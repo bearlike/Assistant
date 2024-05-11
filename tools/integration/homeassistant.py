@@ -19,6 +19,9 @@ from core.classes import AbstractTool, ActionStep
 logging = get_logger(name="tools.integration.homeassistant")
 load_dotenv()
 
+# ! BUG: Error correction for model parsing errors is not implemented yet.
+# !     Currently, if there are parsing errors, the tool is allowed to fail.
+# TODO: Implement OutputFixingParser for error correction.
 
 def cache_monitor(func):
     """Decorator to monitor and update the cache."""
@@ -331,7 +334,14 @@ class HomeAssistant(AbstractTool):
         return MockSpeaker(content=tmp_return_message)
 
     def set_state(self, action_step: ActionStep) -> "MockSpeaker":
-        """Perform the action defined by this service."""
+        """ Predict and call a service for a given action step based
+                on sensor information.
+        Args:
+            action_step (ActionStep): The natural language action
+                                        step to be performed.
+        Returns:
+            Response from the chain.
+        """
         self.update_cache()
         rag_documents = self._load_rag_documents([
             "entities.json", "services.json"
@@ -345,11 +355,19 @@ class HomeAssistant(AbstractTool):
 
         logging.info("Invoking `set` action chain using `%s` for `%s`.",
                      self.model_name, action_step)
+        # TODO: Interpret the response from call service.
         return self._invoke_service_and_set_state(
             chain, rag_documents, action_step)
 
     def get_state(self, action_step: ActionStep) -> "MockSpeaker":
-        """Perform the action defined by this service."""
+        """ Generate response for a given action step based
+                on sensor information.
+        Args:
+            action_step (ActionStep): The natural language action
+                                        step to be performed.
+        Returns:
+            Response from the chain.
+        """
         self.update_cache()
         rag_documents = self._load_rag_documents(["sensors.json"])
 

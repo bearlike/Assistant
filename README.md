@@ -16,9 +16,15 @@ The project takes advantage of various models through OpenAI-compatible endpoint
 Meeseeks builds upon recent advancements in LLM-based multi-agent systems, which have shown promising results in collaborative problem-solving, RAG, consensus-seeking, and theory of mind inference in cooperative settings. By harnessing the planning and decision-making capabilities of LLMs, Meeseeks should provide an efficient and effective solution for handling complex tasks across various tools.
 
 ## Features 🔥
+<details>
+<summary><i>Legends (Expand to View) </i></summary>
+
 | Completed | In-Progress | Planned | Scoping |
 | :-------: | :---------: | :-----: | :-----: |
 |     ✅    |    🚧      |   📅    |    🧐   |
+
+</details>
+
 
 
 | Status | Feature                                                                                                                                                                                                  |
@@ -34,9 +40,9 @@ Meeseeks builds upon recent advancements in LLM-based multi-agent systems, which
 
 ### Integrations 📦
 
-| Status |             Integration Name             | Description                                                                                                                       |
-| :----: | :--------------------------------------: | --------------------------------------------------------------------------------------------------------------------------------- |
-|   ✅    |            Home Assistant API            | Control devices and retrieve sensor data via `request`                                                                            |
+| Status  |             Integration Name             | Description                                                                                                                       |
+| :----:  | :--------------------------------------: | --------------------------------------------------------------------------------------------------------------------------------- |
+|   ✅    |  [Home Assistant](https://github.com/home-assistant/core)    | Control devices and retrieve sensor data via `request`                                                                            |
 |   📅    |                  Gmail                   | Access Gmail functionality via `llama_index.tools.google.GmailToolSpec`                                                           |
 |   🚧    |             Google Calendar              | Access Google Calendar functionality via `llama_index.tools.google.GoogleCalendarToolSpec`                                        |
 |   📅    |              Google Search               | Perform Google search via `llama_index.tools.google.GoogleSearchToolSpec`                                                         |
@@ -45,6 +51,19 @@ Meeseeks builds upon recent advancements in LLM-based multi-agent systems, which
 |   📅    |                   Yelp                   | Search for businesses and fetch reviews from Yelp via `llama_index.tools.yelp.YelpToolSpec`                                       |
 |   🧐    |         Android Debugging Shell          | Use Home Assistant ADB Integrations to perform actions on Android TV Variants via `integrations.HomeAssistant`.                   |
 
+
+## Running Meeseeks with Docker 🐳 (Recommended)
+
+1. **Install Docker**: If you haven't already, [install Docker on your machine](https://docs.docker.com/get-docker/).
+
+2. **Environment Variables**: Copy the [`.env.example`](".env.example") file to a new file named ``docker-meeseeks.env`` and modify the necessary environment variables.
+
+3. **Run the Docker Container**: Default port is `8502`. Run the Docker container with the following command.
+
+```bash
+docker run --env-file docker-meeseeks.env -p 8502:8502 ghcr.io/bearlike/meeseeks-chat:latest
+```
+4. Now, you should be able to access the Meeseeks chat interface at `http://hostname-or-ip:8502` in your web browser. Enjoy chatting with Meeseeks!
 
 ## Project Setup 🛠️
 
@@ -57,7 +76,7 @@ This project is composed of multiple modules, each with its own set of dependenc
 
 
 > [!NOTE]
->  **Quick Installation for Mac and Linux Users:** Clone the repository, navigate to the project root and run the below script:
+>  **Installation script for Mac and Linux Users:** Clone the repository, navigate to the project root and run the below script:
 > ```bash
 > chmod +x build-install.sh
 > ./build-install.sh fallback-install
@@ -87,10 +106,10 @@ This project is composed of multiple modules, each with its own set of dependenc
     poetry install
     cd ../meeseeks-chat
     poetry install
+    cd ..
     ```
 
 4. **Environment Variables**: Copy the [``.env.example``](.env.example) file to a new file named ``.env`` and modify in the necessary environment variables.
-
 
 
 ## Running the Meeseeks Chat Interface 🤖
@@ -98,7 +117,8 @@ This project is composed of multiple modules, each with its own set of dependenc
 After installing the dependencies, you can run the application with the following command:
 
 ```bash
-streamlit run main.py
+cd ./meeseeks-chat
+streamlit run chat_master.py
 ```
 
 

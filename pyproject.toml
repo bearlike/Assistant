@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "meeseeks"
-version = "0.1.0"
+version = "1.0.0"
 description = "Core module for Meeseeks - A powerful multi-LLM-agent assistant for complex tasks with support for tools integration."
 authors = ["Krishnakanth Alagiri <https://github.com/bearlike>"]
 license = "MIT"

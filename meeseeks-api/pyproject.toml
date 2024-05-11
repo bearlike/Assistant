@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "meeseeks-api"
-version = "0.1.0"
+version = "1.0.0"
 description = "REST API Engine wrapped around the meeseeks-core"
 authors = ["Krishnakanth Alagiri <https://github.com/bearlike>"]
 license = "MIT"

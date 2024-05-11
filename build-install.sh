@@ -31,7 +31,7 @@ function build_and_install() {
         mv dist/*.whl ../
 
         # Install the package
-        if ! pip install ../$1-0.1.0-py3-none-any.whl; then
+        if ! pip install ../$1-1.0.0-py3-none-any.whl; then
             echo "Error: Failed to install the $1 package"
             exit 1
         fi
