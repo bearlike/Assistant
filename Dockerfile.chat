@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+
+# Dockerfile.chat
+ARG BASE_IMAGE="ghcr.io/bearlike/meeseeks-base:latest"
+FROM $BASE_IMAGE
+
+ARG TITLE="Meeseeks Chat: Personal Assistant"
+
+LABEL title=$TITLE
+
+# Install the meeseeks-chat dependencies
+WORKDIR /app/meeseeks-chat
+RUN poetry install
+
+# Expose port 8502 for Streamlit
+EXPOSE 8502
+
+# Healthcheck to ensure the Streamlit server is running
+HEALTHCHECK CMD curl --fail http://localhost:8502/_stcore/health
+
+# Run the Streamlit application
+ENTRYPOINT ["poetry", "run", "python", "-m", "streamlit", "run", "chat_master.py", "--server.port=8502", "--server.address=0.0.0.0"]

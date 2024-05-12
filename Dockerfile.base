@@ -1,9 +1,10 @@
-# Dockerfile to build meeseeks-chat with core dependencies.
+# syntax=docker/dockerfile:1
 
+# Dockerfile.base
 FROM python:3.11-buster
 
 # Set the title, GitHub repo URL, version, and author
-ARG TITLE="Meeseeks Chat: Personal Assistant" \
+ARG TITLE="Meeseeks Base" \
     VERSION="1.0.0" \
     AUTHOR="Krishnakanth Alagiri"
 
@@ -43,11 +44,7 @@ RUN pip install 'poetry>=1.8,<1.9'
 # Install the core dependencies
 RUN poetry install
 
-# Install the meeseeks-chat dependencies
-WORKDIR /app/meeseeks-chat
-RUN poetry install
-
-# Set default environment variablesfor Meeseeks
+# Set default environment variables for Meeseeks (common ones)
 ENV CACHE_DIR='/tmp/meeseeks_cache' \
     DEFAULT_MODEL='gpt-3.5-turbo' \
     LOG_LEVEL=DEBUG \
@@ -56,13 +53,3 @@ ENV CACHE_DIR='/tmp/meeseeks_cache' \
     COLOREDLOGS_FIELD_STYLES='asctime=color=240;name=45,inverse' \
     COLOREDLOGS_LEVEL_STYLES='info=220;spam=22;debug=34;verbose=34;notice=220;warning=202;success=118,bold;error=124;critical=background=red' \
     COLOREDLOGS_LOG_FORMAT='%(asctime)s [%(name)s] %(levelname)s %(message)s'
-
-
-# Expose port 8501 for Streamlit
-EXPOSE 8502
-
-# Healthcheck to ensure the Streamlit server is running
-HEALTHCHECK CMD curl --fail http://localhost:8502/_stcore/health
-
-# Run the Streamlit application
-ENTRYPOINT ["poetry", "run", "python", "-m", "streamlit", "run", "chat_master.py", "--server.port=8502", "--server.address=0.0.0.0"]

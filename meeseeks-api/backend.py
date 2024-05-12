@@ -29,16 +29,28 @@ if True:
 
 # Load environment variables
 load_dotenv()
+# Get the API token from the environment variables
+# The default API token is "msk-strong-password"
+MASTER_API_TOKEN = os.getenv("MASTER_API_TOKEN", "msk-strong-password")
 
 # Initialize logger
 logging = get_logger(name="meeseeks-api")
-
+logging.debug("Starting API server with API token: %s", MASTER_API_TOKEN)
 # Create Flask application
 app = Flask(__name__)
+
+authorizations = {
+    'apikey': {
+        'type': 'apiKey',
+        'in': 'header',
+        'name': 'X-API-KEY'
+    }
+}
+VERSION = os.getenv("VERSION", "(Dev)")
 # Create API instance with Swagger documentation
-api = Api(app, version='1.0', title='Meeseeks API',
+api = Api(app, version=VERSION, title='Meeseeks API',
           description='Interact with Meeseeks through a REST API',
-          doc='/swagger-ui/')
+          doc='/swagger-ui/', authorizations=authorizations, security='apikey')
 
 # Define API namespace
 ns = api.namespace('api', description='Meeseeks operations')
@@ -70,7 +82,7 @@ class MeeseeksQuery(Resource):
     action plan as a JSON response.
     """
 
-    @api.doc(security='apiKey')
+    @api.doc(security='apikey')
     @api.expect(api.model('Query', {'query': fields.String(
         required=True, description='The user query')}))
     @api.response(200, 'Success', task_queue_model)
@@ -84,10 +96,12 @@ class MeeseeksQuery(Resource):
         Requires a valid API token for authorization.
         """
         # Get API token from headers
-        api_token = request.headers.get('X-API-Key')
+        api_token = request.headers.get('X-API-Key', None)
 
         # Validate API token
-        if api_token != os.getenv("MASTER_API_TOKEN"):
+        if api_token is None:
+            return {"message": "API token is not provided."}, 401
+        if api_token != MASTER_API_TOKEN:
             logging.warning(
                 "Unauthorized API call attempt with token: %s", api_token)
             return {"message": "Unauthorized"}, 401
@@ -111,4 +125,4 @@ class MeeseeksQuery(Resource):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=5123)

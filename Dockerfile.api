@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+
+# Dockerfile.api
+ARG BASE_IMAGE="ghcr.io/bearlike/meeseeks-base:latest"
+FROM $BASE_IMAGE
+
+ARG TITLE="Meeseeks API: Personal Assistant"
+
+LABEL title=$TITLE
+
+# Install the meeseeks-api dependencies
+WORKDIR /app/meeseeks-api
+RUN poetry install
+
+# Set API specific environment variable
+ENV MASTER_API_TOKEN='msk-strong-password'
+
+# Expose port 5123 for the API
+EXPOSE 5123
+
+# Run the API application
+ENTRYPOINT ["poetry", "run", "python", "backend.py"]
