@@ -1,0 +1,42 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "data": {
+                    "base_url": "Base URL",
+                    "api_key": "API Key",
+                    "timeout": "API Timeout"
+                }
+            }
+        },
+        "error": {
+            "cannot_connect": "Unable to connect",
+            "invalid_url": "Invalid URL",
+            "timeout_connect": "Timeout while establishing connection",
+            "unknown": "Unexpected error, please check logs"
+        },
+        "abort": {
+            "already_configured": "Service is already exist and configured"
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "menu_options": {
+                    "general_config": "General Settings",
+                    "prompt_system": "System Prompt",
+                    "all_set": "Nothing to configure. You're all set!"
+                }
+            },
+            "general_config": {
+                "title": "General Settings",
+                "data": {
+                    "timeout": "API Timeout"
+                }
+            },
+            "prompt_system": {
+                "title": "System Prompt"
+            }
+        }
+    }
+}

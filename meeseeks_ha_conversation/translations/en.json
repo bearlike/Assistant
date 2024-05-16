@@ -1,0 +1,58 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "data": {
+                    "base_url": "Base URL",
+                    "api_key": "API Key",
+                    "timeout": "API Timeout"
+                }
+            }
+        },
+        "error": {
+            "cannot_connect": "Failed to connect",
+            "invalid_url": "Invalid URL",
+            "timeout_connect": "Timeout establishing connection",
+            "unknown": "Unexpected error, check logs"
+        },
+        "abort": {
+            "already_configured": "Service is already configured"
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "menu_options": {
+                    "general_config": "General Settings",
+                    "model_config": "Model Configuration",
+                    "prompt_system": "System Prompt",
+                    "all_set": "Nothing to configure. You're all set!"
+                }
+            },
+            "general_config": {
+                "title": "General Settings",
+                "data": {
+                    "timeout": "API Timeout"
+                }
+            },
+            "model_config": {
+                "title": "Model Configuration",
+                "data": {
+                    "chat_model": "Model",
+                    "ctx_size": "Context Size",
+                    "max_tokens": "Maximum Tokens",
+                    "mirostat_mode": "Mirostat Mode",
+                    "mirostat_eta": "Mirostat ETA",
+                    "mirostat_tau": "Mirostat TAU",
+                    "repeat_penalty": "Repeat Penalty",
+                    "temperature": "Temperature",
+                    "top_p": "Top P",
+                    "top_k": "Top K"
+                }
+            },
+            "prompt_system": {
+                "title": "System Prompt"
+            }
+        }
+    }
+}

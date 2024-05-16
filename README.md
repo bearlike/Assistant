@@ -4,8 +4,9 @@
 <p align="center">
     <a href="https://github.com/bearlike/Personal-Assistant/wiki"><img alt="Wiki" src="https://img.shields.io/badge/GitHub-Wiki-blue?style=for-the-badge&logo=github"></a>
     <a href="https://github.com/features/actions"><img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/bearlike/Personal-Assistant/docker-buildx.yml?style=for-the-badge&"></a>
-    <a href="https://github.com/bearlike/Personal-Assistant/pkgs/container/meeseeks-chat"><img src="https://img.shields.io/badge/ghcr.io-bearlike/meeseeks&#x2212;chat:latest-blue?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Image"></a>
     <a href="https://github.com/bearlike/Personal-Assistant/releases"><img src="https://img.shields.io/github/v/release/bearlike/Personal-Assistant?style=for-the-badge&" alt="GitHub Release"></a>
+    <a href="https://github.com/bearlike/Personal-Assistant/pkgs/container/meeseeks-chat"><img src="https://img.shields.io/badge/ghcr.io-bearlike/meeseeks--chat:latest-blue?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Image"></a>
+    <a href="https://github.com/bearlike/Personal-Assistant/pkgs/container/meeseeks-api"><img src="https://img.shields.io/badge/ghcr.io-bearlike/meeseeks--api:latest-blue?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Image"></a>
 </p>
 
 
@@ -26,7 +27,7 @@ Meeseeks is an innovative AI assistant built on a multi-agent large language mod
 
 | Completed | In-Progress | Planned | Scoping |
 | :-------: | :---------: | :-----: | :-----: |
-|     ✅     |      🚧      |    📅    |    🧐    |
+|     ✅    |     🚧     |    📅   |    🧐   |
 
 </details>
 
@@ -34,22 +35,33 @@ Meeseeks is an innovative AI assistant built on a multi-agent large language mod
 > [!NOTE]
 > Visit [**Features - Wiki**](https://github.com/bearlike/Personal-Assistant/wiki/Features) for detailed information on tools and integration capabilities.
 
+<table align="center">
+    <tr>
+        <th>Answer questions and interpret sensor information</th>
+        <th>Control devices and entities</th>
+    </tr>
+    <tr>
+        <td align="center"><img src="docs/screenshot_ha_assist_1.png" alt="Screenshot" height="512px"></td>
+        <td align="center"><img src="docs/screenshot_ha_assist_2.png" alt="Screenshot" height="512px"></td>
+    </tr>
+</table>
+
 - (✅) [LangFuse](https://github.com/langfuse/langfuse) integrations to accurate log and monitor chains.
 - (✅) Use natural language to interact with integrations and tools.
-- (🚧) Simple REST API interface for 3rd party tools to interface with Meeseeks.
+- (✅) Simple REST API interface for 3rd party tools to interface with Meeseeks.
 - (✅) Handles complex user queries by breaking them into actionable steps, executing these steps, and then summarizing on the results.
-- (🚧) Custom [Home Assistant Conversation Integration](https://www.home-assistant.io/integrations/conversation/) to allow voice assistance via [**HA Assist**](https://www.home-assistant.io/voice_control/).
+- (✅) Custom [Home Assistant Conversation Integration](https://www.home-assistant.io/integrations/conversation/) to allow voice assistance via [**HA Assist**](https://www.home-assistant.io/voice_control/).
 - (✅) A chat Interface using `streamlit` that shows the action plan, user types, and response from the LLM.
 
 ## Extras 👽
 Optional feature that users can choose to install to further optimize their experience.
-- (🧐) **`Quality`** Use [CRITIC reflection framework](https://arxiv.org/pdf/2305.11738) to reflect on a response to a task/query using external tools via [`[^]`](https://llamahub.ai/l/agent/llama-index-agent-introspective).
-- (📅) **`Privacy`** Integrate with [microsoft/presidio](https://github.com/microsoft/presidio) for customizable PII de-identification.
+- (📅) **`Quality`** Use [CRITIC reflection framework](https://arxiv.org/pdf/2305.11738) to reflect on a response to a task/query using external tools via [`[^]`](https://llamahub.ai/l/agent/llama-index-agent-introspective).
+- (🚧) **`Privacy`** Integrate with [microsoft/presidio](https://github.com/microsoft/presidio) for customizable PII de-identification.
 
 ## Integrations 📦
 - (✅) [Home Assistant](https://github.com/home-assistant/core)
 - (🚧) Google Calendar
-- (📅) Google Search, Search recent ArXiv papers and summaries, Yahoo Finance, Yelp
+- (🚧) Google Search, Search recent ArXiv papers and summaries, Yahoo Finance, Yelp
 - (🧐) Android Debugging Shell
 
 ## Installating and Running Meeseeks

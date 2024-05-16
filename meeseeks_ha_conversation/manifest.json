@@ -1,0 +1,16 @@
+{
+  "domain": "meeseeks_conversation",
+  "name": "Meeseeks",
+  "codeowners": [
+    "@bearlike"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "conversation"
+  ],
+  "documentation": "https://github.com/bearlike/Personal-Assistant",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/bearlike/Personal-Assistant/issues",
+  "version": "v1.2.0"
+}
