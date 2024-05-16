@@ -11,10 +11,11 @@ as a JSON response.
 # Standard library modules
 import os
 import sys
+from copy import deepcopy
 from typing import Dict
 
 # Third-party modules
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from flask_restx import Api, Resource, fields
 from dotenv import load_dotenv
 
@@ -35,7 +36,11 @@ MASTER_API_TOKEN = os.getenv("MASTER_API_TOKEN", "msk-strong-password")
 
 # Initialize logger
 logging = get_logger(name="meeseeks-api")
+# logging.basicConfig(level=logging.DEBUG)
+logging.info("Starting Meeseeks API server.")
 logging.debug("Starting API server with API token: %s", MASTER_API_TOKEN)
+
+
 # Create Flask application
 app = Flask(__name__)
 
@@ -59,6 +64,8 @@ ns = api.namespace('api', description='Meeseeks operations')
 task_queue_model = api.model('TaskQueue', {
     'human_message': fields.String(
         required=True, description='The original user query'),
+    'task_result': fields.String(
+        required=True, description='Combined response of all action steps'),
     'action_steps': fields.List(fields.Nested(api.model('ActionStep', {
         'action_consumer': fields.String(
             required=True,
@@ -73,6 +80,13 @@ task_queue_model = api.model('TaskQueue', {
             description='The result of the executed action')
     }))),
 })
+
+
+@app.before_request
+def log_request_info():
+    logging.debug('Endpoint: %s', request.endpoint)
+    logging.debug('Headers: %s', request.headers)
+    logging.debug('Body: %s', request.get_data())
 
 
 @ns.route('/query')
@@ -118,10 +132,13 @@ class MeeseeksQuery(Resource):
 
         # Execute action plan
         task_queue = run_action_plan(task_queue)
-
+        # Deep copy the variable into another variable
+        task_result = deepcopy(task_queue.task_result)
+        to_return = task_queue.dict()
+        to_return["task_result"] = task_result
         # Return TaskQueue as JSON
         logging.info("Returning executed action plan.")
-        return task_queue.dict(), 200
+        return to_return, 200
 
 
 if __name__ == '__main__':

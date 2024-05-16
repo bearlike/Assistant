@@ -2,8 +2,8 @@
 import abc
 import os
 import json
-from typing import Optional
-from typing import List, Any
+from typing import Optional, List, Any
+
 # Third-party modules
 from langchain_community.document_loaders import JSONLoader
 from langchain_openai import ChatOpenAI
@@ -19,6 +19,7 @@ AVAILABLE_TOOLS = ["home_assistant_tool", "talk_to_user_tool"]
 
 
 class ActionStep(BaseModel):
+    """Defines an action step within a task queue with validation."""
     action_consumer: str = Field(
         description=f"Specify one of {AVAILABLE_TOOLS} to indicate the action consumer."
     )
@@ -36,11 +37,17 @@ class ActionStep(BaseModel):
 
 
 class TaskQueue(BaseModel):
+    """Manages a queue of actions to be performed, tracking their results."""
     human_message: Optional[str] = Field(
         alias="_human_message",
         description='Human message associated with the task queue.'
     )
-    action_steps: Optional[List[ActionStep]] = None
+    action_steps: List[ActionStep] = Field(default_factory=list)
+    task_result: Optional[str] = Field(
+        alias="_task_result",
+        default="Not executed yet.",
+        description='Store the result for the entire task queue'
+    )
 
     @validator("action_steps", allow_reuse=True)
     # pylint: disable=E0213,W0613
@@ -81,18 +88,25 @@ class TaskQueue(BaseModel):
 
 
 class AbstractTool(abc.ABC):
-    def __init__(self, name, description, model_name=None, temperature=0.2):
-        # Data Validation
-        if model_name is None:
-            default_model = os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo")
-            self.model_name = os.getenv("TOOL_MODEL", default_model)
-        else:
-            self.model_name = model_name
+    """Abstract base class for tools, providing common features and requiring specific methods."""
 
-        # Set the tool attributes
+    def _setup_cache_dir(self, name: str) -> str:
+        """Set up and return the cache directory path."""
+        root_cache_dir = os.getenv("CACHE_DIR")
+        if not root_cache_dir:
+            raise ValueError("CACHE_DIR environment variable is not set.")
+        cache_path = os.path.join(
+            root_cache_dir, "..", ".cache", f"{name.lower().replace(' ', '_')}_tool")
+        os.makedirs(cache_path, exist_ok=True)
+        return os.path.abspath(cache_path)
+
+    def __init__(self, name: str, description: str, model_name: Optional[str] = None, temperature: float = 0.3):
+        """Initialize the tool with optional model configuration."""
+        self.model_name = model_name or os.getenv(
+            "TOOL_MODEL", os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo"))
         self.name = name
-        self._id = f"{name.lower().replace(' ', '_')}_tool"
         self.description = description
+        self._id = f"{name.lower().replace(' ', '_')}_tool"
         session_id = f"{self._id}-tool-id-{get_unique_timestamp()}"
         logging.info(f"Tool created <name={name}; session_id={session_id};>")
         self.langfuse_handler = CallbackHandler(
@@ -107,7 +121,6 @@ class AbstractTool(abc.ABC):
             model=self.model_name,
             temperature=temperature
         )
-
         root_cache_dir = os.getenv("CACHE_DIR", None)
         if root_cache_dir is None:
             raise ValueError("CACHE_DIR environment variable is not set.")
