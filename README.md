@@ -70,6 +70,59 @@ Optional feature that users can choose to install to further optimize their expe
 
 ---
 
+# Documentation 📚
+
+This repository ships a versioned documentation site built with MkDocs + Material and Mike.
+
+The version selector only lists versions that have been deployed with `mike` (it does not list Git branches directly).
+
+### Local documentation workflow
+
+1. Install documentation dependencies:
+
+   ```bash
+   pip install -r requirements-docs.txt
+   ```
+
+2. Serve docs locally:
+
+   ```bash
+   export PYTHONPATH="$PWD"
+   mkdocs serve
+   ```
+
+3. Build docs locally:
+
+   ```bash
+   export PYTHONPATH="$PWD"
+   mkdocs build --strict
+   ```
+
+### Deploying versioned docs with Mike
+
+For development docs (main branch):
+
+```bash
+export PYTHONPATH="$PWD"
+mike deploy dev
+mike set-default dev
+```
+
+If you plan to push docs to `gh-pages` (for example, using `--push`), ensure git has a user configured:
+
+```bash
+git config user.name "Your Name"
+git config user.email "you@example.com"
+```
+
+For release tags (for example, `v1.2.3` -> `1.2` with `latest` alias):
+
+```bash
+export PYTHONPATH="$PWD"
+mike deploy --update-aliases 1.2 latest
+mike set-default latest
+```
+
 # Contributing 👏
 
 We welcome contributions from the community to help improve Meeseeks. Whether you want to fix a bug, add a new feature, or integrate a new tool, your contributions are highly appreciated.
@@ -86,4 +139,3 @@ To contribute to Meeseeks, please follow these steps:
 If you encounter any bugs or have ideas for new features, please open an issue on our [issue tracker](https://github.com/bearlike/Personal-Assistant/issues). We appreciate detailed bug reports that include steps to reproduce the issue and any relevant error messages.
 
 Thank you for considering contributing to Meeseeks! Let's build cool stuff!
-
