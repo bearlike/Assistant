@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Dockerfile.base
-FROM python:3.11-buster
+FROM python:3.11-slim-bookworm
 
 # Set the title, GitHub repo URL, version, and author
 ARG TITLE="Meeseeks Base" \

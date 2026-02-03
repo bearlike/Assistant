@@ -5,7 +5,7 @@ https://github.com/bearlike/personal-Assistant/
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal, TypedDict
 
 from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigEntry
@@ -17,24 +17,43 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import ulid
 
 from .api import MeeseeksApiClient
-from .const import (
-    DOMAIN, LOGGER,
-    CONF_BASE_URL,
-    CONF_TIMEOUT,
-    DEFAULT_TIMEOUT,
-)
+from .const import CONF_BASE_URL, CONF_TIMEOUT, DEFAULT_TIMEOUT, DOMAIN, LOGGER
+
 # User-defined imports
 from .coordinator import MeeseeksDataUpdateCoordinator
-from .exceptions import (
-    ApiClientError,
-    ApiCommError,
-    ApiJsonError,
-    ApiTimeoutError
-)
+from .exceptions import ApiClientError
+
 # from .helpers import get_exposed_entities
 
+class MeeseeksMessage(TypedDict, total=False):
+    """Message structure used to call the Meeseeks API."""
+    system: str
+    context: str | None
+    session_id: str | None
+    prompt: str
+
+
+class MeeseeksResponse(TypedDict):
+    """Response payload returned from the Meeseeks API."""
+    task_result: str
+    response: str
+    context: str
+    session_id: str | None
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Meeseeks conversation using UI."""
+    """Set up Meeseeks conversation using UI.
+
+    Args:
+        hass: Home Assistant core instance.
+        entry: Configuration entry to initialize.
+
+    Returns:
+        True when setup succeeds.
+
+    Raises:
+        ConfigEntryNotReady: If the Meeseeks API is unreachable.
+    """
     # https://developers.home-assistant.io/docs/config_entries_index/#setting-up-an-entry
     hass.data.setdefault(DOMAIN, {})
     client = MeeseeksApiClient(
@@ -66,13 +85,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload Meeseeks conversation."""
+    """Unload Meeseeks conversation.
+
+    Args:
+        hass: Home Assistant core instance.
+        entry: Configuration entry to unload.
+
+    Returns:
+        True when unload succeeds.
+    """
     conversation.async_unset_agent(hass, entry)
     return True
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload Meeseeks conversation."""
+    """Reload Meeseeks conversation.
+
+    Args:
+        hass: Home Assistant core instance.
+        entry: Configuration entry to reload.
+    """
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)
 
@@ -85,17 +117,28 @@ class MeeseeksAgent(conversation.AbstractConversationAgent):
         self.hass = hass
         self.entry = entry
         self.client = client
-        self.history: dict[str, dict] = {}
+        self.history: dict[str, MeeseeksMessage] = {}
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
-        """Return a list of supported languages."""
+        """Return a list of supported languages.
+
+        Returns:
+            Language identifiers or "*" for all languages.
+        """
         return MATCH_ALL
 
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
-        """Process a sentence."""
+        """Process a user utterance into a conversation result.
+
+        Args:
+            user_input: Incoming conversation input.
+
+        Returns:
+            ConversationResult populated with a response.
+        """
         # * If needeed in the future, uncomment the following lines
         # raw_system_prompt = self.entry.options.get(
         #     CONF_PROMPT_SYSTEM, DEFAULT_PROMPT_SYSTEM)
@@ -110,6 +153,7 @@ class MeeseeksAgent(conversation.AbstractConversationAgent):
             messages = {
                 "system": system_prompt,
                 "context": None,
+                "session_id": None,
             }
 
         messages["prompt"] = user_input.text
@@ -129,6 +173,7 @@ class MeeseeksAgent(conversation.AbstractConversationAgent):
             )
 
         messages["context"] = response["context"]
+        messages["session_id"] = response.get("session_id")
         self.history[conversation_id] = messages
 
         intent_response = intent.IntentResponse(language=user_input.language)
@@ -137,8 +182,18 @@ class MeeseeksAgent(conversation.AbstractConversationAgent):
             response=intent_response, conversation_id=conversation_id
         )
 
-    def _async_generate_prompt(self, raw_prompt: str, exposed_entities) -> str:
-        """Generate a prompt for the user."""
+    def _async_generate_prompt(
+        self, raw_prompt: str, exposed_entities: list[dict[str, Any]]
+    ) -> str:
+        """Generate a prompt for the user.
+
+        Args:
+            raw_prompt: Template string for prompt rendering.
+            exposed_entities: Entities exposed to the conversation agent.
+
+        Returns:
+            Rendered prompt string.
+        """
         return template.Template(raw_prompt, self.hass).async_render(
             {
                 "ha_name": self.hass.config.location_name,
@@ -147,22 +202,32 @@ class MeeseeksAgent(conversation.AbstractConversationAgent):
             parse_result=False,
         )
 
-    async def query(
-        self,
-        messages
-    ):
-        """Process a sentence."""
+    async def query(self, messages: MeeseeksMessage) -> MeeseeksResponse:
+        """Send a query payload to the Meeseeks API.
+
+        Args:
+            messages: Message payload to send.
+
+        Returns:
+            MeeseeksResponse payload with task result and metadata.
+
+        Raises:
+            HomeAssistantError: If the API call fails.
+        """
         # model = self.entry.options.get(CONF_MODEL, DEFAULT_MODEL)
         # LOGGER.debug("Prompt for %s: %s", model, messages["prompt"])
 
         # TODO: $context, and $system are not used but still implemented for
         #        future use
         # * Generator
-        result = await self.client.async_generate({
-            "context": messages["context"],
-            "system": messages["system"],
-            "prompt": messages["prompt"],
-        })
+        result = await self.client.async_generate(
+            {
+                "context": messages.get("context"),
+                "system": messages.get("system"),
+                "prompt": messages["prompt"],
+                "session_id": messages.get("session_id"),
+            }
+        )
         response: str = result["task_result"]
         LOGGER.debug("Response %s", response)
         return result

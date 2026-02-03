@@ -138,6 +138,19 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+# Local runtime sessions
+meeseeks-cli/data/
+
+# Local config files (MCP/tool manifests, secrets)
+configs/*.json
+configs/*.toml
+configs/*.yaml
+configs/*.yml
+!configs/*.example.json
+!configs/*.example.toml
+!configs/*.example.yaml
+!configs/*.example.yml
+
 # Pyre type checker
 .pyre/
 

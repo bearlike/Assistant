@@ -19,6 +19,7 @@
 
 - Home Assistant Conversation Integration for Meeseeks. Can be used with HA Assist ⭐.
 - Wrapped around the REST API Engine for Meeseeks. 100% coverage of Meeseeks API.
+- This integration is optional and auto-disables if `HA_URL`/`HA_TOKEN` are missing or auth fails.
 - No components are explicitly tested for safety or security. Use with caution in a production environment.
 - For more information, such as installation, please check out the [Wiki](https://github.com/bearlike/Personal-Assistant/wiki).
 

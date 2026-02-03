@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Streamlit Chat App
+"""Streamlit chat app.
 
 This module implements a chat application using Streamlit and Meeseeks.
 It allows users to interact with an AI assistant
@@ -10,26 +9,51 @@ through a chat interface.
 # streamlit run chat_master.py
 """
 # Standard library modules
-import time
 import os
 import sys
+import time
+
 # Third-party modules
 import streamlit as st
-from langchain.memory import ConversationBufferWindowMemory
 
 # TODO: Need to package the application and import it as module
 # Adding the parent directory to the path before importing the custom modules
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 # Custom imports - Meeseeks core modules
-from core.task_master import generate_action_plan, run_action_plan
-from core.common import get_logger
-from core.classes import TaskQueue
+from core.classes import TaskQueue  # noqa: E402
+from core.common import get_logger  # noqa: E402
+from core.permissions import auto_approve  # noqa: E402
+from core.session_store import SessionStore  # noqa: E402
+from core.task_master import generate_action_plan, orchestrate_session  # noqa: E402
+
+
+class ConversationBufferWindowMemory:
+    """Simple rolling buffer for chat context."""
+
+    def __init__(self, k: int = 5) -> None:
+        """Initialize the buffer with a max window size."""
+        self.k = k
+        self.buffer: list[dict[str, object]] = []
+
+    def save_context(self, inputs: dict[str, object], outputs: dict[str, object]) -> None:
+        """Store the latest input/output pair with a fixed window size."""
+        self.buffer.append({"input": inputs, "output": outputs})
+        if len(self.buffer) > self.k:
+            self.buffer = self.buffer[-self.k :]
 
 logging = get_logger(name="Meeseeks-Chat")
 
 
-def generate_action_plan_helper(user_input: str):
+def generate_action_plan_helper(user_input: str) -> tuple[list[str], TaskQueue]:
+    """Build the action plan preview for a user query.
+
+    Args:
+        user_input: Raw user query text.
+
+    Returns:
+        Tuple of human-readable action plan entries and the task queue.
+    """
     action_plan_list = []
     task_queue = generate_action_plan(user_query=user_input)
     for action_step in task_queue.action_steps:
@@ -41,20 +65,32 @@ def generate_action_plan_helper(user_input: str):
     return action_plan_list, task_queue
 
 
-def run_action_plan_helper(task_queue: TaskQueue):
-    ai_response = []
-    task_queue = run_action_plan(task_queue)
+def run_action_plan_helper(task_queue: TaskQueue) -> str:
+    """Execute an action plan and combine tool responses.
+
+    Args:
+        task_queue: Precomputed task queue to run.
+
+    Returns:
+        Combined tool responses as a single string.
+    """
+    responses: list[str] = []
+    task_queue = orchestrate_session(
+        user_query=task_queue.human_message or "",
+        model_name=None,
+        initial_task_queue=task_queue,
+        session_id=st.session_state.session_id,
+        session_store=st.session_state.session_store,
+        approval_callback=auto_approve,
+    )
     for action_step in task_queue.action_steps:
-        ai_response.append(action_step.result.content)
+        responses.append(action_step.result.content)
 
-    ai_response = " ".join(ai_response)
-    return ai_response
+    return " ".join(responses)
 
 
-def main():
-    """
-    Main function to run the chat application.
-    """
+def main() -> None:
+    """Run the Streamlit chat application."""
     st.set_page_config(
         page_title="Meeseeks | Bedroom AI",
         page_icon=":speech_balloon:",
@@ -72,6 +108,10 @@ def main():
         st.session_state.conversation_memory = ConversationBufferWindowMemory(
             k=5)
     conversation_memory = st.session_state.conversation_memory
+    if "session_store" not in st.session_state:
+        st.session_state.session_store = SessionStore()
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = st.session_state.session_store.create_session()
 
     if "messages" not in st.session_state:
         st.session_state.messages = [

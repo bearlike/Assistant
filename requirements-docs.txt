@@ -1,6 +1,0 @@
-mkdocs-material
-mkdocstrings[python]
-mike
-coloredlogs
-jinja2
-tiktoken

@@ -8,11 +8,12 @@
 # ./build-install.sh all                # Build and install all submodules
 # ./build-install.sh api                # Build and install the meeseeks-api submodule
 # ./build-install.sh chat               # Build and install the meeseeks-chat submodule
-# ./build-install.sh fallback-install   # Install the meeseeks-chat submodule when on non package mode
+# ./build-install.sh cli                # Build and install the meeseeks-cli submodule
+# ./build-install.sh fallback-install   # Install submodules when on non package mode
 
 function print_usage {
-    echo "Usage: $0 {fallback-install|all|api|chat}"
-    echo "fallback-install: Install the meeseeks-chat submodule when on non package mode"
+    echo "Usage: $0 {fallback-install|all|api|chat|cli}"
+    echo "fallback-install: Install submodules when on non package mode"
     # ! Commented since not fully baked yet.
     # echo "all: Build and install all submodules"
     # echo "api: Build and install the meeseeks-api submodule"
@@ -82,7 +83,8 @@ case $1 in
     all)
         build_and_install "meeseeks-api"
         build_and_install "meeseeks-chat"
-        poetry install --extras "api chat"
+        build_and_install "meeseeks-cli"
+        poetry install --extras "api chat cli"
         ;;
     api)
         build_and_install "meeseeks-api"
@@ -92,10 +94,15 @@ case $1 in
         build_and_install "meeseeks-chat"
         poetry install --extras "chat"
         ;;
+    cli)
+        build_and_install "meeseeks-cli"
+        poetry install --extras "cli"
+        ;;
     fallback-install)
         fallback_install "."
         fallback_install "meeseeks-api"
         fallback_install "meeseeks-chat"
+        fallback_install "meeseeks-cli"
         ;;
     *)
         echo "Error: Invalid argument"

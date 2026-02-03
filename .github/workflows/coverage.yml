@@ -1,0 +1,58 @@
+name: Pytest Coverage
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch or tag) to test"
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install poetry
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run pytest with coverage
+        run: |
+          poetry run pytest \
+            --cov=core \
+            --cov=tools \
+            --cov=meeseeks_ha_conversation \
+            --cov-report=xml \
+            --cov-report=term-missing:skip-covered
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          flags: unit
+          fail_ci_if_error: false
+          use_oidc: true

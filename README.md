@@ -19,7 +19,7 @@
 </p>
 
 # Project Motivation 🚀
-Meeseeks is an innovative AI assistant built on a multi-agent large language model (LLM) architecture. It tackles complex problems by breaking them down into atomic, reproducible tasks, each handled by autonomous agents powered by LLMs. This approach, combined with semantic caching, significantly enhances efficiency and reduces LLM calls. It is also tested to work with OpenAI-compatible endpoints [`[*]`](https://github.com/bearlike/Personal-Assistant/wiki/Additional-Resources). Meeseeks can also call different endpoints for different tools.
+Meeseeks is a personal assistant built on an LLM-driven orchestration loop. It breaks a request into atomic steps, runs tools, and returns a clean summary. The core loop can replan after tool failures and keep short-term state while sessions persist on disk for continuity.
 
 
 <details>
@@ -46,12 +46,18 @@ Meeseeks is an innovative AI assistant built on a multi-agent large language mod
     </tr>
 </table>
 
-- (✅) [LangFuse](https://github.com/langfuse/langfuse) integrations to accurate log and monitor chains.
+- (✅) Optional [LangFuse](https://github.com/langfuse/langfuse) integrations for observability (auto-disabled if not configured).
 - (✅) Use natural language to interact with integrations and tools.
 - (✅) Simple REST API interface for 3rd party tools to interface with Meeseeks.
 - (✅) Handles complex user queries by breaking them into actionable steps, executing these steps, and then summarizing on the results.
-- (✅) Custom [Home Assistant Conversation Integration](https://www.home-assistant.io/integrations/conversation/) to allow voice assistance via [**HA Assist**](https://www.home-assistant.io/voice_control/).
+- (✅) Optional [Home Assistant Conversation Integration](https://www.home-assistant.io/integrations/conversation/) to allow voice assistance via [**HA Assist**](https://www.home-assistant.io/voice_control/).
 - (✅) A chat Interface using `streamlit` that shows the action plan, user types, and response from the LLM.
+- (✅) Terminal CLI for interactive sessions with plan + tool result visibility.
+- (✅) MCP tool visibility and model switch wizard in the CLI.
+- (✅) Plan -> act -> observe loop with re-planning on tool failures.
+- (✅) Session transcripts with lightweight compaction for long-running chats.
+- (✅) Tool registry with optional MCP tool support via manifest.
+- (✅) Permission gate + hooks around tool execution for safer runs.
 
 ## Extras 👽
 Optional feature that users can choose to install to further optimize their experience.
@@ -64,64 +70,53 @@ Optional feature that users can choose to install to further optimize their expe
 - (🚧) Google Search, Search recent ArXiv papers and summaries, Yahoo Finance, Yelp
 - (🧐) Android Debugging Shell
 
-## Installating and Running Meeseeks
+## Monorepo layout 🧭
+- `core/`: orchestration loop, schemas, session storage, compaction, tool registry.
+- `tools/`: tool implementations and integrations (including Home Assistant and MCP).
+- `meeseeks-api/`: Flask REST API for programmatic access.
+- `meeseeks-chat/`: Streamlit UI for interactive chat.
+- `meeseeks-cli/`: Terminal CLI frontend for interactive sessions.
+- `meeseeks_ha_conversation/`: Home Assistant integration that routes voice to the API.
+- `prompts/`: planner prompt and examples.
+
+## Architecture (short) 🧩
+Requests flow through a single core engine used by every interface, so behavior stays consistent across UI, API, and voice.
+
+```mermaid
+flowchart LR
+  User --> Chat
+  User --> API
+  HA --> API
+  User --> CLI
+  Chat --> Core
+  API --> Core
+  CLI --> Core
+  Core --> Tools
+  Tools --> HomeAssistant
+  Tools --> MCP
+  Core --> SessionStore
+```
+
+## Installing and Running Meeseeks
 > [!IMPORTANT]
-> For Docker or manual installation, running, and configuring Meeseeks, visit [**Installation - Wiki**](https://github.com/bearlike/Personal-Assistant/wiki/Installation).
+> For Docker or manual installation, running, and configuring Meeseeks, visit [**Installation - Wiki**](https://github.com/bearlike/Personal-Assistant/wiki/Installation) or read `docs/README.md` for a quick local/deploy overview.
+
+## MCP servers (quick setup)
+MCP tools are auto-discovered from your MCP server config.
+- Copy `configs/mcp.example.json` and set the MCP server URL + headers.
+- Set `MESEEKS_MCP_CONFIG` in `.env`.
+- First run will auto-generate the tool manifest under `~/.meeseeks/` and refresh it on each load.
+- Optional: add `auto_approve_tools` under each server to allowlist tools (the CLI writes this when you pick “Yes, always”).
+
+Advanced: set `MESEEKS_TOOL_MANIFEST` to override the tool list (disables auto-discovery).
+Tip: if you override the manifest, include `talk_to_user_tool` so the assistant can still reply.
+
+## Optional components
+- **Langfuse** is optional. Enable it by setting `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` (or disable with `LANGFUSE_ENABLED=0`).
+- **Home Assistant** tools are optional. Enable them by setting `HA_URL` and `HA_TOKEN` (or disable with `MESEEKS_HOME_ASSISTANT_ENABLED=0`).
+- Optional components auto-disable when init/runtime/auth fails, with logs explaining the reason.
 
 ---
-
-# Documentation 📚
-
-This repository ships a versioned documentation site built with MkDocs + Material and Mike.
-
-The version selector only lists versions that have been deployed with `mike` (it does not list Git branches directly).
-
-### Local documentation workflow
-
-1. Install documentation dependencies:
-
-   ```bash
-   pip install -r requirements-docs.txt
-   ```
-
-2. Serve docs locally:
-
-   ```bash
-   export PYTHONPATH="$PWD"
-   mkdocs serve
-   ```
-
-3. Build docs locally:
-
-   ```bash
-   export PYTHONPATH="$PWD"
-   mkdocs build --strict
-   ```
-
-### Deploying versioned docs with Mike
-
-For development docs (main branch):
-
-```bash
-export PYTHONPATH="$PWD"
-mike deploy dev
-mike set-default dev
-```
-
-If you plan to push docs to `gh-pages` (for example, using `--push`), ensure git has a user configured:
-
-```bash
-git config user.name "Your Name"
-git config user.email "you@example.com"
-```
-
-For release tags (for example, `v1.2.3` -> `1.2` with `latest` alias):
-
-```bash
-export PYTHONPATH="$PWD"
-mike deploy --update-aliases 1.2 latest
-mike set-default latest
-```
 
 # Contributing 👏
 
