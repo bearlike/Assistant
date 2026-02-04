@@ -1,0 +1,27 @@
+[project]
+name = "meeseeks-chat"
+version = "2.0.0-alpha"
+description = "Chat Interface wrapped around the Meeseeks core. Powered by Streamlit."
+readme = "../../README.md"
+requires-python = ">=3.10,<4.0"
+authors = [
+  { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },
+]
+license = { text = "MIT" }
+
+dependencies = [
+  "meeseeks-core>=2.0.0-alpha",
+  "meeseeks-tools[mcp]>=2.0.0-alpha",
+  "streamlit>=1.34.0,<2.0.0",
+]
+
+[project.scripts]
+meeseeks-chat = "meeseeks_chat.entrypoint:main"
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/meeseeks_chat"]
+include = ["src/meeseeks_chat/static/**"]

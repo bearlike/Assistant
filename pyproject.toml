@@ -1,46 +1,67 @@
-[tool.poetry]
-name = "meeseeks"
-version = "1.0.0"
-description = "Core module for Meeseeks - A powerful multi-LLM-agent assistant for complex tasks with support for tools integration."
-authors = ["Krishnakanth Alagiri <https://github.com/bearlike>"]
-license = "MIT"
+[project]
+name = "meeseeks-workspace"
+version = "2.0.0-alpha"
+description = "Workspace package for the Meeseeks monorepo."
 readme = "README.md"
-include = ["*.py"]
-package-mode = false
+requires-python = ">=3.10,<4.0"
+authors = [
+  { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },
+]
+license = { text = "MIT" }
+dependencies = [
+  "meeseeks-core>=2.0.0-alpha",
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-streamlit = "^1.34.0"
-python-dotenv = "^1.0.1"
-openai = "^1.28.0"
-langchain = "^1.2.8"
-langchain-openai = "^1.1.7"
-langfuse = { version = "^2.29.3", optional = true }
-jinja2 = "^3.1.4"
-jq = "^1.7.0"
-tiktoken = "^0.7.0"
-typing-extensions = "^4.12.2"
-meeseeks-api = { path = "./meeseeks-api", optional = true }
-meeseeks-chat = { path = "./meeseeks-chat", optional = true }
-meeseeks-cli = { path = "./meeseeks-cli", optional = true }
-langchain-core = "^1.2.8"
-langchain-community = "^0.4.1"
-langchain-mcp-adapters = "^0.2.1"
-loguru = "^0.7.2"
+[project.scripts]
+meeseeks = "meeseeks_cli.cli_master:main"
 
+[project.optional-dependencies]
+cli = ["meeseeks-cli>=2.0.0-alpha"]
+api = ["meeseeks-api>=2.0.0-alpha"]
+chat = ["meeseeks-chat>=2.0.0-alpha"]
+ha = ["meeseeks-ha-conversation>=2.0.0-alpha"]
+tools = ["meeseeks-tools>=2.0.0-alpha"]
 
-[tool.poetry.group.dev.dependencies]
-flake8 = "^7.0.0"
-pytest = "^8.2.0"
-autopep8 = "^2.1.0"
-pylint = "^3.1.0"
-ruff = "^0.6.9"
-mypy = "^1.11.2"
-pre-commit = "^3.7.1"
-types-requests = "^2.32.4.20260107"
-pytest-cov = "^7.0.0"
-flask = "^3.0.3"
-flask-restx = "^1.3.0"
+[dependency-groups]
+dev = [
+  "autopep8==2.1.0",
+  "flake8==7.0.0",
+  "mypy==1.11.2",
+  "pre-commit==3.7.1",
+  "pylint==3.1.0",
+  "pytest==8.2.0",
+  "pytest-cov==7.0.0",
+  "ruff==0.6.9",
+  "types-requests==2.32.4.20260107",
+  "vulture==2.14",
+]
+docs = [
+  "mike",
+  "mkdocs",
+  "mkdocs-material",
+  "mkdocstrings[python]",
+]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv]
+default-groups = []
+
+[tool.uv.sources]
+meeseeks-core = { workspace = true }
+meeseeks-tools = { workspace = true }
+meeseeks-cli = { path = "apps/meeseeks_cli" }
+meeseeks-api = { path = "apps/meeseeks_api" }
+meeseeks-chat = { path = "apps/meeseeks_chat" }
+meeseeks-ha-conversation = { path = "meeseeks_ha_conversation" }
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/meeseeks_workspace"]
 
 [tool.ruff]
 line-length = 100
@@ -61,8 +82,11 @@ convention = "google"
 
 [tool.mypy]
 files = [
-  "core/**/*.py",
-  "tools/**/*.py",
+  "packages/meeseeks_core/src/meeseeks_core/**/*.py",
+  "packages/meeseeks_tools/src/meeseeks_tools/**/*.py",
+  "apps/meeseeks_api/src/meeseeks_api/**/*.py",
+  "apps/meeseeks_chat/src/meeseeks_chat/**/*.py",
+  "apps/meeseeks_cli/src/meeseeks_cli/**/*.py",
   "meeseeks_ha_conversation/**/*.py",
 ]
 explicit_package_bases = true
@@ -74,15 +98,9 @@ warn_redundant_casts = true
 warn_unused_configs = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-
-[tool.poetry.extras]
-api = ["meeseeks-api"]
-chat = ["meeseeks-chat"]
-cli = ["meeseeks-cli"]
-observability = ["langfuse"]
-
-
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+testpaths = [
+  "tests",
+  "apps/meeseeks_api/tests",
+  "apps/meeseeks_chat/tests",
+  "apps/meeseeks_cli/tests",
+]

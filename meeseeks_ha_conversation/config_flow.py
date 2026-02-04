@@ -1,4 +1,5 @@
 """Adds config flow for Meeseeks."""
+
 from __future__ import annotations
 
 import types
@@ -43,7 +44,7 @@ DEFAULT_OPTIONS: Mapping[str, Any] = types.MappingProxyType(
         CONF_API_KEY: DEFAULT_API_KEY,
         CONF_TIMEOUT: DEFAULT_TIMEOUT,
         CONF_MODEL: DEFAULT_MODEL,
-        CONF_PROMPT_SYSTEM: DEFAULT_PROMPT_SYSTEM
+        CONF_PROMPT_SYSTEM: DEFAULT_PROMPT_SYSTEM,
     }
 )
 
@@ -54,9 +55,7 @@ class MeeseeksConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ign
     VERSION = 1
     client: MeeseeksApiClient
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial config flow step.
 
         Args:
@@ -66,9 +65,7 @@ class MeeseeksConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ign
             FlowResult for the configuration step.
         """
         if user_input is None:
-            return self.async_show_form(
-                step_id="user", data_schema=STEP_USER_DATA_SCHEMA
-            )
+            return self.async_show_form(step_id="user", data_schema=STEP_USER_DATA_SCHEMA)
 
         # Search for duplicates with the same CONF_BASE_URL value.
         for existing_entry in self._async_current_entries(include_ignore=False):
@@ -100,12 +97,8 @@ class MeeseeksConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ign
         else:
             return self.async_create_entry(
                 title=f"Meeseeks - {user_input[CONF_BASE_URL]}",
-                data={
-                    CONF_BASE_URL: user_input[CONF_BASE_URL]
-                },
-                options={
-                    CONF_TIMEOUT: user_input[CONF_TIMEOUT]
-                }
+                data={CONF_BASE_URL: user_input[CONF_BASE_URL]},
+                options={CONF_TIMEOUT: user_input[CONF_TIMEOUT]},
             )
 
         return self.async_show_form(
@@ -139,9 +132,7 @@ class MeeseeksOptionsFlow(config_entries.OptionsFlow):
         self.config_entry = config_entry
         self.options = dict(config_entry.options)
 
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Show the options menu.
 
         Args:
@@ -150,14 +141,9 @@ class MeeseeksOptionsFlow(config_entries.OptionsFlow):
         Returns:
             FlowResult for the options menu.
         """
-        return self.async_show_menu(
-            step_id="init",
-            menu_options=MENU_OPTIONS
-        )
+        return self.async_show_menu(step_id="init", menu_options=MENU_OPTIONS)
 
-    async def async_step_all_set(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_all_set(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the "all_set" options step.
 
         Args:
@@ -166,10 +152,7 @@ class MeeseeksOptionsFlow(config_entries.OptionsFlow):
         Returns:
             FlowResult for the options menu.
         """
-        return self.async_show_menu(
-            step_id="init",
-            menu_options=MENU_OPTIONS
-        )
+        return self.async_show_menu(step_id="init", menu_options=MENU_OPTIONS)
 
     async def async_step_general_config(
         self, user_input: dict[str, Any] | None = None
@@ -182,10 +165,7 @@ class MeeseeksOptionsFlow(config_entries.OptionsFlow):
         Returns:
             FlowResult for the options menu.
         """
-        return self.async_show_menu(
-            step_id="init",
-            menu_options=MENU_OPTIONS
-        )
+        return self.async_show_menu(step_id="init", menu_options=MENU_OPTIONS)
 
     async def async_step_prompt_system(
         self, user_input: dict[str, Any] | None = None
@@ -198,14 +178,9 @@ class MeeseeksOptionsFlow(config_entries.OptionsFlow):
         Returns:
             FlowResult for the options menu.
         """
-        return self.async_show_menu(
-            step_id="init",
-            menu_options=MENU_OPTIONS
-        )
+        return self.async_show_menu(step_id="init", menu_options=MENU_OPTIONS)
 
-    async def async_step_model_config(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_model_config(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the model configuration step.
 
         Args:
@@ -214,7 +189,4 @@ class MeeseeksOptionsFlow(config_entries.OptionsFlow):
         Returns:
             FlowResult for the options menu.
         """
-        return self.async_show_menu(
-            step_id="init",
-            menu_options=MENU_OPTIONS
-        )
+        return self.async_show_menu(step_id="init", menu_options=MENU_OPTIONS)

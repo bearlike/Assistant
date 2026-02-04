@@ -1,0 +1,31 @@
+[project]
+name = "meeseeks-ha-conversation"
+version = "2.0.0-alpha"
+description = "Home Assistant conversation integration for Meeseeks."
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+authors = [
+  { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },
+]
+license = { text = "MIT" }
+
+dependencies = [
+  "aiohttp>=3.9.0,<4.0.0",
+  "async-timeout>=4.0.0,<5.0.0",
+  "voluptuous>=0.13.1,<1.0.0",
+]
+
+[project.optional-dependencies]
+homeassistant = ["homeassistant>=2024.1.0"]
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["meeseeks_ha_conversation"]
+include = [
+  "manifest.json",
+  "strings.json",
+  "translations/**",
+]

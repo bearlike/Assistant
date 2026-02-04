@@ -1,0 +1,64 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "⬆️"
+      prefix-development: "⬆️"
+      include: "scope"
+
+  - package-ecosystem: "pip"
+    directory: "/packages/meeseeks_core"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "⬆️"
+      prefix-development: "⬆️"
+      include: "scope"
+
+  - package-ecosystem: "pip"
+    directory: "/packages/meeseeks_tools"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "⬆️"
+      prefix-development: "⬆️"
+      include: "scope"
+
+  - package-ecosystem: "pip"
+    directory: "/apps/meeseeks_api"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "⬆️"
+      prefix-development: "⬆️"
+      include: "scope"
+
+  - package-ecosystem: "pip"
+    directory: "/apps/meeseeks_chat"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "⬆️"
+      prefix-development: "⬆️"
+      include: "scope"
+
+  - package-ecosystem: "pip"
+    directory: "/apps/meeseeks_cli"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "⬆️"
+      prefix-development: "⬆️"
+      include: "scope"
+
+  - package-ecosystem: "pip"
+    directory: "/meeseeks_ha_conversation"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "⬆️"
+      prefix-development: "⬆️"
+      include: "scope"

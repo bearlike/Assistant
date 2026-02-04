@@ -1,8 +1,7 @@
 # Home Assistant Conversation Integration for Meeseeks 🚀
 
 <p align="center">
-    <a href="https://github.com/bearlike/Personal-Assistant/wiki"><img alt="Wiki" src="https://img.shields.io/badge/GitHub-Wiki-blue?style=for-the-badge&logo=github"></a>
-    <a href="https://github.com/bearlike/Personal-Assistant/releases"><img src="https://img.shields.io/github/v/release/bearlike/Personal-Assistant?style=for-the-badge&" alt="GitHub Release"></a>
+    <a href="https://github.com/bearlike/Assistant/releases"><img src="https://img.shields.io/github/v/release/bearlike/Assistant?style=for-the-badge&" alt="GitHub Release"></a>
 </p>
 
 
@@ -21,6 +20,14 @@
 - Wrapped around the REST API Engine for Meeseeks. 100% coverage of Meeseeks API.
 - This integration is optional and auto-disables if `HA_URL`/`HA_TOKEN` are missing or auth fails.
 - No components are explicitly tested for safety or security. Use with caution in a production environment.
-- For more information, such as installation, please check out the [Wiki](https://github.com/bearlike/Personal-Assistant/wiki).
+- For full setup and configuration, see `docs/getting-started.md`.
 
-[Link to GitHub Repository](https://github.com/bearlike/Personal-Assistant)
+## Install (optional)
+```bash
+uv sync --extra ha
+```
+
+To use it in Home Assistant, install `meeseeks_ha_conversation/` as a custom component
+and point it at the Meeseeks API.
+
+[Link to GitHub Repository](https://github.com/bearlike/Assistant)

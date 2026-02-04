@@ -1,0 +1,31 @@
+[project]
+name = "meeseeks-cli"
+version = "2.0.0-alpha"
+description = "Terminal CLI frontend for the Meeseeks core orchestration engine."
+readme = "../../README.md"
+requires-python = ">=3.10,<4.0"
+authors = [
+  { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },
+]
+license = { text = "MIT" }
+
+dependencies = [
+  "meeseeks-core>=2.0.0-alpha",
+  "meeseeks-tools[mcp]>=2.0.0-alpha",
+  "prompt-toolkit>=3.0.47,<4.0.0",
+  "rich>=14.2.0,<15.0.0",
+  "textual>=7.5.0,<8.0.0",
+]
+
+[project.optional-dependencies]
+observability = ["langfuse>=2.29.3,<3.0.0"]
+
+[project.scripts]
+meeseeks = "meeseeks_cli.cli_master:main"
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/meeseeks_cli"]

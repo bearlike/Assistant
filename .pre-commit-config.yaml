@@ -6,18 +6,8 @@ repos:
         args: [--fix]
   - repo: local
     hooks:
-      - id: mypy-root
-        name: mypy (root)
-        entry: poetry run mypy
-        language: system
-        pass_filenames: false
-      - id: mypy-api
-        name: mypy (meeseeks-api)
-        entry: bash -lc 'cd meeseeks-api && poetry run mypy'
-        language: system
-        pass_filenames: false
-      - id: mypy-chat
-        name: mypy (meeseeks-chat)
-        entry: bash -lc 'cd meeseeks-chat && poetry run mypy'
+      - id: mypy
+        name: mypy
+        entry: .venv/bin/mypy
         language: system
         pass_filenames: false

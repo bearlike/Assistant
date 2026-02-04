@@ -1,0 +1,172 @@
+{
+  "repo_notes": [
+    {
+      "content": "Developer documentation only. Prioritize architecture, interfaces between subprojects, and operational/debugging guidance for contributors. Keep pages concise and cross-link to /docs as canonical references."
+    }
+  ],
+  "pages": [
+    {
+      "title": "Overview",
+      "purpose": "Project-level developer overview: repo goals, component boundaries, and how the monorepo is organized."
+    },
+    {
+      "title": "Repo Map",
+      "purpose": "Explain the monorepo layout and responsibilities of each top-level project folder; include a directory map and ownership boundaries.",
+      "parent": "Overview"
+    },
+    {
+      "title": "Architecture",
+      "purpose": "High-level architecture and system boundaries; how subprojects integrate with the Core.",
+      "parent": "Overview"
+    },
+    {
+      "title": "System Architecture",
+      "purpose": "Core architecture diagram(s) and data/control flows across Core, API, CLI, Chat UI, and Home Assistant integration.",
+      "parent": "Architecture"
+    },
+    {
+      "title": "Integration Contracts",
+      "purpose": "Define how subprojects call Core orchestration, tool registry, permissions, and session store; include interfaces and data contracts.",
+      "parent": "Architecture"
+    },
+    {
+      "title": "Core Engine",
+      "purpose": "Deep dive into orchestration, planning, execution, session management, and tool coordination.",
+      "parent": "Overview"
+    },
+    {
+      "title": "Orchestration Loop",
+      "purpose": "Plan-act-observe-replan loop, iteration limits, failure handling, and response synthesis.",
+      "parent": "Core Engine"
+    },
+    {
+      "title": "Action Planning",
+      "purpose": "Action plan structure, planner prompt, and schema requirements for tool calls.",
+      "parent": "Core Engine"
+    },
+    {
+      "title": "Session Management",
+      "purpose": "Session creation, transcript persistence, summary storage, tagging, and forking.",
+      "parent": "Core Engine"
+    },
+    {
+      "title": "Tool Registry",
+      "purpose": "Tool discovery, registration, manifest usage, MCP auto-discovery, and lazy instantiation behavior.",
+      "parent": "Core Engine"
+    },
+    {
+      "title": "Permissions & Hooks",
+      "purpose": "Permission policies, approval callbacks, pre/post-tool hooks, and execution control.",
+      "parent": "Core Engine"
+    },
+    {
+      "title": "Tools & Integrations",
+      "purpose": "Developer reference for tool contracts and integration patterns (local tools, MCP tools, optional integrations)."
+    },
+    {
+      "title": "Tool Architecture",
+      "purpose": "AbstractTool base class, ToolRunner protocol, MockSpeaker responses, and how to author custom tools.",
+      "parent": "Tools & Integrations"
+    },
+    {
+      "title": "MCP Tool Integration",
+      "purpose": "MCP server configuration, discovery flow, schema validation, and manifest caching.",
+      "parent": "Tools & Integrations"
+    },
+    {
+      "title": "Home Assistant Integration",
+      "purpose": "Home Assistant tool wiring, API communication, caching, and HA-specific constraints.",
+      "parent": "Tools & Integrations"
+    },
+    {
+      "title": "Data Models & Types",
+      "purpose": "Pydantic models, TypedDict payloads, and type boundaries used across the system."
+    },
+    {
+      "title": "Core Data Models",
+      "purpose": "ActionStep, TaskQueue, OrchestrationState, ToolSpec, and validation rules.",
+      "parent": "Data Models & Types"
+    },
+    {
+      "title": "Event System",
+      "purpose": "EventRecord types, event logging, transcript schema, and how events drive replanning.",
+      "parent": "Data Models & Types"
+    },
+    {
+      "title": "Payload Types",
+      "purpose": "ActionStepPayload, ToolResultPayload, PermissionPayload, UserPayload, and related structures.",
+      "parent": "Data Models & Types"
+    },
+    {
+      "title": "Subprojects",
+      "purpose": "Developer docs for each subproject; include local architecture diagrams and integration notes."
+    },
+    {
+      "title": "CLI Project",
+      "purpose": "CLI architecture, command registry, prompt/response rendering, and orchestration integration.",
+      "parent": "Subprojects"
+    },
+    {
+      "title": "Chat UI Project",
+      "purpose": "Chat UI architecture, session flow, and integration with Core orchestration.",
+      "parent": "Subprojects"
+    },
+    {
+      "title": "API Project",
+      "purpose": "REST API architecture, endpoints, and Core integration contract.",
+      "parent": "Subprojects"
+    },
+    {
+      "title": "Home Assistant Conversation Project",
+      "purpose": "HA conversation adapter architecture and Core integration points.",
+      "parent": "Subprojects"
+    },
+    {
+      "title": "Test Suite",
+      "purpose": "Testing strategy, mocking boundaries, integration tests, and coverage expectations.",
+      "parent": "Subprojects"
+    },
+    {
+      "title": "Configuration & Deployment",
+      "purpose": "Developer setup, environment variables, model configuration, and deployment options."
+    },
+    {
+      "title": "Development Setup",
+      "purpose": "Local dev setup, dependency installation, and how to run tests/linting.",
+      "parent": "Configuration & Deployment"
+    },
+    {
+      "title": "Environment Variables",
+      "purpose": "Reference of env vars, defaults, and precedence across subprojects.",
+      "parent": "Configuration & Deployment"
+    },
+    {
+      "title": "Model Configuration",
+      "purpose": "Model selection, action vs default models, and provider configuration.",
+      "parent": "Configuration & Deployment"
+    },
+    {
+      "title": "Docker Deployment",
+      "purpose": "Docker images, build targets, runtime configuration, and multi-platform notes.",
+      "parent": "Configuration & Deployment"
+    },
+    {
+      "title": "Operations & Diagnostics",
+      "purpose": "Logging, troubleshooting, and production support workflows."
+    },
+    {
+      "title": "Logging & Diagnostics",
+      "purpose": "Log levels, error traces, and guidance for capturing failures.",
+      "parent": "Operations & Diagnostics"
+    },
+    {
+      "title": "Troubleshooting",
+      "purpose": "Common failure modes (MCP discovery, tool init, permissions) and recovery steps.",
+      "parent": "Operations & Diagnostics"
+    },
+    {
+      "title": "Advanced Topics",
+      "purpose": "Context management, reflection/compaction, observability, and performance tuning."
+    }
+  ]
+}

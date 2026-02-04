@@ -1,6 +1,0 @@
-Tool: Talk to User (action_consumer="talk_to_user_tool")
-- The argument is a message to speak to the user.
-- Use a conversational tone and avoid lists, breaks, colons, or formal structuring.
-- action_type=set: Speak to the user.
-- action_type=get does not exist for this tool.
-- If a tool with action_type=get already communicates results to the user, avoid adding a talk_to_user_tool action after it.

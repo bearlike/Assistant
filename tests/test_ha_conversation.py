@@ -1,4 +1,5 @@
 """Tests for the Home Assistant conversation integration."""
+
 import asyncio
 import sys
 import types
@@ -43,9 +44,7 @@ def _install_homeassistant_stubs():
     homeassistant_components_ha = types.ModuleType(
         "homeassistant.components.homeassistant.exposed_entities"
     )
-    homeassistant_components_ha.async_should_expose = (
-        lambda hass, domain, entity_id: True
-    )
+    homeassistant_components_ha.async_should_expose = lambda hass, domain, entity_id: True
 
     config_entries = types.ModuleType("homeassistant.config_entries")
 
@@ -199,9 +198,9 @@ def _install_homeassistant_stubs():
 
     sys.modules["homeassistant.components"] = components
     sys.modules["homeassistant.components.conversation"] = conversation
-    sys.modules[
-        "homeassistant.components.homeassistant.exposed_entities"
-    ] = homeassistant_components_ha
+    sys.modules["homeassistant.components.homeassistant.exposed_entities"] = (
+        homeassistant_components_ha
+    )
     sys.modules["homeassistant.config_entries"] = config_entries
     sys.modules["homeassistant.data_entry_flow"] = data_entry_flow
     sys.modules["homeassistant.const"] = const
@@ -250,6 +249,7 @@ def _install_other_stubs():
 _install_homeassistant_stubs()
 _install_other_stubs()
 
+import meeseeks_ha_conversation as ha_module  # noqa: E402
 from meeseeks_ha_conversation import (  # noqa: E402
     MeeseeksAgent,
 )
@@ -267,6 +267,7 @@ from meeseeks_ha_conversation.helpers import get_exposed_entities  # noqa: E402
 
 class DummySession:
     """Stub aiohttp session for API client testing."""
+
     def __init__(self, payload):
         """Initialize the session with a payload."""
         self.payload = payload
@@ -280,6 +281,7 @@ class DummySession:
 
 class DummyResponse:
     """Stub response object for aiohttp interactions."""
+
     def __init__(self, payload):
         """Initialize the response with a payload."""
         self._payload = payload
@@ -302,9 +304,7 @@ def test_api_generate_includes_session_id():
     """Include session_id in API request payloads."""
     session = DummySession({"task_result": "ok"})
     client = MeeseeksApiClient(base_url="http://test", timeout=10, session=session)
-    result = asyncio.run(
-        client.async_generate({"prompt": "hello", "session_id": "abc"})
-    )
+    result = asyncio.run(client.async_generate({"prompt": "hello", "session_id": "abc"}))
     assert session.last_request["json"]["session_id"] == "abc"
     assert result["response"] == "ok"
     assert result["context"] == "ok"
@@ -324,6 +324,7 @@ def test_api_generate_requires_prompt():
 
 def test_coordinator_update_success():
     """Update coordinator successfully when heartbeat passes."""
+
     class Client:
         async def async_get_heartbeat(self):
             return True
@@ -335,6 +336,7 @@ def test_coordinator_update_success():
 
 def test_coordinator_update_failure():
     """Raise UpdateFailed when heartbeat errors."""
+
     class Client:
         async def async_get_heartbeat(self):
             raise ApiClientError("bad")
@@ -372,11 +374,9 @@ def test_agent_process_success():
     async def fake_query(messages):
         return {"response": "hi", "context": {}, "session_id": "sid", "task_result": "hi"}
 
-    agent.query = fake_query  # type: ignore[assignment]
+    agent.query = fake_query
 
-    ConversationInput = sys.modules[
-        "homeassistant.components.conversation"
-    ].ConversationInput
+    ConversationInput = sys.modules["homeassistant.components.conversation"].ConversationInput
     user_input = ConversationInput("conv1", "hello", "en")
     result = asyncio.run(agent.async_process(user_input))
     assert result.response.speech == "hi"
@@ -394,14 +394,32 @@ def test_agent_process_error():
     async def fake_query(messages):
         raise HomeAssistantError("boom")
 
-    agent.query = fake_query  # type: ignore[assignment]
+    agent.query = fake_query
 
-    ConversationInput = sys.modules[
-        "homeassistant.components.conversation"
-    ].ConversationInput
+    ConversationInput = sys.modules["homeassistant.components.conversation"].ConversationInput
     user_input = ConversationInput("conv1", "hello", "en")
     result = asyncio.run(agent.async_process(user_input))
     assert result.response.error is not None
+
+
+def test_agent_process_uses_history():
+    """Reuse history when conversation_id already exists."""
+    hass = types.SimpleNamespace()
+    entry = types.SimpleNamespace()
+    client = types.SimpleNamespace()
+    agent = MeeseeksAgent(hass, entry, client)
+
+    async def fake_query(messages):
+        return {"response": "hi", "context": {}, "session_id": "sid", "task_result": "hi"}
+
+    agent.query = fake_query
+    ConversationInput = sys.modules["homeassistant.components.conversation"].ConversationInput
+    user_input = ConversationInput("conv1", "hello", "en")
+    first = asyncio.run(agent.async_process(user_input))
+    assert first.conversation_id in agent.history
+    followup = ConversationInput(first.conversation_id, "hello again", "en")
+    asyncio.run(agent.async_process(followup))
+    assert first.conversation_id in agent.history
 
 
 def test_config_flow_show_form():
@@ -447,8 +465,168 @@ def test_config_flow_success(monkeypatch):
     assert result["data"]["base_url"] == "http://test"
 
 
+def test_config_flow_error(monkeypatch):
+    """Return error form when heartbeat raises."""
+    flow = MeeseeksConfigFlow()
+    flow.hass = object()
+
+    async def fake_heartbeat(self):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(MeeseeksApiClient, "async_get_heartbeat", fake_heartbeat)
+    user_input = {
+        "base_url": "http://test",
+        "api_key": "token",
+        "timeout": 10,
+    }
+    result = asyncio.run(flow.async_step_user(user_input))
+    assert result["type"] == "form"
+    assert result["errors"]["base"] == "unknown"
+
+
 def test_options_flow_menu():
     """Return options flow menu results."""
     flow = MeeseeksOptionsFlow(types.SimpleNamespace(options={}))
     result = asyncio.run(flow.async_step_init())
     assert result["type"] == "menu"
+
+
+def test_options_flow_other_steps():
+    """Cover other options flow steps."""
+    flow = MeeseeksOptionsFlow(types.SimpleNamespace(options={}))
+    assert asyncio.run(flow.async_step_all_set())["type"] == "menu"
+    assert asyncio.run(flow.async_step_general_config())["type"] == "menu"
+    assert asyncio.run(flow.async_step_prompt_system())["type"] == "menu"
+    assert asyncio.run(flow.async_step_model_config())["type"] == "menu"
+
+
+def test_async_setup_and_unload_entry(monkeypatch):
+    """Set up and unload the Home Assistant integration."""
+    from meeseeks_ha_conversation.const import CONF_BASE_URL, CONF_TIMEOUT
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def async_get_heartbeat(self):
+            return True
+
+    class DummyCoordinator:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def async_config_entry_first_refresh(self):
+            return None
+
+    monkeypatch.setattr(ha_module, "MeeseeksApiClient", DummyClient)
+    monkeypatch.setattr(ha_module, "MeeseeksDataUpdateCoordinator", DummyCoordinator)
+    monkeypatch.setattr(ha_module, "async_get_clientsession", lambda _hass: None)
+
+    ConfigEntry = sys.modules["homeassistant.config_entries"].ConfigEntry
+    hass = types.SimpleNamespace(data={})
+    entry = ConfigEntry(
+        data={CONF_BASE_URL: "http://test"},
+        options={CONF_TIMEOUT: 10},
+    )
+    assert asyncio.run(ha_module.async_setup_entry(hass, entry)) is True
+    assert hass._agent is not None
+    assert asyncio.run(ha_module.async_unload_entry(hass, entry)) is True
+    assert hass._agent is None
+
+
+def test_async_reload_entry(monkeypatch):
+    """Reload calls unload and setup."""
+    calls = []
+
+    async def fake_unload(*_args, **_kwargs):
+        calls.append("unload")
+        return True
+
+    async def fake_setup(*_args, **_kwargs):
+        calls.append("setup")
+        return True
+
+    monkeypatch.setattr(ha_module, "async_unload_entry", fake_unload)
+    monkeypatch.setattr(ha_module, "async_setup_entry", fake_setup)
+    hass = types.SimpleNamespace()
+    entry = types.SimpleNamespace()
+    asyncio.run(ha_module.async_reload_entry(hass, entry))
+    assert calls == ["unload", "setup"]
+
+
+def test_supported_languages_and_prompt_render():
+    """Expose supported languages and prompt rendering."""
+    hass = types.SimpleNamespace(config=types.SimpleNamespace(location_name="Home"))
+    entry = types.SimpleNamespace()
+    client = types.SimpleNamespace()
+    agent = MeeseeksAgent(hass, entry, client)
+    assert agent.supported_languages == "*"
+    rendered = agent._async_generate_prompt("hello", [])
+    assert rendered == "hello"
+
+
+def test_missing_homeassistant_error():
+    """Raise when Home Assistant is unavailable."""
+    original_available = ha_module._HOMEASSISTANT_AVAILABLE
+    original_error = getattr(ha_module, "_HOMEASSISTANT_IMPORT_ERROR", None)
+    try:
+        ha_module._HOMEASSISTANT_AVAILABLE = False
+        ha_module._HOMEASSISTANT_IMPORT_ERROR = ModuleNotFoundError("ha")
+        error = ha_module._missing_homeassistant_error()
+        assert isinstance(error, RuntimeError)
+        assert isinstance(error.__cause__, ModuleNotFoundError)
+    finally:
+        ha_module._HOMEASSISTANT_AVAILABLE = original_available
+        ha_module._HOMEASSISTANT_IMPORT_ERROR = original_error
+
+
+def test_api_wrapper_decode_json_false():
+    """Return text response when decode_json is disabled."""
+
+    class Response:
+        status = 200
+
+        def raise_for_status(self):
+            return None
+
+        async def json(self):
+            return {"task_result": "ok"}
+
+        async def text(self):
+            return "plain"
+
+    class Session:
+        async def request(self, **_kwargs):
+            return Response()
+
+    client = MeeseeksApiClient(base_url="http://test", timeout=10, session=Session())
+    result = asyncio.run(client._meeseeks_api_wrapper("get", "http://test", decode_json=False))
+    assert result == "plain"
+
+
+def test_api_wrapper_handles_404():
+    """Raise ApiJsonError when API returns 404 payload."""
+
+    class Response:
+        status = 404
+
+        def raise_for_status(self):
+            return None
+
+        async def json(self):
+            return {"error": "nope"}
+
+        async def text(self):
+            return "nope"
+
+    class Session:
+        async def request(self, **_kwargs):
+            return Response()
+
+    client = MeeseeksApiClient(base_url="http://test", timeout=10, session=Session())
+    try:
+        asyncio.run(client._meeseeks_api_wrapper("get", "http://test"))
+    except Exception as exc:
+        assert exc.__class__.__name__ == "ApiJsonError"
+    else:
+        assert False

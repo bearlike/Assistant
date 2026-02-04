@@ -8,9 +8,9 @@
   "dependencies": [
     "conversation"
   ],
-  "documentation": "https://github.com/bearlike/Personal-Assistant",
+  "documentation": "https://github.com/bearlike/Assistant",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/bearlike/Personal-Assistant/issues",
+  "issue_tracker": "https://github.com/bearlike/Assistant/issues",
   "version": "v1.2.0"
 }

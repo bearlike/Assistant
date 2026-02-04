@@ -1,42 +1,19 @@
 """Integration tests for core tools and adapters."""
+
 import asyncio
 import sys
 import types
 
 import pytest
-
-from core.common import get_mock_speaker
-from tools.core.talk_to_user import TalkToUser
-from tools.integration.homeassistant import HomeAssistant
-from tools.integration.mcp import MCPToolRunner, _load_mcp_config, discover_mcp_tools
-
-
-def test_talk_to_user_set_state(monkeypatch, tmp_path):
-    """Echo the action argument when setting state."""
-    monkeypatch.setenv("CACHE_DIR", str(tmp_path))
-    tool = TalkToUser()
-    step = types.SimpleNamespace(action_argument="hello")
-    result = tool.set_state(step)
-    assert result.content == "hello"
-
-
-def test_talk_to_user_requires_step(monkeypatch, tmp_path):
-    """Require an action step for TalkToUser set_state."""
-    monkeypatch.setenv("CACHE_DIR", str(tmp_path))
-    tool = TalkToUser()
-    with pytest.raises(ValueError):
-        tool.set_state(None)
-
-
-def test_talk_to_user_skips_llm(monkeypatch, tmp_path):
-    """Ensure TalkToUser does not initialize an LLM client."""
-    monkeypatch.setenv("CACHE_DIR", str(tmp_path))
-
-    def _boom(*_args, **_kwargs):
-        raise AssertionError("build_chat_model should not be called")
-
-    monkeypatch.setattr("core.classes.build_chat_model", _boom)
-    TalkToUser()
+from meeseeks_core.common import get_mock_speaker
+from meeseeks_tools.integration.homeassistant import HomeAssistant, cache_monitor
+from meeseeks_tools.integration.mcp import (
+    MCPToolRunner,
+    _load_mcp_config,
+    _prepare_mcp_input,
+    discover_mcp_tool_details_with_failures,
+    discover_mcp_tools,
+)
 
 
 def test_mcp_config_requires_env(monkeypatch):
@@ -64,6 +41,7 @@ def test_mcp_config_normalizes_legacy_keys(monkeypatch, tmp_path):
 def test_mcp_tool_runner_uses_async(monkeypatch):
     """Use async invocation path in MCP tool runner."""
     runner = MCPToolRunner(server_name="srv", tool_name="tool")
+
     async def _fake_invoke(_):
         return "ok"
 
@@ -108,6 +86,99 @@ def test_mcp_discovery_normalizes_config(monkeypatch):
     assert server["headers"] == {"Authorization": "Bearer token"}
 
 
+def test_mcp_discovery_schema_and_runtime_failure(monkeypatch, tmp_path):
+    """Cover schema extraction and runtime error logging in one flow."""
+    config_path = tmp_path / "mcp.json"
+    config_path.write_text(
+        '{"servers": {"good": {"transport": "stdio"}, "bad": {"transport": "stdio"}}}'
+    )
+    monkeypatch.setenv("MESEEKS_MCP_CONFIG", str(config_path))
+
+    class SchemaModelJson:
+        def model_json_schema(self):
+            return {
+                "required": "bad",
+                "properties": {"query": "bad"},
+            }
+
+    class SchemaLegacy:
+        def schema(self):
+            return {
+                "required": ["query"],
+                "properties": "bad",
+            }
+
+    class SchemaNonDict:
+        def schema(self):
+            return "bad"
+
+    class ToolA:
+        name = "tool_a"
+        args_schema = SchemaModelJson()
+
+        async def ainvoke(self, _input):
+            raise DummyError()
+
+    class ToolB:
+        name = "tool_b"
+        args_schema = SchemaLegacy()
+
+    class ToolC:
+        name = "tool_c"
+        args_schema = SchemaNonDict()
+
+    class ToolD:
+        name = "tool_d"
+        args_schema = object()
+
+    class ToolE:
+        name = "tool_e"
+        args_schema = SchemaLegacy()
+
+        async def ainvoke(self, _input):
+            raise RuntimeError("plain")
+
+    class DummyError(Exception):
+        def __init__(self):
+            super().__init__("boom")
+            self.exceptions = (RuntimeError("sub1"), RuntimeError("sub2"))
+
+    class DummyClient:
+        def __init__(self, servers):
+            self.servers = servers
+
+        async def get_tools(self, server_name):
+            if server_name == "bad":
+                raise DummyError()
+            if server_name == "plain":
+                raise RuntimeError("plain")
+            return [ToolA(), ToolB(), ToolC(), ToolD(), ToolE()]
+
+    module = types.ModuleType("langchain_mcp_adapters.client")
+    module.MultiServerMCPClient = DummyClient
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters.client", module)
+
+    discovered, failures = discover_mcp_tool_details_with_failures(
+        {
+            "servers": {
+                "good": {"transport": "stdio"},
+                "bad": {"transport": "stdio"},
+                "plain": {"transport": "stdio"},
+            }
+        }
+    )
+    schema = discovered["good"][0]["schema"]
+    assert schema["required"] == []
+    assert "bad" in failures
+
+    runner = MCPToolRunner(server_name="good", tool_name="tool_a")
+    with pytest.raises(DummyError):
+        asyncio.run(runner._invoke_async("hi"))
+    runner = MCPToolRunner(server_name="good", tool_name="tool_e")
+    with pytest.raises(RuntimeError):
+        asyncio.run(runner._invoke_async("hi"))
+
+
 def test_mcp_invoke_async_success(monkeypatch, tmp_path):
     """Invoke an MCP tool successfully with stubbed client."""
     config_path = tmp_path / "mcp.json"
@@ -118,6 +189,8 @@ def test_mcp_invoke_async_success(monkeypatch, tmp_path):
         name = "tool"
 
         async def ainvoke(self, input_text):
+            if isinstance(input_text, dict):
+                return f"out:{input_text.get('query')}"
             return f"out:{input_text}"
 
     class DummyClient:
@@ -134,6 +207,108 @@ def test_mcp_invoke_async_success(monkeypatch, tmp_path):
     runner = MCPToolRunner(server_name="srv", tool_name="tool")
     result = asyncio.run(runner._invoke_async("hi"))
     assert result == "out:hi"
+
+
+@pytest.mark.parametrize(
+    ("schema", "argument", "expected"),
+    [
+        (types.SimpleNamespace(model_fields={"query": object()}), "hi", {"query": "hi"}),
+        (
+            types.SimpleNamespace(model_fields={"query": object(), "other": object()}),
+            "hello",
+            {"query": "hello"},
+        ),
+        (
+            types.SimpleNamespace(model_fields={"alpha": object(), "beta": object()}),
+            "hi",
+            "hi",
+        ),
+        (
+            {
+                "required": ["query"],
+                "properties": {"query": {"type": "string"}},
+            },
+            "hello",
+            {"query": "hello"},
+        ),
+        (
+            types.SimpleNamespace(__fields__={"question": object()}),
+            "hi",
+            {"question": "hi"},
+        ),
+        (
+            {
+                "required": ["query"],
+                "properties": {"query": {"type": "array", "items": {"type": "string"}}},
+            },
+            "hi",
+            {"query": ["hi"]},
+        ),
+        (
+            {"properties": "bad"},
+            "hello",
+            "hello",
+        ),
+        (
+            {"properties": {"query": {"type": "string"}}},
+            {"query": "hi"},
+            {"query": "hi"},
+        ),
+        (
+            {"properties": {"query": {"type": "string"}}},
+            123,
+            123,
+        ),
+    ],
+)
+def test_mcp_prepare_input_variants(schema, argument, expected):
+    """Normalize string payloads for MCP tools with schemas."""
+    tool = types.SimpleNamespace(args_schema=schema)
+    payload = _prepare_mcp_input(tool, argument)
+    assert payload == expected
+
+
+def test_mcp_prepare_input_parses_json_string():
+    """Parse JSON object strings into dictionaries."""
+    tool = types.SimpleNamespace(args_schema=None)
+    payload = _prepare_mcp_input(tool, '{"question": "hi"}')
+    assert payload == {"question": "hi"}
+    fallback = _prepare_mcp_input(tool, "{bad json}")
+    assert fallback == "{bad json}"
+
+
+def test_mcp_invoke_async_wraps_string_for_schema(monkeypatch, tmp_path):
+    """Ensure MCP invoke passes dict payloads when args_schema exists."""
+    config_path = tmp_path / "mcp.json"
+    config_path.write_text('{"servers": {"srv": {"transport": "stdio"}}}', encoding="utf-8")
+    monkeypatch.setenv("MESEEKS_MCP_CONFIG", str(config_path))
+    captured = {}
+
+    class DummyArgsSchema:
+        model_fields = {"query": object()}
+
+    class DummyTool:
+        name = "tool"
+        args_schema = DummyArgsSchema
+
+        async def ainvoke(self, input_text):
+            captured["payload"] = input_text
+            return "ok"
+
+    class DummyClient:
+        def __init__(self, servers):
+            self.servers = servers
+
+        async def get_tools(self, server_name):
+            return [DummyTool()]
+
+    module = types.ModuleType("langchain_mcp_adapters.client")
+    module.MultiServerMCPClient = DummyClient
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters.client", module)
+
+    runner = MCPToolRunner(server_name="srv", tool_name="tool")
+    asyncio.run(runner._invoke_async("hi"))
+    assert captured["payload"] == {"query": "hi"}
 
 
 def test_mcp_invoke_async_missing_tool(monkeypatch, tmp_path):
@@ -199,7 +374,7 @@ def test_homeassistant_update_services(monkeypatch):
             return [{"domain": "scene"}]
 
     monkeypatch.setattr(
-        "tools.integration.homeassistant.requests.get",
+        "meeseeks_tools.integration.homeassistant.requests.get",
         lambda *args, **kwargs: DummyResponse(),
     )
     assert ha.update_services() is True
@@ -221,7 +396,7 @@ def test_homeassistant_update_entities(monkeypatch):
             ]
 
     monkeypatch.setattr(
-        "tools.integration.homeassistant.requests.get",
+        "meeseeks_tools.integration.homeassistant.requests.get",
         lambda *args, **kwargs: DummyResponse(),
     )
     assert ha.update_entities() is True
@@ -247,6 +422,7 @@ def test_homeassistant_update_entity_ids(monkeypatch):
 
 def test_homeassistant_prompt_builders():
     """Build prompts for set/get operations."""
+
     class DummyParser:
         def get_format_instructions(self):
             return "format"
@@ -282,7 +458,7 @@ def test_homeassistant_call_service_success(monkeypatch):
             return "ok"
 
     monkeypatch.setattr(
-        "tools.integration.homeassistant.requests.post",
+        "meeseeks_tools.integration.homeassistant.requests.post",
         lambda *args, **kwargs: DummyResponse(),
     )
     ok, payload = ha.call_service("scene", "turn_on", "scene.lamp")
@@ -332,12 +508,12 @@ def test_homeassistant_set_state(monkeypatch):
             return "format"
 
     monkeypatch.setattr(
-        "tools.integration.homeassistant.PydanticOutputParser",
+        "meeseeks_tools.integration.homeassistant.PydanticOutputParser",
         DummyParser,
     )
     monkeypatch.setattr(HomeAssistant, "_create_set_prompt", lambda *_a, **_k: DummyChain())
     monkeypatch.setattr(
-        "tools.integration.homeassistant.ha_render_system_prompt",
+        "meeseeks_tools.integration.homeassistant.ha_render_system_prompt",
         lambda *args, **kwargs: "prompt",
     )
     monkeypatch.setattr(
@@ -363,9 +539,54 @@ def test_homeassistant_get_state(monkeypatch):
 
     monkeypatch.setattr(HomeAssistant, "_create_get_prompt", lambda *_a, **_k: DummyChain())
     monkeypatch.setattr(
-        "tools.integration.homeassistant.ha_render_system_prompt",
+        "meeseeks_tools.integration.homeassistant.ha_render_system_prompt",
         lambda *args, **kwargs: "prompt",
     )
     step = types.SimpleNamespace(action_argument="status")
     result = ha.get_state(step)
     assert result.content == "answer"
+
+
+def test_cache_monitor_cleans_entities():
+    """Clean entity and service cache data through the decorator."""
+
+    class DummyCacheHolder:
+        def __init__(self):
+            self.cache = {
+                "entities": [
+                    {
+                        "entity_id": "light.kitchen",
+                        "attributes": {"icon": "light"},
+                        "state": "on",
+                        "context": {},
+                        "last_changed": "x",
+                        "last_reported": "x",
+                        "last_updated": "x",
+                    },
+                    {
+                        "entity_id": "sensor.temp",
+                        "attributes": {"icon": "sensor"},
+                        "state": "5",
+                    },
+                    {
+                        "entity_id": "scene.morning",
+                        "attributes": {},
+                        "state": "on",
+                    },
+                ],
+                "services": [{"domain": "light"}, {"domain": "switch"}],
+                "allowed_domains": ["light"],
+                "entity_ids": ["light.kitchen", "sensor.temp", "scene.morning"],
+                "sensor_ids": ["sensor.temp"],
+                "sensors": [],
+            }
+
+        @cache_monitor
+        def refresh(self):
+            return "ok"
+
+    holder = DummyCacheHolder()
+    assert holder.refresh() == "ok"
+    assert all(service["domain"] == "light" for service in holder.cache["services"])
+    assert any(entity["entity_id"].startswith("light.") for entity in holder.cache["entities"])
+    assert any(sensor["entity_id"].startswith("sensor.") for sensor in holder.cache["sensors"])

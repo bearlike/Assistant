@@ -1,16 +1,22 @@
-.PHONY: lint lint-fix typecheck precommit-install
+.PHONY: bootstrap lint lint-fix typecheck precommit-install
+
+VENV ?= .venv
+
+bootstrap:
+	uv venv $(VENV)
+	uv pip install -e .[dev]
+	uv pip install -e packages/meeseeks_core -e packages/meeseeks_tools \
+		-e apps/meeseeks_api -e apps/meeseeks_chat -e apps/meeseeks_cli \
+		-e meeseeks_ha_conversation
 
 lint:
-	poetry run ruff check .
+	$(VENV)/bin/ruff check .
 
 lint-fix:
-	poetry run ruff check --fix .
+	$(VENV)/bin/ruff check --fix .
 
 typecheck:
-	poetry run mypy
-	cd meeseeks-api && poetry run mypy
-	cd meeseeks-chat && poetry run mypy
-	cd meeseeks-cli && poetry run mypy
+	$(VENV)/bin/mypy
 
 precommit-install:
-	poetry run pre-commit install
+	$(VENV)/bin/pre-commit install

@@ -1,4 +1,5 @@
 """Constants for meeseeks_conversation."""
+
 from logging import Logger, getLogger
 
 LOGGER: Logger = getLogger(__package__)

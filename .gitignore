@@ -116,6 +116,9 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
+*.env
 .venv
 env/
 venv/
@@ -139,7 +142,7 @@ venv.bak/
 dmypy.json
 
 # Local runtime sessions
-meeseeks-cli/data/
+apps/meeseeks_cli/data/
 
 # Local config files (MCP/tool manifests, secrets)
 configs/*.json

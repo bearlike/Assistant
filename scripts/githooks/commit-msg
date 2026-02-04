@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+msg_file="${1:-}"
+if [[ -z "${msg_file}" || ! -f "${msg_file}" ]]; then
+  echo "commit-msg hook: missing commit message file." >&2
+  exit 1
+fi
+
+message=""
+while IFS= read -r line; do
+  if [[ -z "${line}" || "${line}" =~ ^# ]]; then
+    continue
+  fi
+  message="${line}"
+  break
+done < "${msg_file}"
+
+if [[ -z "${message}" ]]; then
+  exit 0
+fi
+
+case "${message}" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *)
+    exit 0
+    ;;
+esac
+
+emoji="${message%% *}"
+rest="${message#* }"
+
+if [[ -z "${emoji}" || "${emoji}" == "${message}" ]]; then
+  echo "Commit message must start with an emoji, then a space." >&2
+  echo "See .github/git-commit-instructions.md" >&2
+  exit 1
+fi
+
+if [[ "${emoji}" =~ ^[[:ascii:]]+$ ]]; then
+  echo "Commit message must start with a non-ASCII emoji." >&2
+  echo "See .github/git-commit-instructions.md" >&2
+  exit 1
+fi
+
+if ! [[ "${rest}" =~ ^[a-z]+\([a-z0-9_-]+\):\ .+ ]]; then
+  echo "Commit message must match: <emoji> <verb>(<scope>): <message>" >&2
+  echo "See .github/git-commit-instructions.md" >&2
+  exit 1
+fi

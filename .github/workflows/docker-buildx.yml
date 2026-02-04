@@ -16,7 +16,7 @@
 # * The 'latest' and 'stable' tags allow us to easily switch between different versions.
 # * The 'dev' tag allows you to have a separate version for development.
 
-name: Build and Push Docker Images
+name: Docker Images
 
 on:
   workflow_dispatch:
@@ -100,7 +100,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile.base
+          file: docker/Dockerfile.base
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta_base.outputs.tags }}
@@ -110,7 +110,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile.chat
+          file: docker/Dockerfile.chat
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta_chat.outputs.tags }}
@@ -122,7 +122,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile.api
+          file: docker/Dockerfile.api
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta_api.outputs.tags }}

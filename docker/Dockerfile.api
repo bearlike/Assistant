@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+
+# Dockerfile.api
+ARG BASE_IMAGE="ghcr.io/bearlike/meeseeks-base:latest"
+FROM $BASE_IMAGE
+
+ARG TITLE="Meeseeks API: Personal Assistant"
+
+LABEL title=$TITLE
+
+# Install uv if base image doesn't have it
+RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
+
+# Install the meeseeks-api dependencies
+WORKDIR /app/apps/meeseeks_api
+RUN uv pip install --system -e . \
+    && rm -rf /root/.cache/uv
+
+# Set API specific environment variable
+ENV MASTER_API_TOKEN='msk-strong-password'
+
+# Expose port 5123 for the API
+EXPOSE 5123
+
+# Run the API application
+ENTRYPOINT ["meeseeks-api"]

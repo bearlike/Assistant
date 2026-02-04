@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1
+
+# Dockerfile.chat
+ARG BASE_IMAGE="ghcr.io/bearlike/meeseeks-base:latest"
+FROM $BASE_IMAGE
+
+ARG TITLE="Meeseeks Chat: Personal Assistant"
+
+LABEL title=$TITLE
+
+# Install uv if base image doesn't have it
+RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
+
+# Install the meeseeks-chat dependencies
+WORKDIR /app/apps/meeseeks_chat
+RUN uv pip install --system -e . \
+    && rm -rf /root/.cache/uv
+
+# Expose port 8502 for Streamlit
+EXPOSE 8502
+
+# Streamlit server defaults for container
+ENV STREAMLIT_SERVER_PORT=8502 \
+    STREAMLIT_SERVER_ADDRESS=0.0.0.0
+
+# Healthcheck to ensure the Streamlit server is running
+HEALTHCHECK CMD curl --fail http://localhost:8502/_stcore/health
+
+# Run the Streamlit application
+ENTRYPOINT ["meeseeks-chat"]

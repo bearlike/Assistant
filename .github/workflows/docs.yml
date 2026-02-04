@@ -1,0 +1,66 @@
+name: Docs Build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install docs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv sync --group docs --extra tools --extra ha
+
+      - name: Verify mkdocstrings imports
+        run: .venv/bin/python -c "import meeseeks_core.common; print(meeseeks_core.common.__name__)"
+
+      - name: Build docs
+        run: .venv/bin/mkdocs build
+
+      - name: Configure git for mike
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy dev docs
+        if: github.ref == 'refs/heads/main'
+        run: PATH=".venv/bin:$PATH" .venv/bin/mike deploy --push dev
+
+      - name: Deploy versioned docs
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DOCS_VERSION="${VERSION%.*}"
+          echo "DOCS_VERSION=$DOCS_VERSION" >> "$GITHUB_ENV"
+          PATH=".venv/bin:$PATH" .venv/bin/mike deploy --push --update-aliases "$DOCS_VERSION" latest
+          PATH=".venv/bin:$PATH" .venv/bin/mike set-default --push latest
+
+      - name: Smoke test versioned site
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          rm -rf site
+          git fetch origin gh-pages:gh-pages
+          git worktree add site gh-pages
+          test -d "site/$DOCS_VERSION"
+          test -d "site/latest"
+          git worktree remove site

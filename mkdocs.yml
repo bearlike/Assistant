@@ -1,0 +1,36 @@
+site_name: Personal Assistant
+site_description: Documentation for the Personal Assistant (Meeseeks) project.
+repo_url: https://github.com/bearlike/Assistant
+repo_name: bearlike/Assistant
+
+theme:
+  name: material
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - .
+            - packages/meeseeks_core/src
+            - packages/meeseeks_tools/src
+            - apps/meeseeks_api/src
+            - apps/meeseeks_chat/src
+            - apps/meeseeks_cli/src
+          options:
+            docstring_style: google
+            show_source: true
+            show_signature_annotations: true
+            show_root_heading: true
+            show_root_toc_entry: false
+
+extra:
+  version:
+    provider: mike
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Components: components.md
+  - Reference: reference.md

@@ -1,4 +1,5 @@
 """Meeseeks API client."""
+
 from __future__ import annotations
 
 import json
@@ -15,11 +16,13 @@ from .exceptions import ApiJsonError
 
 class ModelsResponse(TypedDict):
     """Schema for the models list endpoint response."""
+
     models: list[dict[str, Any]]
 
 
 class MeeseeksQueryResponse(TypedDict):
     """Schema for the main query response."""
+
     task_result: str
     response: str
     context: str
@@ -43,7 +46,7 @@ class MeeseeksApiClient:
             session: Shared aiohttp client session.
         """
         self._base_url = base_url.rstrip("/")
-        self._api_key = 'msk-strong-password'
+        self._api_key = "msk-strong-password"
         self.timeout = timeout
         self._session = session
 
@@ -69,15 +72,13 @@ class MeeseeksApiClient:
                     "name": "meeseeks",
                     "modified_at": "2023-11-01T00:00:00.000000000-04:00",
                     "size": 0,
-                    "digest": None
+                    "digest": None,
                 }
             ]
         }
         return json.dumps(response_data)
 
-    async def async_generate(
-        self, data: dict[str, Any] | None = None
-    ) -> MeeseeksQueryResponse:
+    async def async_generate(self, data: dict[str, Any] | None = None) -> MeeseeksQueryResponse:
         """Generate a completion from the API.
 
         Args:
@@ -94,7 +95,7 @@ class MeeseeksApiClient:
             raise ValueError("Missing prompt in request data.")
         url_query = f"{self._base_url}/api/query"
         data_custom = {
-            'query': str(data["prompt"]).strip(),
+            "query": str(data["prompt"]).strip(),
         }
         session_id = data.get("session_id") if isinstance(data, dict) else None
         if session_id:
@@ -136,9 +137,9 @@ class MeeseeksApiClient:
         """
         if headers is None:
             headers = {
-                'accept': 'application/json',
-                'X-API-KEY': self._api_key,
-                'Content-Type': 'application/json',
+                "accept": "application/json",
+                "X-API-KEY": self._api_key,
+                "Content-Type": "application/json",
             }
         async with async_timeout.timeout(self.timeout):
             response = await self._session.request(
