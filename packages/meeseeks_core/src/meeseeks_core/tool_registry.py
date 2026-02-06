@@ -14,6 +14,7 @@ from typing import Protocol
 from meeseeks_core.classes import ActionStep, set_available_tools
 from meeseeks_core.common import MockSpeaker, get_logger
 from meeseeks_core.components import resolve_home_assistant_status
+from meeseeks_core.config import get_config_value, get_mcp_config_path
 from meeseeks_core.types import JsonValue
 
 logging = get_logger(name="core.tool_registry")
@@ -52,6 +53,10 @@ class ToolSpec:
     kind: str = "local"
     prompt_path: str | None = None
     metadata: dict[str, JsonValue] = field(default_factory=dict)
+
+    def is_plan_safe(self) -> bool:
+        """Return True if the tool is safe to use in plan mode."""
+        return bool(self.metadata.get("plan_safe"))
 
 
 class ToolRegistry:
@@ -118,6 +123,13 @@ class ToolRegistry:
             return specs
         return [spec for spec in specs if spec.enabled]
 
+    def list_specs_for_mode(self, mode: str, *, include_disabled: bool = False) -> list[ToolSpec]:
+        """List specs filtered by orchestration mode."""
+        specs = self.list_specs(include_disabled=include_disabled)
+        if mode != "plan":
+            return specs
+        return [spec for spec in specs if spec.is_plan_safe()]
+
     def tool_catalog(self) -> list[dict[str, str]]:
         """Return a serialized catalog of registered tool metadata."""
         return [
@@ -159,13 +171,64 @@ def _default_registry() -> ToolRegistry:
             metadata={"disabled_reason": ha_status.reason} if not ha_status.enabled else {},
         )
     )
+    registry.register(
+        ToolSpec(
+            tool_id="aider_edit_block_tool",
+            name="Aider Edit Blocks",
+            description="Apply Aider-style SEARCH/REPLACE blocks to files.",
+            factory=_import_factory(
+                "meeseeks_tools.integration.aider_edit_blocks",
+                "AiderEditBlockTool",
+            ),
+            prompt_path="tools/aider-edit-blocks",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            tool_id="aider_read_file_tool",
+            name="Aider Read File",
+            description="Read local files using Aider helpers.",
+            factory=_import_factory(
+                "meeseeks_tools.integration.aider_file_tools",
+                "AiderReadFileTool",
+            ),
+            prompt_path="tools/aider-read-file",
+            metadata={"plan_safe": True},
+        )
+    )
+    registry.register(
+        ToolSpec(
+            tool_id="aider_list_dir_tool",
+            name="Aider List Directory",
+            description="List files under a directory using Aider helpers.",
+            factory=_import_factory(
+                "meeseeks_tools.integration.aider_file_tools",
+                "AiderListDirTool",
+            ),
+            prompt_path="tools/aider-list-dir",
+            metadata={"plan_safe": True},
+        )
+    )
+    registry.register(
+        ToolSpec(
+            tool_id="aider_shell_tool",
+            name="Aider Shell",
+            description="Run shell commands using Aider helpers.",
+            factory=_import_factory(
+                "meeseeks_tools.integration.aider_shell_tool",
+                "AiderShellTool",
+            ),
+            prompt_path="tools/aider-shell",
+        )
+    )
     return registry
 
 
 def _default_manifest_cache_path() -> str:
-    base_dir = os.getenv("MESEEKS_CONFIG_DIR")
+    base_dir = get_config_value("runtime", "config_dir")
     if not base_dir:
         base_dir = os.path.join(os.path.expanduser("~"), ".meeseeks")
+    base_dir = os.path.expanduser(str(base_dir))
     os.makedirs(base_dir, exist_ok=True)
     return os.path.join(base_dir, "tool-manifest.auto.json")
 
@@ -189,6 +252,48 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "kind": "local",
             "enabled": ha_status.enabled,
             "prompt": "tools/home-assistant",
+        },
+        {
+            "tool_id": "aider_edit_block_tool",
+            "name": "Aider Edit Blocks",
+            "description": "Apply Aider-style SEARCH/REPLACE blocks to files.",
+            "module": "meeseeks_tools.integration.aider_edit_blocks",
+            "class": "AiderEditBlockTool",
+            "kind": "local",
+            "enabled": True,
+            "prompt": "tools/aider-edit-blocks",
+        },
+        {
+            "tool_id": "aider_read_file_tool",
+            "name": "Aider Read File",
+            "description": "Read local files using Aider helpers.",
+            "module": "meeseeks_tools.integration.aider_file_tools",
+            "class": "AiderReadFileTool",
+            "kind": "local",
+            "enabled": True,
+            "prompt": "tools/aider-read-file",
+            "plan_safe": True,
+        },
+        {
+            "tool_id": "aider_list_dir_tool",
+            "name": "Aider List Directory",
+            "description": "List files under a directory using Aider helpers.",
+            "module": "meeseeks_tools.integration.aider_file_tools",
+            "class": "AiderListDirTool",
+            "kind": "local",
+            "enabled": True,
+            "prompt": "tools/aider-list-dir",
+            "plan_safe": True,
+        },
+        {
+            "tool_id": "aider_shell_tool",
+            "name": "Aider Shell",
+            "description": "Run shell commands using Aider helpers.",
+            "module": "meeseeks_tools.integration.aider_shell_tool",
+            "class": "AiderShellTool",
+            "kind": "local",
+            "enabled": True,
+            "prompt": "tools/aider-shell",
         },
     ]
     if not ha_status.enabled and ha_status.reason:
@@ -231,18 +336,21 @@ def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
             logging.warning("Failed to read existing MCP manifest: {}", exc)
 
     mcp_module = _load_mcp_support()
+    mcp_tools: dict[str, list[dict[str, object]]] = {}
+    failures: dict[str, Exception] = {}
+    global_failure: Exception | None = None
     if mcp_module is None:
-        return manifest_path if os.path.exists(manifest_path) else None
-
-    try:
-        config = mcp_module._load_mcp_config(mcp_config_path)
-        mcp_tools, failures = mcp_module.discover_mcp_tool_details_with_failures(config)
-    except Exception as exc:
-        logging.warning("Failed to auto-discover MCP tools: {}", exc)
-        return manifest_path if os.path.exists(manifest_path) else None
+        global_failure = RuntimeError("MCP support is not installed.")
+    else:
+        try:
+            config = mcp_module._load_mcp_config(mcp_config_path)
+            mcp_tools, failures = mcp_module.discover_mcp_tool_details_with_failures(config)
+        except Exception as exc:
+            logging.warning("Failed to auto-discover MCP tools: {}", exc)
+            global_failure = exc
 
     payload = _build_manifest_payload(mcp_tools)
-    if failures and existing_manifest:
+    if (failures or global_failure) and existing_manifest:
         payload_tools = payload.get("tools", [])
         if not isinstance(payload_tools, list):
             payload_tools = []
@@ -263,14 +371,19 @@ def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
             if tool.get("kind") != "mcp":
                 continue
             server_name = tool.get("server")
-            if server_name not in failures:
+            if not isinstance(server_name, str) or not server_name:
+                continue
+            if not global_failure and server_name not in failures:
                 continue
             tool_id = tool.get("tool_id")
             if not tool_id:
                 continue
             disabled_tool = dict(tool)
             disabled_tool["enabled"] = False
-            disabled_tool["disabled_reason"] = f"Discovery failed: {failures[server_name]}"
+            if global_failure:
+                disabled_tool["disabled_reason"] = f"Discovery failed: {global_failure}"
+            else:
+                disabled_tool["disabled_reason"] = f"Discovery failed: {failures[server_name]}"
             tools_by_id[tool_id] = disabled_tool
         payload["tools"] = list(tools_by_id.values())
     try:
@@ -284,16 +397,11 @@ def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
 
 
 def load_registry(manifest_path: str | None = None) -> ToolRegistry:
-    """Load tool registry from a JSON manifest if available."""
+    """Load tool registry, auto-discovering MCP tools when configured."""
     if manifest_path is None:
-        manifest_path = os.getenv("MESEEKS_TOOL_MANIFEST")
-
-    if not manifest_path:
-        mcp_config_path = os.getenv("MESEEKS_MCP_CONFIG")
-        if mcp_config_path:
-            auto_manifest = _ensure_auto_manifest(mcp_config_path)
-            if auto_manifest:
-                manifest_path = auto_manifest
+        mcp_config_path = get_mcp_config_path()
+        if mcp_config_path and os.path.exists(mcp_config_path):
+            manifest_path = _ensure_auto_manifest(mcp_config_path)
 
     if not manifest_path:
         return _default_registry()
@@ -376,6 +484,14 @@ def load_registry(manifest_path: str | None = None) -> ToolRegistry:
 
     if not registry.list_specs(include_disabled=True):
         return _default_registry()
+
+    builtin_registry = _default_registry()
+    existing_ids = {spec.tool_id for spec in registry.list_specs(include_disabled=True)}
+    for spec in builtin_registry.list_specs(include_disabled=True):
+        if spec.tool_id in existing_ids:
+            continue
+        registry.register(spec)
+        existing_ids.add(spec.tool_id)
 
     return registry
 

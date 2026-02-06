@@ -1,0 +1,10 @@
+Aider Edit Blocks tool
+
+Use this tool to apply Aider-style SEARCH/REPLACE blocks to local files.
+
+Action arguments (JSON):
+- content: string containing one or more SEARCH/REPLACE blocks.
+- root: optional project root to resolve file paths (defaults to current working directory).
+- files: optional list of file paths to validate fuzzy filename matches.
+
+Use action_type "set" to apply changes and "get" to validate without writing.

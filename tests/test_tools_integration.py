@@ -6,6 +6,7 @@ import types
 
 import pytest
 from meeseeks_core.common import get_mock_speaker
+from meeseeks_core.config import set_mcp_config_path
 from meeseeks_tools.integration.homeassistant import HomeAssistant, cache_monitor
 from meeseeks_tools.integration.mcp import (
     MCPToolRunner,
@@ -18,7 +19,7 @@ from meeseeks_tools.integration.mcp import (
 
 def test_mcp_config_requires_env(monkeypatch):
     """Raise when MCP config environment variable is missing."""
-    monkeypatch.delenv("MESEEKS_MCP_CONFIG", raising=False)
+    set_mcp_config_path(None)
     with pytest.raises(ValueError):
         _load_mcp_config()
 
@@ -30,7 +31,7 @@ def test_mcp_config_normalizes_legacy_keys(monkeypatch, tmp_path):
         '{"servers": {"srv": {"transport": "http", "http_headers": {"a": "b"}}}}',
         encoding="utf-8",
     )
-    monkeypatch.setenv("MESEEKS_MCP_CONFIG", str(config_path))
+    set_mcp_config_path(str(config_path))
     config = _load_mcp_config()
     server = config["servers"]["srv"]
     assert server["transport"] == "streamable_http"
@@ -92,7 +93,7 @@ def test_mcp_discovery_schema_and_runtime_failure(monkeypatch, tmp_path):
     config_path.write_text(
         '{"servers": {"good": {"transport": "stdio"}, "bad": {"transport": "stdio"}}}'
     )
-    monkeypatch.setenv("MESEEKS_MCP_CONFIG", str(config_path))
+    set_mcp_config_path(str(config_path))
 
     class SchemaModelJson:
         def model_json_schema(self):
@@ -183,7 +184,7 @@ def test_mcp_invoke_async_success(monkeypatch, tmp_path):
     """Invoke an MCP tool successfully with stubbed client."""
     config_path = tmp_path / "mcp.json"
     config_path.write_text('{"servers": {"srv": {"transport": "stdio"}}}', encoding="utf-8")
-    monkeypatch.setenv("MESEEKS_MCP_CONFIG", str(config_path))
+    set_mcp_config_path(str(config_path))
 
     class DummyTool:
         name = "tool"
@@ -281,7 +282,7 @@ def test_mcp_invoke_async_wraps_string_for_schema(monkeypatch, tmp_path):
     """Ensure MCP invoke passes dict payloads when args_schema exists."""
     config_path = tmp_path / "mcp.json"
     config_path.write_text('{"servers": {"srv": {"transport": "stdio"}}}', encoding="utf-8")
-    monkeypatch.setenv("MESEEKS_MCP_CONFIG", str(config_path))
+    set_mcp_config_path(str(config_path))
     captured = {}
 
     class DummyArgsSchema:
@@ -315,7 +316,7 @@ def test_mcp_invoke_async_missing_tool(monkeypatch, tmp_path):
     """Raise when the requested MCP tool is unavailable."""
     config_path = tmp_path / "mcp.json"
     config_path.write_text('{"servers": {"srv": {"transport": "stdio"}}}', encoding="utf-8")
-    monkeypatch.setenv("MESEEKS_MCP_CONFIG", str(config_path))
+    set_mcp_config_path(str(config_path))
 
     class DummyClient:
         def __init__(self, servers):

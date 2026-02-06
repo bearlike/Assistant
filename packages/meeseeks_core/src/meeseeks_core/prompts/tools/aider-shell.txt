@@ -1,0 +1,12 @@
+Tool: Aider Shell
+
+Use this tool to run shell commands when the user requests execution.
+
+Guidelines:
+- Prefer read-only commands (ls, pwd, git status) when gathering context.
+- Keep commands minimal and explicit.
+- Set cwd when operating in a subdirectory.
+- Do not run destructive commands without explicit user intent.
+
+Example:
+ActionStep(action_consumer="aider_shell_tool", action_type="set", action_argument={"command": "ls", "cwd": "."})

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from meeseeks_core.common import get_logger
+from meeseeks_core.config import get_config_value
 from meeseeks_core.types import Event, EventRecord
 
 logging = get_logger(name="core.session_store")
@@ -49,7 +50,7 @@ class SessionStore:
     def __init__(self, root_dir: str | None = None) -> None:
         """Initialize the store and ensure the root directory exists."""
         if root_dir is None:
-            root_dir = os.getenv("MESEEKS_SESSION_DIR", "./data/sessions")
+            root_dir = get_config_value("runtime", "session_dir", default="./data/sessions")
         self.root_dir = os.path.abspath(root_dir)
         os.makedirs(self.root_dir, exist_ok=True)
 

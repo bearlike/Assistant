@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-import tomllib
-
 from meeseeks_core.common import num_tokens_from_string
+from meeseeks_core.config import get_config_value
 from meeseeks_core.types import EventRecord
 
 
@@ -50,24 +48,16 @@ def _parse_context_from_model(model_name: str) -> int | None:
 
 
 def _load_context_overrides() -> dict[str, int]:
-    """Load context window overrides from an env var or JSON/TOML file."""
-    env_value = os.getenv("MESEEKS_MODEL_CONTEXT_WINDOWS")
-    if not env_value:
+    """Load context window overrides from config."""
+    overrides = get_config_value("token_budget", "model_context_windows", default={})
+    if not isinstance(overrides, dict):
         return {}
-    if os.path.exists(env_value):
-        with open(env_value, "rb") as handle:
-            if env_value.endswith(".toml"):
-                data = tomllib.load(handle)
-            else:
-                data = json.load(handle)
-    else:
-        data = json.loads(env_value)
-    return {str(key): int(value) for key, value in data.items()}
+    return {str(key): int(value) for key, value in overrides.items()}
 
 
 def get_context_window(model_name: str | None) -> int:
     """Resolve the context window for a model name or default."""
-    default_window = int(os.getenv("MESEEKS_DEFAULT_CONTEXT_WINDOW", "128000"))
+    default_window = int(get_config_value("token_budget", "default_context_window", default=128000))
     if not model_name:
         return default_window
     overrides = _load_context_overrides()
@@ -120,7 +110,7 @@ def get_token_budget(
     context_window = get_context_window(model_name)
     remaining_tokens = max(context_window - total_tokens, 0)
     if threshold is None:
-        threshold = float(os.getenv("MESEEKS_AUTO_COMPACT_THRESHOLD", "0.8"))
+        threshold = float(get_config_value("token_budget", "auto_compact_threshold", default=0.8))
     utilization = total_tokens / context_window if context_window else 0.0
     return TokenBudget(
         total_tokens=total_tokens,

@@ -145,14 +145,13 @@ dmypy.json
 apps/meeseeks_cli/data/
 
 # Local config files (MCP/tool manifests, secrets)
-configs/*.json
+**/app.json
+**/*config.json
 configs/*.toml
 configs/*.yaml
 configs/*.yml
+configs/mcp.json
 !configs/*.example.json
-!configs/*.example.toml
-!configs/*.example.yaml
-!configs/*.example.yml
 
 # Pyre type checker
 .pyre/

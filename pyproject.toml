@@ -1,6 +1,6 @@
 [project]
 name = "meeseeks-workspace"
-version = "2.0.0-alpha"
+version = "2.1.0-alpha"
 description = "Workspace package for the Meeseeks monorepo."
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
@@ -9,18 +9,18 @@ authors = [
 ]
 license = { text = "MIT" }
 dependencies = [
-  "meeseeks-core>=2.0.0-alpha",
+  "meeseeks-core>=2.1.0-alpha",
 ]
 
 [project.scripts]
 meeseeks = "meeseeks_cli.cli_master:main"
 
 [project.optional-dependencies]
-cli = ["meeseeks-cli>=2.0.0-alpha"]
-api = ["meeseeks-api>=2.0.0-alpha"]
-chat = ["meeseeks-chat>=2.0.0-alpha"]
-ha = ["meeseeks-ha-conversation>=2.0.0-alpha"]
-tools = ["meeseeks-tools>=2.0.0-alpha"]
+cli = ["meeseeks-cli>=2.1.0-alpha"]
+api = ["meeseeks-api>=2.1.0-alpha"]
+chat = ["meeseeks-chat>=2.1.0-alpha"]
+ha = ["meeseeks-ha-conversation>=2.1.0-alpha"]
+tools = ["meeseeks-tools>=2.1.0-alpha"]
 
 [dependency-groups]
 dev = [
@@ -51,10 +51,10 @@ default-groups = []
 [tool.uv.sources]
 meeseeks-core = { workspace = true }
 meeseeks-tools = { workspace = true }
-meeseeks-cli = { path = "apps/meeseeks_cli" }
-meeseeks-api = { path = "apps/meeseeks_api" }
-meeseeks-chat = { path = "apps/meeseeks_chat" }
-meeseeks-ha-conversation = { path = "meeseeks_ha_conversation" }
+meeseeks-cli = { path = "apps/meeseeks_cli", editable = true }
+meeseeks-api = { path = "apps/meeseeks_api", editable = true }
+meeseeks-chat = { path = "apps/meeseeks_chat", editable = true }
+meeseeks-ha-conversation = { path = "meeseeks_ha_conversation", editable = true }
 
 [build-system]
 requires = ["hatchling>=1.25.0"]
@@ -68,11 +68,13 @@ line-length = 100
 target-version = "py310"
 extend-exclude = [
   "meeseeks_ha_conversation/translations",
+  "vendor",
 ]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "I", "UP"]
 fixable = ["ALL"]
+per-file-ignores = { "packages/meeseeks_tools/src/meeseeks_tools/aider_bridge/edit_blocks.py" = ["D"], "vendor/**" = ["D"] }
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
@@ -103,4 +105,10 @@ testpaths = [
   "apps/meeseeks_api/tests",
   "apps/meeseeks_chat/tests",
   "apps/meeseeks_cli/tests",
+]
+
+[tool.coverage.run]
+omit = [
+  "packages/meeseeks_tools/src/meeseeks_tools/vendor/*",
+  "vendor/*",
 ]

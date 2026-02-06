@@ -7,6 +7,7 @@ from meeseeks_core import planning, task_master  # noqa: E402
 from meeseeks_core.action_runner import ActionPlanRunner  # noqa: E402
 from meeseeks_core.classes import ActionStep, TaskQueue, set_available_tools  # noqa: E402
 from meeseeks_core.common import get_mock_speaker  # noqa: E402
+from meeseeks_core.config import set_config_override  # noqa: E402
 from meeseeks_core.context import ContextBuilder  # noqa: E402
 from meeseeks_core.hooks import HookManager  # noqa: E402
 from meeseeks_core.orchestrator import Orchestrator  # noqa: E402
@@ -102,14 +103,16 @@ def test_orchestrator_creates_session_when_missing(monkeypatch, tmp_path):
 
 def test_generate_action_plan_omits_disabled_tools(monkeypatch):
     """Ensure prompt does not advertise disabled tools."""
-    monkeypatch.setenv("MESEEKS_HOME_ASSISTANT_ENABLED", "0")
+    set_config_override({"home_assistant": {"enabled": False}})
     registry = load_registry()
 
     def _fake_model(messages):
+        if hasattr(messages, "to_messages"):
+            messages = messages.to_messages()
         combined = "\n".join(
             message.content for message in messages if getattr(message, "content", None)
         )
-        assert "home_assistant_tool" not in combined
+        assert "Available tools:\n- home_assistant_tool" not in combined
         payload = {"action_steps": []}
         return json.dumps(payload)
 
@@ -122,6 +125,52 @@ def test_generate_action_plan_omits_disabled_tools(monkeypatch):
     task_queue = task_master.generate_action_plan(
         "hi",
         tool_registry=registry,
+    )
+    assert task_queue.action_steps == []
+
+
+def test_generate_action_plan_plan_mode_filters_tools(monkeypatch):
+    """Expose only plan-safe tools and avoid extra guidance in plan mode."""
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            tool_id="plan_tool",
+            name="Plan Tool",
+            description="Safe tool for planning.",
+            factory=lambda: None,
+            metadata={"plan_safe": True},
+        )
+    )
+    registry.register(
+        ToolSpec(
+            tool_id="mut_tool",
+            name="Mutating Tool",
+            description="Mutating tool.",
+            factory=lambda: None,
+        )
+    )
+
+    def _fake_model(messages):
+        if hasattr(messages, "to_messages"):
+            messages = messages.to_messages()
+        combined = "\n".join(
+            message.content for message in messages if getattr(message, "content", None)
+        )
+        assert "plan_tool" in combined
+        assert "mut_tool" not in combined
+        assert "Tool guidance:" not in combined
+        return json.dumps({"action_steps": []})
+
+    monkeypatch.setattr(
+        planning,
+        "build_chat_model",
+        lambda **_kwargs: RunnableLambda(_fake_model),
+    )
+
+    task_queue = task_master.generate_action_plan(
+        "make a plan",
+        tool_registry=registry,
+        mode="plan",
     )
     assert task_queue.action_steps == []
 
@@ -167,6 +216,38 @@ def test_orchestrate_session_replans_on_failure(monkeypatch, tmp_path):
     assert generate_calls.count == 2
     assert run_calls.count == 2
     assert "Last tool failure:" in captured["query"]
+
+
+def test_orchestrate_session_plan_mode_no_replan(monkeypatch, tmp_path):
+    """Plan mode should not replan after a failure."""
+    generate_calls = Counter()
+    session_store = SessionStore(root_dir=str(tmp_path))
+    session_id = session_store.create_session()
+
+    def fake_generate(_self, *_args, **_kwargs):
+        generate_calls.bump()
+        return make_task_queue("plan it")
+
+    def fake_run(_self, _session_id, task_queue, *_args, **_kwargs):
+        task_queue.last_error = "tool not allowed in plan mode"
+        return task_queue
+
+    monkeypatch.setattr(Planner, "generate", fake_generate)
+    monkeypatch.setattr(Orchestrator, "_run_action_plan", fake_run)
+    monkeypatch.setattr(Orchestrator, "_should_synthesize_response", lambda *_a, **_k: False)
+
+    task_queue, state = task_master.orchestrate_session(
+        "make a plan for this",
+        max_iters=3,
+        session_id=session_id,
+        session_store=session_store,
+        return_state=True,
+        mode="plan",
+    )
+
+    assert generate_calls.count == 1
+    assert state.done is True
+    assert state.done_reason in {"blocked", "incomplete"}
 
 
 def test_orchestrate_session_schema_replan_and_context(monkeypatch, tmp_path):
@@ -313,7 +394,7 @@ def test_orchestrate_session_schema_replan_and_context(monkeypatch, tmp_path):
         lambda **_kwargs: RunnableLambda(fake_model),
     )
     monkeypatch.setattr(Orchestrator, "_should_synthesize_response", lambda *_a, **_k: False)
-    monkeypatch.setenv("MEESEEKS_CONTEXT_SELECTION", "0")
+    set_config_override({"context": {"selection_enabled": False}})
 
     policy = PermissionPolicy(
         rules=[],
@@ -740,8 +821,7 @@ def test_orchestrate_session_context_selection(monkeypatch, tmp_path):
         task_queue.task_result = "ok"
         return task_queue
 
-    monkeypatch.setenv("MEESEEKS_CONTEXT_SELECT_THRESHOLD", "0")
-    monkeypatch.setenv("MEESEEKS_RECENT_EVENT_LIMIT", "1")
+    set_config_override({"context": {"selection_threshold": 0.0, "recent_event_limit": 1}})
     monkeypatch.setattr(ContextBuilder, "_select_context_events", fake_select)
     monkeypatch.setattr(Planner, "generate", fake_generate)
     monkeypatch.setattr(ActionPlanRunner, "run", fake_run)
@@ -786,10 +866,99 @@ def test_orchestrate_session_max_iters(monkeypatch, tmp_path):
     )
 
     assert task_queue.task_result == "failed"
-    assert state.done is False
-    assert state.done_reason == "max_iterations_reached"
+    assert state.done is True
+    assert state.done_reason == "incomplete"
     assert generate_calls.count == 1
     assert run_calls.count == 1
+
+
+def test_orchestrator_max_iters_zero_marks_limit(tmp_path):
+    """Mark completion reason when max_iters is zero."""
+    session_store = SessionStore(root_dir=str(tmp_path))
+    registry = ToolRegistry()
+    orchestrator = Orchestrator(
+        session_store=session_store,
+        tool_registry=registry,
+        permission_policy=PermissionPolicy(),
+        approval_callback=lambda *_a, **_k: True,
+        hook_manager=HookManager(),
+    )
+    task_queue, state = orchestrator.run(
+        "hello",
+        max_iters=0,
+        initial_task_queue=TaskQueue(action_steps=[]),
+        return_state=True,
+        session_id=session_store.create_session(),
+    )
+    assert task_queue.action_steps == []
+    assert state.done is False
+    assert state.done_reason == "max_iterations_reached"
+
+
+def test_resolve_mode_plan_trigger():
+    """Switch to plan mode when plan keywords are present."""
+    assert Orchestrator._resolve_mode("Make a plan for launch", None) == "plan"
+
+
+def test_should_replan_blocks_permission_denied():
+    """Avoid replanning when permission was denied."""
+    task_queue = TaskQueue(action_steps=[])
+    task_queue.last_error = "permission denied for tool"
+    assert Orchestrator._should_replan(task_queue, 0, 3, mode="act") is False
+
+
+def test_should_replan_blocks_tool_not_allowed():
+    """Avoid replanning when tool not allowed error occurs."""
+    task_queue = TaskQueue(action_steps=[])
+    task_queue.last_error = "tool not allowed in plan mode"
+    assert Orchestrator._should_replan(task_queue, 0, 3, mode="act") is False
+
+
+def test_run_action_plan_plan_mode_filters_tools(monkeypatch, tmp_path):
+    """Pass plan-safe tool ids to the action runner in plan mode."""
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            tool_id="plan_tool",
+            name="Plan Tool",
+            description="Safe tool for planning.",
+            factory=lambda: None,
+            metadata={"plan_safe": True},
+        )
+    )
+    registry.register(
+        ToolSpec(
+            tool_id="mut_tool",
+            name="Mutating Tool",
+            description="Mutating tool.",
+            factory=lambda: None,
+        )
+    )
+    captured = {}
+
+    class DummyRunner:
+        def __init__(self, *args, **kwargs):
+            captured["allowed"] = kwargs.get("allowed_tool_ids")
+
+        def run(self, task_queue):
+            return task_queue
+
+    monkeypatch.setattr("meeseeks_core.orchestrator.ActionPlanRunner", DummyRunner)
+
+    orchestrator = Orchestrator(
+        session_store=SessionStore(root_dir=str(tmp_path)),
+        tool_registry=registry,
+        permission_policy=PermissionPolicy(),
+        approval_callback=lambda *_a, **_k: True,
+        hook_manager=HookManager(),
+    )
+    orchestrator._run_action_plan(
+        session_id="session",
+        task_queue=TaskQueue(action_steps=[]),
+        mode="plan",
+    )
+
+    assert captured["allowed"] == {"plan_tool"}
 
 
 def test_orchestrate_session_compact(tmp_path):
@@ -912,7 +1081,7 @@ def test_run_action_plan_hooks_modify_input():
         hook_manager=hooks,
     )
     assert dummy_tool.called_with == "updated"
-    assert task_queue.task_result == "post:updated"
+    assert task_queue.task_result.endswith("post:updated")
 
 
 def test_run_action_plan_disables_tool_on_error():
@@ -999,7 +1168,7 @@ def test_orchestrate_session_auto_compact(monkeypatch, tmp_path):
     """Auto-compact sessions based on token budget."""
     session_store = SessionStore(root_dir=str(tmp_path))
     session_id = session_store.create_session()
-    monkeypatch.setenv("MESEEKS_AUTO_COMPACT_THRESHOLD", "0")
+    set_config_override({"token_budget": {"auto_compact_threshold": 0.0}})
 
     def fake_generate(*_args, **_kwargs):
         return make_task_queue("say hi")

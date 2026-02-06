@@ -8,26 +8,20 @@ as a JSON response.
 """
 
 # TODO: API key authentication and rate limiting not implemented yet.
-# Standard library modules
-import os
 from copy import deepcopy
-
-from dotenv import load_dotenv
 
 # Third-party modules
 from flask import Flask, request
 from flask_restx import Api, Resource, fields
 from meeseeks_core.classes import TaskQueue
 from meeseeks_core.common import get_logger
+from meeseeks_core.config import get_config, get_config_value, start_preflight
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.task_master import orchestrate_session
 
-# Load environment variables
-load_dotenv()
-# Get the API token from the environment variables
-# The default API token is "msk-strong-password"
-MASTER_API_TOKEN = os.getenv("MASTER_API_TOKEN", "msk-strong-password")
+# Get the API token from app config
+MASTER_API_TOKEN = get_config_value("api", "master_token", default="msk-strong-password")
 
 # Initialize logger
 logging = get_logger(name="meeseeks-api")
@@ -35,13 +29,17 @@ logging = get_logger(name="meeseeks-api")
 logging.info("Starting Meeseeks API server.")
 logging.debug("Starting API server with API token: {}", MASTER_API_TOKEN)
 
+_config = get_config()
+if _config.runtime.preflight_enabled:
+    start_preflight(_config)
+
 
 # Create Flask application
 app = Flask(__name__)
 session_store = SessionStore()
 
 authorizations = {"apikey": {"type": "apiKey", "in": "header", "name": "X-API-KEY"}}
-VERSION = os.getenv("VERSION", "(Dev)")
+VERSION = get_config_value("runtime", "version", default="(Dev)")
 # Create API instance with Swagger documentation
 api = Api(
     app,

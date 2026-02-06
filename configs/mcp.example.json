@@ -3,7 +3,6 @@
     "codex_tools": {
       "transport": "streamable_http",
       "url": "http://127.0.0.1:6783/mcp/Codex-Tools-Personal",
-      "auto_approve_tools": [],
       "headers": {
         "Authorization": "Bearer YOUR_MCP_TOKEN"
       }

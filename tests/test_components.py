@@ -10,11 +10,12 @@ from meeseeks_core.components import (
     resolve_home_assistant_status,
     resolve_langfuse_status,
 )
+from meeseeks_core.config import set_config_override
 
 
 def test_langfuse_disabled_flag(monkeypatch):
     """Disable langfuse via explicit env flag."""
-    monkeypatch.setenv("LANGFUSE_ENABLED", "0")
+    set_config_override({"langfuse": {"enabled": False}})
     status = resolve_langfuse_status()
     assert status.enabled is False
     assert "disabled" in (status.reason or "")
@@ -22,19 +23,19 @@ def test_langfuse_disabled_flag(monkeypatch):
 
 def test_home_assistant_requires_env(monkeypatch):
     """Home Assistant tool stays disabled without env configuration."""
-    monkeypatch.delenv("MESEEKS_HOME_ASSISTANT_ENABLED", raising=False)
-    monkeypatch.delenv("HA_URL", raising=False)
-    monkeypatch.delenv("HA_TOKEN", raising=False)
+    set_config_override({"home_assistant": {"enabled": True, "url": "", "token": ""}})
     status = resolve_home_assistant_status()
     assert status.enabled is False
-    assert "HA_URL" in (status.reason or "") or "HA_TOKEN" in (status.reason or "")
+    assert "home_assistant.url" in (status.reason or "") or "home_assistant.token" in (
+        status.reason or ""
+    )
 
 
 def test_home_assistant_enabled(monkeypatch):
     """Enable Home Assistant when required env vars are present."""
-    monkeypatch.delenv("MESEEKS_HOME_ASSISTANT_ENABLED", raising=False)
-    monkeypatch.setenv("HA_URL", "http://localhost")
-    monkeypatch.setenv("HA_TOKEN", "token")
+    set_config_override(
+        {"home_assistant": {"enabled": True, "url": "http://localhost", "token": "token"}}
+    )
     status = resolve_home_assistant_status()
     assert status.enabled is True
 
@@ -52,36 +53,41 @@ def test_format_component_status():
 
 def test_langfuse_status_requires_keys(monkeypatch):
     """Disable Langfuse when keys are missing but module is present."""
-    module = types.ModuleType("langfuse.callback")
+    module = types.ModuleType("langfuse.langchain")
 
     class CallbackHandler:
         def __init__(self, **_kwargs):
             pass
 
     module.CallbackHandler = CallbackHandler
-    monkeypatch.setitem(sys.modules, "langfuse.callback", module)
-    monkeypatch.setenv("LANGFUSE_ENABLED", "1")
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    monkeypatch.setitem(sys.modules, "langfuse.langchain", module)
+    set_config_override({"langfuse": {"enabled": True, "public_key": "", "secret_key": ""}})
     status = resolve_langfuse_status()
     assert status.enabled is False
-    assert "missing LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY" in (status.reason or "")
+    assert "missing langfuse.public_key/langfuse.secret_key" in (status.reason or "")
 
 
 def test_build_langfuse_handler_configured(monkeypatch):
     """Construct a Langfuse callback handler when configured."""
     created = {}
-    module = types.ModuleType("langfuse.callback")
+    langfuse_module = types.ModuleType("langfuse")
+    langchain_module = types.ModuleType("langfuse.langchain")
+
+    class Langfuse:
+        def __init__(self, **kwargs):
+            created["client"] = kwargs
 
     class CallbackHandler:
         def __init__(self, **kwargs):
             created.update(kwargs)
 
-    module.CallbackHandler = CallbackHandler
-    monkeypatch.setitem(sys.modules, "langfuse.callback", module)
-    monkeypatch.setenv("LANGFUSE_ENABLED", "1")
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pub")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "secret")
+    langfuse_module.Langfuse = Langfuse
+    langchain_module.CallbackHandler = CallbackHandler
+    monkeypatch.setitem(sys.modules, "langfuse", langfuse_module)
+    monkeypatch.setitem(sys.modules, "langfuse.langchain", langchain_module)
+    set_config_override(
+        {"langfuse": {"enabled": True, "public_key": "pub", "secret_key": "secret"}}
+    )
     handler = build_langfuse_handler(
         user_id="user",
         session_id="sid",
@@ -90,12 +96,16 @@ def test_build_langfuse_handler_configured(monkeypatch):
         release="dev",
     )
     assert handler is not None
-    assert created["user_id"] == "user"
+    assert created["public_key"] == "pub"
+    assert created["client"]["public_key"] == "pub"
+    assert created["client"]["secret_key"] == "secret"
+    metadata = getattr(handler, "langfuse_metadata", {})
+    assert metadata.get("langfuse_user_id") == "user"
 
 
 def test_build_langfuse_handler_disabled(monkeypatch):
     """Return None when Langfuse is disabled."""
-    monkeypatch.setenv("LANGFUSE_ENABLED", "0")
+    set_config_override({"langfuse": {"enabled": False}})
     assert (
         build_langfuse_handler(
             user_id="user",

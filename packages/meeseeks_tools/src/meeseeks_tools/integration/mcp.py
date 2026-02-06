@@ -11,8 +11,10 @@ from typing import Any
 
 from meeseeks_core.classes import ActionStep
 from meeseeks_core.common import MockSpeaker, get_logger, get_mock_speaker
+from meeseeks_core.config import get_mcp_config_path
 
 logging = get_logger(name="tools.integration.mcp")
+_LAST_DISCOVERY_FAILURES: dict[str, str] = {}
 
 
 def _log_discovery_failure(server_name: str, exc: Exception) -> None:
@@ -61,14 +63,16 @@ def _load_mcp_config(path: str | None = None) -> dict[str, Any]:
         Parsed MCP configuration dictionary.
 
     Raises:
-        ValueError: If MESEEKS_MCP_CONFIG is not set.
+        ValueError: If the MCP config path is not set.
         OSError: If the configuration file cannot be read.
         json.JSONDecodeError: If the configuration is invalid JSON.
     """
-    config_path = path or os.getenv("MESEEKS_MCP_CONFIG")
+    config_path = path or get_mcp_config_path()
     if not config_path:
-        raise ValueError("MESEEKS_MCP_CONFIG is not set.")
+        raise ValueError("MCP config path is not set.")
     config_path = os.path.abspath(config_path)
+    if not os.path.exists(config_path):
+        raise ValueError(f"MCP config not found at {config_path}.")
     with open(config_path, encoding="utf-8") as handle:
         config = json.load(handle)
     return _normalize_mcp_config(config)
@@ -79,11 +83,11 @@ def save_mcp_config(config: dict[str, Any], path: str | None = None) -> None:
 
     Args:
         config: MCP configuration payload to write.
-        path: Optional explicit file path (defaults to MESEEKS_MCP_CONFIG).
+        path: Optional explicit file path (defaults to the configured MCP path).
     """
-    config_path = path or os.getenv("MESEEKS_MCP_CONFIG")
+    config_path = path or get_mcp_config_path()
     if not config_path:
-        raise ValueError("MESEEKS_MCP_CONFIG is not set.")
+        raise ValueError("MCP config path is not set.")
     config_path = os.path.abspath(config_path)
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
@@ -208,7 +212,23 @@ def discover_mcp_tool_details_with_failures(
     config: dict[str, Any],
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Exception]]:
     """Discover MCP tool names, schemas, and per-server failures."""
-    return _run_async(_discover_mcp_tool_details_with_failures_async(_normalize_mcp_config(config)))
+    discovered, failures = _run_async(
+        _discover_mcp_tool_details_with_failures_async(_normalize_mcp_config(config))
+    )
+    _record_discovery_failures(failures)
+    return discovered, failures
+
+
+def _record_discovery_failures(failures: dict[str, Exception]) -> None:
+    _LAST_DISCOVERY_FAILURES.clear()
+    for server_name, exc in failures.items():
+        reason = str(exc).strip().splitlines()[0] if exc else "Unknown error"
+        _LAST_DISCOVERY_FAILURES[server_name] = reason
+
+
+def get_last_discovery_failures() -> dict[str, str]:
+    """Return last MCP discovery failures per server (if any)."""
+    return dict(_LAST_DISCOVERY_FAILURES)
 
 
 def tool_auto_approved(

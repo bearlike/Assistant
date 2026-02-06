@@ -1,0 +1,63 @@
+{
+  "runtime": {
+    "version": "2.1.0-alpha",
+    "envmode": "dev",
+    "log_level": "INFO",
+    "log_style": "",
+    "cli_log_style": "dark",
+    "preflight_enabled": false,
+    "cache_dir": ".cache",
+    "session_dir": "./data/sessions",
+    "config_dir": "~/.meeseeks"
+  },
+  "llm": {
+    "api_base": "https://lite-llm.server.local/v1",
+    "api_key": "sk-OPENAI_API_KEY",
+    "default_model": "gpt-5.2",
+    "action_plan_model": "gpt-5.2",
+    "tool_model": "gpt-5.2",
+    "reasoning_effort": "medium",
+    "reasoning_effort_models": []
+  },
+  "context": {
+    "recent_event_limit": 8,
+    "selection_threshold": 0.8,
+    "selection_enabled": true,
+    "context_selector_model": "gpt-5.2"
+  },
+  "token_budget": {
+    "default_context_window": 128000,
+    "auto_compact_threshold": 0.8,
+    "model_context_windows": {}
+  },
+  "reflection": {
+    "enabled": true,
+    "model": "gpt-5.2"
+  },
+  "langfuse": {
+    "enabled": false,
+    "host": "https://langfuse.server.local",
+    "public_key": "pk-lf-xxxxxxxxxxxxxxxx",
+    "secret_key": "sk-lf-xxxxxxxxxxxxxxxx"
+  },
+  "home_assistant": {
+    "enabled": false,
+    "url": "http://homeassistant.local:8123",
+    "token": "ha_token_here"
+  },
+  "permissions": {
+    "policy_path": "./configs/policy.json",
+    "approval_mode": "ask"
+  },
+  "cli": {
+    "disable_textual": false,
+    "approval_style": "aider"
+  },
+  "chat": {
+    "streamlit_port": 8501,
+    "streamlit_address": "127.0.0.1"
+  },
+  "api": {
+    "master_token": "msk-strong-password"
+  }
+}

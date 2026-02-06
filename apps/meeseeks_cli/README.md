@@ -7,6 +7,8 @@ A terminal frontend for Meeseeks. It runs the same orchestration loop as the API
 - Shows action plans and tool results per request.
 - Session transcripts and compaction from the core engine.
 - Tag and fork sessions for experiments.
+- Built-in local tools for file reads/edits, directory listing, and shell commands (approval-gated).
+- Rich inline approval prompt with padded, dotted borders (clears after input).
 
 ## Run
 ```bash
@@ -15,12 +17,9 @@ uv run meeseeks
 ```
 
 ## MCP setup (required for /mcp tools)
-- Create MCP server config: `configs/mcp.example.json`.
-- Set `MESEEKS_MCP_CONFIG` in `.env`.
+- Configure MCP servers in `configs/mcp.json`.
 - MCP tools are auto-discovered and cached on load.
 - Optional: add `auto_approve_tools` per server to allowlist tools (the CLI writes this when you pick “Yes, always”).
-
-Advanced: set `MESEEKS_TOOL_MANIFEST` to override the tool list (disables auto-discovery).
 
 ## Common commands
 - `/help` list commands
@@ -31,6 +30,8 @@ Advanced: set `MESEEKS_TOOL_MANIFEST` to override the tool list (disables auto-d
 - `/new` start a new session
 - `/mcp` list MCP tools and servers
 - `/mcp init` scaffold an MCP config file
+- `/config init` scaffold a config example file
+- `/init` scaffold both config and MCP examples
 - `/mcp select` filter the MCP tools displayed
 - `/models` switch models using a wizard
 - `/automatic` enable auto-approve for this session (prompts for confirmation)

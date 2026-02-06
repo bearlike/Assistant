@@ -13,7 +13,7 @@ from meeseeks_core.hooks import HookManager, default_hook_manager
 from meeseeks_core.permissions import (
     PermissionDecision,
     PermissionPolicy,
-    approval_callback_from_env,
+    approval_callback_from_config,
     load_permission_policy,
 )
 from meeseeks_core.reflection import StepReflection, StepReflector
@@ -44,21 +44,35 @@ class ActionPlanRunner:
         hook_manager: HookManager | None = None,
         reflector: StepReflector | None = None,
         event_logger: EventLogger | None = None,
+        allowed_tool_ids: set[str] | None = None,
+        mode: str = "act",
     ) -> None:
         """Initialize the action plan runner."""
         self._tool_registry = tool_registry or load_registry()
         self._permission_policy = permission_policy or load_permission_policy()
-        self._approval_callback = approval_callback or approval_callback_from_env()
+        self._approval_callback = approval_callback or approval_callback_from_config()
         self._hook_manager = hook_manager or default_hook_manager()
         self._reflector = reflector
         self._event_logger = event_logger
+        self._allowed_tool_ids = allowed_tool_ids
+        self._mode = mode
 
     def run(self, task_queue: TaskQueue) -> TaskQueue:
         """Run all steps in the task queue."""
         task_queue.last_error = None
         for idx, action_step in enumerate(task_queue.action_steps):
             logging.debug("Processing ActionStep: {}", action_step)
+            if (
+                self._allowed_tool_ids is not None
+                and action_step.action_consumer not in self._allowed_tool_ids
+            ):
+                reason = "tool not allowed in plan mode"
+                self._record_failure(action_step, reason, task_queue)
+                self._emit_tool_result(action_step, None, error=reason)
+                break
             if not self._ensure_permission(action_step):
+                self._record_failure(action_step, "permission denied", task_queue)
+                self._emit_tool_result(action_step, None, error="Permission denied")
                 continue
 
             action_step = self._hook_manager.run_pre_tool_use(action_step)
@@ -103,19 +117,33 @@ class ActionPlanRunner:
 
             self._emit_tool_result(action_step, outcome.content)
 
-        task_queue.task_result = " ".join(
-            str(getattr(step.result, "content", step.result))
+        summaries = [
+            summary
             for step in task_queue.action_steps
-            if step.result is not None
-        ).strip()
+            if (summary := self._format_step_summary(step))
+        ]
+        task_queue.task_result = "\n".join(summaries).strip()
         return task_queue
 
     def _ensure_permission(self, action_step: ActionStep) -> bool:
         decision = self._permission_policy.decide(action_step)
         decision = self._hook_manager.run_permission_request(action_step, decision)
         decision_logged = False
+        logging.debug(
+            "Permission check: tool={} action={} decision={} callback_present={}",
+            action_step.action_consumer,
+            action_step.action_type,
+            decision.value if isinstance(decision, PermissionDecision) else decision,
+            self._approval_callback is not None,
+        )
         if decision == PermissionDecision.ASK:
             approved = self._approval_callback(action_step) if self._approval_callback else False
+            logging.debug(
+                "Permission prompt result: tool={} action={} approved={}",
+                action_step.action_consumer,
+                action_step.action_type,
+                approved,
+            )
             decision = PermissionDecision.ALLOW if approved else PermissionDecision.DENY
             self._emit_event(
                 {
@@ -171,7 +199,6 @@ class ActionPlanRunner:
         logging.error("Error processing action step: {}", exc)
         self._record_failure(action_step, str(exc), task_queue)
         self._tool_registry.disable(action_step.action_consumer, f"Runtime error: {exc}")
-        action_step.result = None
         self._emit_tool_result(action_step, None, error=str(exc))
         mock = get_mock_speaker()
         self._hook_manager.run_post_tool_use(action_step, mock(content=f"Tool error: {exc}"))
@@ -181,15 +208,21 @@ class ActionPlanRunner:
         if reason:
             note = f"{note}: {reason}"
         task_queue.last_error = note
+        if step.result is None and reason:
+            mock = get_mock_speaker()
+            step.result = mock(content=f"ERROR: {reason}")
 
     def _emit_tool_result(
         self, action_step: ActionStep, result: str | None, *, error: str | None = None
     ) -> None:
+        summary = self._summarize_result(result, error)
         payload: ToolResultPayload = {
             "action_consumer": action_step.action_consumer,
             "action_type": action_step.action_type,
             "action_argument": action_step.action_argument,
             "result": result,
+            "success": error is None,
+            "summary": summary,
         }
         if error:
             payload["error"] = error
@@ -269,6 +302,27 @@ class ActionPlanRunner:
             return None
 
         return "Unsupported action_argument type for MCP tool."
+
+    @staticmethod
+    def _summarize_result(result: str | None, error: str | None) -> str:
+        if error:
+            return f"ERROR: {error}"
+        if result is None:
+            return ""
+        text = str(result).strip()
+        if len(text) <= 500:
+            return text
+        return text[:497] + "..."
+
+    @classmethod
+    def _format_step_summary(cls, step: ActionStep) -> str:
+        if step.result is None:
+            return ""
+        content = getattr(step.result, "content", step.result)
+        summary = cls._summarize_result(str(content), None)
+        if not summary:
+            return ""
+        return f"{step.action_consumer}:{step.action_type} -> {summary}"
 
 
 __all__ = ["ActionPlanRunner", "EventLogger"]

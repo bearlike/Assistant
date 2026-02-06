@@ -2,12 +2,12 @@
 
 # ruff: noqa: I001
 import json
-import os
 import types
 from importlib.metadata import PackageNotFoundError
 
-from meeseeks_core.classes import ActionStep, TaskQueue  # noqa: E402
+from meeseeks_core.classes import ActionStep, TaskQueue, set_available_tools  # noqa: E402
 from meeseeks_core.common import get_mock_speaker  # noqa: E402
+from meeseeks_core.config import get_config_value, set_config_override, set_mcp_config_path  # noqa: E402
 from meeseeks_core.session_store import SessionStore  # noqa: E402
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, load_registry  # noqa: E402
 from rich.console import Console  # noqa: E402
@@ -92,7 +92,9 @@ def test_build_approval_callback_accepts():
     console = Console(record=True)
     state = CliState(session_id="s")
     registry = load_registry()
-    callback = _build_approval_callback(lambda _: "y", console, state, registry)
+    callback = _build_approval_callback(
+        lambda _: "y", console, state, registry, auto_approve_enabled=False
+    )
     step = DummyStep("tool", "set", "arg")
     assert callback is not None
     assert callback(step) is True
@@ -103,7 +105,9 @@ def test_build_approval_callback_none():
     console = Console(record=True)
     state = CliState(session_id="s")
     registry = load_registry()
-    assert _build_approval_callback(None, console, state, registry) is None
+    assert (
+        _build_approval_callback(None, console, state, registry, auto_approve_enabled=False) is None
+    )
 
 
 def test_build_approval_callback_auto_approve(tmp_path, monkeypatch):
@@ -115,10 +119,37 @@ def test_build_approval_callback_auto_approve(tmp_path, monkeypatch):
     def _boom(_prompt):
         raise AssertionError("prompt should not be called")
 
-    callback = _build_approval_callback(_boom, console, state, registry)
+    callback = _build_approval_callback(_boom, console, state, registry, auto_approve_enabled=True)
     step = DummyStep("tool", "set", "arg")
     assert callback is not None
     assert callback(step) is True
+
+
+def test_build_approval_callback_session_yes(monkeypatch, tmp_path):
+    """Enable session-wide auto-approve when selected."""
+    from meeseeks_cli.cli_master import _build_approval_callback
+
+    monkeypatch.setattr(
+        "meeseeks_cli.cli_master._confirm_rich_panel", lambda *args, **kwargs: "session"
+    )
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            tool_id="tool",
+            name="Tool",
+            description="Tool",
+            factory=lambda: None,
+        )
+    )
+    console = Console(record=True)
+    state = CliState(session_id="s")
+    callback = _build_approval_callback(
+        lambda _: "n", console, state, registry, auto_approve_enabled=False
+    )
+    step = DummyStep("tool", "set", "arg")
+    assert callback is not None
+    assert callback(step) is True
+    assert state.auto_approve_all is True
 
 
 def test_mcp_yes_always_updates_config(tmp_path, monkeypatch):
@@ -128,7 +159,7 @@ def test_mcp_yes_always_updates_config(tmp_path, monkeypatch):
         '{"servers": {"srv": {"transport": "http", "url": "http://example"}}}',
         encoding="utf-8",
     )
-    monkeypatch.setenv("MESEEKS_MCP_CONFIG", str(config_path))
+    set_mcp_config_path(config_path)
 
     class DummyDialogs:
         def __init__(self, *args, **kwargs):
@@ -155,7 +186,9 @@ def test_mcp_yes_always_updates_config(tmp_path, monkeypatch):
     )
     console = Console(record=True)
     state = CliState(session_id="s")
-    callback = _build_approval_callback(lambda _: "y", console, state, registry)
+    callback = _build_approval_callback(
+        lambda _: "y", console, state, registry, auto_approve_enabled=False
+    )
     step = DummyStep("mcp_srv_tool", "set", "arg")
     assert callback is not None
     assert callback(step) is True
@@ -210,6 +243,97 @@ def test_run_query(monkeypatch, tmp_path):
     assert captured["session_id"] == session_id
 
 
+def test_run_query_auto_approves_in_headless(monkeypatch, tmp_path):
+    """Enable auto-approve when no prompt function is available."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    state = CliState(session_id=session_id, show_plan=False)
+    tool_registry = load_registry()
+    console = Console(record=True)
+    captured: dict[str, object] = {}
+
+    def fake_build(_prompt, _console, _state, _registry, *, auto_approve_enabled):
+        captured["auto_approve"] = auto_approve_enabled
+        return lambda _step: True
+
+    def fake_orchestrate(*args, **kwargs):
+        step = ActionStep(
+            action_consumer="home_assistant_tool",
+            action_type="get",
+            action_argument="hi",
+        )
+        task_queue = TaskQueue(action_steps=[step])
+        task_queue.task_result = "ok"
+        return task_queue
+
+    monkeypatch.setattr("meeseeks_cli.cli_master._build_approval_callback", fake_build)
+    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+
+    _run_query(
+        console,
+        store,
+        state,
+        tool_registry,
+        "hi",
+        types.SimpleNamespace(max_iters=1),
+        prompt_func=None,
+    )
+
+    assert captured["auto_approve"] is True
+
+
+def test_run_query_headless_auto_approves_set_tool(monkeypatch, tmp_path):
+    """Execute a set action when headless auto-approve is enabled."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    state = CliState(session_id=session_id, show_plan=False)
+    console = Console(record=True)
+    tool_registry = ToolRegistry()
+    executed = {"called": False}
+    set_available_tools(["dummy_set_tool"])
+
+    class DummyTool:
+        def run(self, _step):
+            executed["called"] = True
+            MockSpeaker = get_mock_speaker()
+            return MockSpeaker(content="ok")
+
+    tool_registry.register(
+        ToolSpec(
+            tool_id="dummy_set_tool",
+            name="Dummy Set Tool",
+            description="Dummy tool for set actions",
+            factory=lambda: DummyTool(),
+        )
+    )
+
+    def fake_generate(_self, _query, *_args, **_kwargs):
+        step = ActionStep(
+            action_consumer="dummy_set_tool",
+            action_type="set",
+            action_argument="payload",
+        )
+        return TaskQueue(action_steps=[step])
+
+    monkeypatch.setattr("meeseeks_core.planning.Planner.generate", fake_generate)
+    monkeypatch.setattr(
+        "meeseeks_core.orchestrator.Orchestrator._should_synthesize_response",
+        lambda *_a, **_k: False,
+    )
+
+    _run_query(
+        console,
+        store,
+        state,
+        tool_registry,
+        "hi",
+        types.SimpleNamespace(max_iters=1, auto_approve=True),
+        prompt_func=None,
+    )
+
+    assert executed["called"] is True
+
+
 def test_run_query_renders_tool_output_and_response(monkeypatch, tmp_path):
     """Render tool output and final response in verbose mode."""
     store = SessionStore(root_dir=str(tmp_path))
@@ -253,6 +377,103 @@ def test_run_query_renders_tool_output_and_response(monkeypatch, tmp_path):
     output = console.export_text()
     assert '"foo": "bar"' in output
     assert "final response" in output
+
+
+def test_run_query_renders_diff_tool_output(monkeypatch, tmp_path):
+    """Render diff payloads in verbose mode."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    state = CliState(session_id=session_id, show_plan=False)
+    tool_registry = ToolRegistry()
+    tool_registry.register(
+        ToolSpec(
+            tool_id="diff_tool",
+            name="Diff Tool",
+            description="Tool",
+            factory=lambda: None,
+        )
+    )
+    console = Console(record=True)
+
+    def fake_orchestrate(*_args, **_kwargs):
+        step = ActionStep(
+            action_consumer="diff_tool",
+            action_type="set",
+            action_argument="payload",
+        )
+        step.result = get_mock_speaker()(
+            content={"kind": "diff", "text": "--- a/file.txt\n+++ b/file.txt\n"}
+        )
+        task_queue = TaskQueue(action_steps=[step])
+        task_queue.task_result = "final response"
+        return task_queue
+
+    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+
+    _run_query(
+        console,
+        store,
+        state,
+        tool_registry,
+        "hi",
+        types.SimpleNamespace(max_iters=1, verbose=1),
+        prompt_func=lambda _: "y",
+    )
+
+    output = console.export_text()
+    assert "--- a/file.txt" in output
+    assert "final response" in output
+
+
+def test_run_query_renders_shell_tool_output(monkeypatch, tmp_path):
+    """Render shell payloads in verbose mode."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    state = CliState(session_id=session_id, show_plan=False)
+    tool_registry = ToolRegistry()
+    tool_registry.register(
+        ToolSpec(
+            tool_id="shell_tool",
+            name="Shell Tool",
+            description="Tool",
+            factory=lambda: None,
+        )
+    )
+    console = Console(record=True)
+
+    def fake_orchestrate(*_args, **_kwargs):
+        step = ActionStep(
+            action_consumer="shell_tool",
+            action_type="get",
+            action_argument="payload",
+        )
+        step.result = get_mock_speaker()(
+            content={
+                "kind": "shell",
+                "command": "pytest -q",
+                "exit_code": 1,
+                "stdout": "test output",
+            }
+        )
+        task_queue = TaskQueue(action_steps=[step])
+        task_queue.task_result = "final response"
+        return task_queue
+
+    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+
+    _run_query(
+        console,
+        store,
+        state,
+        tool_registry,
+        "hi",
+        types.SimpleNamespace(max_iters=1, verbose=1),
+        prompt_func=lambda _: "y",
+    )
+
+    output = console.export_text()
+    assert "$ pytest -q" in output
+    assert "exit_code: 1" in output
 
 
 def test_run_query_hides_output_when_not_verbose(monkeypatch, tmp_path):
@@ -435,15 +656,14 @@ def test_cli_bootstrap_and_format_helpers(monkeypatch):
     assert _verbosity_to_level(1) == "DEBUG"
     assert _verbosity_to_level(2) == "TRACE"
 
-    monkeypatch.delenv("LOG_LEVEL", raising=False)
     _bootstrap_cli_logging_env(["prog"])
-    assert os.getenv("LOG_LEVEL") == "WARNING"
+    assert get_config_value("runtime", "log_level") == "WARNING"
     _bootstrap_cli_logging_env(["prog", "-vv"])
-    assert os.getenv("LOG_LEVEL") == "TRACE"
+    assert get_config_value("runtime", "log_level") == "TRACE"
 
-    monkeypatch.setenv("VERSION", "9.9.9")
+    set_config_override({"runtime": {"version": "9.9.9"}})
     assert _resolve_cli_version() == "9.9.9"
-    monkeypatch.delenv("VERSION", raising=False)
+    set_config_override({"runtime": {"version": ""}})
     assert _resolve_cli_version()
 
     def _raise_missing(_name):
@@ -466,7 +686,7 @@ def test_run_cli_single_query(monkeypatch, tmp_path):
         '{"servers": {"missing": {"transport": "http", "url": "http://example"}}}',
         encoding="utf-8",
     )
-    monkeypatch.setenv("MESEEKS_MCP_CONFIG", str(config_path))
+    set_mcp_config_path(str(config_path))
 
     args = types.SimpleNamespace(
         query="hi",

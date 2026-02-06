@@ -53,7 +53,7 @@ When you need external context (other repos, CI failures, specs, APIs), prefer M
 
 ## Testing & running (common paths)
 - Tests live under `tests/` (use `pytest`).
-- Local dev uses `uv` and `.env` based on `.env.example`.
+- Local dev uses `uv` with `configs/app.json` (and `configs/mcp.json` when using MCP).
 - Core-only install: `uv sync`.
 - Full dev install: `uv sync --all-extras --all-groups`.
 - Run interfaces from repo root with `uv run meeseeks`, `uv run meeseeks-api`, or `uv run meeseeks-chat`.

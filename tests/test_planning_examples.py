@@ -9,7 +9,7 @@ from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 
 def test_planner_examples_are_wrapped():
     """Ensure planner examples are tagged as illustrative only."""
-    messages = Planner._build_example_messages(["home_assistant_tool"])
+    messages = Planner._build_example_messages(["home_assistant_tool"], mode="plan")
     assert len(messages) == 4
     for message in messages:
         assert isinstance(message, HumanMessage | AIMessage)
@@ -21,7 +21,7 @@ def test_planner_examples_are_wrapped():
 
 def test_planner_examples_wrap_when_tools_missing():
     """Ensure example tags exist even when tool examples are empty."""
-    messages = Planner._build_example_messages([])
+    messages = Planner._build_example_messages([], mode="plan")
     assert len(messages) == 4
     for message in messages:
         assert message.content.startswith(

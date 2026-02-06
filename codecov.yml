@@ -1,0 +1,41 @@
+coverage:
+  status:
+    patch:
+      default:
+        paths:
+          - "packages/meeseeks_tools/src/meeseeks_tools/vendor/**"
+          - "vendor/**"
+
+comment:
+  layout: "header, diff, components"
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+  individual_components:
+    - component_id: core
+      name: core
+      paths:
+        - "packages/meeseeks_core/**"
+    - component_id: tools
+      name: tools
+      paths:
+        - "packages/meeseeks_tools/**"
+    - component_id: cli
+      name: cli
+      paths:
+        - "apps/meeseeks_cli/**"
+    - component_id: api
+      name: api
+      paths:
+        - "apps/meeseeks_api/**"
+    - component_id: chat
+      name: chat
+      paths:
+        - "apps/meeseeks_chat/**"
+    - component_id: ha
+      name: ha
+      paths:
+        - "meeseeks_ha_conversation/**"

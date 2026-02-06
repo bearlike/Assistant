@@ -1,6 +1,7 @@
 """Tests for step reflection logic."""
 
 from meeseeks_core.classes import ActionStep
+from meeseeks_core.config import set_config_override
 from meeseeks_core.reflection import StepReflection, StepReflector
 
 
@@ -17,7 +18,7 @@ def test_reflect_skips_without_objective():
 
 def test_reflect_disabled_by_env(monkeypatch):
     """Skip reflection when disabled via env."""
-    monkeypatch.setenv("MEESEEKS_STEP_REFLECTION", "0")
+    set_config_override({"reflection": {"enabled": False}})
     reflector = StepReflector(model_name="gpt-4")
     step = ActionStep(
         action_consumer="home_assistant_tool",
@@ -30,9 +31,12 @@ def test_reflect_disabled_by_env(monkeypatch):
 
 def test_reflect_skips_without_model(monkeypatch):
     """Skip reflection when no model is configured."""
-    monkeypatch.delenv("STEP_REFLECTION_MODEL", raising=False)
-    monkeypatch.delenv("ACTION_PLAN_MODEL", raising=False)
-    monkeypatch.setenv("DEFAULT_MODEL", "")
+    set_config_override(
+        {
+            "reflection": {"model": ""},
+            "llm": {"action_plan_model": "", "default_model": ""},
+        }
+    )
     reflector = StepReflector(model_name=None)
     step = ActionStep(
         action_consumer="home_assistant_tool",

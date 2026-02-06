@@ -14,6 +14,7 @@ import tomllib
 
 from meeseeks_core.classes import ActionStep
 from meeseeks_core.common import get_logger
+from meeseeks_core.config import get_config_value
 from meeseeks_core.types import JsonValue
 
 logging = get_logger(name="core.permissions")
@@ -103,7 +104,7 @@ def _load_policy_data(path: str) -> dict[str, JsonValue]:
 def load_permission_policy(path: str | None = None) -> PermissionPolicy:
     """Load permission policy configuration from disk or defaults."""
     if path is None:
-        path = os.getenv("MESEEKS_PERMISSION_POLICY")
+        path = get_config_value("permissions", "policy_path")
     if not path:
         return _default_policy()
     if not os.path.exists(path):
@@ -145,9 +146,10 @@ def load_permission_policy(path: str | None = None) -> PermissionPolicy:
     )
 
 
-def approval_callback_from_env() -> Callable[[ActionStep], bool] | None:
-    """Return an approval callback based on environment configuration."""
-    mode = os.getenv("MESEEKS_APPROVAL_MODE", "").strip().lower()
+def approval_callback_from_config() -> Callable[[ActionStep], bool] | None:
+    """Return an approval callback based on config settings."""
+    mode_raw = get_config_value("permissions", "approval_mode", default="")
+    mode = str(mode_raw or "").strip().lower()
     if mode in {"allow", "auto", "approve", "yes"}:
         return lambda _: True
     if mode in {"deny", "never", "no"}:
@@ -169,7 +171,7 @@ __all__ = [
     "PermissionDecision",
     "PermissionPolicy",
     "PermissionRule",
-    "approval_callback_from_env",
+    "approval_callback_from_config",
     "auto_approve",
     "auto_deny",
     "load_permission_policy",

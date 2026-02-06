@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from meeseeks_core.config import get_config_value, get_mcp_config_path
 from meeseeks_core.task_master import orchestrate_session
 from meeseeks_core.token_budget import get_token_budget
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, load_registry
@@ -206,21 +207,54 @@ def _cmd_plan(context: CommandContext, args: list[str]) -> bool:
     return True
 
 
+@REGISTRY.command("/mode", "Set orchestration mode: /mode act|plan")
+def _cmd_mode(context: CommandContext, args: list[str]) -> bool:
+    if not args:
+        context.console.print(f"Current mode: {context.state.mode}")
+        return True
+    value = args[0].lower()
+    if value not in {"act", "plan"}:
+        context.console.print("Usage: /mode act|plan")
+        return True
+    context.state.mode = value
+    context.console.print(f"Mode set to: {context.state.mode}")
+    return True
+
+
 @REGISTRY.command("/mcp", "List MCP tools and servers (/mcp select|init)")
 def _cmd_mcp(context: CommandContext, args: list[str]) -> bool:
     if args and args[0].lower() == "init":
         return _cmd_mcp_init(context, args[1:])
     selection_mode = not args or args[0].lower() in {"select", "filter"}
-    mcp_specs = [spec for spec in context.tool_registry.list_specs() if spec.kind == "mcp"]
+    all_specs = context.tool_registry.list_specs(include_disabled=True)
+    mcp_specs = [spec for spec in all_specs if spec.kind == "mcp"]
     if selection_mode and mcp_specs:
         mcp_specs = _maybe_select_mcp_specs(context, mcp_specs) or mcp_specs
-    _render_mcp(context.console, context.tool_registry, mcp_specs=mcp_specs)
+    _render_mcp(
+        context.console,
+        context.tool_registry,
+        mcp_specs=mcp_specs,
+        all_specs=all_specs,
+    )
     return True
+
+
+@REGISTRY.command("/config", "Manage config files (/config init)")
+def _cmd_config(context: CommandContext, args: list[str]) -> bool:
+    if args and args[0].lower() == "init":
+        return _cmd_config_init(context, args[1:])
+    context.console.print("Usage: /config init [--force]")
+    return True
+
+
+@REGISTRY.command("/init", "Scaffold both config and MCP example files")
+def _cmd_init_all(context: CommandContext, args: list[str]) -> bool:
+    return _cmd_config_init(context, args) and _cmd_mcp_init(context, args)
 
 
 def _cmd_mcp_init(context: CommandContext, args: list[str]) -> bool:
     """Create a local MCP config file for quick setup."""
-    target = os.getenv("MESEEKS_MCP_CONFIG") or os.path.join("configs", "mcp.json")
+    target = get_mcp_config_path()
     force = False
     if args:
         force = "--force" in args or "--yes" in args
@@ -234,7 +268,6 @@ def _cmd_mcp_init(context: CommandContext, args: list[str]) -> bool:
         return True
 
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    template_path = os.path.join("configs", "mcp.example.json")
     payload = {
         "servers": {
             "codex_tools": {
@@ -244,9 +277,10 @@ def _cmd_mcp_init(context: CommandContext, args: list[str]) -> bool:
             }
         }
     }
-    if os.path.exists(template_path):
+    example_path = os.path.join("configs", "mcp.example.json")
+    if os.path.exists(example_path):
         try:
-            with open(template_path, encoding="utf-8") as handle:
+            with open(example_path, encoding="utf-8") as handle:
                 payload = json.load(handle)
         except Exception:
             pass
@@ -255,12 +289,26 @@ def _cmd_mcp_init(context: CommandContext, args: list[str]) -> bool:
         handle.write("\n")
 
     context.console.print(f"Created MCP config at {target}.")
-    context.console.print("Set MESEEKS_MCP_CONFIG in .env and restart the CLI.")
+    return True
+
+
+def _cmd_config_init(context: CommandContext, args: list[str]) -> bool:
+    """Create app config example file for quick setup."""
+    force = "--force" in args or "--yes" in args
+    example_path = os.path.join("configs", "app.example.json")
+    if os.path.exists(example_path) and not force:
+        context.console.print(f"Config example already exists at {example_path}.")
+        context.console.print("Use /config init --force to overwrite.")
+        return True
+    from meeseeks_core.config import ensure_example_configs
+
+    ensure_example_configs()
+    context.console.print(f"Created config example at {example_path}.")
     return True
 
 
 def _refresh_mcp_registry(context: CommandContext) -> None:
-    target = os.getenv("MESEEKS_MCP_CONFIG") or os.path.join("configs", "mcp.json")
+    target = get_mcp_config_path()
     if not os.path.exists(target):
         _cmd_mcp_init(context, [])
     refreshed = load_registry()
@@ -287,7 +335,11 @@ def _maybe_select_mcp_specs(
     )
     if selected == refresh_label:
         _refresh_mcp_registry(context)
-        return [spec for spec in context.tool_registry.list_specs() if spec.kind == "mcp"]
+        return [
+            spec
+            for spec in context.tool_registry.list_specs(include_disabled=True)
+            if spec.kind == "mcp"
+        ]
     if selected is None or selected == all_label:
         return None
     return [spec for spec in mcp_specs if spec.tool_id == selected]
@@ -384,16 +436,16 @@ def _cmd_budget(context: CommandContext, args: list[str]) -> bool:
 
 
 def _get_openai_base_url() -> str | None:
-    return os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL")
+    return get_config_value("llm", "api_base")
 
 
 def _fetch_models() -> list[str]:
     base_url = _get_openai_base_url()
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = get_config_value("llm", "api_key")
     if not base_url:
-        raise RuntimeError("OPENAI_API_BASE or OPENAI_BASE_URL is not set.")
+        raise RuntimeError("llm.api_base is not set.")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set.")
+        raise RuntimeError("llm.api_key is not set.")
     base_url = base_url.rstrip("/")
     if base_url.endswith("/v1"):
         url = f"{base_url}/models"
@@ -465,8 +517,9 @@ def _render_mcp(
     console: Console,
     tool_registry: ToolRegistry,
     mcp_specs: list[ToolSpec] | None = None,
+    all_specs: list[ToolSpec] | None = None,
 ) -> None:
-    config_path = os.getenv("MESEEKS_MCP_CONFIG")
+    config_path = get_mcp_config_path()
     if config_path and os.path.exists(config_path):
         try:
             with open(config_path, encoding="utf-8") as handle:
@@ -493,9 +546,38 @@ def _render_mcp(
             console.print(f"Failed to read MCP config: {exc}")
     specs = mcp_specs
     if specs is None:
-        specs = [spec for spec in tool_registry.list_specs() if spec.kind == "mcp"]
+        specs = [
+            spec for spec in tool_registry.list_specs(include_disabled=True) if spec.kind == "mcp"
+        ]
     if not specs:
         console.print("No MCP tools configured.")
+    if all_specs is None:
+        all_specs = tool_registry.list_specs(include_disabled=True)
+    local_specs = [spec for spec in all_specs if spec.kind != "mcp"]
+    if local_specs:
+        local_lines: list[Text] = []
+        for spec in local_specs:
+            line = Text()
+            line.append(spec.tool_id, style="cyan")
+            if spec.description:
+                line.append(" — ", style="dim")
+                line.append(spec.description)
+            if not spec.enabled:
+                disabled_reason = spec.metadata.get("disabled_reason")
+                line.append(" — ", style="dim")
+                line.append("disabled", style="yellow")
+                if disabled_reason:
+                    line.append(" • ", style="dim")
+                    line.append(str(disabled_reason), style="dim")
+            local_lines.append(line)
+        console.print(
+            Panel(
+                Group(*local_lines),
+                title="Built-in Tools",
+                border_style="dim",
+            )
+        )
+    if not specs:
         return
     tool_lines: list[Text] = []
     for spec in specs:
@@ -511,6 +593,13 @@ def _render_mcp(
             if server_name:
                 line.append(" • ", style="dim")
             line.append(f"tool:{tool_name}")
+        if not spec.enabled:
+            disabled_reason = spec.metadata.get("disabled_reason")
+            line.append(" — ", style="dim")
+            line.append("disabled", style="yellow")
+            if disabled_reason:
+                line.append(" • ", style="dim")
+                line.append(str(disabled_reason), style="dim")
         tool_lines.append(line)
     console.print(
         Panel(

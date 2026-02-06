@@ -2,6 +2,7 @@
 
 import types
 
+from meeseeks_core.config import set_config_override
 from meeseeks_core.context import ContextBuilder, event_payload_text, render_event_lines
 from meeseeks_core.session_store import SessionStore
 
@@ -141,9 +142,12 @@ def test_select_context_events_empty_candidates(monkeypatch, tmp_path):
 
 def test_select_context_events_without_model(monkeypatch, tmp_path):
     """Return events when no selector model is configured."""
-    monkeypatch.setenv("CONTEXT_SELECTOR_MODEL", "")
-    monkeypatch.setenv("DEFAULT_MODEL", "")
-    monkeypatch.setenv("ACTION_PLAN_MODEL", "")
+    set_config_override(
+        {
+            "context": {"context_selector_model": ""},
+            "llm": {"default_model": "", "action_plan_model": ""},
+        }
+    )
     builder = ContextBuilder(SessionStore(root_dir=str(tmp_path)))
     events = [{"type": "user", "payload": {"text": "one"}}]
     selected = builder._select_context_events(events, "query", None)

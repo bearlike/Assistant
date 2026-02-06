@@ -45,6 +45,8 @@ class ToolResultPayload(TypedDict):
     action_type: str
     action_argument: ActionArgument
     result: str | None
+    success: NotRequired[bool]
+    summary: NotRequired[str]
     error: NotRequired[str]
 
 

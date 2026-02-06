@@ -1,6 +1,7 @@
 """Tests for token budget calculations."""
 
 from meeseeks_core import token_budget as token_budget_module
+from meeseeks_core.config import set_config_override
 from meeseeks_core.token_budget import get_context_window, get_token_budget
 
 
@@ -28,34 +29,16 @@ def test_parse_context_from_model_name():
     assert token_budget_module._parse_context_from_model("gpt-4-2m") == 2_000_000
 
 
-def test_load_context_overrides_env_json(monkeypatch):
-    """Load context overrides from JSON environment values."""
-    monkeypatch.setenv("MESEEKS_MODEL_CONTEXT_WINDOWS", '{"gpt-x": 8000}')
+def test_load_context_overrides_from_config():
+    """Load context overrides from config values."""
+    set_config_override({"token_budget": {"model_context_windows": {"gpt-x": 8000}}})
     overrides = token_budget_module._load_context_overrides()
     assert overrides["gpt-x"] == 8000
 
 
-def test_load_context_overrides_from_file(tmp_path, monkeypatch):
-    """Load context overrides from a JSON file path."""
-    config_path = tmp_path / "contexts.json"
-    config_path.write_text('{"gpt-y": 9000}', encoding="utf-8")
-    monkeypatch.setenv("MESEEKS_MODEL_CONTEXT_WINDOWS", str(config_path))
-    overrides = token_budget_module._load_context_overrides()
-    assert overrides["gpt-y"] == 9000
-
-
-def test_load_context_overrides_from_toml(tmp_path, monkeypatch):
-    """Load context overrides from a TOML file path."""
-    config_path = tmp_path / "contexts.toml"
-    config_path.write_text("gpt-z = 7777\n", encoding="utf-8")
-    monkeypatch.setenv("MESEEKS_MODEL_CONTEXT_WINDOWS", str(config_path))
-    overrides = token_budget_module._load_context_overrides()
-    assert overrides["gpt-z"] == 7777
-
-
 def test_get_context_window_uses_override(monkeypatch):
     """Use context window override when present."""
-    monkeypatch.setenv("MESEEKS_MODEL_CONTEXT_WINDOWS", '{"gpt-override": 1234}')
+    set_config_override({"token_budget": {"model_context_windows": {"gpt-override": 1234}}})
     assert get_context_window("gpt-override") == 1234
 
 

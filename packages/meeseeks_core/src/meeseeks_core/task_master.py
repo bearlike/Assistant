@@ -3,23 +3,22 @@
 
 from __future__ import annotations
 
-import os
 import warnings
 from collections.abc import Callable
 from typing import cast
 
-from dotenv import load_dotenv
 from langchain_core._api.beta_decorator import LangChainBetaWarning
 
 from meeseeks_core.action_runner import ActionPlanRunner
 from meeseeks_core.classes import ActionStep, OrchestrationState, TaskQueue
 from meeseeks_core.common import get_logger
+from meeseeks_core.config import get_config_value
 from meeseeks_core.context import ContextSnapshot
 from meeseeks_core.hooks import HookManager, default_hook_manager
 from meeseeks_core.orchestrator import Orchestrator
 from meeseeks_core.permissions import (
     PermissionPolicy,
-    approval_callback_from_env,
+    approval_callback_from_config,
     load_permission_policy,
 )
 from meeseeks_core.planning import Planner
@@ -32,7 +31,6 @@ from meeseeks_core.types import Event, EventRecord
 logging = get_logger(name="core.task_master")
 
 warnings.simplefilter("ignore", LangChainBetaWarning)
-load_dotenv()
 
 
 def _build_context_snapshot(
@@ -57,12 +55,16 @@ def generate_action_plan(
     session_summary: str | None = None,
     recent_events: list[EventRecord] | None = None,
     selected_events: list[EventRecord] | None = None,
+    *,
+    mode: str = "act",
 ) -> TaskQueue:
     """Generate an action plan for a user query."""
     tool_registry = tool_registry or load_registry()
     resolved_model = cast(
         str,
-        model_name or os.getenv("ACTION_PLAN_MODEL") or os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo"),
+        model_name
+        or get_config_value("llm", "action_plan_model")
+        or get_config_value("llm", "default_model", default="gpt-5.2"),
     )
     context = _build_context_snapshot(
         session_summary,
@@ -70,7 +72,7 @@ def generate_action_plan(
         selected_events,
         resolved_model,
     )
-    return Planner(tool_registry).generate(user_query, resolved_model, context=context)
+    return Planner(tool_registry).generate(user_query, resolved_model, context=context, mode=mode)
 
 
 def run_action_plan(
@@ -81,11 +83,13 @@ def run_action_plan(
     approval_callback: Callable[[ActionStep], bool] | None = None,
     hook_manager: HookManager | None = None,
     model_name: str | None = None,
+    *,
+    mode: str = "act",
 ) -> TaskQueue:
     """Execute a task queue with permissions and hooks."""
     tool_registry = tool_registry or load_registry()
     permission_policy = permission_policy or load_permission_policy()
-    approval_callback = approval_callback or approval_callback_from_env()
+    approval_callback = approval_callback or approval_callback_from_config()
     hook_manager = hook_manager or default_hook_manager()
     runner = ActionPlanRunner(
         tool_registry=tool_registry,
@@ -94,6 +98,7 @@ def run_action_plan(
         hook_manager=hook_manager,
         event_logger=event_logger,
         reflector=StepReflector(model_name),
+        mode=mode,
     )
     return runner.run(task_queue)
 
@@ -110,6 +115,7 @@ def orchestrate_session(
     permission_policy: PermissionPolicy | None = None,
     approval_callback: Callable[[ActionStep], bool] | None = None,
     hook_manager: HookManager | None = None,
+    mode: str | None = None,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
     """Run the plan-act-observe orchestration loop."""
     return Orchestrator(
@@ -125,6 +131,7 @@ def orchestrate_session(
         initial_task_queue=initial_task_queue,
         return_state=return_state,
         session_id=session_id,
+        mode=mode,
     )
 
 

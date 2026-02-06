@@ -3,13 +3,11 @@
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Callable
 from typing import Any, Concatenate, ParamSpec, Protocol, TypedDict, TypeVar, runtime_checkable
 
 import requests
-from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.messages.ai import AIMessage
@@ -17,11 +15,11 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from meeseeks_core.classes import AbstractTool, ActionStep
 from meeseeks_core.common import MockSpeaker, get_logger, get_mock_speaker, ha_render_system_prompt
+from meeseeks_core.config import get_config_value
 from pydantic.v1 import BaseModel, Field, validator
 from typing_extensions import NotRequired
 
 logging = get_logger(name="tools.integration.homeassistant")
-load_dotenv()
 
 # ! BUG: Error correction for model parsing errors is not implemented yet.
 # !     Currently, if there are parsing errors, the tool is allowed to fail.
@@ -298,8 +296,8 @@ class HomeAssistant(AbstractTool):
             name="Home Assistant",
             description="A service to manage and interact with Home Assistant",
         )
-        self.base_url = os.getenv("HA_URL", None)
-        self._api_token = os.getenv("HA_TOKEN", None)
+        self.base_url = get_config_value("home_assistant", "url")
+        self._api_token = get_config_value("home_assistant", "token")
         self.cache: HomeAssistantCache = {
             "entity_ids": [],
             "sensor_ids": [],
@@ -310,7 +308,7 @@ class HomeAssistant(AbstractTool):
         }
 
         if not self.base_url or not self._api_token:
-            raise ValueError("HA_URL and HA_TOKEN must be set in the environment.")
+            raise ValueError("home_assistant.url and home_assistant.token must be set.")
 
         self.api_headers: dict[str, str] = {
             "Authorization": f"Bearer {self._api_token}",

@@ -5,18 +5,17 @@ Scope: this file applies to the `apps/meeseeks_api/` package. It captures runtim
 ## Runtime flow (what actually happens)
 - Entry point: `apps/meeseeks_api/src/meeseeks_api/backend.py` (HTTP API framework).
 - Single endpoint: `POST /api/query`.
-- Auth: requires `X-API-KEY` header. Token defaults to `msk-strong-password` if `MASTER_API_TOKEN` is not set.
+- Auth: requires `X-API-KEY` header. Token defaults to `api.master_token` from `configs/app.json` (default: `msk-strong-password`).
 - Orchestration: calls `meeseeks_core.task_master.orchestrate_session(...)` with `auto_approve` and a shared `SessionStore`.
 - Sessions: supports `session_id`, `session_tag`, and `fork_from` (tag or id). Tags are resolved via `SessionStore`.
 
 ## Hidden dependencies / assumptions
-- Loads `.env` via an env loader at import time.
-- Uses core logging (`meeseeks_core.common.get_logger`); log level controlled by core env.
-- Relies on core LLM config env: `OPENAI_API_BASE` / `OPENAI_API_KEY`, `DEFAULT_MODEL`, `ACTION_PLAN_MODEL`.
+- Uses core logging (`meeseeks_core.common.get_logger`); log level controlled by `runtime.log_level`.
+- Relies on core LLM config (`llm.api_base`, `llm.api_key`, `llm.default_model`, `llm.action_plan_model`).
 - No rate limiting or auth hardening beyond the header token.
 
 ## Pitfalls / gotchas
-- `MASTER_API_TOKEN` default is insecure; production should override it.
+- `api.master_token` default is insecure; production should override it in `configs/app.json`.
 - No heartbeat or health endpoint; external deployments must handle liveness checks.
 - The API returns the whole `TaskQueue` including action steps; ensure tool results are safe to expose.
 - Treat language models as black-box APIs with non-deterministic output; avoid anthropomorphic language in docs/changes.

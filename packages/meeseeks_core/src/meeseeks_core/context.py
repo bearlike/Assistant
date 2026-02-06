@@ -12,6 +12,8 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 from pydantic.v1 import BaseModel, Field
 
 from meeseeks_core.common import format_action_argument, get_logger
+from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
+from meeseeks_core.config import get_config_value
 from meeseeks_core.llm import build_chat_model
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.token_budget import TokenBudget, get_token_budget
@@ -81,14 +83,14 @@ class ContextBuilder:
         context_events = [
             event for event in events if event.get("type") in {"user", "assistant", "tool_result"}
         ]
-        recent_limit = int(os.getenv("MEESEEKS_RECENT_EVENT_LIMIT", "8"))
+        recent_limit = int(get_config_value("context", "recent_event_limit", default=8))
         recent_events = context_events[-recent_limit:] if recent_limit > 0 else []
         candidate_events = context_events[:-recent_limit] if recent_limit > 0 else context_events
         budget = get_token_budget(events, summary, model_name)
         selected_events: list[EventRecord] | None = None
-        selection_threshold = float(os.getenv("MEESEEKS_CONTEXT_SELECT_THRESHOLD", "0.8"))
+        selection_threshold = float(get_config_value("context", "selection_threshold", default=0.8))
         if (
-            os.getenv("MEESEEKS_CONTEXT_SELECTION", "1") != "0"
+            bool(get_config_value("context", "selection_enabled", default=True))
             and candidate_events
             and budget.utilization >= selection_threshold
         ):
@@ -114,10 +116,10 @@ class ContextBuilder:
         if not events:
             return []
         selector_model = (
-            os.getenv("CONTEXT_SELECTOR_MODEL")
+            get_config_value("context", "context_selector_model")
             or model_name
-            or os.getenv("ACTION_PLAN_MODEL")
-            or os.getenv("DEFAULT_MODEL")
+            or get_config_value("llm", "action_plan_model")
+            or get_config_value("llm", "default_model")
         )
         if not selector_model:
             return events
@@ -151,13 +153,48 @@ class ContextBuilder:
             return events
         model = build_chat_model(
             model_name=selector_model,
-            temperature=0.0,
-            openai_api_base=os.getenv("OPENAI_API_BASE"),
+            openai_api_base=get_config_value("llm", "api_base"),
+            api_key=get_config_value("llm", "api_key"),
         )
+        handler = build_langfuse_handler(
+            user_id="meeseeks-context",
+            session_id=f"context-{os.getpid()}-{os.urandom(4).hex()}",
+            trace_name="meeseeks-context",
+            version=get_config_value("runtime", "version", default="Not Specified"),
+            release=get_config_value("runtime", "envmode", default="Not Specified"),
+        )
+        config: dict[str, object] = {}
+        if handler is not None:
+            config["callbacks"] = [handler]
+            metadata = getattr(handler, "langfuse_metadata", None)
+            if isinstance(metadata, dict) and metadata:
+                config["metadata"] = metadata
         try:
-            selection = (prompt | model | parser).invoke(
-                {"user_query": user_query.strip(), "candidates": candidates_text}
-            )
+            with langfuse_trace_span("context-select") as span:
+                if span is not None:
+                    try:
+                        span.update_trace(
+                            input={
+                                "user_query": user_query.strip(),
+                                "candidate_count": len(lines),
+                            }
+                        )
+                    except Exception:
+                        pass
+                selection = (prompt | model | parser).invoke(
+                    {"user_query": user_query.strip(), "candidates": candidates_text},
+                    config=config or None,
+                )
+                if span is not None:
+                    try:
+                        span.update_trace(
+                            output={
+                                "keep_ids": selection.keep_ids,
+                                "drop_ids": selection.drop_ids,
+                            }
+                        )
+                    except Exception:
+                        pass
         except Exception as exc:  # pragma: no cover - defensive
             logging.warning("Context selection failed: {}", exc)
             return events[-3:]

@@ -1,6 +1,6 @@
 [project]
 name = "meeseeks-cli"
-version = "2.0.0-alpha"
+version = "2.1.0-alpha"
 description = "Terminal CLI frontend for the Meeseeks core orchestration engine."
 readme = "../../README.md"
 requires-python = ">=3.10,<4.0"
@@ -10,8 +10,8 @@ authors = [
 license = { text = "MIT" }
 
 dependencies = [
-  "meeseeks-core>=2.0.0-alpha",
-  "meeseeks-tools[mcp]>=2.0.0-alpha",
+  "meeseeks-core>=2.1.0-alpha",
+  "meeseeks-tools[mcp]>=2.1.0-alpha",
   "prompt-toolkit>=3.0.47,<4.0.0",
   "rich>=14.2.0,<15.0.0",
   "textual>=7.5.0,<8.0.0",

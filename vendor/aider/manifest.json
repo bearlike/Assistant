@@ -1,0 +1,10 @@
+{
+  "repo": "https://github.com/Aider-AI/aider",
+  "ref": "4bf56b77145b0be593ed48c3c90cdecead217496",
+  "files": [
+    "aider/coders/editblock_coder.py",
+    "aider/coders/editblock_prompts.py",
+    "aider/coders/editblock_fenced_prompts.py",
+    "LICENSE.txt"
+  ]
+}

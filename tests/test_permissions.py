@@ -2,11 +2,12 @@
 
 from meeseeks_core import permissions as permissions_module
 from meeseeks_core.classes import ActionStep
+from meeseeks_core.config import set_config_override
 from meeseeks_core.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRule,
-    approval_callback_from_env,
+    approval_callback_from_config,
     auto_approve,
     auto_deny,
     load_permission_policy,
@@ -79,7 +80,7 @@ def test_load_policy_from_json(tmp_path, monkeypatch):
         """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("MESEEKS_PERMISSION_POLICY", str(policy_path))
+    set_config_override({"permissions": {"policy_path": str(policy_path)}})
     policy = load_permission_policy()
     step = ActionStep(
         action_consumer="home_assistant_tool",
@@ -107,7 +108,7 @@ def test_load_policy_from_toml(tmp_path, monkeypatch):
         """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("MESEEKS_PERMISSION_POLICY", str(policy_path))
+    set_config_override({"permissions": {"policy_path": str(policy_path)}})
     policy = load_permission_policy()
     step = ActionStep(
         action_consumer="home_assistant_tool",
@@ -132,7 +133,7 @@ def test_load_policy_skips_invalid_rules_and_defaults(tmp_path, monkeypatch):
         """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("MESEEKS_PERMISSION_POLICY", str(policy_path))
+    set_config_override({"permissions": {"policy_path": str(policy_path)}})
     policy = load_permission_policy()
     step = ActionStep(
         action_consumer="home_assistant_tool",
@@ -151,7 +152,7 @@ def test_parse_decision_invalid_and_valid():
 
 def test_load_policy_missing_file(monkeypatch):
     """Fall back to defaults when the policy file is missing."""
-    monkeypatch.setenv("MESEEKS_PERMISSION_POLICY", "/tmp/missing-policy.json")
+    set_config_override({"permissions": {"policy_path": "/tmp/missing-policy.json"}})
     policy = load_permission_policy()
     step = ActionStep(
         action_consumer="home_assistant_tool",
@@ -165,7 +166,7 @@ def test_load_policy_invalid_json(tmp_path, monkeypatch):
     """Fall back to defaults when policy JSON is invalid."""
     policy_path = tmp_path / "policy.json"
     policy_path.write_text("{invalid-json}", encoding="utf-8")
-    monkeypatch.setenv("MESEEKS_PERMISSION_POLICY", str(policy_path))
+    set_config_override({"permissions": {"policy_path": str(policy_path)}})
     policy = load_permission_policy()
     step = ActionStep(
         action_consumer="home_assistant_tool",
@@ -175,16 +176,16 @@ def test_load_policy_invalid_json(tmp_path, monkeypatch):
     assert policy.decide(step) == PermissionDecision.ALLOW
 
 
-def test_approval_callback_from_env(monkeypatch):
-    """Resolve approval callbacks from env flags."""
-    monkeypatch.setenv("MESEEKS_APPROVAL_MODE", "allow")
-    callback = approval_callback_from_env()
+def test_approval_callback_from_config(monkeypatch):
+    """Resolve approval callbacks from config flags."""
+    set_config_override({"permissions": {"approval_mode": "allow"}})
+    callback = approval_callback_from_config()
     assert callback is not None
     assert callback(
         ActionStep(action_consumer="home_assistant_tool", action_type="get", action_argument="x")
     )
-    monkeypatch.setenv("MESEEKS_APPROVAL_MODE", "deny")
-    callback = approval_callback_from_env()
+    set_config_override({"permissions": {"approval_mode": "deny"}})
+    callback = approval_callback_from_config()
     assert callback is not None
     assert (
         callback(
@@ -194,8 +195,8 @@ def test_approval_callback_from_env(monkeypatch):
         )
         is False
     )
-    monkeypatch.setenv("MESEEKS_APPROVAL_MODE", "maybe")
-    assert approval_callback_from_env() is None
+    set_config_override({"permissions": {"approval_mode": "maybe"}})
+    assert approval_callback_from_config() is None
 
 
 def test_auto_approve_and_deny():

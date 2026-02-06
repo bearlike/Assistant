@@ -9,17 +9,16 @@ import os
 from collections.abc import Sequence
 from typing import cast
 
-from dotenv import load_dotenv
 from langchain_community.document_loaders import JSONLoader
 from langchain_core.documents import Document
 from pydantic.v1 import BaseModel, Field, validator
 
 from meeseeks_core.common import MockSpeaker, get_logger, get_mock_speaker, get_unique_timestamp
 from meeseeks_core.components import build_langfuse_handler
+from meeseeks_core.config import get_config_value
 from meeseeks_core.llm import build_chat_model
 from meeseeks_core.types import ActionArgument, ActionStepPayload
 
-load_dotenv()
 logging = get_logger(name="core.classes")
 AVAILABLE_TOOLS: list[str] = ["home_assistant_tool"]
 
@@ -141,13 +140,14 @@ class AbstractTool(abc.ABC):
         name: str,
         description: str,
         model_name: str | None = None,
-        temperature: float = 0.3,
         use_llm: bool = True,
     ) -> None:
         """Initialize tool configuration."""
+        tool_model = get_config_value("llm", "tool_model")
+        default_model = get_config_value("llm", "default_model", default="gpt-5.2")
         self.model_name = cast(
             str,
-            model_name or os.getenv("TOOL_MODEL") or os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo"),
+            model_name or tool_model or default_model,
         )
         self.name = name
         self.description = description
@@ -159,22 +159,20 @@ class AbstractTool(abc.ABC):
             user_id=f"meeseeks-{name}",
             session_id=session_id,
             trace_name=f"meeseeks-{self._id}",
-            version=os.getenv("VERSION", "Not Specified"),
-            release=os.getenv("ENVMODE", "Not Specified"),
+            version=get_config_value("runtime", "version", default="Not Specified"),
+            release=get_config_value("runtime", "envmode", default="Not Specified"),
         )
         self.model = None
         if self.use_llm:
             self.model = build_chat_model(
                 model_name=self.model_name,
-                temperature=temperature,
-                openai_api_base=os.getenv("OPENAI_API_BASE"),
+                openai_api_base=get_config_value("llm", "api_base"),
+                api_key=get_config_value("llm", "api_key"),
             )
-        root_cache_dir = os.getenv("CACHE_DIR", None)
-        if root_cache_dir is None:
-            raise ValueError("CACHE_DIR environment variable is not set.")
-
-        cache_dir = os.path.join(root_cache_dir, "..", ".cache", self._id)
-        self.cache_dir = os.path.abspath(cache_dir)
+        root_cache_dir = get_config_value("runtime", "cache_dir", default=".cache")
+        if not root_cache_dir:
+            raise ValueError("runtime.cache_dir is not set.")
+        self.cache_dir = os.path.abspath(os.path.join(str(root_cache_dir), self._id))
         logging.debug("{} cache directory is {}.", self._id, self.cache_dir)
 
     def _save_json(self, data: object, filename: str) -> None:

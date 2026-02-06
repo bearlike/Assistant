@@ -20,11 +20,13 @@ Meeseeks is an AI task agent assistant that breaks a request into small actions,
 - Plan → act → observe loop to keep work grounded in tool results.
 - Multiple interfaces (chat UI, REST API, Home Assistant, terminal CLI) backed by one core engine.
 - Tool registry for local tools plus optional MCP tools.
+- Built-in local file and shell tools (Aider adapters) for edit blocks, read, list, and shell execution.
 - Session transcripts with compaction for long runs and context budget awareness.
 - Context snapshots built from recent turns plus summaries of prior activity.
 - Step-level reflection after tool execution to validate outcomes.
 - Permission gate with approval callbacks plus lightweight hooks around tool execution.
 - Optional components (Langfuse, Home Assistant) auto-disable when not configured.
+- Langfuse tracing is session-scoped when enabled, grouping multi-turn runs.
 
 ## Repo map (short)
 - `packages/meeseeks_core/`: orchestration loop, schemas, session storage, compaction, tool registry.
@@ -43,17 +45,20 @@ Prompts are packaged under `packages/meeseeks_core/src/meeseeks_core/prompts/`.
 
 ```mermaid
 flowchart LR
+  User --> CLI
   User --> Chat
   User --> API
   HA --> API
-  User --> CLI
+  CLI --> Core
   Chat --> Core
   API --> Core
-  CLI --> Core
-  Core --> Tools
-  Tools --> HomeAssistant
+  Core --> Planner
+  Planner --> Tools
+  Tools --> LocalTools
   Tools --> MCP
+  Tools --> HomeAssistant
   Core --> SessionStore
+  Core --> Langfuse
 ```
 
 ## Getting started

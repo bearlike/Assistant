@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import logging as logging_real
-import os
 import sys
 import time
 from importlib import resources
@@ -14,6 +13,8 @@ from typing import NamedTuple
 import tiktoken
 from jinja2 import Environment, PackageLoader
 from loguru import logger as loguru_logger
+
+from meeseeks_core.config import get_config_value
 
 
 class MockSpeaker(NamedTuple):
@@ -31,16 +32,16 @@ _LOG_CONFIGURED = False
 
 
 def _resolve_log_level() -> str:
-    level_name = os.getenv("LOG_LEVEL")
-    if level_name:
+    level_name = get_config_value("runtime", "log_level", default="DEBUG")
+    if isinstance(level_name, str) and level_name.strip():
         return level_name.strip().upper()
     return "DEBUG"
 
 
 def _should_use_cli_dark_logs() -> bool:
-    style = os.getenv("MEESEEKS_LOG_STYLE", "")
+    style = get_config_value("runtime", "log_style", default="")
     if not style:
-        style = os.getenv("MEESEEKS_CLI_LOG_STYLE", "")
+        style = get_config_value("runtime", "cli_log_style", default="")
     return style.lower() == "dark"
 
 

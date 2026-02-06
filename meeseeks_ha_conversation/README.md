@@ -18,7 +18,7 @@
 
 - Home Assistant Conversation Integration for Meeseeks. Can be used with HA Assist ⭐.
 - Wrapped around the REST API Engine for Meeseeks. 100% coverage of Meeseeks API.
-- This integration is optional and auto-disables if `HA_URL`/`HA_TOKEN` are missing or auth fails.
+- This integration is optional and auto-disables if `home_assistant.enabled` is false or credentials are missing in `configs/app.json`.
 - No components are explicitly tested for safety or security. Use with caution in a production environment.
 - For full setup and configuration, see `docs/getting-started.md`.
 

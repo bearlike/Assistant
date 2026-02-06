@@ -5,7 +5,7 @@ FROM python:3.11-slim-bookworm
 
 # Set the title, GitHub repo URL, version, and author
 ARG TITLE="Meeseeks Base" \
-    VERSION="1.0.0" \
+    VERSION="2.1.0-alpha" \
     AUTHOR="Krishnakanth Alagiri" \
     GITHUB_REPO_URL="https://github.com/bearlike/Assistant"
 
@@ -43,7 +43,7 @@ RUN uv pip install --system -e packages/meeseeks_core -e packages/meeseeks_tools
 
 # Set default environment variables for Meeseeks (common ones)
 ENV CACHE_DIR='/tmp/meeseeks_cache' \
-    DEFAULT_MODEL='gpt-3.5-turbo' \
+    DEFAULT_MODEL='gpt-5.2' \
     LOG_LEVEL=DEBUG \
     ENVMODE=dev \
     VERSION=${VERSION} \

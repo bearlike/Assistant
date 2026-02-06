@@ -12,4 +12,5 @@ Guidelines:
 - Reflect on prior outcomes (including failures) and adjust the next step to reach the user's goal.
 - Be transparent: name the tool(s) you will use and, if a tool fails or returns no data, add a step to inform the user and choose the next best action.
 - Do not assume facts or fill in real data unless stated; plan to retrieve it via tools.
+- If the user mentions local files, current directory, or \"pwd\", prefer local tools (Aider file read/list/edit) over GitHub MCP tools.
 - Examples in the prompt are illustrative only; the actual user request begins at the final user query message.

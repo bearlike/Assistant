@@ -66,6 +66,8 @@ If you add a new interactive flow, use `DialogFactory` instead of writing custom
 - `/fork [TAG]`: fork current session (dialog when TAG omitted).
 - `/plan on|off`: toggle action plan display.
 - `/mcp [select|init]`: list MCP tools, filter, or scaffold config.
+- `/config init`: scaffold a config example file.
+- `/init`: scaffold both config and MCP example files.
 - `/models`: model wizard (interactive only).
 - `/automatic`: auto-approve all tool actions in this session.
 
@@ -75,14 +77,12 @@ If you add a new interactive flow, use `DialogFactory` instead of writing custom
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_dialogs.py`: dialog factory.
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_context.py`: state shared across commands.
 
-## Environment knobs (UI-relevant)
-- `OPENAI_API_BASE` / `OPENAI_BASE_URL`: printed in the ready panel.
-- `DEFAULT_MODEL` / `ACTION_PLAN_MODEL`: used when `--model` is not set.
-- `MEESEEKS_DISABLE_TEXTUAL=1`: disable dialogs (force fallback).
-- `MEESEEKS_CLI=1`: set at startup to tag CLI runtime context.
-- `MEESEEKS_LOG_STYLE=dark`: default log styling for the CLI.
-- `MESEEKS_MCP_CONFIG`: MCP server config used for discovery.
-- `MESEEKS_TOOL_MANIFEST`: optional override for tool registry.
+## Config knobs (UI-relevant)
+- `llm.api_base`: printed in the ready panel.
+- `llm.default_model` / `llm.action_plan_model`: used when `--model` is not set.
+- `cli.disable_textual`: disable dialogs (force fallback).
+- `runtime.cli_log_style`: default log styling for the CLI.
+- `configs/mcp.json`: MCP server config used for discovery.
 
 ## KISS / DRY rules for UI work
 - Reuse existing render helpers and dialogs; add small helpers if needed.

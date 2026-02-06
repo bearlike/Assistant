@@ -17,6 +17,7 @@ class CliState:
     show_plan: bool = True
     model_name: str | None = None
     auto_approve_all: bool = False
+    mode: str = "act"
 
 
 @dataclass

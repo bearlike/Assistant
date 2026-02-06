@@ -5,6 +5,7 @@ import os
 import meeseeks_core.classes as classes
 import pytest
 from meeseeks_core.classes import ActionStep, TaskQueue, create_task_queue, set_available_tools
+from meeseeks_core.config import set_config_override
 
 
 def test_action_step_normalization():
@@ -69,7 +70,7 @@ def test_save_json(tmp_path, monkeypatch):
         def get_state(self, *args, **kwargs):
             raise NotImplementedError
 
-    monkeypatch.setenv("CACHE_DIR", str(tmp_path))
+    set_config_override({"runtime": {"cache_dir": str(tmp_path)}})
     tool = DummyTool.__new__(DummyTool)
     tool.cache_dir = str(tmp_path)
     tool._save_json({"value": 1}, "data.json")
@@ -126,7 +127,7 @@ def test_abstract_tool_init_and_run(monkeypatch, tmp_path):
     module = types.ModuleType("langchain_litellm")
     module.ChatLiteLLM = DummyChatLiteLLM
     monkeypatch.setitem(sys.modules, "langchain_litellm", module)
-    monkeypatch.setenv("CACHE_DIR", str(tmp_path))
+    set_config_override({"runtime": {"cache_dir": str(tmp_path)}})
 
     class DummyTool(classes.AbstractTool):
         def __init__(self):
@@ -150,7 +151,7 @@ def test_abstract_tool_cache_dir_missing(monkeypatch):
         def __init__(self):
             super().__init__(name="Dummy", description="Test tool", use_llm=False)
 
-    monkeypatch.delenv("CACHE_DIR", raising=False)
+    set_config_override({"runtime": {"cache_dir": ""}})
     with pytest.raises(ValueError):
         DummyTool()
 
@@ -171,7 +172,7 @@ def test_abstract_tool_rag_helpers(monkeypatch, tmp_path):
 
     monkeypatch.setattr(classes, "JSONLoader", DummyLoader)
     cache_root = tmp_path / "cache-root"
-    monkeypatch.setenv("CACHE_DIR", str(cache_root))
+    set_config_override({"runtime": {"cache_dir": str(cache_root)}})
     tool = DummyTool()
     tool._save_json([{"foo": "bar"}], "rag.json")
     docs = tool._load_rag_json("rag.json")
@@ -188,7 +189,7 @@ def test_abstract_tool_run_variants(monkeypatch, tmp_path):
             super().__init__(name="Dummy", description="Test tool", use_llm=False)
 
     cache_root = tmp_path / "cache-root"
-    monkeypatch.setenv("CACHE_DIR", str(cache_root))
+    set_config_override({"runtime": {"cache_dir": str(cache_root)}})
     tool = DummyTool()
     set_available_tools(["home_assistant_tool"])
     step = ActionStep(

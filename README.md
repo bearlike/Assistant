@@ -4,8 +4,6 @@
 <p align="center">
     <a href="https://deepwiki.com/bearlike/Assistant"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg"></a>
     <a href="https://github.com/bearlike/Assistant/actions/workflows/docker-buildx.yml"><img alt="Build and Push Docker Images" src="https://github.com/bearlike/Assistant/actions/workflows/docker-buildx.yml/badge.svg"></a>
-    <a href="https://codecov.io/gh/bearlike/Assistant"><img alt="Coverage" src="https://codecov.io/gh/bearlike/Assistant/branch/main/graph/badge.svg"></a>
-    <a href="https://codecov.io/gh/bearlike/Assistant?flags=core"><img alt="Coverage (core)" src="https://codecov.io/gh/bearlike/Assistant/branch/main/graph/badge.svg?flags=core"></a>
     <a href="https://github.com/bearlike/Assistant/actions/workflows/lint.yml"><img alt="Lint" src="https://github.com/bearlike/Assistant/actions/workflows/lint.yml/badge.svg"></a>
     <a href="https://github.com/bearlike/Assistant/actions/workflows/docs.yml"><img alt="Docs" src="https://github.com/bearlike/Assistant/actions/workflows/docs.yml/badge.svg"></a>
     <a href="https://github.com/bearlike/Assistant/releases"><img src="https://img.shields.io/github/v/release/bearlike/Assistant" alt="GitHub Release"></a>
@@ -64,6 +62,7 @@ Meeseeks is an AI task agent assistant built on a plan-act-observe orchestration
 
 ## Tooling and integrations
 - (✅) **Tool registry:** Discovers local tools and optional MCP tools with manual manifest overrides.
+- (✅) **Local file + shell tools:** Built-in Aider adapters for edit blocks, read files, list dirs, and shell commands (approval-gated).
 - (✅) **Home Assistant:** Ships a Conversation integration for voice control and entity actions.
 - (✅) **REST API:** Exposes the assistant over HTTP for third-party integration.
 - (✅) **Web chat UI:** Streamlit interface with plans, tool input types, and responses.
@@ -71,7 +70,7 @@ Meeseeks is an AI task agent assistant built on a plan-act-observe orchestration
 
 ## Safety and observability
 - (✅) **Permission gate:** Uses approval callbacks and hooks to control tool execution.
-- (✅) **Operational visibility:** Optional Langfuse tracing is available and stays off if unconfigured.
+- (✅) **Operational visibility:** Optional Langfuse tracing (session-scoped traces) stays off if unconfigured.
 
 ## Optional add-ons
 Optional features that can be installed when needed.
@@ -82,6 +81,7 @@ Optional features that can be installed when needed.
 ## Interface notes
 - **CLI layout adapts to terminal width.** Headers and tool result cards adjust to small and wide shells.
 - **Interactive CLI controls.** Use a model picker, MCP browser, session summary, and token budget commands.
+- **Inline approvals.** Rich-based approval prompts render with padded, dotted borders and clear after input.
 - **Unified experience.** Web, API, Home Assistant, and CLI interfaces share the same core engine to reduce duplicated maintenance.
 
 ## Monorepo layout
@@ -100,17 +100,20 @@ Requests flow through a single core engine used by every interface, so behavior 
 
 ```mermaid
 flowchart LR
+  User --> CLI
   User --> Chat
   User --> API
   HA --> API
-  User --> CLI
+  CLI --> Core
   Chat --> Core
   API --> Core
-  CLI --> Core
-  Core --> Tools
+  Core --> Planner
+  Planner --> Tools
+  Tools --> LocalTools
+  Tools --> MCP
   Tools --> HomeAssistant
-  Tools --> External_MCPs
   Core --> SessionStore
+  Core --> Langfuse
 ```
 
 ## Documentation

@@ -3,19 +3,27 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
+from meeseeks_core.config import get_config_value
+from rich import box
 from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Input, Label, OptionList, SelectionList
 
+_DOTTED_BOX = box.Box(
+    ".:.:" "\n: ::" "\n.:.:" "\n: ::" "\n.:.:" "\n.:.:" "\n: ::" "\n.:.:",
+    ascii=True,
+)
+
 
 def _textual_enabled() -> bool:
-    if os.getenv("MEESEEKS_DISABLE_TEXTUAL") == "1":
+    if get_config_value("cli", "disable_textual", default=False):
         return False
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -27,11 +35,14 @@ class DialogFactory:
     console: Console | None = None
     prompt_func: Callable[[str], str] | None = None
     force_textual: bool | None = None
+    prefer_inline: bool = False
 
     def can_use_textual(self) -> bool:
         """Return True when Textual dialogs are allowed."""
         if self.force_textual is not None:
             return self.force_textual
+        if self.prefer_inline and self.prompt_func is not None:
+            return False
         return _textual_enabled()
 
     def select_one(
@@ -207,6 +218,110 @@ def _confirm_fallback(
     if not choice:
         return default
     return choice in {"y", "yes"}
+
+
+def _confirm_aider(
+    message: str,
+    *,
+    default: bool = False,
+    subject: str | None = None,
+    prompt_func: Callable[[str], str] | None = None,
+) -> bool | None:
+    try:
+        from meeseeks_tools.vendor.aider.io import InputOutput
+    except Exception:
+        return None
+
+    io = InputOutput(pretty=True, fancy_input=False)
+    default_char = "y" if default else "n"
+
+    if prompt_func is None:
+        return io.confirm_ask(message, default=default_char, subject=subject)
+
+    import builtins
+
+    original_input = builtins.input
+
+    def _fake_input(*args: object, **_kwargs: object) -> str:
+        prompt = str(args[0]) if args else ""
+        return prompt_func(prompt)
+
+    try:
+        builtins.input = _fake_input
+        return io.confirm_ask(message, default=default_char, subject=subject)
+    finally:
+        builtins.input = original_input
+
+
+def _clear_console_lines(console: Console, line_count: int) -> None:
+    if line_count <= 0 or not console.is_terminal:
+        return
+    try:
+        for _ in range(line_count):
+            sys.stdout.write("\x1b[1A\x1b[2K")
+        sys.stdout.flush()
+    except Exception:
+        return
+
+
+def _confirm_rich_panel(
+    console: Console | None,
+    prompt_func: Callable[[str], str] | None,
+    message: str,
+    *,
+    subject: str | None = None,
+    default: bool = False,
+    allow_always: bool = False,
+    allow_session: bool = False,
+) -> str | None:
+    if prompt_func is None or console is None:
+        return None
+
+    body = Text()
+    body.append(message, style="bold")
+    if subject:
+        body.append("\n")
+        body.append(subject, style="dim")
+
+    panel = Panel(
+        body,
+        title="Tool approval",
+        border_style="cyan",
+        padding=(1, 2),
+        box=_DOTTED_BOX,
+    )
+
+    try:
+        line_count = len(console.render_lines(panel, console.options))
+    except Exception:
+        line_count = 0
+
+    console.print(panel)
+    suffix = "Y/n" if default else "y/N"
+    if allow_always:
+        suffix = f"{suffix}/a"
+    if allow_session:
+        suffix = f"{suffix}/s"
+    prompt = f"{suffix}: "
+    try:
+        response = prompt_func(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        response = ""
+
+    if not response:
+        response = "y" if default else "n"
+
+    if response in {"a", "always"} and allow_always:
+        decision = "always"
+    elif response in {"s", "session"} and allow_session:
+        decision = "session"
+    elif response in {"y", "yes"}:
+        decision = "yes"
+    else:
+        decision = "no"
+
+    _clear_console_lines(console, line_count + 1)
+    return decision
 
 
 class _BaseDialog(App):

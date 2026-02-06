@@ -9,13 +9,13 @@ import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from rich import box
 from rich.columns import Columns
-from rich.console import Console, Group
-from rich.markdown import Markdown
+from rich.console import Console, Group, RenderableType
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.status import Status
@@ -55,16 +55,14 @@ def _parse_verbosity(argv: list[str]) -> int | None:
 
 
 def _bootstrap_cli_logging_env(argv: list[str]) -> None:
-    """Configure logging environment for the CLI before core imports."""
-    os.environ["MEESEEKS_CLI"] = "1"
-    os.environ.setdefault("MEESEEKS_LOG_STYLE", "dark")
+    """Configure logging overrides for the CLI before core imports."""
+    from meeseeks_core.config import set_config_override
+
     verbosity = _parse_verbosity(argv)
     if verbosity is not None:
-        os.environ["LOG_LEVEL"] = _verbosity_to_level(verbosity)
+        set_config_override({"runtime": {"log_level": _verbosity_to_level(verbosity)}})
         return
-    existing_level = os.getenv("LOG_LEVEL", "").upper()
-    if not existing_level:
-        os.environ["LOG_LEVEL"] = "WARNING"
+    set_config_override({"runtime": {"log_level": "WARNING"}})
 
 
 _bootstrap_cli_logging_env(sys.argv)
@@ -72,8 +70,16 @@ _bootstrap_cli_logging_env(sys.argv)
 from meeseeks_core.classes import ActionStep, TaskQueue
 from meeseeks_core.common import MockSpeaker, format_action_argument, get_logger
 from meeseeks_core.components import resolve_langfuse_status
+from meeseeks_core.config import (
+    AppConfig,
+    get_app_config_path,
+    get_config,
+    get_config_value,
+    get_mcp_config_path,
+    start_preflight,
+)
 from meeseeks_core.hooks import HookManager
-from meeseeks_core.permissions import PermissionDecision
+from meeseeks_core.permissions import PermissionDecision, auto_approve
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.task_master import generate_action_plan, orchestrate_session
 from meeseeks_core.tool_registry import ToolRegistry, load_registry
@@ -84,9 +90,16 @@ from meeseeks_tools.integration.mcp import (
     tool_auto_approved,
 )
 
+from meeseeks_cli.aider_ui import (
+    render_diff,
+    render_dir_payload,
+    render_file_payload,
+    render_markdown,
+    render_shell_payload,
+)
 from meeseeks_cli.cli_commands import get_registry
 from meeseeks_cli.cli_context import CliState, CommandContext
-from meeseeks_cli.cli_dialogs import DialogFactory
+from meeseeks_cli.cli_dialogs import DialogFactory, _confirm_aider, _confirm_rich_panel
 
 logging = get_logger(name="meeseeks.cli")
 
@@ -130,6 +143,13 @@ def _ensure_history_path(path: str) -> str:
     return path
 
 
+def _render_resume_hint(console: Console, session_id: str, session_dir: str | None) -> None:
+    command = f"uv run meeseeks --session {session_id}"
+    if session_dir:
+        command = f"{command} --session-dir {session_dir}"
+    console.print(f"Resume: {command}", style="dim")
+
+
 def _parse_command(text: str) -> tuple[str, list[str]]:
     parts = text.strip().split()
     command = parts[0]
@@ -139,10 +159,25 @@ def _parse_command(text: str) -> tuple[str, list[str]]:
 def _resolve_display_model(model_name: str | None) -> str:
     return (
         model_name
-        or os.getenv("ACTION_PLAN_MODEL")
-        or os.getenv("DEFAULT_MODEL")
-        or "gpt-3.5-turbo"
+        or get_config_value("llm", "action_plan_model")
+        or get_config_value("llm", "default_model")
+        or "gpt-5.2"
     )
+
+
+def _resolve_query_mode(query: str, state: CliState) -> str:
+    lowered = query.strip().lower()
+    plan_triggers = [
+        "make a plan",
+        "create a plan",
+        "draft a plan",
+        "plan the",
+        "plan for",
+        "planning",
+    ]
+    if any(trigger in lowered for trigger in plan_triggers):
+        return "plan"
+    return state.mode if state.mode in {"plan", "act"} else "act"
 
 
 @dataclass(frozen=True)
@@ -198,9 +233,9 @@ def _format_model(model: str, max_len: int) -> Text:
 
 
 def _resolve_cli_version() -> str:
-    env_version = os.getenv("VERSION")
-    if env_version:
-        return env_version
+    configured = get_config_value("runtime", "version")
+    if configured:
+        return str(configured)
     try:
         return version("meeseeks-cli")
     except PackageNotFoundError:
@@ -344,7 +379,26 @@ def run_cli(args: argparse.Namespace) -> int:
         Exit code for the CLI process.
     """
     console = Console(color_system=None if args.no_color else "auto")
-    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    config = get_config()
+    logging.info(
+        "Config paths: app={} mcp={}",
+        get_app_config_path(),
+        get_mcp_config_path() or "(disabled)",
+    )
+    logging.info(
+        "LLM config: default={} action_plan={} tool={} api_base={} model_override={}",
+        get_config_value("llm", "default_model", default=""),
+        get_config_value("llm", "action_plan_model", default=""),
+        get_config_value("llm", "tool_model", default=""),
+        get_config_value("llm", "api_base", default=""),
+        args.model or "",
+    )
+    if config.runtime.preflight_enabled:
+        start_preflight(
+            config,
+            on_complete=lambda results: _render_preflight_warnings(console, results),
+        )
+    log_level = str(get_config_value("runtime", "log_level", default="INFO")).upper()
     verbosity = getattr(args, "verbose", 0)
     if verbosity > 0:
         logging.info(
@@ -363,7 +417,7 @@ def run_cli(args: argparse.Namespace) -> int:
     tool_registry = load_registry()
     registry = get_registry()
 
-    base_url = os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL")
+    base_url = get_config_value("llm", "api_base") or ""
     model_name = _resolve_display_model(state.model_name)
     langfuse_status = resolve_langfuse_status()
     all_specs = tool_registry.list_specs(include_disabled=True)
@@ -372,8 +426,8 @@ def run_cli(args: argparse.Namespace) -> int:
     external_enabled = sum(1 for spec in all_specs if spec.kind == "mcp" and spec.enabled)
     external_disabled = sum(1 for spec in all_specs if spec.kind == "mcp" and not spec.enabled)
     try:
-        config = _load_mcp_config()
-        configured_servers = set(config.get("servers", {}).keys())
+        mcp_config = _load_mcp_config()
+        configured_servers = set(mcp_config.get("servers", {}).keys())
         discovered_servers = {
             spec.metadata.get("server")
             for spec in all_specs
@@ -401,6 +455,7 @@ def run_cli(args: argparse.Namespace) -> int:
         external_disabled=external_disabled,
     )
     render_header(console, header_ctx)
+    _maybe_warn_missing_configs(console, tool_registry, config)
     console.print("Meeseeks CLI ready")
     console.print(f"Session: {state.session_id}")
     console.print("Type /help for commands.", style=f"dim {HEADER_STYLE}")
@@ -417,6 +472,7 @@ def run_cli(args: argparse.Namespace) -> int:
             user_input = session.prompt("meeseeks> ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\nBye.")
+            _render_resume_hint(console, state.session_id, args.session_dir)
             return 0
 
         if not user_input:
@@ -431,6 +487,7 @@ def run_cli(args: argparse.Namespace) -> int:
                 prompt_func=session.prompt,
             )
             if not registry.execute(command, context, cmd_args):
+                _render_resume_hint(console, state.session_id, args.session_dir)
                 return 0
             continue
 
@@ -459,20 +516,36 @@ def _run_query(
     prompt_func: Callable[[str], str] | None,
 ) -> None:
     initial_task_queue = None
+    mode = _resolve_query_mode(query, state)
     if state.show_plan:
         initial_task_queue = generate_action_plan(
             user_query=query,
             model_name=state.model_name,
             session_summary=store.load_summary(state.session_id),
+            mode=mode,
         )
         _render_plan_with_registry(console, initial_task_queue, tool_registry)
 
+    auto_approve_enabled = bool(
+        state.auto_approve_all or getattr(args, "auto_approve", False) or prompt_func is None
+    )
+    logging.debug(
+        "Auto-approve resolved: {} (state={}, args={}, prompt_func_none={})",
+        auto_approve_enabled,
+        state.auto_approve_all,
+        getattr(args, "auto_approve", False),
+        prompt_func is None,
+    )
     approval_callback = _build_approval_callback(
         prompt_func,
         console,
         state,
         tool_registry,
+        auto_approve_enabled=auto_approve_enabled,
     )
+    if approval_callback is None and prompt_func is None:
+        logging.debug("Forcing auto-approve for headless query execution.")
+        approval_callback = auto_approve
     hook_manager = _build_cli_hook_manager(console, tool_registry)
     task_queue = orchestrate_session(
         user_query=query,
@@ -484,6 +557,7 @@ def _run_query(
         tool_registry=tool_registry,
         approval_callback=approval_callback,
         hook_manager=hook_manager,
+        mode=mode,
     )
 
     _render_results_with_registry(
@@ -496,11 +570,74 @@ def _run_query(
     if task_queue.task_result:
         console.print(
             Panel(
-                Markdown(task_queue.task_result),
+                render_markdown(task_queue.task_result),
                 title=":speech_balloon: Response",
                 border_style="bold green",
             )
         )
+
+
+def _maybe_warn_missing_configs(
+    console: Console,
+    tool_registry: ToolRegistry,
+    config: AppConfig,
+) -> None:
+    config_path = Path("configs/app.json")
+    mcp_path = Path(get_mcp_config_path())
+    missing: list[str] = []
+    if not config_path.exists():
+        missing.append("configs/app.json")
+    if not mcp_path.exists():
+        missing.append("configs/mcp.json")
+    if not missing:
+        pass
+    else:
+        console.print(
+            "Config files missing: "
+            + ", ".join(missing)
+            + ". Run /config init, /mcp init, or /init to scaffold examples.",
+            style="yellow",
+        )
+
+    llm_api_base = get_config_value("llm", "api_base", default="")
+    llm_api_key = get_config_value("llm", "api_key", default="")
+    if not llm_api_base:
+        console.print("LLM base URL is not set (llm.api_base).", style="yellow")
+    if not llm_api_key:
+        console.print("LLM API key is not set (llm.api_key).", style="yellow")
+
+    langfuse_enabled, langfuse_reason, _ = config.langfuse.evaluate()
+    if config.langfuse.enabled and not langfuse_enabled:
+        console.print(f"Langfuse disabled: {langfuse_reason}", style="yellow")
+
+    ha_enabled, ha_reason, _ = config.home_assistant.evaluate()
+    if config.home_assistant.enabled and not ha_enabled:
+        console.print(f"Home Assistant disabled: {ha_reason}", style="yellow")
+
+    disabled_tools = [
+        spec for spec in tool_registry.list_specs(include_disabled=True) if not spec.enabled
+    ]
+    for spec in disabled_tools:
+        reason = spec.metadata.get("disabled_reason") or "disabled"
+        console.print(f"Tool {spec.tool_id} is disabled: {reason}", style="yellow")
+
+    try:
+        from meeseeks_tools.integration import mcp as mcp_module
+
+        failures = mcp_module.get_last_discovery_failures()
+        for server, reason in failures.items():
+            console.print(f"MCP server {server} unreachable: {reason}", style="yellow")
+    except Exception:
+        pass
+
+
+def _render_preflight_warnings(console: Console, results: dict[str, dict[str, object]]) -> None:
+    failures = [
+        (name, info) for name, info in results.items() if info.get("enabled") and not info.get("ok")
+    ]
+    for name, info in failures:
+        reason = info.get("reason") or "unknown failure"
+        console.print(f"Preflight failed for {name}: {reason}", style="yellow")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -611,7 +748,7 @@ def _render_results_with_registry(
         is_latest = highlight_latest and index == last_index
         content_style = None if is_latest else "dim"
         border_style = "magenta" if is_latest else "dim magenta"
-        renderable: Text | Syntax
+        renderable: RenderableType
         if result is None:
             renderable = Text("(no result)", style="dim")
         elif not verbose:
@@ -636,9 +773,19 @@ def _render_results_with_registry(
     console.print(Columns(panels, expand=True))
 
 
-def _format_tool_output(result: object, content_style: str | None) -> Text | Syntax:
+def _format_tool_output(result: object, content_style: str | None) -> RenderableType:
     style = content_style or ""
-    if isinstance(result, dict | list):
+    if isinstance(result, dict):
+        renderable = _render_tool_payload(result, style)
+        if renderable is not None:
+            return renderable
+        return Syntax(
+            json.dumps(result, indent=2, ensure_ascii=True),
+            "json",
+            theme="ansi_dark",
+            word_wrap=True,
+        )
+    if isinstance(result, list):
         return Syntax(
             json.dumps(result, indent=2, ensure_ascii=True),
             "json",
@@ -661,6 +808,43 @@ def _format_tool_output(result: object, content_style: str | None) -> Text | Syn
                 )
         return Text(result, style=style)
     return Text(str(result), style=style)
+
+
+def _render_tool_payload(payload: dict[str, object], style: str) -> RenderableType | None:
+    kind_raw = payload.get("kind")
+    kind = kind_raw if isinstance(kind_raw, str) else str(kind_raw or "")
+    kind = kind.strip().lower()
+    if kind == "diff":
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return Text("(empty diff)", style="dim")
+        return render_diff(text)
+    if kind == "file":
+        path = payload.get("path")
+        text = payload.get("text")
+        if isinstance(path, str) and isinstance(text, str):
+            return render_file_payload(path, text)
+    if kind == "dir":
+        path = payload.get("path")
+        entries = payload.get("entries")
+        if isinstance(path, str) and isinstance(entries, list):
+            return render_dir_payload(path, [str(item) for item in entries])
+    if kind == "shell":
+        command = payload.get("command")
+        exit_code = payload.get("exit_code")
+        stdout = payload.get("stdout")
+        stderr = payload.get("stderr")
+        duration_ms = payload.get("duration_ms")
+        cwd = payload.get("cwd")
+        return render_shell_payload(
+            command if isinstance(command, str) else None,
+            stdout if isinstance(stdout, str) else None,
+            stderr if isinstance(stderr, str) else None,
+            exit_code if isinstance(exit_code, int) else None,
+            duration_ms if isinstance(duration_ms, int) else None,
+            cwd if isinstance(cwd, str) else None,
+        )
+    return None
 
 
 def _build_cli_hook_manager(
@@ -697,16 +881,26 @@ def _build_approval_callback(
     console: Console,
     state: CliState,
     tool_registry: ToolRegistry,
+    *,
+    auto_approve_enabled: bool,
 ) -> Callable[[ActionStep], bool] | None:
+    logging.debug(
+        "Approval callback build: auto_approve_enabled={}, prompt_func_none={}",
+        auto_approve_enabled,
+        prompt_func is None,
+    )
+    if auto_approve_enabled:
+        logging.debug("Approval callback: auto-approve enabled.")
+        return auto_approve
     if prompt_func is None:
+        logging.debug("Approval callback: prompt disabled, returning None.")
         return None
-    dialogs = DialogFactory(console=console, prompt_func=prompt_func)
+    dialogs = DialogFactory(console=console, prompt_func=prompt_func, prefer_inline=True)
+    approval_style = str(get_config_value("cli", "approval_style", default="inline")).strip()
+    approval_style = approval_style.lower()
     specs_by_id = _tool_specs_by_id(tool_registry)
 
     def _approve(action_step: ActionStep) -> bool:
-        if state.auto_approve_all:
-            return True
-
         spec = specs_by_id.get(action_step.action_consumer)
         is_mcp = spec is not None and getattr(spec, "kind", "") == "mcp"
         server_name = None
@@ -723,17 +917,65 @@ def _build_approval_callback(
                 except Exception:
                     pass
 
-        if dialogs.can_use_textual():
+        subject = (
+            f"{action_step.action_consumer}:{action_step.action_type} "
+            f"({format_action_argument(action_step.action_argument)})"
+        )
+        if approval_style in {"aider", "inline", "rich"}:
+            rich_decision = _confirm_rich_panel(
+                console,
+                prompt_func,
+                "Approve tool use?",
+                subject=subject,
+                default=False,
+                allow_always=bool(is_mcp),
+                allow_session=True,
+            )
+            if rich_decision == "always":
+                if is_mcp and server_name and tool_name:
+                    try:
+                        config = _load_mcp_config()
+                        config = mark_tool_auto_approved(config, server_name, tool_name)
+                        save_mcp_config(config)
+                    except Exception as exc:
+                        console.print(f"Failed to persist auto-approve: {exc}")
+                return True
+            if rich_decision == "session":
+                state.auto_approve_all = True
+                return True
+            if rich_decision == "yes":
+                if is_mcp and server_name and tool_name:
+                    try:
+                        config = _load_mcp_config()
+                        config = mark_tool_auto_approved(config, server_name, tool_name)
+                        save_mcp_config(config)
+                    except Exception as exc:
+                        console.print(f"Failed to persist auto-approve: {exc}")
+                return True
+            if rich_decision == "no":
+                return False
+
+            if approval_style == "aider":
+                decision = _confirm_aider(
+                    "Approve tool use?",
+                    default=False,
+                    subject=subject,
+                    prompt_func=prompt_func,
+                )
+                if decision is not None:
+                    return decision
+
+        if approval_style == "textual" and dialogs.can_use_textual():
             choice = dialogs.select_one(
                 "Approve tool use",
-                ["Yes", "No", "Yes, always"],
-                subtitle=(
-                    f"{action_step.action_consumer}:{action_step.action_type} "
-                    f"({format_action_argument(action_step.action_argument)})"
-                ),
+                ["Yes", "No", "Yes, always", "Yes, this session"],
+                subtitle=subject,
             )
             if choice is None or choice == "No":
                 return False
+            if choice == "Yes, this session":
+                state.auto_approve_all = True
+                return True
             if choice == "Yes, always" and is_mcp and server_name and tool_name:
                 try:
                     config = _load_mcp_config()
@@ -743,16 +985,15 @@ def _build_approval_callback(
                     console.print(f"Failed to persist auto-approve: {exc}")
             return True
 
-        prompt = (
-            "Approve "
-            f"{action_step.action_consumer}:{action_step.action_type} "
-            f"({format_action_argument(action_step.action_argument)})? [y/N/a] "
-        )
+        prompt = f"Approve {subject}? [y/N/a/s] "
         try:
             response = prompt_func(prompt).strip().lower()
         except (EOFError, KeyboardInterrupt):
             console.print("\nApproval denied.")
             return False
+        if response in {"s", "session"}:
+            state.auto_approve_all = True
+            return True
         if response in {"a", "always"} and is_mcp and server_name and tool_name:
             try:
                 config = _load_mcp_config()

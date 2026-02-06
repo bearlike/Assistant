@@ -1,4 +1,4 @@
-.PHONY: bootstrap lint lint-fix typecheck precommit-install
+.PHONY: bootstrap lint lint-fix typecheck precommit-install vendor-aider
 
 VENV ?= .venv
 
@@ -20,3 +20,6 @@ typecheck:
 
 precommit-install:
 	$(VENV)/bin/pre-commit install
+
+vendor-aider:
+	./scripts/vendor_aider.sh
