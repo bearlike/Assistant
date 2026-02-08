@@ -83,6 +83,17 @@ def test_session_store_list_tags(tmp_path):
     assert tags["primary"] == session_id
 
 
+def test_session_store_archive_roundtrip(tmp_path):
+    """Archive and unarchive sessions."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    assert store.is_archived(session_id) is False
+    store.archive_session(session_id)
+    assert store.is_archived(session_id) is True
+    store.unarchive_session(session_id)
+    assert store.is_archived(session_id) is False
+
+
 def test_compaction_helpers():
     """Verify compaction helpers summarize and detect thresholds."""
     events = [{"type": "user", "payload": {"text": "hello"}}]

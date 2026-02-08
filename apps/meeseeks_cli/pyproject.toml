@@ -11,14 +11,11 @@ license = { text = "MIT" }
 
 dependencies = [
   "meeseeks-core>=2.1.0-alpha",
-  "meeseeks-tools[mcp]>=2.1.0-alpha",
+  "meeseeks-tools>=2.1.0-alpha",
   "prompt-toolkit>=3.0.47,<4.0.0",
   "rich>=14.2.0,<15.0.0",
   "textual>=7.5.0,<8.0.0",
 ]
-
-[project.optional-dependencies]
-observability = ["langfuse>=2.29.3,<3.0.0"]
 
 [project.scripts]
 meeseeks = "meeseeks_cli.cli_master:main"

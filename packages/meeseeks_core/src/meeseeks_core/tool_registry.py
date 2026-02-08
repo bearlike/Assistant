@@ -493,6 +493,7 @@ def load_registry(manifest_path: str | None = None) -> ToolRegistry:
         registry.register(spec)
         existing_ids.add(spec.tool_id)
 
+    set_available_tools([spec.tool_id for spec in registry.list_specs()])
     return registry
 
 

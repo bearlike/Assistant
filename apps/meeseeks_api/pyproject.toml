@@ -11,7 +11,7 @@ license = { text = "MIT" }
 
 dependencies = [
   "meeseeks-core>=2.1.0-alpha",
-  "meeseeks-tools[mcp]>=2.1.0-alpha",
+  "meeseeks-tools>=2.1.0-alpha",
   "flask>=3.0.3,<4.0.0",
   "flask-restx>=1.3.0,<2.0.0",
 ]

@@ -81,6 +81,36 @@ MCP tools are auto-discovered from `configs/mcp.json`.
 - Chat UI: `uv run meeseeks-chat`
 - Home Assistant integration: install `meeseeks_ha_conversation/` as a custom component and point it at the API.
 
+API notes (polling is API-only; CLI uses the runtime in-process):
+- Session runtime endpoints support async runs with polling:
+  - `POST /api/sessions` create session
+  - `POST /api/sessions/{session_id}/query` enqueue or core commands
+  - `GET /api/sessions/{session_id}/events?after=...` poll events
+  - `GET /api/sessions` list sessions (defaults to non-archived, non-empty)
+  - `GET /api/sessions?include_archived=1` include archived sessions
+  - `POST /api/sessions/{session_id}/archive` archive a session
+  - `DELETE /api/sessions/{session_id}/archive` unarchive a session
+  - `POST /api/query` legacy synchronous endpoint
+
+## Aider edit blocks (local tool)
+The edit-block tool expects strict SEARCH/REPLACE blocks and returns format guidance on mismatches.
+
+````
+<path>
+```text
+<<<<<<< SEARCH
+<exact text to match>
+=======
+<replacement text>
+>>>>>>> REPLACE
+```
+````
+
+Rules:
+- Filename line immediately before the opening fence.
+- SEARCH must match exactly (including whitespace/newlines).
+- Use a line with `...` in both SEARCH and REPLACE to skip unchanged sections.
+
 ## Docker (optional)
 - Build images using `docker/Dockerfile.api` and `docker/Dockerfile.chat`.
 - Mount `configs/app.json` (and `configs/mcp.json` if you use MCP).

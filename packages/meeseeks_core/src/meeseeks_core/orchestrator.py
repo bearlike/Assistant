@@ -65,6 +65,7 @@ class Orchestrator:
         return_state: bool = False,
         session_id: str | None = None,
         mode: str | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run a plan-act-observe loop for a session."""
         if session_id is None:
@@ -78,6 +79,7 @@ class Orchestrator:
                 return_state=return_state,
                 session_id=session_id,
                 mode=mode,
+                should_cancel=should_cancel,
             )
 
     def _run_with_session_context(
@@ -89,6 +91,7 @@ class Orchestrator:
         return_state: bool,
         session_id: str,
         mode: str | None,
+        should_cancel: Callable[[], bool] | None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration with Langfuse session context set."""
         state = OrchestrationState(goal=user_query, session_id=session_id)
@@ -132,8 +135,21 @@ class Orchestrator:
         self._append_action_plan(session_id, task_queue.action_steps)
 
         for iteration in range(max_iters):
-            task_queue = self._run_action_plan(session_id, task_queue, mode=resolved_mode)
+            if should_cancel is not None and should_cancel():
+                state.done = True
+                state.done_reason = "canceled"
+                break
+            task_queue = self._run_action_plan(
+                session_id,
+                task_queue,
+                mode=resolved_mode,
+                should_cancel=should_cancel,
+            )
             state.tool_results.append(task_queue.task_result or "")
+            if should_cancel is not None and should_cancel():
+                state.done = True
+                state.done_reason = "canceled"
+                break
 
             if self._action_steps_complete(task_queue):
                 state.done = True
@@ -196,7 +212,14 @@ class Orchestrator:
 
         return (task_queue, state) if return_state else task_queue
 
-    def _run_action_plan(self, session_id: str, task_queue: TaskQueue, *, mode: str) -> TaskQueue:
+    def _run_action_plan(
+        self,
+        session_id: str,
+        task_queue: TaskQueue,
+        *,
+        mode: str,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> TaskQueue:
         reflector = StepReflector(self._model_name)
         allowed_tools = None
         if mode == "plan":
@@ -212,6 +235,7 @@ class Orchestrator:
             event_logger=lambda event: self._session_store.append_event(session_id, event),
             allowed_tool_ids=allowed_tools,
             mode=mode,
+            should_cancel=should_cancel,
         )
         return runner.run(task_queue)
 

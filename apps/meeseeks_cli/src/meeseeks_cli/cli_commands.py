@@ -9,7 +9,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from meeseeks_core.config import get_config_value, get_mcp_config_path
-from meeseeks_core.task_master import orchestrate_session
 from meeseeks_core.token_budget import get_token_budget
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, load_registry
 from rich import box
@@ -130,10 +129,9 @@ def _cmd_summary(context: CommandContext, args: list[str]) -> bool:
 @REGISTRY.command("/summarize", "Summarize and compact this session")
 def _cmd_summarize(context: CommandContext, args: list[str]) -> bool:
     del args
-    task_queue = orchestrate_session(
-        "/compact",
+    task_queue = context.runtime.run_sync(
+        user_query="/compact",
         session_id=context.state.session_id,
-        session_store=context.store,
     )
     context.console.print(Panel(task_queue.task_result or "", title="Summary"))
     return True
@@ -142,6 +140,25 @@ def _cmd_summarize(context: CommandContext, args: list[str]) -> bool:
 @REGISTRY.command("/compact", "Compact session transcript")
 def _cmd_compact(context: CommandContext, args: list[str]) -> bool:
     return _cmd_summarize(context, args)
+
+
+@REGISTRY.command("/status", "Show current session status")
+def _cmd_status(context: CommandContext, args: list[str]) -> bool:
+    del args
+    summary = context.runtime.summarize_session(context.state.session_id)
+    context.console.print(Panel(json.dumps(summary, indent=2), title="Session Status"))
+    return True
+
+
+@REGISTRY.command("/terminate", "Cancel the active session run")
+def _cmd_terminate(context: CommandContext, args: list[str]) -> bool:
+    del args
+    canceled = context.runtime.cancel(context.state.session_id)
+    if canceled:
+        context.console.print("Cancellation requested.", style="yellow")
+    else:
+        context.console.print("No active run to cancel.", style="yellow")
+    return True
 
 
 @REGISTRY.command("/tag", "Tag this session: /tag NAME")

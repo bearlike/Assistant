@@ -4,6 +4,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from meeseeks_core.session_runtime import SessionRuntime
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.tool_registry import ToolRegistry
 from rich.console import Console
@@ -28,4 +29,5 @@ class CommandContext:
     store: SessionStore
     state: CliState
     tool_registry: ToolRegistry
+    runtime: SessionRuntime
     prompt_func: Callable[[str], str] | None

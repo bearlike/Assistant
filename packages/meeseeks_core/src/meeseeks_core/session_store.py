@@ -62,7 +62,7 @@ class SessionStore:
         """Load the session index from disk or return defaults."""
         index_path = self._index_path()
         if not os.path.exists(index_path):
-            return {"tags": {}}
+            return {"tags": {}, "archived": {}}
         with open(index_path, encoding="utf-8") as handle:
             return json.load(handle)
 
@@ -173,3 +173,25 @@ class SessionStore:
         """Return a mapping of tags to session IDs."""
         index = self._load_index()
         return dict(index.get("tags", {}))
+
+    def archive_session(self, session_id: str) -> None:
+        """Mark a session as archived."""
+        index = self._load_index()
+        archived = index.setdefault("archived", {})
+        archived[session_id] = _utc_now()
+        self._save_index(index)
+
+    def unarchive_session(self, session_id: str) -> None:
+        """Remove archived status from a session."""
+        index = self._load_index()
+        archived = index.get("archived", {})
+        if session_id in archived:
+            archived.pop(session_id, None)
+            index["archived"] = archived
+            self._save_index(index)
+
+    def is_archived(self, session_id: str) -> bool:
+        """Return True if a session is archived."""
+        index = self._load_index()
+        archived = index.get("archived", {})
+        return session_id in archived

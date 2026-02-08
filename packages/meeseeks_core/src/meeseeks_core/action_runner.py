@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from meeseeks_core.classes import ActionStep, TaskQueue
 from meeseeks_core.common import get_logger, get_mock_speaker
+from meeseeks_core.errors import ToolInputError
 from meeseeks_core.hooks import HookManager, default_hook_manager
 from meeseeks_core.permissions import (
     PermissionDecision,
@@ -45,6 +46,7 @@ class ActionPlanRunner:
         reflector: StepReflector | None = None,
         event_logger: EventLogger | None = None,
         allowed_tool_ids: set[str] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
         mode: str = "act",
     ) -> None:
         """Initialize the action plan runner."""
@@ -55,12 +57,16 @@ class ActionPlanRunner:
         self._reflector = reflector
         self._event_logger = event_logger
         self._allowed_tool_ids = allowed_tool_ids
+        self._should_cancel = should_cancel
         self._mode = mode
 
     def run(self, task_queue: TaskQueue) -> TaskQueue:
         """Run all steps in the task queue."""
         task_queue.last_error = None
         for idx, action_step in enumerate(task_queue.action_steps):
+            if self._should_cancel is not None and self._should_cancel():
+                self._record_failure(action_step, "canceled", task_queue)
+                break
             logging.debug("Processing ActionStep: {}", action_step)
             if (
                 self._allowed_tool_ids is not None
@@ -198,7 +204,10 @@ class ActionPlanRunner:
     ) -> None:
         logging.error("Error processing action step: {}", exc)
         self._record_failure(action_step, str(exc), task_queue)
-        self._tool_registry.disable(action_step.action_consumer, f"Runtime error: {exc}")
+        spec = self._tool_registry.get_spec(action_step.action_consumer)
+        is_mcp = spec is not None and spec.kind == "mcp"
+        if not isinstance(exc, ToolInputError) and not is_mcp:
+            self._tool_registry.disable(action_step.action_consumer, f"Runtime error: {exc}")
         self._emit_tool_result(action_step, None, error=str(exc))
         mock = get_mock_speaker()
         self._hook_manager.run_post_tool_use(action_step, mock(content=f"Tool error: {exc}"))

@@ -1853,7 +1853,7 @@ dependencies = [
     { name = "flask" },
     { name = "flask-restx" },
     { name = "meeseeks-core" },
-    { name = "meeseeks-tools", extra = ["mcp"] },
+    { name = "meeseeks-tools" },
 ]
 
 [package.metadata]
@@ -1861,7 +1861,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0.3,<4.0.0" },
     { name = "flask-restx", specifier = ">=1.3.0,<2.0.0" },
     { name = "meeseeks-core", specifier = ">=2.1.0a0" },
-    { name = "meeseeks-tools", extras = ["mcp"], specifier = ">=2.1.0a0" },
+    { name = "meeseeks-tools", specifier = ">=2.1.0a0" },
 ]
 
 [[package]]
@@ -1870,14 +1870,14 @@ version = "2.1.0a0"
 source = { editable = "apps/meeseeks_chat" }
 dependencies = [
     { name = "meeseeks-core" },
-    { name = "meeseeks-tools", extra = ["mcp"] },
+    { name = "meeseeks-tools" },
     { name = "streamlit" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "meeseeks-core", specifier = ">=2.1.0a0" },
-    { name = "meeseeks-tools", extras = ["mcp"], specifier = ">=2.1.0a0" },
+    { name = "meeseeks-tools", specifier = ">=2.1.0a0" },
     { name = "streamlit", specifier = ">=1.34.0,<2.0.0" },
 ]
 
@@ -1887,7 +1887,7 @@ version = "2.1.0a0"
 source = { editable = "apps/meeseeks_cli" }
 dependencies = [
     { name = "meeseeks-core" },
-    { name = "meeseeks-tools", extra = ["mcp"] },
+    { name = "meeseeks-tools" },
     { name = "prompt-toolkit" },
     { name = "rich" },
     { name = "textual" },
@@ -1895,14 +1895,12 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "langfuse", marker = "extra == 'observability'", specifier = ">=2.29.3,<3.0.0" },
     { name = "meeseeks-core", specifier = ">=2.1.0a0" },
-    { name = "meeseeks-tools", extras = ["mcp"], specifier = ">=2.1.0a0" },
+    { name = "meeseeks-tools", specifier = ">=2.1.0a0" },
     { name = "prompt-toolkit", specifier = ">=3.0.47,<4.0.0" },
     { name = "rich", specifier = ">=14.2.0,<15.0.0" },
     { name = "textual", specifier = ">=7.5.0,<8.0.0" },
 ]
-provides-extras = ["observability"]
 
 [[package]]
 name = "meeseeks-core"
@@ -1914,16 +1912,12 @@ dependencies = [
     { name = "langchain-community" },
     { name = "langchain-core" },
     { name = "langchain-litellm" },
+    { name = "langfuse" },
     { name = "litellm" },
     { name = "loguru" },
     { name = "pydantic" },
     { name = "tiktoken" },
     { name = "typing-extensions" },
-]
-
-[package.optional-dependencies]
-observability = [
-    { name = "langfuse" },
 ]
 
 [package.metadata]
@@ -1933,14 +1927,13 @@ requires-dist = [
     { name = "langchain-community", specifier = ">=0.4.1,<0.5.0" },
     { name = "langchain-core", specifier = ">=1.2.8,<2.0.0" },
     { name = "langchain-litellm", specifier = ">=0.4.0,<0.5.0" },
-    { name = "langfuse", marker = "extra == 'observability'", specifier = ">=3.8.0,<4.0.0" },
+    { name = "langfuse", specifier = ">=3.8.0,<4.0.0" },
     { name = "litellm", specifier = ">=1.81.0,<2.0.0" },
     { name = "loguru", specifier = ">=0.7.2,<1.0.0" },
     { name = "pydantic", specifier = ">=2.7.0,<3.0.0" },
     { name = "tiktoken", specifier = ">=0.7.0,<1.0.0" },
     { name = "typing-extensions", specifier = ">=4.12.2,<5.0.0" },
 ]
-provides-extras = ["observability"]
 
 [[package]]
 name = "meeseeks-ha-conversation"
@@ -1967,6 +1960,7 @@ version = "2.1.0a0"
 source = { editable = "packages/meeseeks_tools" }
 dependencies = [
     { name = "langchain-core" },
+    { name = "langchain-mcp-adapters" },
     { name = "meeseeks-core" },
     { name = "prompt-toolkit" },
     { name = "pydantic" },
@@ -1976,15 +1970,10 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 
-[package.optional-dependencies]
-mcp = [
-    { name = "langchain-mcp-adapters" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "langchain-core", specifier = ">=1.2.8,<2.0.0" },
-    { name = "langchain-mcp-adapters", marker = "extra == 'mcp'", specifier = ">=0.2.1,<0.3.0" },
+    { name = "langchain-mcp-adapters", specifier = ">=0.2.1,<0.3.0" },
     { name = "meeseeks-core", editable = "packages/meeseeks_core" },
     { name = "prompt-toolkit", specifier = ">=3.0.47,<4.0.0" },
     { name = "pydantic", specifier = ">=2.7.0,<3.0.0" },
@@ -1993,7 +1982,6 @@ requires-dist = [
     { name = "rich", specifier = ">=14.2.0,<15.0.0" },
     { name = "typing-extensions", specifier = ">=4.12.2,<5.0.0" },
 ]
-provides-extras = ["mcp"]
 
 [[package]]
 name = "meeseeks-workspace"

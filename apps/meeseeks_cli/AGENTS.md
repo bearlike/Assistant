@@ -62,6 +62,8 @@ If you add a new interactive flow, use `DialogFactory` instead of writing custom
 - `/session`: show current session id.
 - `/summary`: show current session summary.
 - `/summarize` or `/compact`: summarize + compact transcript.
+- `/status`: show session status (shared runtime).
+- `/terminate`: cancel the active run (shared runtime).
 - `/tag NAME`: tag the current session (dialog when NAME omitted).
 - `/fork [TAG]`: fork current session (dialog when TAG omitted).
 - `/plan on|off`: toggle action plan display.
@@ -76,6 +78,7 @@ If you add a new interactive flow, use `DialogFactory` instead of writing custom
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_commands.py`: commands, model wizard, MCP listing.
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_dialogs.py`: dialog factory.
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_context.py`: state shared across commands.
+- `packages/meeseeks_core/src/meeseeks_core/session_runtime.py`: shared runtime for session orchestration and polling.
 
 ## Config knobs (UI-relevant)
 - `llm.api_base`: printed in the ready panel.

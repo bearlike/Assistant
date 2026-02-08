@@ -6,6 +6,8 @@ Meeseeks is a multi-agent LLM personal assistant that decomposes user requests i
 ## Core entry points
 - `packages/meeseeks_core/src/meeseeks_core/task_master.py`: action planning + task execution loop
 - `packages/meeseeks_core/src/meeseeks_core/classes.py`: `ActionStep`, `TaskQueue`, `AbstractTool` contracts
+- `packages/meeseeks_core/src/meeseeks_core/session_runtime.py`: session lifecycle, listing, archiving, and async runs
+- `packages/meeseeks_core/src/meeseeks_core/session_store.py`: transcript storage, tags, and archive state
 - `packages/meeseeks_tools/src/meeseeks_tools/`: tool implementations and integration glue
 - `apps/meeseeks_chat/src/meeseeks_chat/chat_master.py`: Streamlit UI
 - `apps/meeseeks_api/src/meeseeks_api/backend.py`: Flask API

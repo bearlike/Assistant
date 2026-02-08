@@ -33,4 +33,5 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Components: components.md
+  - Session Runtime: session-runtime.md
   - Reference: reference.md

@@ -112,7 +112,6 @@ def apply_search_replace_blocks(
     root_path = Path(root).resolve()
     file_cache: dict[Path, str] = {}
     file_exists: dict[Path, bool] = {}
-    created: set[Path] = set()
     results: list[AppliedEdit] = []
 
     for edit in edits:
@@ -141,8 +140,6 @@ def apply_search_replace_blocks(
 
         file_cache[target_path] = new_content
         created_flag = not exists and not edit.search.strip()
-        if created_flag:
-            created.add(target_path)
         results.append(AppliedEdit(path=edit.path, applied=True, created=created_flag))
 
     if write:

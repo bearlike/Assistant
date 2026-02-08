@@ -10,6 +10,7 @@ from pathlib import Path
 
 from meeseeks_core.classes import AbstractTool, ActionStep
 from meeseeks_core.common import MockSpeaker, get_mock_speaker
+from meeseeks_core.errors import ToolInputError
 
 from meeseeks_tools.aider_bridge import (
     EditBlockApplyError,
@@ -41,39 +42,49 @@ class AiderEditBlockTool(AbstractTool):
 
     def set_state(self, action_step: ActionStep | None = None) -> MockSpeaker:
         """Apply search/replace blocks to files."""
-        request = _parse_request(action_step)
-        target_paths = _collect_target_paths(request)
-        before_map = _read_targets(target_paths)
-        results = apply_search_replace_blocks(
-            request.content,
-            root=request.root,
-            valid_fnames=request.files,
-            write=True,
-        )
-        diff_text = _build_diff(before_map, target_paths)
-        if diff_text:
-            message: object = {
-                "kind": "diff",
-                "title": "Aider Edit Blocks",
-                "text": diff_text,
-            }
-        else:
-            message = _format_summary(results, dry_run=False)
-        MockSpeaker = get_mock_speaker()
-        return MockSpeaker(content=message)
+        try:
+            request = _parse_request(action_step)
+            target_paths = _collect_target_paths(request)
+            before_map = _read_targets(target_paths)
+            results = apply_search_replace_blocks(
+                request.content,
+                root=request.root,
+                valid_fnames=request.files,
+                write=True,
+            )
+            if not results:
+                raise ToolInputError(_format_tool_input_error("No SEARCH/REPLACE blocks found."))
+            diff_text = _build_diff(before_map, target_paths)
+            if diff_text:
+                message: object = {
+                    "kind": "diff",
+                    "title": "Aider Edit Blocks",
+                    "text": diff_text,
+                }
+            else:
+                message = _format_summary(results, dry_run=False)
+            MockSpeaker = get_mock_speaker()
+            return MockSpeaker(content=message)
+        except EditBlockApplyError as exc:
+            raise ToolInputError(_format_tool_input_error(str(exc))) from exc
 
     def get_state(self, action_step: ActionStep | None = None) -> MockSpeaker:
         """Validate search/replace blocks without writing changes."""
-        request = _parse_request(action_step)
-        results = apply_search_replace_blocks(
-            request.content,
-            root=request.root,
-            valid_fnames=request.files,
-            write=False,
-        )
-        message = _format_summary(results, dry_run=True)
-        MockSpeaker = get_mock_speaker()
-        return MockSpeaker(content=message)
+        try:
+            request = _parse_request(action_step)
+            results = apply_search_replace_blocks(
+                request.content,
+                root=request.root,
+                valid_fnames=request.files,
+                write=False,
+            )
+            if not results:
+                raise ToolInputError(_format_tool_input_error("No SEARCH/REPLACE blocks found."))
+            message = _format_summary(results, dry_run=True)
+            MockSpeaker = get_mock_speaker()
+            return MockSpeaker(content=message)
+        except EditBlockApplyError as exc:
+            raise ToolInputError(_format_tool_input_error(str(exc))) from exc
 
 
 def _parse_request(action_step: ActionStep | None) -> EditBlockRequest:
@@ -170,6 +181,26 @@ def _format_summary(results, *, dry_run: bool) -> str:
     if created:
         summary += f" Created {len(created)} file(s)."
     return summary
+
+
+def _format_tool_input_error(message: str) -> str:
+    guidance = (
+        "Expected format:\n"
+        "<path>\n"
+        "```text\n"
+        "<<<<<<< SEARCH\n"
+        "<exact text to match>\n"
+        "=======\n"
+        "<replacement text>\n"
+        ">>>>>>> REPLACE\n"
+        "```\n"
+        "Rules: filename line immediately before the fence; SEARCH must match exactly; "
+        "use a line with `...` in both SEARCH and REPLACE to skip unchanged sections; "
+        "do not use shell code blocks."
+    )
+    if not message:
+        return guidance
+    return f"{message}\n\n{guidance}"
 
 
 __all__ = ["AiderEditBlockTool", "EditBlockRequest"]

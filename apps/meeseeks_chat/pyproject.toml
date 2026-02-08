@@ -11,7 +11,7 @@ license = { text = "MIT" }
 
 dependencies = [
   "meeseeks-core>=2.1.0-alpha",
-  "meeseeks-tools[mcp]>=2.1.0-alpha",
+  "meeseeks-tools>=2.1.0-alpha",
   "streamlit>=1.34.0,<2.0.0",
 ]
 

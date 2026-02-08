@@ -1,172 +1,208 @@
 {
   "repo_notes": [
     {
-      "content": "Developer documentation only. Prioritize architecture, interfaces between subprojects, and operational/debugging guidance for contributors. Keep pages concise and cross-link to /docs as canonical references."
+      "content": "Developer documentation only. Mirror the repo structure and module boundaries (packages/, apps/, meeseeks_ha_conversation/) with minimal redundancy. Every page must include a meaningful Mermaid diagram that matches the page purpose. Name exact classes/functions and module paths. Clarify that API exposes polling; CLI runs the runtime in-process (no polling). Focus on system behavior, abstractions, and integration contracts rather than usage tips."
     }
   ],
   "pages": [
     {
-      "title": "Overview",
-      "purpose": "Project-level developer overview: repo goals, component boundaries, and how the monorepo is organized."
+      "title": "Overview & Repo Map",
+      "purpose": "Single entry point: repo goals, module boundaries, and top-level folder ownership in one place."
     },
     {
-      "title": "Repo Map",
-      "purpose": "Explain the monorepo layout and responsibilities of each top-level project folder; include a directory map and ownership boundaries.",
-      "parent": "Overview"
+      "title": "Core Runtime & Orchestration (meeseeks_core)",
+      "purpose": "How the shared core runtime and orchestration engine work; entry points and class boundaries.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "Architecture",
-      "purpose": "High-level architecture and system boundaries; how subprojects integrate with the Core.",
-      "parent": "Overview"
+      "title": "Session Runtime & Store",
+      "purpose": "SessionRuntime, RunRegistry, SessionStore, and event log behavior (polling is API-only).",
+      "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
-      "title": "System Architecture",
-      "purpose": "Core architecture diagram(s) and data/control flows across Core, API, CLI, Chat UI, and Home Assistant integration.",
-      "parent": "Architecture"
+      "title": "Orchestration Engine",
+      "purpose": "orchestrate_session, Orchestrator, ActionPlanRunner, and plan-act-observe-replan flow.",
+      "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
-      "title": "Integration Contracts",
-      "purpose": "Define how subprojects call Core orchestration, tool registry, permissions, and session store; include interfaces and data contracts.",
-      "parent": "Architecture"
+      "title": "LLM Abstraction",
+      "purpose": "ChatModel protocol, build_chat_model, model routing, and reasoning-effort configuration.",
+      "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
-      "title": "Core Engine",
-      "purpose": "Deep dive into orchestration, planning, execution, session management, and tool coordination.",
-      "parent": "Overview"
+      "title": "Context, Summaries, Compaction",
+      "purpose": "ContextBuilder, summary persistence, and compaction behavior.",
+      "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
-      "title": "Orchestration Loop",
-      "purpose": "Plan-act-observe-replan loop, iteration limits, failure handling, and response synthesis.",
-      "parent": "Core Engine"
+      "title": "Permissions, Hooks, Reflection",
+      "purpose": "Approval callbacks, hook pipeline, and step reflection behavior.",
+      "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
-      "title": "Action Planning",
-      "purpose": "Action plan structure, planner prompt, and schema requirements for tool calls.",
-      "parent": "Core Engine"
+      "title": "Core Data Models & Events",
+      "purpose": "ActionStep, TaskQueue, OrchestrationState, EventRecord, and payload schemas.",
+      "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
-      "title": "Session Management",
-      "purpose": "Session creation, transcript persistence, summary storage, tagging, and forking.",
-      "parent": "Core Engine"
+      "title": "Tooling & Integrations (meeseeks_tools)",
+      "purpose": "Tool layer boundaries and integration patterns for local tools and MCP.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "Tool Registry",
-      "purpose": "Tool discovery, registration, manifest usage, MCP auto-discovery, and lazy instantiation behavior.",
-      "parent": "Core Engine"
+      "title": "Tool Framework",
+      "purpose": "ToolRegistry, ToolSpec, AbstractTool, and tool execution lifecycle.",
+      "parent": "Tooling & Integrations (meeseeks_tools)"
     },
     {
-      "title": "Permissions & Hooks",
-      "purpose": "Permission policies, approval callbacks, pre/post-tool hooks, and execution control.",
-      "parent": "Core Engine"
+      "title": "Local Tools (Aider adapters)",
+      "purpose": "Edit-block tool flow, file tools, and shell tool behavior.",
+      "parent": "Tooling & Integrations (meeseeks_tools)"
     },
     {
-      "title": "Tools & Integrations",
-      "purpose": "Developer reference for tool contracts and integration patterns (local tools, MCP tools, optional integrations)."
+      "title": "MCP Integration",
+      "purpose": "MCP config, discovery, schema validation, and manifest caching.",
+      "parent": "Tooling & Integrations (meeseeks_tools)"
     },
     {
-      "title": "Tool Architecture",
-      "purpose": "AbstractTool base class, ToolRunner protocol, MockSpeaker responses, and how to author custom tools.",
-      "parent": "Tools & Integrations"
+      "title": "API Project (meeseeks_api)",
+      "purpose": "REST API boundaries and how it binds to SessionRuntime.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "MCP Tool Integration",
-      "purpose": "MCP server configuration, discovery flow, schema validation, and manifest caching.",
-      "parent": "Tools & Integrations"
+      "title": "API Endpoints & Polling",
+      "purpose": "Session endpoints, async runs, and polling flow (API-only).",
+      "parent": "API Project (meeseeks_api)"
     },
     {
-      "title": "Home Assistant Integration",
-      "purpose": "Home Assistant tool wiring, API communication, caching, and HA-specific constraints.",
-      "parent": "Tools & Integrations"
+      "title": "CLI Project (meeseeks_cli)",
+      "purpose": "CLI flow, dialogs, in-process runtime usage, and command handling.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "Data Models & Types",
-      "purpose": "Pydantic models, TypedDict payloads, and type boundaries used across the system."
+      "title": "Chat UI Project (meeseeks_chat)",
+      "purpose": "Streamlit UI flow and integration with core runtime.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "Core Data Models",
-      "purpose": "ActionStep, TaskQueue, OrchestrationState, ToolSpec, and validation rules.",
-      "parent": "Data Models & Types"
+      "title": "Home Assistant Project (meeseeks_ha_conversation)",
+      "purpose": "HA adapter flow and API interaction.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "Event System",
-      "purpose": "EventRecord types, event logging, transcript schema, and how events drive replanning.",
-      "parent": "Data Models & Types"
+      "title": "Configuration & Runtime Settings",
+      "purpose": "configs/app.json, configs/mcp.json, env layering, and runtime defaults.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "Payload Types",
-      "purpose": "ActionStepPayload, ToolResultPayload, PermissionPayload, UserPayload, and related structures.",
-      "parent": "Data Models & Types"
+      "title": "CI/CD & Docs Pipeline",
+      "purpose": "CI checks, coverage gating, release automation, and docs generation; where pipeline logic lives in the repo.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "Subprojects",
-      "purpose": "Developer docs for each subproject; include local architecture diagrams and integration notes."
+      "title": "Testing & Quality",
+      "purpose": "Integration-first test patterns, boundaries, and coverage targets from tests/AGENTS.md.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "CLI Project",
-      "purpose": "CLI architecture, command registry, prompt/response rendering, and orchestration integration.",
-      "parent": "Subprojects"
+      "title": "Tracing & Diagnostics",
+      "purpose": "Logging, Langfuse tracing, and error propagation paths.",
+      "parent": "Overview & Repo Map"
     },
     {
-      "title": "Chat UI Project",
-      "purpose": "Chat UI architecture, session flow, and integration with Core orchestration.",
-      "parent": "Subprojects"
+      "title": "Client Extension Guide",
+      "purpose": "How new clients extend SessionRuntime and core abstractions without duplicating logic.",
+      "parent": "Overview & Repo Map"
+    }
+  ],
+  "page_notes": [
+    {
+      "title": "Overview & Repo Map",
+      "notes": "Mermaid: module map with subgraphs by top-level folder (packages/, apps/, meeseeks_ha_conversation/)."
     },
     {
-      "title": "API Project",
-      "purpose": "REST API architecture, endpoints, and Core integration contract.",
-      "parent": "Subprojects"
+      "title": "Core Runtime & Orchestration (meeseeks_core)",
+      "notes": "Mermaid: runtime facade flow (SessionRuntime -> Orchestrator -> ActionPlanRunner) and how clients call it."
     },
     {
-      "title": "Home Assistant Conversation Project",
-      "purpose": "HA conversation adapter architecture and Core integration points.",
-      "parent": "Subprojects"
+      "title": "Session Runtime & Store",
+      "notes": "Mermaid: sequence for async run + JSONL event log + API polling (explicitly API-only); include RunRegistry and SessionStore."
     },
     {
-      "title": "Test Suite",
-      "purpose": "Testing strategy, mocking boundaries, integration tests, and coverage expectations.",
-      "parent": "Subprojects"
+      "title": "Orchestration Engine",
+      "notes": "Mermaid: state machine for plan -> act -> observe -> replan -> respond; label orchestrate_session/Orchestrator/ActionPlanRunner."
     },
     {
-      "title": "Configuration & Deployment",
-      "purpose": "Developer setup, environment variables, model configuration, and deployment options."
+      "title": "LLM Abstraction",
+      "notes": "Mermaid: class diagram for ChatModel protocol and build_chat_model usage."
     },
     {
-      "title": "Development Setup",
-      "purpose": "Local dev setup, dependency installation, and how to run tests/linting.",
-      "parent": "Configuration & Deployment"
+      "title": "Context, Summaries, Compaction",
+      "notes": "Mermaid: data flow from EventRecord -> summary -> ContextBuilder snapshot."
     },
     {
-      "title": "Environment Variables",
-      "purpose": "Reference of env vars, defaults, and precedence across subprojects.",
-      "parent": "Configuration & Deployment"
+      "title": "Permissions, Hooks, Reflection",
+      "notes": "Mermaid: sequence diagram of tool call -> hooks -> permission -> tool result -> reflection."
     },
     {
-      "title": "Model Configuration",
-      "purpose": "Model selection, action vs default models, and provider configuration.",
-      "parent": "Configuration & Deployment"
+      "title": "Core Data Models & Events",
+      "notes": "Mermaid: class diagram for ActionStep, TaskQueue, OrchestrationState + EventRecord and payload variants."
     },
     {
-      "title": "Docker Deployment",
-      "purpose": "Docker images, build targets, runtime configuration, and multi-platform notes.",
-      "parent": "Configuration & Deployment"
+      "title": "Tooling & Integrations (meeseeks_tools)",
+      "notes": "Mermaid: ToolRegistry -> ToolSpec -> AbstractTool -> local/MCP implementations."
     },
     {
-      "title": "Operations & Diagnostics",
-      "purpose": "Logging, troubleshooting, and production support workflows."
+      "title": "Tool Framework",
+      "notes": "Mermaid: class diagram with ToolRegistry, ToolSpec, AbstractTool, ActionStep."
     },
     {
-      "title": "Logging & Diagnostics",
-      "purpose": "Log levels, error traces, and guidance for capturing failures.",
-      "parent": "Operations & Diagnostics"
+      "title": "Local Tools (Aider adapters)",
+      "notes": "Mermaid: sequence for edit-block tool (SEARCH/REPLACE) -> diff -> tool_result."
     },
     {
-      "title": "Troubleshooting",
-      "purpose": "Common failure modes (MCP discovery, tool init, permissions) and recovery steps.",
-      "parent": "Operations & Diagnostics"
+      "title": "MCP Integration",
+      "notes": "Mermaid: flow from config -> discovery -> schema normalization -> registry."
     },
     {
-      "title": "Advanced Topics",
-      "purpose": "Context management, reflection/compaction, observability, and performance tuning."
+      "title": "API Project (meeseeks_api)",
+      "notes": "Mermaid: request flow from API handlers to SessionRuntime and SessionStore."
+    },
+    {
+      "title": "API Endpoints & Polling",
+      "notes": "Mermaid: sequence for /sessions, /query, /events polling (API-only)."
+    },
+    {
+      "title": "CLI Project (meeseeks_cli)",
+      "notes": "Mermaid: sync flow CLI -> SessionRuntime -> Orchestrator -> response (no polling)."
+    },
+    {
+      "title": "Chat UI Project (meeseeks_chat)",
+      "notes": "Mermaid: Streamlit UI flow -> SessionRuntime -> response."
+    },
+    {
+      "title": "Home Assistant Project (meeseeks_ha_conversation)",
+      "notes": "Mermaid: HA adapter -> API -> SessionRuntime -> tools."
+    },
+    {
+      "title": "Configuration & Runtime Settings",
+      "notes": "Mermaid: config resolution flow (configs/app.json, configs/mcp.json, env overrides)."
+    },
+    {
+      "title": "CI/CD & Docs Pipeline",
+      "notes": "Mermaid: pipeline flow (push/PR -> lint/tests -> coverage -> status checks) plus docs generation (docs/ + mkdocs.yml -> build -> deploy)."
+    },
+    {
+      "title": "Testing & Quality",
+      "notes": "Mermaid: test harness flow (fake tools/LLM boundary) covering full turn integration tests."
+    },
+    {
+      "title": "Tracing & Diagnostics",
+      "notes": "Mermaid: error propagation flow and tracing hooks to Langfuse."
+    },
+    {
+      "title": "Client Extension Guide",
+      "notes": "Mermaid: extension diagram for new client binding to SessionRuntime and ToolRegistry."
     }
   ]
 }

@@ -80,8 +80,9 @@ from meeseeks_core.config import (
 )
 from meeseeks_core.hooks import HookManager
 from meeseeks_core.permissions import PermissionDecision, auto_approve
+from meeseeks_core.session_runtime import SessionRuntime
 from meeseeks_core.session_store import SessionStore
-from meeseeks_core.task_master import generate_action_plan, orchestrate_session
+from meeseeks_core.task_master import generate_action_plan
 from meeseeks_core.tool_registry import ToolRegistry, load_registry
 from meeseeks_tools.integration.mcp import (
     _load_mcp_config,
@@ -105,23 +106,16 @@ logging = get_logger(name="meeseeks.cli")
 
 
 def _resolve_session_id(
-    store: SessionStore,
+    runtime: SessionRuntime,
     session_id: str | None,
     session_tag: str | None,
     fork_from: str | None,
 ) -> str:
-    if fork_from:
-        source_session_id = store.resolve_tag(fork_from) or fork_from
-        session_id = store.fork_session(source_session_id)
-    if session_tag and not session_id:
-        resolved = store.resolve_tag(session_tag)
-        session_id = resolved if resolved else None
-    if not session_id:
-        session_id = store.create_session()
-    if session_tag:
-        store.tag_session(session_id, session_tag)
-    assert session_id is not None
-    return session_id
+    return runtime.resolve_session(
+        session_id=session_id,
+        session_tag=session_tag,
+        fork_from=fork_from,
+    )
 
 
 def _format_steps(steps: Iterable[ActionStep]) -> list[tuple[str, str, str]]:
@@ -407,7 +401,8 @@ def run_cli(args: argparse.Namespace) -> int:
             verbosity,
         )
     store = SessionStore(root_dir=args.session_dir)
-    session_id = _resolve_session_id(store, args.session, args.tag, args.fork)
+    runtime = SessionRuntime(session_store=store)
+    session_id = _resolve_session_id(runtime, args.session, args.tag, args.fork)
     state = CliState(
         session_id=session_id,
         show_plan=args.show_plan,
@@ -462,7 +457,7 @@ def run_cli(args: argparse.Namespace) -> int:
     console.print()
 
     if args.query:
-        return _run_single_query(console, store, state, tool_registry, args.query, args)
+        return _run_single_query(console, store, runtime, state, tool_registry, args.query, args)
 
     history_path = _ensure_history_path(args.history_file)
     session: PromptSession[str] = PromptSession(history=FileHistory(history_path))
@@ -484,6 +479,7 @@ def run_cli(args: argparse.Namespace) -> int:
                 store=store,
                 state=state,
                 tool_registry=tool_registry,
+                runtime=runtime,
                 prompt_func=session.prompt,
             )
             if not registry.execute(command, context, cmd_args):
@@ -491,24 +487,35 @@ def run_cli(args: argparse.Namespace) -> int:
                 return 0
             continue
 
-        _run_query(console, store, state, tool_registry, user_input, args, session.prompt)
+        _run_query(
+            console,
+            store,
+            runtime,
+            state,
+            tool_registry,
+            user_input,
+            args,
+            session.prompt,
+        )
 
 
 def _run_single_query(
     console: Console,
     store: SessionStore,
+    runtime: SessionRuntime,
     state: CliState,
     tool_registry: ToolRegistry,
     query: str,
     args: argparse.Namespace,
 ) -> int:
-    _run_query(console, store, state, tool_registry, query, args, None)
+    _run_query(console, store, runtime, state, tool_registry, query, args, None)
     return 0
 
 
 def _run_query(
     console: Console,
     store: SessionStore,
+    runtime: SessionRuntime,
     state: CliState,
     tool_registry: ToolRegistry,
     query: str,
@@ -547,13 +554,12 @@ def _run_query(
         logging.debug("Forcing auto-approve for headless query execution.")
         approval_callback = auto_approve
     hook_manager = _build_cli_hook_manager(console, tool_registry)
-    task_queue = orchestrate_session(
+    task_queue = runtime.run_sync(
         user_query=query,
         model_name=state.model_name,
         max_iters=args.max_iters,
         initial_task_queue=initial_task_queue,
         session_id=state.session_id,
-        session_store=store,
         tool_registry=tool_registry,
         approval_callback=approval_callback,
         hook_manager=hook_manager,
@@ -751,7 +757,7 @@ def _render_results_with_registry(
         renderable: RenderableType
         if result is None:
             renderable = Text("(no result)", style="dim")
-        elif not verbose:
+        elif not verbose and not _should_force_preview(result):
             renderable = Text("(output hidden; use -v/--verbose)", style="dim")
         else:
             renderable = _format_tool_output(result, content_style)
@@ -771,6 +777,15 @@ def _render_results_with_registry(
         console.print(panels[0])
         return
     console.print(Columns(panels, expand=True))
+
+
+def _should_force_preview(result: object) -> bool:
+    if not isinstance(result, dict):
+        return False
+    kind_raw = result.get("kind")
+    kind = kind_raw if isinstance(kind_raw, str) else str(kind_raw or "")
+    kind = kind.strip().lower()
+    return kind in {"diff", "file"}
 
 
 def _format_tool_output(result: object, content_style: str | None) -> RenderableType:

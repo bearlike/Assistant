@@ -20,6 +20,7 @@ from meeseeks_core.planning import Planner, ResponseSynthesizer  # noqa: E402
 from meeseeks_core.reflection import StepReflector  # noqa: E402
 from meeseeks_core.session_store import SessionStore  # noqa: E402
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, load_registry  # noqa: E402
+from meeseeks_tools.integration.aider_edit_blocks import AiderEditBlockTool  # noqa: E402
 
 
 class Counter:
@@ -32,6 +33,26 @@ class Counter:
     def bump(self):
         """Increment the counter by one."""
         self.count += 1
+
+
+def _edit_block(path: str, search: str, replace: str) -> str:
+    return (
+        f"{path}\n"
+        "```text\n"
+        "<<<<<<< SEARCH\n"
+        f"{search}=======\n"
+        f"{replace}>>>>>>> REPLACE\n"
+        "```\n"
+    )
+
+
+def _types_in_order(events, expected):
+    indices = []
+    for value in expected:
+        indices.append(
+            next(i for i, event in enumerate(events) if event["type"] == value)
+        )
+    assert indices == sorted(indices)
 
 
 def make_task_queue(message: str) -> TaskQueue:
@@ -216,6 +237,115 @@ def test_orchestrate_session_replans_on_failure(monkeypatch, tmp_path):
     assert generate_calls.count == 2
     assert run_calls.count == 2
     assert "Last tool failure:" in captured["query"]
+
+
+def test_orchestrate_session_edit_block_success_records_events(monkeypatch, tmp_path):
+    """Run an edit-block tool and assert event ordering + payloads."""
+    monkeypatch.setattr("meeseeks_core.session_store._utc_now", lambda: "2024-01-01T00:00:00+00:00")
+    session_store = SessionStore(root_dir=str(tmp_path))
+    session_id = "sess-edit-success"
+    target = tmp_path / "hello.txt"
+    target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            tool_id="aider_edit_block_tool",
+            name="Aider Edit Blocks",
+            description="Apply Aider-style SEARCH/REPLACE blocks to files.",
+            factory=lambda: AiderEditBlockTool(),
+        )
+    )
+
+    def fake_generate(_self, *_args, **_kwargs):
+        step = ActionStep(
+            action_consumer="aider_edit_block_tool",
+            action_type="set",
+            action_argument={
+                "content": _edit_block(
+                    "hello.txt",
+                    "alpha\n...\ngamma\n",
+                    "alpha\n...\ndelta\n",
+                ),
+                "root": str(tmp_path),
+            },
+        )
+        return TaskQueue(action_steps=[step])
+
+    monkeypatch.setattr(Planner, "generate", fake_generate)
+    monkeypatch.setattr(ResponseSynthesizer, "synthesize", lambda *_a, **_k: "done")
+
+    task_queue = task_master.orchestrate_session(
+        "apply edit",
+        max_iters=1,
+        session_id=session_id,
+        session_store=session_store,
+        tool_registry=registry,
+        approval_callback=lambda *_a, **_k: True,
+    )
+
+    assert task_queue.task_result == "done"
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\ndelta\n"
+
+    events = session_store.load_transcript(session_id)
+    _types_in_order(events, ["user", "action_plan", "tool_result", "completion"])
+    tool_event = next(event for event in events if event["type"] == "tool_result")
+    assert tool_event["payload"]["action_consumer"] == "aider_edit_block_tool"
+    assert tool_event["payload"]["success"] is True
+    assert "kind': 'diff'" in tool_event["payload"]["result"]
+
+
+def test_orchestrate_session_edit_block_input_error_replans(monkeypatch, tmp_path):
+    """Replan on edit-block input errors without disabling the tool."""
+    monkeypatch.setattr("meeseeks_core.session_store._utc_now", lambda: "2024-01-01T00:00:00+00:00")
+    session_store = SessionStore(root_dir=str(tmp_path))
+    session_id = "sess-edit-error"
+    captured: dict[str, str] = {}
+    generate_calls = Counter()
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            tool_id="aider_edit_block_tool",
+            name="Aider Edit Blocks",
+            description="Apply Aider-style SEARCH/REPLACE blocks to files.",
+            factory=lambda: AiderEditBlockTool(),
+        )
+    )
+
+    def fake_generate(_self, user_query, *_args, **_kwargs):
+        generate_calls.bump()
+        if generate_calls.count == 2:
+            captured["query"] = user_query
+            return TaskQueue(action_steps=[])
+        step = ActionStep(
+            action_consumer="aider_edit_block_tool",
+            action_type="set",
+            action_argument={"content": "no edits here", "root": str(tmp_path)},
+        )
+        return TaskQueue(action_steps=[step])
+
+    monkeypatch.setattr(Planner, "generate", fake_generate)
+    monkeypatch.setattr(ResponseSynthesizer, "synthesize", lambda *_a, **_k: "done")
+
+    task_queue = task_master.orchestrate_session(
+        "apply edit",
+        max_iters=2,
+        session_id=session_id,
+        session_store=session_store,
+        tool_registry=registry,
+        approval_callback=lambda *_a, **_k: True,
+    )
+
+    assert task_queue.task_result == "done"
+    assert "Last tool failure:" in captured["query"]
+    spec = registry.get_spec("aider_edit_block_tool")
+    assert spec is not None
+    assert spec.enabled is True
+    events = session_store.load_transcript(session_id)
+    _types_in_order(events, ["user", "action_plan", "tool_result", "completion"])
+    tool_event = next(event for event in events if event["type"] == "tool_result")
+    assert tool_event["payload"]["success"] is False
 
 
 def test_orchestrate_session_plan_mode_no_replan(monkeypatch, tmp_path):

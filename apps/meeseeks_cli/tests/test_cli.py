@@ -8,6 +8,7 @@ from importlib.metadata import PackageNotFoundError
 from meeseeks_core.classes import ActionStep, TaskQueue, set_available_tools  # noqa: E402
 from meeseeks_core.common import get_mock_speaker  # noqa: E402
 from meeseeks_core.config import get_config_value, set_config_override, set_mcp_config_path  # noqa: E402
+from meeseeks_core.session_runtime import SessionRuntime  # noqa: E402
 from meeseeks_core.session_store import SessionStore  # noqa: E402
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, load_registry  # noqa: E402
 from rich.console import Console  # noqa: E402
@@ -58,11 +59,12 @@ def test_format_steps():
 def test_resolve_session_id(tmp_path):
     """Resolve session IDs from tags or fork options."""
     store = SessionStore(root_dir=str(tmp_path))
-    session_id = _resolve_session_id(store, None, "primary", None)
+    runtime = SessionRuntime(session_store=store)
+    session_id = _resolve_session_id(runtime, None, "primary", None)
     assert session_id
     assert store.resolve_tag("primary") == session_id
 
-    forked_id = _resolve_session_id(store, None, None, session_id)
+    forked_id = _resolve_session_id(runtime, None, None, session_id)
     assert forked_id != session_id
 
 
@@ -74,11 +76,13 @@ def test_handle_new_session_command(tmp_path):
     registry = get_registry()
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=True)
+    runtime = SessionRuntime(session_store=store)
     context = CommandContext(
         console=console,
         store=store,
         state=state,
         tool_registry=tool_registry,
+        runtime=runtime,
         prompt_func=None,
     )
 
@@ -199,6 +203,7 @@ def test_mcp_yes_always_updates_config(tmp_path, monkeypatch):
 def test_run_query(monkeypatch, tmp_path):
     """Run a CLI query with a generated plan."""
     store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=True)
     tool_registry = load_registry()
@@ -228,11 +233,12 @@ def test_run_query(monkeypatch, tmp_path):
         return task_queue
 
     monkeypatch.setattr("meeseeks_cli.cli_master.generate_action_plan", fake_generate)
-    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
 
     _run_query(
         console,
         store,
+        runtime,
         state,
         tool_registry,
         "hi",
@@ -246,6 +252,7 @@ def test_run_query(monkeypatch, tmp_path):
 def test_run_query_auto_approves_in_headless(monkeypatch, tmp_path):
     """Enable auto-approve when no prompt function is available."""
     store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=False)
     tool_registry = load_registry()
@@ -267,11 +274,12 @@ def test_run_query_auto_approves_in_headless(monkeypatch, tmp_path):
         return task_queue
 
     monkeypatch.setattr("meeseeks_cli.cli_master._build_approval_callback", fake_build)
-    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
 
     _run_query(
         console,
         store,
+        runtime,
         state,
         tool_registry,
         "hi",
@@ -285,6 +293,7 @@ def test_run_query_auto_approves_in_headless(monkeypatch, tmp_path):
 def test_run_query_headless_auto_approves_set_tool(monkeypatch, tmp_path):
     """Execute a set action when headless auto-approve is enabled."""
     store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=False)
     console = Console(record=True)
@@ -324,6 +333,7 @@ def test_run_query_headless_auto_approves_set_tool(monkeypatch, tmp_path):
     _run_query(
         console,
         store,
+        runtime,
         state,
         tool_registry,
         "hi",
@@ -337,6 +347,7 @@ def test_run_query_headless_auto_approves_set_tool(monkeypatch, tmp_path):
 def test_run_query_renders_tool_output_and_response(monkeypatch, tmp_path):
     """Render tool output and final response in verbose mode."""
     store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=False)
     tool_registry = ToolRegistry()
@@ -362,11 +373,12 @@ def test_run_query_renders_tool_output_and_response(monkeypatch, tmp_path):
         task_queue.task_result = "final response"
         return task_queue
 
-    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
 
     _run_query(
         console,
         store,
+        runtime,
         state,
         tool_registry,
         "hi",
@@ -382,6 +394,7 @@ def test_run_query_renders_tool_output_and_response(monkeypatch, tmp_path):
 def test_run_query_renders_diff_tool_output(monkeypatch, tmp_path):
     """Render diff payloads in verbose mode."""
     store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=False)
     tool_registry = ToolRegistry()
@@ -408,11 +421,12 @@ def test_run_query_renders_diff_tool_output(monkeypatch, tmp_path):
         task_queue.task_result = "final response"
         return task_queue
 
-    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
 
     _run_query(
         console,
         store,
+        runtime,
         state,
         tool_registry,
         "hi",
@@ -428,6 +442,7 @@ def test_run_query_renders_diff_tool_output(monkeypatch, tmp_path):
 def test_run_query_renders_shell_tool_output(monkeypatch, tmp_path):
     """Render shell payloads in verbose mode."""
     store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=False)
     tool_registry = ToolRegistry()
@@ -459,11 +474,12 @@ def test_run_query_renders_shell_tool_output(monkeypatch, tmp_path):
         task_queue.task_result = "final response"
         return task_queue
 
-    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
 
     _run_query(
         console,
         store,
+        runtime,
         state,
         tool_registry,
         "hi",
@@ -479,6 +495,7 @@ def test_run_query_renders_shell_tool_output(monkeypatch, tmp_path):
 def test_run_query_hides_output_when_not_verbose(monkeypatch, tmp_path):
     """Hide tool output in non-verbose mode."""
     store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=False)
     tool_registry = ToolRegistry()
@@ -502,11 +519,12 @@ def test_run_query_hides_output_when_not_verbose(monkeypatch, tmp_path):
         step.result = get_mock_speaker()(content={"foo": "bar"})
         return TaskQueue(action_steps=[step])
 
-    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
 
     _run_query(
         console,
         store,
+        runtime,
         state,
         tool_registry,
         "hi",
@@ -521,6 +539,7 @@ def test_run_query_hides_output_when_not_verbose(monkeypatch, tmp_path):
 def test_run_query_renders_partial_tool_results(monkeypatch, tmp_path):
     """Render mixed tool results when a step fails and a later step succeeds."""
     store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=False)
     tool_registry = ToolRegistry()
@@ -558,11 +577,12 @@ def test_run_query_renders_partial_tool_results(monkeypatch, tmp_path):
         queue.task_result = "final response"
         return queue
 
-    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
 
     _run_query(
         console,
         store,
+        runtime,
         state,
         tool_registry,
         "hi",
@@ -578,6 +598,7 @@ def test_run_query_renders_partial_tool_results(monkeypatch, tmp_path):
 def test_run_query_dims_tool_panels_after_response(monkeypatch, tmp_path):
     """Disable highlight when a final response exists."""
     store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
     session_id = store.create_session()
     state = CliState(session_id=session_id, show_plan=False)
     tool_registry = ToolRegistry()
@@ -598,12 +619,13 @@ def test_run_query_dims_tool_panels_after_response(monkeypatch, tmp_path):
     def fake_render(*_args, **kwargs):
         captured["highlight_latest"] = kwargs.get("highlight_latest")
 
-    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
     monkeypatch.setattr("meeseeks_cli.cli_master._render_results_with_registry", fake_render)
 
     _run_query(
         console,
         store,
+        runtime,
         state,
         tool_registry,
         "hi",
@@ -717,7 +739,7 @@ def test_run_cli_single_query(monkeypatch, tmp_path):
         return task_queue
 
     monkeypatch.setattr("meeseeks_cli.cli_master.render_header", fake_header)
-    monkeypatch.setattr("meeseeks_cli.cli_master.orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
     monkeypatch.setattr("meeseeks_cli.cli_master.load_registry", lambda: ToolRegistry())
     assert run_cli(args) == 0
 

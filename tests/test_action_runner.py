@@ -4,6 +4,7 @@ import pytest
 from meeseeks_core.action_runner import ActionPlanRunner
 from meeseeks_core.classes import ActionStep, TaskQueue, set_available_tools
 from meeseeks_core.common import get_mock_speaker
+from meeseeks_core.errors import ToolInputError
 from meeseeks_core.hooks import default_hook_manager
 from meeseeks_core.permissions import PermissionPolicy
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
@@ -228,6 +229,88 @@ def test_action_runner_records_tool_errors_in_task_result():
     assert task_queue.last_error
     assert "boom" in task_queue.last_error
     assert "ERROR: boom" in task_queue.task_result
+
+
+def test_action_runner_preserves_tool_on_input_error():
+    """Do not disable tools for expected input errors."""
+    registry = ToolRegistry()
+
+    class InputErrorTool:
+        def run(self, _step):
+            raise ToolInputError("bad input")
+
+    registry.register(
+        ToolSpec(
+            tool_id="input_error_tool",
+            name="InputError",
+            description="Fails on input",
+            factory=lambda: InputErrorTool(),
+        )
+    )
+    events = []
+    runner = ActionPlanRunner(
+        tool_registry=registry,
+        permission_policy=PermissionPolicy(),
+        approval_callback=lambda _step: True,
+        hook_manager=default_hook_manager(),
+        event_logger=events.append,
+    )
+    task_queue = TaskQueue(
+        action_steps=[
+            ActionStep(
+                action_consumer="input_error_tool",
+                action_type="get",
+                action_argument="payload",
+            )
+        ]
+    )
+    task_queue = runner.run(task_queue)
+    assert task_queue.last_error
+    assert "bad input" in task_queue.last_error
+    spec = registry.get_spec("input_error_tool")
+    assert spec is not None
+    assert spec.enabled is True
+    assert events
+    assert events[-1]["payload"]["success"] is False
+
+
+def test_action_runner_preserves_mcp_tool_on_runtime_error():
+    """Do not disable MCP tools on transient runtime errors."""
+    registry = ToolRegistry()
+
+    class ExplodingTool:
+        def run(self, _step):
+            raise RuntimeError("network aborted")
+
+    registry.register(
+        ToolSpec(
+            tool_id="mcp_tool",
+            name="MCP Tool",
+            description="MCP tool",
+            factory=lambda: ExplodingTool(),
+            kind="mcp",
+        )
+    )
+    runner = ActionPlanRunner(
+        tool_registry=registry,
+        permission_policy=PermissionPolicy(),
+        approval_callback=lambda _step: True,
+        hook_manager=default_hook_manager(),
+    )
+    task_queue = TaskQueue(
+        action_steps=[
+            ActionStep(
+                action_consumer="mcp_tool",
+                action_type="get",
+                action_argument="payload",
+            )
+        ]
+    )
+    task_queue = runner.run(task_queue)
+    assert task_queue.last_error
+    spec = registry.get_spec("mcp_tool")
+    assert spec is not None
+    assert spec.enabled is True
 
 
 def test_summarize_result_truncates_long_text():

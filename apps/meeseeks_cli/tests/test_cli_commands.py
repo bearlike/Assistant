@@ -7,6 +7,7 @@ import pytest
 from rich.console import Console
 
 from meeseeks_core.config import set_config_override, set_mcp_config_path  # noqa: E402
+from meeseeks_core.session_runtime import SessionRuntime  # noqa: E402
 from meeseeks_core.session_store import SessionStore  # noqa: E402
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec  # noqa: E402
 
@@ -36,11 +37,13 @@ def _make_context(tmp_path):
         )
     )
     console = Console(record=True)
+    runtime = SessionRuntime(session_store=store)
     return CommandContext(
         console=console,
         store=store,
         state=state,
         tool_registry=registry,
+        runtime=runtime,
         prompt_func=lambda _: "",
     )
 
@@ -117,6 +120,14 @@ def test_command_automatic_confirm(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_commands, "DialogFactory", DummyDialogs)
     assert registry.execute("/automatic", context, []) is True
     assert context.state.auto_approve_all is True
+
+
+def test_command_status_and_terminate(tmp_path):
+    """Handle status and terminate commands without errors."""
+    context = _make_context(tmp_path)
+    registry = get_registry()
+    assert registry.execute("/status", context, []) is True
+    assert registry.execute("/terminate", context, []) is True
 
 
 def test_command_models(monkeypatch, tmp_path):
@@ -354,10 +365,10 @@ def test_command_compact(monkeypatch, tmp_path):
     context = _make_context(tmp_path)
     registry = get_registry()
 
-    def fake_orchestrate(*args, **kwargs):
+    def fake_run_sync(*args, **kwargs):
         return DummyQueue("compacted")
 
-    monkeypatch.setattr(cli_commands, "orchestrate_session", fake_orchestrate)
+    monkeypatch.setattr(context.runtime, "run_sync", fake_run_sync)
     assert registry.execute("/compact", context, []) is True
 
 

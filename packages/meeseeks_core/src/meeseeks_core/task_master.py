@@ -116,6 +116,7 @@ def orchestrate_session(
     approval_callback: Callable[[ActionStep], bool] | None = None,
     hook_manager: HookManager | None = None,
     mode: str | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
     """Run the plan-act-observe orchestration loop."""
     return Orchestrator(
@@ -132,6 +133,7 @@ def orchestrate_session(
         return_state=return_state,
         session_id=session_id,
         mode=mode,
+        should_cancel=should_cancel,
     )
 
 

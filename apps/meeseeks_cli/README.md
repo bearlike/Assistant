@@ -25,6 +25,8 @@ uv run meeseeks
 - `/help` list commands
 - `/plan on|off` toggle plan display
 - `/summarize` compact the session transcript
+- `/status` show session status
+- `/terminate` cancel the active run
 - `/tag NAME` tag a session
 - `/fork [TAG]` fork the current session
 - `/new` start a new session

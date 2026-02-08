@@ -1,6 +1,24 @@
 Aider Edit Blocks tool
 
 Use this tool to apply Aider-style SEARCH/REPLACE blocks to local files.
+Output ONLY SEARCH/REPLACE blocks, no extra prose.
+
+Format (repeat per file):
+<path>
+```text
+<<<<<<< SEARCH
+<exact text to match>
+=======
+<replacement text>
+>>>>>>> REPLACE
+```
+
+Rules:
+- The filename line must be immediately before the opening fence.
+- SEARCH must match exactly (include whitespace and newlines).
+- To skip unchanged sections, use a line with `...` in BOTH SEARCH and REPLACE.
+- To create a new file, leave SEARCH empty and put full content in REPLACE.
+- Do not include shell code blocks; use the shell tool for commands.
 
 Action arguments (JSON):
 - content: string containing one or more SEARCH/REPLACE blocks.

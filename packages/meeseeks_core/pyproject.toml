@@ -15,15 +15,13 @@ dependencies = [
   "langchain-core>=1.2.8,<2.0.0",
   "langchain-community>=0.4.1,<0.5.0",
   "langchain-litellm>=0.4.0,<0.5.0",
+  "langfuse>=3.8.0,<4.0.0",
   "litellm>=1.81.0,<2.0.0",
   "loguru>=0.7.2,<1.0.0",
   "pydantic>=2.7.0,<3.0.0",
   "tiktoken>=0.7.0,<1.0.0",
   "typing-extensions>=4.12.2,<5.0.0",
 ]
-
-[project.optional-dependencies]
-observability = ["langfuse>=3.8.0,<4.0.0"]
 
 [build-system]
 requires = ["hatchling>=1.25.0"]

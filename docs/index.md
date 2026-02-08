@@ -15,6 +15,7 @@ Meeseeks is an AI task agent assistant that breaks a request into small actions,
 
 **Reference**
 - [API reference](reference.md) - mkdocstrings reference for core modules
+- [Session runtime](session-runtime.md) - shared runtime used by CLI + API
 
 ## Feature highlights (quick view)
 - Plan → act → observe loop to keep work grounded in tool results.
@@ -23,8 +24,10 @@ Meeseeks is an AI task agent assistant that breaks a request into small actions,
 - Built-in local file and shell tools (Aider adapters) for edit blocks, read, list, and shell execution.
 - Session transcripts with compaction for long runs and context budget awareness.
 - Context snapshots built from recent turns plus summaries of prior activity.
+- Session listings filter empty sessions and support archiving via the API.
 - Step-level reflection after tool execution to validate outcomes.
 - Permission gate with approval callbacks plus lightweight hooks around tool execution.
+- Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.
 - Optional components (Langfuse, Home Assistant) auto-disable when not configured.
 - Langfuse tracing is session-scoped when enabled, grouping multi-turn runs.
 
@@ -49,15 +52,18 @@ flowchart LR
   User --> Chat
   User --> API
   HA --> API
-  CLI --> Core
-  Chat --> Core
-  API --> Core
-  Core --> Planner
+  CLI --> Runtime
+  Chat --> Runtime
+  API --> Runtime
+  Runtime --> Core
+  Runtime --> SessionStore
+  Runtime --> Planner
   Planner --> Tools
   Tools --> LocalTools
   Tools --> MCP
   Tools --> HomeAssistant
-  Core --> SessionStore
+  Runtime --> Events["Session events (JSONL)"]
+  Events --> Polling["Event polling (API only)"]
   Core --> Langfuse
 ```
 
@@ -70,6 +76,8 @@ See [getting-started.md](getting-started.md) for full setup (env, MCP, configs, 
 - `/mcp` list MCP servers/tools (use `/mcp select` to filter)
 - `/mcp init` scaffold an MCP config file
 - `/summarize` compact the session
+- `/status` show session status
+- `/terminate` cancel the active run
 - `/new` start a fresh session
 - `/automatic` auto-approve tool actions for the session
 - `/quit` exit the CLI

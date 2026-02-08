@@ -416,6 +416,30 @@ def test_auto_manifest_from_mcp_config(tmp_path, monkeypatch):
     assert manifest_path.exists()
 
 
+def test_load_registry_sets_available_tools_for_mcp(tmp_path, monkeypatch):
+    """Ensure MCP tools participate in action validation."""
+    config_path = tmp_path / "mcp.json"
+    config_path.write_text(
+        '{"servers": {"srv": {"transport": "http", "url": "http://example"}}}',
+        encoding="utf-8",
+    )
+    set_mcp_config_path(str(config_path))
+    set_config_override({"runtime": {"config_dir": str(tmp_path)}})
+
+    monkeypatch.setattr(
+        "meeseeks_tools.integration.mcp.discover_mcp_tool_details_with_failures",
+        lambda _config: ({"srv": [{"name": "tool-a", "schema": None}]}, {}),
+    )
+
+    registry = load_registry()
+    tool_ids = {spec.tool_id for spec in registry.list_specs()}
+    assert "mcp_srv_tool_a" in tool_ids
+
+    from meeseeks_core.classes import AVAILABLE_TOOLS
+
+    assert "mcp_srv_tool_a" in AVAILABLE_TOOLS
+
+
 def test_auto_manifest_marks_failed_server(tmp_path, monkeypatch):
     """Disable cached MCP tools when discovery fails."""
     config_path = tmp_path / "mcp.json"
