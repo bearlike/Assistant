@@ -24,14 +24,14 @@ tools = ["meeseeks-tools>=2.1.0-alpha"]
 
 [dependency-groups]
 dev = [
-  "autopep8==2.1.0",
-  "flake8==7.0.0",
-  "mypy==1.11.2",
-  "pre-commit==3.7.1",
-  "pylint==3.1.0",
-  "pytest==8.2.0",
+  "autopep8==2.3.2",
+  "flake8==7.3.0",
+  "mypy==1.19.1",
+  "pre-commit==3.8.0",
+  "pylint==3.3.9",
+  "pytest==8.4.2",
   "pytest-cov==7.0.0",
-  "ruff==0.6.9",
+  "ruff==0.15.0",
   "types-requests==2.32.4.20260107",
   "vulture==2.14",
 ]
