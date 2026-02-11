@@ -1,6 +1,6 @@
 [project]
 name = "meeseeks-core"
-version = "2.1.0-alpha"
+version = "0.0.7"
 description = "Core module for Meeseeks - orchestration, schemas, and utilities."
 readme = "../../README.md"
 requires-python = ">=3.10,<4.0"

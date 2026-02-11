@@ -1,0 +1,35 @@
+name: Refresh uv.lock
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+  push:
+    paths:
+      - "pyproject.toml"
+      - "**/pyproject.toml"
+      - "uv.lock"
+
+jobs:
+  refresh-lock:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Update lockfile
+        run: uv lock
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          branch: chore/uv-lock-refresh
+          delete-branch: true
+          title: "chore(uv): refresh lockfile"
+          commit-message: "chore(uv): refresh lockfile"
+          body: |
+            - Automated uv.lock refresh.
+            - Runs `uv lock` at repo root.

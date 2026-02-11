@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+from pydantic.v1 import BaseModel, Field
 
-from meeseeks_core.classes import TaskQueue, get_task_master_examples
+from meeseeks_core.classes import Plan, PlanStep, get_task_master_examples
 from meeseeks_core.common import get_logger, get_system_prompt, num_tokens_from_string
 from meeseeks_core.components import (
     ComponentStatus,
@@ -22,12 +24,11 @@ from meeseeks_core.components import (
 from meeseeks_core.config import get_config_value
 from meeseeks_core.context import ContextSnapshot, render_event_lines
 from meeseeks_core.llm import build_chat_model
-from meeseeks_core.tool_registry import ToolRegistry
+from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 
 logging = get_logger(name="core.planning")
 EXAMPLE_TAG_OPEN = '<example desc="Illustrative only; not part of the live conversation">'
 EXAMPLE_TAG_CLOSE = "</example>"
-TOOL_DETAIL_MAX = 10
 INTENT_KEYWORDS: dict[str, set[str]] = {
     "web": {
         "latest",
@@ -83,6 +84,29 @@ INTENT_CAPABILITIES: dict[str, set[str]] = {
     "home": {"home_assistant"},
     "shell": {"shell_exec"},
 }
+
+
+class ToolSelection(BaseModel):
+    """Tool selection decision for a user query."""
+
+    tool_required: bool = Field(default=False)
+    tool_ids: list[str] = Field(default_factory=list)
+    rationale: str | None = None
+
+
+class StepDecision(BaseModel):
+    """Decision on how to execute a single plan step."""
+
+    decision: str = Field(description="tool or respond")
+    tool_id: str | None = None
+    args: object | None = None
+    response: str | None = None
+
+
+class PlanUpdate(BaseModel):
+    """Updated remaining plan steps."""
+
+    steps: list[PlanStep] = Field(default_factory=list)
 
 
 class PromptBuilder:
@@ -223,9 +247,10 @@ class Planner:
         model_name: str,
         context: ContextSnapshot | None = None,
         *,
+        tool_specs: list[ToolSpec] | None = None,
         mode: str = "act",
-    ) -> TaskQueue:
-        """Generate a task queue from the user query."""
+    ) -> Plan:
+        """Generate a plan from the user query."""
         if self._tool_registry is None:
             raise ValueError("Tool registry is required for planning.")
         user_id = "meeseeks-task-master"
@@ -242,13 +267,16 @@ class Planner:
             openai_api_base=get_config_value("llm", "api_base"),
             api_key=get_config_value("llm", "api_key"),
         )
-        parser = PydanticOutputParser(pydantic_object=TaskQueue)
+        parser = PydanticOutputParser(pydantic_object=Plan)
         component_status = self._resolve_component_status()
-        specs = self._tool_registry.list_specs_for_mode(mode)
-        include_tool_details = True
-        if mode == "act":
+        if tool_specs is not None:
+            specs = tool_specs
+        elif mode == "plan":
+            specs = self._tool_registry.list_specs()
+        else:
+            specs = self._tool_registry.list_specs_for_mode(mode)
+        if mode == "act" and tool_specs is None:
             specs = self._filter_specs_by_intent(specs, user_query)
-            include_tool_details = len(specs) <= TOOL_DETAIL_MAX
         available_tool_ids = [spec.tool_id for spec in specs]
         system_prompt = self._prompt_builder.build(
             get_system_prompt(),
@@ -256,18 +284,14 @@ class Planner:
             component_status=component_status if mode == "act" else None,
             mode=mode,
             tool_specs=specs,
-            include_tool_schemas=include_tool_details,
-            include_tool_guidance=include_tool_details,
+            include_tool_schemas=False,
+            include_tool_guidance=False,
         )
         example_messages = self._build_example_messages(available_tool_ids, mode=mode)
         if mode == "act":
-            instruction = (
-                "## Generate the minimal action plan for the user query\n"
-                "Prefer a single tool call when possible. "
-                "Avoid multi-step plans unless necessary."
-            )
+            instruction = "## Generate the minimal plan for the user query"
         else:
-            instruction = "## Generate a task queue for the user query"
+            instruction = "## Generate a plan for the user query"
         prompt = ChatPromptTemplate(
             messages=[
                 SystemMessage(content=system_prompt),
@@ -304,7 +328,7 @@ class Planner:
             )
             if span is not None:
                 try:
-                    span.update_trace(output={"step_count": len(action_plan.action_steps or [])})
+                    span.update_trace(output={"step_count": len(action_plan.steps or [])})
                 except Exception:
                     pass
         action_plan.human_message = user_query
@@ -351,6 +375,192 @@ class Planner:
 
     def _resolve_component_status(self) -> list[ComponentStatus]:
         return [resolve_langfuse_status()]
+
+
+def _render_tool_catalog(specs: list[ToolSpec], *, include_schema: bool) -> str:
+    lines: list[str] = []
+    for spec in specs:
+        line = f"- {spec.tool_id}: {spec.description}"
+        if include_schema:
+            schema = spec.metadata.get("schema")
+            if isinstance(schema, dict):
+                line += f" | schema={json.dumps(schema, ensure_ascii=True)}"
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+class ToolSelector:
+    """Select tools needed to satisfy a request."""
+
+    def __init__(self, tool_registry: ToolRegistry | None) -> None:
+        """Initialize the tool selector."""
+        self._tool_registry = tool_registry
+
+    def select(
+        self,
+        user_query: str,
+        model_name: str,
+        *,
+        tool_specs: list[ToolSpec],
+        context: ContextSnapshot | None = None,
+    ) -> ToolSelection:
+        """Return a tool selection decision."""
+        if self._tool_registry is None:
+            raise ValueError("Tool registry is required for tool selection.")
+        parser = PydanticOutputParser(pydantic_object=ToolSelection)  # type: ignore[type-var]
+        system_prompt = get_system_prompt("tool-selector")
+        tools_text = _render_tool_catalog(tool_specs, include_schema=False)
+        prompt = ChatPromptTemplate(
+            messages=[
+                SystemMessage(
+                    content=(
+                        f"{system_prompt}\n\nAvailable tools:\n{tools_text}"
+                        if tools_text
+                        else system_prompt
+                    )
+                ),
+                HumanMessagePromptTemplate.from_template(
+                    "User request:\n{user_query}\n\n{format_instructions}"
+                ),
+            ],
+            partial_variables={"format_instructions": parser.get_format_instructions()},
+            input_variables=["user_query"],
+        )
+        try:
+            model = build_chat_model(
+                model_name=model_name,
+                openai_api_base=get_config_value("llm", "api_base"),
+                api_key=get_config_value("llm", "api_key"),
+            )
+            selection = (prompt | model | parser).invoke({"user_query": user_query.strip()})
+            if selection.tool_required and selection.tool_ids:
+                specs_by_id = {spec.tool_id: spec for spec in tool_specs}
+                selected_caps: set[str] = set()
+                for tool_id in selection.tool_ids:
+                    spec = specs_by_id.get(tool_id)
+                    if spec is not None:
+                        selected_caps |= Planner._spec_capabilities(spec)
+                if "web_search" in selected_caps:
+                    for spec in tool_specs:
+                        if "web_read" in Planner._spec_capabilities(spec):
+                            if spec.tool_id not in selection.tool_ids:
+                                selection.tool_ids.append(spec.tool_id)
+            return selection
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logging.warning("Tool selector unavailable, falling back to all tools: {}", exc)
+            return ToolSelection(
+                tool_required=bool(tool_specs),
+                tool_ids=[spec.tool_id for spec in tool_specs],
+                rationale="fallback",
+            )
+
+
+class StepExecutor:
+    """Decide how to execute a single plan step."""
+
+    def __init__(self, tool_registry: ToolRegistry | None) -> None:
+        """Initialize the step executor."""
+        self._tool_registry = tool_registry
+
+    def decide(
+        self,
+        user_query: str,
+        step: PlanStep,
+        model_name: str,
+        *,
+        allowed_tools: list[ToolSpec],
+        context: ContextSnapshot | None = None,
+    ) -> StepDecision:
+        """Return a decision for executing the step."""
+        if self._tool_registry is None:
+            raise ValueError("Tool registry is required for step execution.")
+        parser = PydanticOutputParser(pydantic_object=StepDecision)  # type: ignore[type-var]
+        system_prompt = get_system_prompt("step-executor")
+        tools_text = _render_tool_catalog(allowed_tools, include_schema=True)
+        prompt = ChatPromptTemplate(
+            messages=[
+                SystemMessage(
+                    content=(
+                        f"{system_prompt}\n\nAllowed tools:\n{tools_text}"
+                        if tools_text
+                        else system_prompt
+                    )
+                ),
+                HumanMessagePromptTemplate.from_template(
+                    "User request:\n{user_query}\n\n"
+                    "Plan step:\n- {title}\n- {description}\n\n"
+                    "{format_instructions}"
+                ),
+            ],
+            partial_variables={"format_instructions": parser.get_format_instructions()},
+            input_variables=["user_query", "title", "description"],
+        )
+        model = build_chat_model(
+            model_name=model_name,
+            openai_api_base=get_config_value("llm", "api_base"),
+            api_key=get_config_value("llm", "api_key"),
+        )
+        decision = (prompt | model | parser).invoke(
+            {
+                "user_query": user_query.strip(),
+                "title": step.title,
+                "description": step.description,
+            }
+        )
+        return decision
+
+
+class PlanUpdater:
+    """Update remaining plan steps after executing a step."""
+
+    def __init__(self, tool_registry: ToolRegistry | None) -> None:
+        """Initialize the plan updater."""
+        self._tool_registry = tool_registry
+
+    def update(
+        self,
+        user_query: str,
+        model_name: str,
+        *,
+        completed_step: PlanStep,
+        last_result: str | None,
+        remaining_steps: list[PlanStep],
+        context: ContextSnapshot | None = None,
+    ) -> list[PlanStep]:
+        """Return updated remaining steps."""
+        parser = PydanticOutputParser(pydantic_object=PlanUpdate)  # type: ignore[type-var]
+        system_prompt = get_system_prompt("plan-updater")
+        remaining_lines = [f"- {step.title}: {step.description}" for step in remaining_steps]
+        remaining_text = "\n".join(remaining_lines) or "(none)"
+        prompt = ChatPromptTemplate(
+            messages=[
+                SystemMessage(content=system_prompt),
+                HumanMessagePromptTemplate.from_template(
+                    "User request:\n{user_query}\n\n"
+                    "Completed step:\n- {title}\n- {description}\n\n"
+                    "Latest result:\n{result}\n\n"
+                    "Remaining steps:\n{remaining}\n\n"
+                    "{format_instructions}"
+                ),
+            ],
+            partial_variables={"format_instructions": parser.get_format_instructions()},
+            input_variables=["user_query", "title", "description", "result", "remaining"],
+        )
+        model = build_chat_model(
+            model_name=model_name,
+            openai_api_base=get_config_value("llm", "api_base"),
+            api_key=get_config_value("llm", "api_key"),
+        )
+        update = (prompt | model | parser).invoke(
+            {
+                "user_query": user_query.strip(),
+                "title": completed_step.title,
+                "description": completed_step.description,
+                "result": last_result or "",
+                "remaining": remaining_text,
+            }
+        )
+        return update.steps
 
 
 class ResponseSynthesizer:
@@ -429,4 +639,14 @@ class ResponseSynthesizer:
         return str(content).strip()
 
 
-__all__ = ["Planner", "PromptBuilder", "ResponseSynthesizer"]
+__all__ = [
+    "Planner",
+    "PromptBuilder",
+    "ResponseSynthesizer",
+    "ToolSelector",
+    "StepExecutor",
+    "PlanUpdater",
+    "ToolSelection",
+    "StepDecision",
+    "PlanUpdate",
+]

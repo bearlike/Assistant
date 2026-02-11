@@ -1,6 +1,10 @@
 """Tests for intent-based tool scoping in the planner."""
 
-from meeseeks_core.planning import Planner
+import pytest
+from langchain_core.runnables import RunnableLambda
+from meeseeks_core import planning
+from meeseeks_core.classes import PlanStep
+from meeseeks_core.planning import Planner, PlanUpdater, StepExecutor, ToolSelector
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 
 
@@ -81,3 +85,102 @@ def test_spec_capabilities_infers_web_read():
     planner = Planner(ToolRegistry())
     spec = _spec("mcp_utils_internet_search_web_url_read", kind="mcp")
     assert "web_read" in planner._spec_capabilities(spec)
+
+
+def test_tool_selector_includes_web_read_for_search(monkeypatch):
+    """Include web_url_read tool when web_search is selected."""
+    selector = ToolSelector(ToolRegistry())
+    specs = [
+        _spec("mcp_utils_internet_search_searxng_web_search", kind="mcp"),
+        _spec("mcp_utils_internet_search_web_url_read", kind="mcp"),
+    ]
+
+    def _fake_model(_inputs):
+        return (
+            '{"tool_required": true, '
+            '"tool_ids": ["mcp_utils_internet_search_searxng_web_search"], '
+            '"rationale": "search"}'
+        )
+
+    monkeypatch.setattr(
+        planning,
+        "build_chat_model",
+        lambda **_kwargs: RunnableLambda(_fake_model),
+    )
+
+    selection = selector.select("Find recent news", "gpt-5.2", tool_specs=specs)
+    assert "mcp_utils_internet_search_web_url_read" in selection.tool_ids
+
+
+def test_tool_selector_requires_registry():
+    """Raise when tool registry is missing."""
+    selector = ToolSelector(None)
+    with pytest.raises(ValueError):
+        selector.select("hello", "gpt-5.2", tool_specs=[])
+
+
+def test_step_executor_requires_registry():
+    """Raise when step executor has no tool registry."""
+    executor = StepExecutor(None)
+    with pytest.raises(ValueError):
+        executor.decide(
+            "hello",
+            PlanStep(title="Say hello", description="Respond to the user."),
+            "gpt-5.2",
+            allowed_tools=[],
+        )
+
+
+def test_step_executor_decides_response(monkeypatch):
+    """Return a parsed decision from the step executor."""
+    executor = StepExecutor(ToolRegistry())
+    spec = ToolSpec(
+        tool_id="dummy_tool",
+        name="Dummy",
+        description="test",
+        factory=lambda: object(),
+        metadata={"schema": {"type": "object"}},
+    )
+
+    def _fake_model(_inputs):
+        return '{"decision": "respond", "response": "ok"}'
+
+    monkeypatch.setattr(
+        planning,
+        "build_chat_model",
+        lambda **_kwargs: RunnableLambda(_fake_model),
+    )
+
+    decision = executor.decide(
+        "hello",
+        PlanStep(title="Say hello", description="Respond to the user."),
+        "gpt-5.2",
+        allowed_tools=[spec],
+    )
+    assert decision.decision == "respond"
+    assert decision.response == "ok"
+
+
+def test_plan_updater_returns_steps(monkeypatch):
+    """Return updated remaining steps from the plan updater."""
+    updater = PlanUpdater(ToolRegistry())
+
+    def _fake_model(_inputs):
+        return '{"steps": [{"title": "Next", "description": "Do it"}]}'
+
+    monkeypatch.setattr(
+        planning,
+        "build_chat_model",
+        lambda **_kwargs: RunnableLambda(_fake_model),
+    )
+
+    steps = updater.update(
+        "hello",
+        "gpt-5.2",
+        completed_step=PlanStep(title="Step 1", description="Do it"),
+        last_result=None,
+        remaining_steps=[],
+        context=None,
+    )
+    assert steps
+    assert steps[0].title == "Next"

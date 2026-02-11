@@ -44,7 +44,7 @@ def _resolve_path(root: str, rel_path: str) -> Path:
 def _parse_read_request(action_step: ActionStep | None) -> ReadFileRequest:
     if action_step is None:
         raise ValueError("Action step is required.")
-    argument = action_step.action_argument
+    argument = action_step.tool_input
     if isinstance(argument, str):
         path = argument.strip()
         if not path:
@@ -62,13 +62,13 @@ def _parse_read_request(action_step: ActionStep | None) -> ReadFileRequest:
             except (TypeError, ValueError):
                 max_bytes = None
         return ReadFileRequest(path=path, root=root, max_bytes=max_bytes)
-    raise ValueError("Action argument must be a string path or an object payload.")
+    raise ValueError("Tool input must be a string path or an object payload.")
 
 
 def _parse_list_request(action_step: ActionStep | None) -> ListDirRequest:
     if action_step is None:
         raise ValueError("Action step is required.")
-    argument = action_step.action_argument
+    argument = action_step.tool_input
     if isinstance(argument, str):
         path = argument.strip() or "."
         return ListDirRequest(path=path, root=os.getcwd(), max_entries=None)
@@ -82,7 +82,7 @@ def _parse_list_request(action_step: ActionStep | None) -> ListDirRequest:
             except (TypeError, ValueError):
                 max_entries = None
         return ListDirRequest(path=path, root=root, max_entries=max_entries)
-    raise ValueError("Action argument must be a string path or an object payload.")
+    raise ValueError("Tool input must be a string path or an object payload.")
 
 
 class AiderReadFileTool(AbstractTool):

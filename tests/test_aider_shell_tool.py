@@ -19,9 +19,9 @@ def test_shell_tool_runs_command(monkeypatch, tmp_path):
 
     tool = AiderShellTool()
     step = ActionStep(
-        action_consumer="aider_shell_tool",
-        action_type="set",
-        action_argument={"command": "echo hello", "root": str(tmp_path)},
+        tool_id="aider_shell_tool",
+        operation="set",
+        tool_input={"command": "echo hello", "root": str(tmp_path)},
     )
     result = tool.set_state(step)
     payload = result.content
@@ -43,9 +43,9 @@ def test_shell_tool_resolves_cwd(monkeypatch, tmp_path):
 
     tool = AiderShellTool()
     step = ActionStep(
-        action_consumer="aider_shell_tool",
-        action_type="set",
-        action_argument={"command": "pwd", "root": str(tmp_path), "cwd": "subdir"},
+        tool_id="aider_shell_tool",
+        operation="set",
+        tool_input={"command": "pwd", "root": str(tmp_path), "cwd": "subdir"},
     )
     result = tool.set_state(step)
     payload = result.content
@@ -57,9 +57,9 @@ def test_shell_tool_blocks_escape(tmp_path):
     """Reject cwd that escapes the root."""
     tool = AiderShellTool()
     step = ActionStep(
-        action_consumer="aider_shell_tool",
-        action_type="set",
-        action_argument={"command": "pwd", "root": str(tmp_path), "cwd": "../"},
+        tool_id="aider_shell_tool",
+        operation="set",
+        tool_input={"command": "pwd", "root": str(tmp_path), "cwd": "../"},
     )
     result = tool.set_state(step)
     assert isinstance(result.content, str)
@@ -70,10 +70,23 @@ def test_shell_tool_requires_command(tmp_path):
     """Reject missing command input."""
     tool = AiderShellTool()
     step = ActionStep(
-        action_consumer="aider_shell_tool",
-        action_type="set",
-        action_argument={"command": "", "root": str(tmp_path)},
+        tool_id="aider_shell_tool",
+        operation="set",
+        tool_input={"command": "", "root": str(tmp_path)},
     )
     result = tool.set_state(step)
     assert isinstance(result.content, str)
     assert "command is required" in result.content
+
+
+def test_shell_tool_rejects_invalid_payload_type():
+    """Reject invalid tool input types."""
+    tool = AiderShellTool()
+    step = ActionStep.construct(
+        tool_id="aider_shell_tool",
+        operation="set",
+        tool_input=123,
+    )
+    result = tool.set_state(step)
+    assert isinstance(result.content, str)
+    assert "Tool input must be a string command" in result.content

@@ -33,13 +33,13 @@ class PermissionRule:
     """Rule describing a tool/action permission decision."""
 
     tool_id: str = "*"
-    action_type: str = "*"
+    operation: str = "*"
     decision: PermissionDecision = PermissionDecision.ASK
 
     def matches(self, action_step: ActionStep) -> bool:
         """Return True when the action step matches the rule pattern."""
-        return fnmatch(action_step.action_consumer, self.tool_id) and fnmatch(
-            action_step.action_type, self.action_type
+        return fnmatch(action_step.tool_id, self.tool_id) and fnmatch(
+            action_step.operation, self.operation
         )
 
 
@@ -49,12 +49,12 @@ class PermissionPolicy:
     def __init__(
         self,
         rules: list[PermissionRule] | None = None,
-        default_by_action: dict[str, PermissionDecision] | None = None,
+        default_by_operation: dict[str, PermissionDecision] | None = None,
         default_decision: PermissionDecision = PermissionDecision.ASK,
     ) -> None:
         """Initialize the permission policy."""
         self._rules = rules or []
-        self._default_by_action = default_by_action or {}
+        self._default_by_operation = default_by_operation or {}
         self._default_decision = default_decision
 
     def decide(self, action_step: ActionStep) -> PermissionDecision:
@@ -62,9 +62,9 @@ class PermissionPolicy:
         for rule in self._rules:
             if rule.matches(action_step):
                 return rule.decision
-        action_decision = self._default_by_action.get(action_step.action_type)
-        if action_decision is not None:
-            return action_decision
+        operation_decision = self._default_by_operation.get(action_step.operation)
+        if operation_decision is not None:
+            return operation_decision
         return self._default_decision
 
 
@@ -82,13 +82,13 @@ def _parse_decision(value: str | None) -> PermissionDecision | None:
 def _default_policy() -> PermissionPolicy:
     """Build the default permission policy."""
     rules: list[PermissionRule] = []
-    default_by_action = {
+    default_by_operation = {
         "get": PermissionDecision.ALLOW,
         "set": PermissionDecision.ASK,
     }
     return PermissionPolicy(
         rules=rules,
-        default_by_action=default_by_action,
+        default_by_operation=default_by_operation,
         default_decision=PermissionDecision.ASK,
     )
 
@@ -124,16 +124,16 @@ def load_permission_policy(path: str | None = None) -> PermissionPolicy:
         rules.append(
             PermissionRule(
                 tool_id=str(rule_data.get("tool_id", "*")),
-                action_type=str(rule_data.get("action_type", "*")),
+                operation=str(rule_data.get("operation", "*")),
                 decision=decision,
             )
         )
 
-    default_by_action: dict[str, PermissionDecision] = {}
-    for key, value in payload.get("default_by_action", {}).items():
+    default_by_operation: dict[str, PermissionDecision] = {}
+    for key, value in payload.get("default_by_operation", {}).items():
         parsed = _parse_decision(str(value))
         if parsed is not None:
-            default_by_action[str(key)] = parsed
+            default_by_operation[str(key)] = parsed
 
     default_decision = _parse_decision(payload.get("default_decision"))
     if default_decision is None:
@@ -141,7 +141,7 @@ def load_permission_policy(path: str | None = None) -> PermissionPolicy:
 
     return PermissionPolicy(
         rules=rules,
-        default_by_action=default_by_action,
+        default_by_operation=default_by_operation,
         default_decision=default_decision,
     )
 

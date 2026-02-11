@@ -12,7 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 from pydantic.v1 import BaseModel, Field
 
 from meeseeks_core.classes import ActionStep
-from meeseeks_core.common import format_action_argument, get_logger
+from meeseeks_core.common import format_tool_input, get_logger
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
 from meeseeks_core.config import get_config_value
 from meeseeks_core.llm import build_chat_model
@@ -58,7 +58,7 @@ class StepReflector:
                     content=(
                         "Reflect on whether the tool result satisfies the step objective. "
                         "Return status 'ok' if complete, 'retry' if the step should be "
-                        "re-executed, or 'revise' if the action argument needs adjustment."
+                        "re-executed, or 'revise' if the tool input needs adjustment."
                     )
                 ),
                 HumanMessagePromptTemplate.from_template(
@@ -73,11 +73,15 @@ class StepReflector:
             partial_variables={"format_instructions": parser.get_format_instructions()},
             input_variables=["title", "objective", "checklist", "expected", "result"],
         )
-        model = build_chat_model(
-            model_name=reflection_model,
-            openai_api_base=get_config_value("llm", "api_base"),
-            api_key=get_config_value("llm", "api_key"),
-        )
+        try:
+            model = build_chat_model(
+                model_name=reflection_model,
+                openai_api_base=get_config_value("llm", "api_base"),
+                api_key=get_config_value("llm", "api_key"),
+            )
+        except Exception as exc:
+            logging.warning("Step reflection unavailable: {}", exc)
+            return None
         handler = build_langfuse_handler(
             user_id="meeseeks-reflection",
             session_id=f"reflection-{os.getpid()}-{os.urandom(4).hex()}",
@@ -97,18 +101,18 @@ class StepReflector:
                     try:
                         span.update_trace(
                             input={
-                                "title": action_step.title or action_step.action_consumer,
+                                "title": action_step.title or action_step.tool_id,
                                 "objective": action_step.objective
-                                or format_action_argument(action_step.action_argument),
+                                or format_tool_input(action_step.tool_input),
                             }
                         )
                     except Exception:
                         pass
                 reflection = (prompt | model | parser).invoke(
                     {
-                        "title": action_step.title or action_step.action_consumer,
+                        "title": action_step.title or action_step.tool_id,
                         "objective": action_step.objective
-                        or format_action_argument(action_step.action_argument),
+                        or format_tool_input(action_step.tool_input),
                         "checklist": "; ".join(action_step.execution_checklist or []),
                         "expected": action_step.expected_output or "Not specified",
                         "result": result_text,

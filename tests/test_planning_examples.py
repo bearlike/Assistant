@@ -1,8 +1,11 @@
 """Tests for planner example message wrappers."""
 
+from contextlib import contextmanager
+
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableLambda
 from meeseeks_core import planning as planning_module
-from meeseeks_core.classes import TaskQueue
+from meeseeks_core.classes import Plan
 from meeseeks_core.planning import Planner
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 
@@ -60,7 +63,7 @@ def test_planner_includes_langfuse_callbacks(monkeypatch):
 
         def invoke(self, *_args, **kwargs):
             captured["config"] = kwargs.get("config")
-            return TaskQueue(action_steps=[])
+            return Plan(steps=[])
 
     class DummyPrompt:
         def __init__(self, *args, **kwargs):
@@ -88,3 +91,52 @@ def test_planner_includes_langfuse_callbacks(monkeypatch):
     config = captured.get("config")
     assert config is not None
     assert "callbacks" in config
+
+
+def test_planner_generate_uses_tool_specs_and_updates_span(monkeypatch):
+    """Use provided tool specs and update langfuse span output."""
+    registry = ToolRegistry()
+    spec = ToolSpec(
+        tool_id="dummy_tool",
+        name="Dummy",
+        description="Test",
+        factory=lambda: object(),
+    )
+    planner = Planner(registry)
+    captured: dict[str, object] = {}
+
+    def fake_build(_prompt, _context, **kwargs):
+        captured["tool_specs"] = kwargs.get("tool_specs")
+        return "prompt"
+
+    planner._prompt_builder.build = fake_build  # type: ignore[assignment]
+
+    class DummySpan:
+        def __init__(self):
+            self.updates: list[dict[str, object]] = []
+
+        def update_trace(self, **kwargs):
+            self.updates.append(kwargs)
+
+    dummy_span = DummySpan()
+
+    @contextmanager
+    def fake_span(_name):
+        yield dummy_span
+
+    monkeypatch.setattr(planning_module, "langfuse_trace_span", fake_span)
+    monkeypatch.setattr(planning_module, "build_langfuse_handler", lambda **_k: None)
+
+    def _fake_model(_inputs):
+        return '{"steps": []}'
+
+    monkeypatch.setattr(
+        planning_module,
+        "build_chat_model",
+        lambda **_kwargs: RunnableLambda(_fake_model),
+    )
+
+    plan = planner.generate("hello", "gpt-5.2", tool_specs=[spec])
+    assert plan.steps == []
+    assert captured["tool_specs"] == [spec]
+    assert any("output" in update for update in dummy_span.updates)

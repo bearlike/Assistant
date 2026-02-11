@@ -1,6 +1,6 @@
 {
   "runtime": {
-    "version": "2.1.0-alpha",
+    "version": "0.0.7",
     "envmode": "dev",
     "log_level": "INFO",
     "log_style": "",

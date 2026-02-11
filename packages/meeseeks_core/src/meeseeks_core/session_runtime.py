@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from meeseeks_core.classes import TaskQueue
+from meeseeks_core.classes import Plan, TaskQueue
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.task_master import orchestrate_session
 from meeseeks_core.types import EventRecord
@@ -174,20 +174,28 @@ class SessionRuntime:
             return
         self._session_store.append_event(session_id, {"type": "context", "payload": context})
 
-    def summarize_session(self, session_id: str) -> dict[str, object]:
+    def summarize_session(
+        self,
+        session_id: str,
+        *,
+        events: list[EventRecord] | None = None,
+    ) -> dict[str, object]:
         """Return a summarized view of a session."""
-        events = self._session_store.load_transcript(session_id)
+        if events is None:
+            events = self._session_store.load_transcript(session_id)
         created_at = events[0]["ts"] if events else None
         title = None
         status = "idle"
         done_reason = None
         context: dict[str, object] | None = None
+        has_user_event = False
         for event in events:
             if event.get("type") == "context":
                 payload = event.get("payload")
                 if isinstance(payload, dict):
                     context = payload
             if title is None and event.get("type") == "user":
+                has_user_event = True
                 payload = event.get("payload", {})
                 if isinstance(payload, dict):
                     title = payload.get("text")
@@ -199,6 +207,8 @@ class SessionRuntime:
         running = self.is_running(session_id)
         if running:
             status = "running"
+        if not has_user_event and not running:
+            created_at = None
         if not title:
             title = f"Session {session_id[:8]}"
         return {
@@ -216,7 +226,13 @@ class SessionRuntime:
         """List sessions with summary metadata."""
         summaries: list[dict[str, object]] = []
         for session_id in self._session_store.list_sessions():
-            summary = self.summarize_session(session_id)
+            events = self._session_store.load_transcript(session_id)
+            summary = self.summarize_session(session_id, events=events)
+            has_visible_event = any(
+                event.get("type") not in {"session", "context"} for event in events
+            )
+            if not has_visible_event and not summary.get("running"):
+                continue
             if summary.get("created_at") is None and not summary.get("running"):
                 continue
             if not include_archived and summary.get("archived"):
@@ -236,7 +252,7 @@ class SessionRuntime:
         user_query: str,
         model_name: str | None = None,
         max_iters: int = 3,
-        initial_task_queue: TaskQueue | None = None,
+        initial_plan: Plan | None = None,
         tool_registry=None,
         permission_policy=None,
         approval_callback=None,
@@ -251,7 +267,7 @@ class SessionRuntime:
                 session_id=session_id,
                 model_name=model_name,
                 max_iters=max_iters,
-                initial_task_queue=initial_task_queue,
+                initial_plan=initial_plan,
                 tool_registry=tool_registry,
                 permission_policy=permission_policy,
                 approval_callback=approval_callback,
@@ -269,7 +285,7 @@ class SessionRuntime:
         session_id: str,
         model_name: str | None = None,
         max_iters: int = 3,
-        initial_task_queue: TaskQueue | None = None,
+        initial_plan: Plan | None = None,
         tool_registry=None,
         permission_policy=None,
         approval_callback=None,
@@ -282,7 +298,7 @@ class SessionRuntime:
             user_query=user_query,
             model_name=model_name,
             max_iters=max_iters,
-            initial_task_queue=initial_task_queue,
+            initial_plan=initial_plan,
             session_id=session_id,
             session_store=self._session_store,
             tool_registry=tool_registry,

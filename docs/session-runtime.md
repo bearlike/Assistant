@@ -26,6 +26,10 @@ Typical polling flow:
 2. Start an async run.
 3. Poll `/events` with `after` to receive only new records.
 
+Event payload notes:
+- `action_plan` payloads include `steps: [{title, description}]`.
+- Tool activity uses `tool_id`, `operation`, and `tool_input` in `tool_result` and `permission` events.
+
 ## Minimal usage (Python)
 ```python
 from meeseeks_core.session_runtime import SessionRuntime

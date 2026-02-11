@@ -9,4 +9,4 @@ Guidelines:
 - Do not run destructive commands without explicit user intent.
 
 Example:
-ActionStep(action_consumer="aider_shell_tool", action_type="set", action_argument={"command": "ls", "cwd": "."})
+Call `aider_shell_tool` with args: {"command": "ls", "cwd": "."}

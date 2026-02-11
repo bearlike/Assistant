@@ -9,9 +9,9 @@ def test_reflect_skips_without_objective():
     """Skip reflection when no objective or checklist is provided."""
     reflector = StepReflector(model_name="gpt-4")
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="get",
-        action_argument="ping",
+        tool_id="home_assistant_tool",
+        operation="get",
+        tool_input="ping",
     )
     assert reflector.reflect(step, "ok") is None
 
@@ -21,9 +21,9 @@ def test_reflect_disabled_by_env(monkeypatch):
     set_config_override({"reflection": {"enabled": False}})
     reflector = StepReflector(model_name="gpt-4")
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="get",
-        action_argument="ping",
+        tool_id="home_assistant_tool",
+        operation="get",
+        tool_input="ping",
         objective="Check status",
     )
     assert reflector.reflect(step, "ok") is None
@@ -39,9 +39,9 @@ def test_reflect_skips_without_model(monkeypatch):
     )
     reflector = StepReflector(model_name=None)
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="get",
-        action_argument="ping",
+        tool_id="home_assistant_tool",
+        operation="get",
+        tool_input="ping",
         objective="Check status",
     )
     assert reflector.reflect(step, "ok") is None
@@ -75,9 +75,9 @@ def test_reflect_returns_result(monkeypatch):
     monkeypatch.setattr("meeseeks_core.reflection.build_chat_model", lambda **_k: object())
     reflector = StepReflector(model_name="gpt-4")
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="get",
-        action_argument="ping",
+        tool_id="home_assistant_tool",
+        operation="get",
+        tool_input="ping",
         objective="Check status",
     )
     result = reflector.reflect(step, "ok")

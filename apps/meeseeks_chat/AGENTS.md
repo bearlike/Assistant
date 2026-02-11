@@ -7,7 +7,7 @@ Scope: this file applies to the `apps/meeseeks_chat/` UI app. It captures runtim
 - Uses `generate_action_plan(...)` for preview and `orchestrate_session(...)` for execution.
 - Stores session state in `st.session_state`:
   - `session_store`, `session_id`, `messages`, and `conversation_memory`.
-- Action plan is displayed in an expander ("thought" role).
+- Action plan (title/description steps) is displayed in an expander ("thought" role).
 
 ## Hidden dependencies / assumptions
 - Expects static assets packaged under `src/meeseeks_chat/static/`.

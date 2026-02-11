@@ -10,7 +10,7 @@
 </p>
 
 
-- Chat Interface wrapped around the meeseeks-core. Powered by Streamlit.
+- Chat interface wrapped around meeseeks-core. Powered by Streamlit.
 - For full setup and configuration, see `docs/getting-started.md`.
 
 ## Run

@@ -11,7 +11,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from pydantic.v1 import BaseModel, Field
 
-from meeseeks_core.common import format_action_argument, get_logger
+from meeseeks_core.common import format_tool_input, get_logger
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
 from meeseeks_core.config import get_config_value
 from meeseeks_core.llm import build_chat_model
@@ -44,9 +44,9 @@ def event_payload_text(event: EventRecord) -> str:
     """Return a readable payload string for an event."""
     payload = event.get("payload", "")
     if isinstance(payload, dict):
-        if "action_argument" in payload:
+        if "tool_input" in payload:
             payload = dict(payload)
-            payload["action_argument"] = format_action_argument(payload.get("action_argument"))
+            payload["tool_input"] = format_tool_input(payload.get("tool_input"))
         return str(
             payload.get("text") or payload.get("message") or payload.get("result") or payload
         )
@@ -81,7 +81,15 @@ class ContextBuilder:
         events = self._session_store.load_transcript(session_id)
         summary = self._session_store.load_summary(session_id)
         context_events = [
-            event for event in events if event.get("type") in {"user", "assistant", "tool_result"}
+            event
+            for event in events
+            if event.get("type")
+            in {
+                "user",
+                "assistant",
+                "tool_result",
+                "step_reflection",
+            }
         ]
         recent_limit = int(get_config_value("context", "recent_event_limit", default=8))
         recent_events = context_events[-recent_limit:] if recent_limit > 0 else []

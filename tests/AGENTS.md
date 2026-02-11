@@ -15,7 +15,7 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 
 ## Pitfalls / gotchas
 - Over-mocking hides real behavior. Mock only the LLM call boundary and tool execution boundary.
-- Schema mismatches must be exercised (string args, dict args, invalid schema, required fields).
+- Schema mismatches must be exercised (string tool_input, dict tool_input, invalid schema, required fields).
 - Replan tests should include failure context (“Last tool failure: …”) in the next prompt.
 - When a failure triggers replan, disable response synthesis or stub it to avoid network calls.
 - Missing-tool tests should assert `last_error` and follow the same path as production.
@@ -32,7 +32,7 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 
 ## Cross-project insights (for test design)
 - Reference implementations emphasize integration tests with mocked model/tool servers.
-- Assert outbound request payloads and event ordering rather than only return values.
+- Assert outbound request payloads and event ordering rather than only return values (tool_id/operation/tool_input).
 - Build tests around “event streams” (plan, tool call, tool result, response) to catch orchestration regressions.
 - Prefer harness-style helpers to simulate model responses without HTTP.
 - Exercise error paths with structured exceptions to verify logging and replan behavior.

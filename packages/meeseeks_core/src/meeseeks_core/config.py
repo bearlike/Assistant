@@ -59,7 +59,7 @@ def _coerce_list(value: Any) -> list[str]:
 
 
 class RuntimeConfig(BaseModel):
-    version: str = Field("2.1.0-alpha", example="2.1.0-alpha")
+    version: str = Field("0.0.7", example="0.0.7")
     envmode: str = Field("dev", example="dev")
     log_level: str = Field("DEBUG", example="INFO")
     log_style: str = Field("", example="")

@@ -8,42 +8,49 @@ from typing import TypedDict
 from typing_extensions import NotRequired
 
 JsonValue = str | int | float | bool | None | list[object] | dict[str, object]
-ActionArgument = str | dict[str, object]
+ToolInput = str | dict[str, object]
+
+
+class PlanStepPayload(TypedDict):
+    """Payload describing a single plan step."""
+
+    title: str
+    description: str
+
+
+class ActionPlanPayload(TypedDict):
+    """Payload describing an action plan."""
+
+    steps: list[PlanStepPayload]
 
 
 class ActionStepPayload(TypedDict):
-    """Serialized action step data sent to/from orchestration."""
+    """Serialized tool call data sent to/from execution."""
 
-    action_consumer: str
-    action_type: str
-    action_argument: ActionArgument
+    tool_id: str
+    operation: str
+    tool_input: ToolInput
     title: NotRequired[str]
     objective: NotRequired[str]
     execution_checklist: NotRequired[list[str]]
     expected_output: NotRequired[str]
 
 
-class ActionPlanPayload(TypedDict):
-    """Payload describing an action plan."""
-
-    steps: list[ActionStepPayload]
-
-
 class PermissionPayload(TypedDict):
     """Payload emitted for permission decisions."""
 
-    action_consumer: str
-    action_type: str
-    action_argument: str
+    tool_id: str
+    operation: str
+    tool_input: str
     decision: str
 
 
 class ToolResultPayload(TypedDict):
     """Payload describing the outcome of a tool invocation."""
 
-    action_consumer: str
-    action_type: str
-    action_argument: ActionArgument
+    tool_id: str
+    operation: str
+    tool_input: ToolInput
     result: str | None
     success: NotRequired[bool]
     summary: NotRequired[str]
@@ -68,6 +75,8 @@ class CompletionPayload(TypedDict):
     done: bool
     done_reason: str | None
     task_result: str | None
+    error: NotRequired[str]
+    last_error: NotRequired[str]
 
 
 EventPayload = (

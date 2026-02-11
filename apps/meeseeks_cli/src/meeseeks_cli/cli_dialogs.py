@@ -17,7 +17,7 @@ from textual.containers import Vertical
 from textual.widgets import Input, Label, OptionList, SelectionList
 
 _DOTTED_BOX = box.Box(
-    ".:.:" "\n: ::" "\n.:.:" "\n: ::" "\n.:.:" "\n.:.:" "\n: ::" "\n.:.:",
+    ".:.:\n: ::\n.:.:\n: ::\n.:.:\n.:.:\n: ::\n.:.:",
     ascii=True,
 )
 

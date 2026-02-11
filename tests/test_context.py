@@ -11,7 +11,7 @@ def test_event_payload_text_variants():
     """Format payloads with and without dict structures."""
     assert event_payload_text({"type": "user", "payload": "hello"}) == "hello"
     text = event_payload_text(
-        {"type": "tool_result", "payload": {"action_argument": {"a": 1}, "result": "ok"}}
+        {"type": "tool_result", "payload": {"tool_input": {"a": 1}, "result": "ok"}}
     )
     assert "ok" in text
     fallback = event_payload_text({"type": "tool_result", "payload": {"foo": "bar"}})

@@ -5,7 +5,8 @@ Meeseeks is a multi-agent LLM personal assistant that decomposes user requests i
 
 ## Core entry points
 - `packages/meeseeks_core/src/meeseeks_core/task_master.py`: action planning + task execution loop
-- `packages/meeseeks_core/src/meeseeks_core/classes.py`: `ActionStep`, `TaskQueue`, `AbstractTool` contracts
+- `packages/meeseeks_core/src/meeseeks_core/classes.py`: `ActionStep` (tool_id/operation/tool_input), `TaskQueue`, `AbstractTool` contracts
+- `packages/meeseeks_core/src/meeseeks_core/planning.py`: `Planner`, `ToolSelector`, `StepExecutor`, `PlanUpdater`
 - `packages/meeseeks_core/src/meeseeks_core/session_runtime.py`: session lifecycle, listing, archiving, and async runs
 - `packages/meeseeks_core/src/meeseeks_core/session_store.py`: transcript storage, tags, and archive state
 - `packages/meeseeks_tools/src/meeseeks_tools/`: tool implementations and integration glue
@@ -32,7 +33,7 @@ When you need external context (other repos, CI failures, specs, APIs), prefer M
 ## Engineering principles (project-specific)
 - KISS and DRY: prefer small, obvious changes; remove redundancy instead of adding layers.
 - KRY: keep requirements and acceptance criteria in view; do not drift.
-- Keep tool contracts stable (`AbstractTool`, `ActionStep`, `TaskQueue`).
+- Keep tool contracts stable (`AbstractTool`, `ActionStep`, `TaskQueue`) and the tool field names (`tool_id`, `operation`, `tool_input`).
 - Favor composition and reuse across interfaces; avoid duplicating core logic.
 - Add or improve tests for non-trivial behavior; expand coverage when touching core logic or tools.
 - Use Gitmoji + Conventional Commit format (e.g., `✨ feat: add session summary pass-through`).
@@ -44,7 +45,7 @@ When you need external context (other repos, CI failures, specs, APIs), prefer M
 ## Orchestration insights (transferable)
 - Separate tool execution from user-facing response: synthesize after tool results, don't dump raw tool output.
 - Keep the loop explicit: plan -> act -> observe -> decide; re-plan only when needed.
-- Make tool inputs schema-aware; prefer structured arguments for MCP tools.
+- Make tool inputs schema-aware; prefer structured `tool_input` for MCP tools.
 - Surface tool activity clearly (permissions, tool IDs, arguments) to reduce user confusion.
 
 ## Testing patterns (what worked)
@@ -64,7 +65,7 @@ When you need external context (other repos, CI failures, specs, APIs), prefer M
 ## Linting & formatting
 - Primary linting uses `ruff` (root + subpackages). Auto-fix with `.venv/bin/ruff check --fix .`.
 - Type checking uses `mypy`. Run from repo root after installing with `uv`.
-- `flake8`, `pylint`, and `autopep8` are still available as dev tools (legacy or ad‑hoc use).
+- `flake8`, `pylint`, and `autopep8` are still available as dev tools (optional/ad‑hoc use).
 - Helper targets: `make lint`, `make lint-fix`, and `make typecheck`.
 - Pre-commit hooks are defined in `.pre-commit-config.yaml` (install with `make precommit-install`).
 

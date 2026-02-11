@@ -1,10 +1,22 @@
-site_name: Personal Assistant
-site_description: Documentation for the Personal Assistant (Meeseeks) project.
+site_name: bearlike/Assistant
+site_description: Documentation for the bearlike/Assistant (Meeseeks) project.
 repo_url: https://github.com/bearlike/Assistant
 repo_name: bearlike/Assistant
+site_url: https://thekrishna.in/Assistant/
 
 theme:
-  name: material
+  name: shadcn
+
+markdown_extensions:
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      use_pygments: true
+      linenums: false
+  - pymdownx.inlinehilite
 
 plugins:
   - search
@@ -29,9 +41,24 @@ extra:
   version:
     provider: mike
 
+extra_javascript:
+  - https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js
+  - javascripts/mermaid-init-v2.js
+  - javascripts/version-switcher.js
+  - javascripts/copy-page.js
+  - javascripts/build-info.js
+
 nav:
   - Home: index.md
-  - Getting Started: getting-started.md
-  - Components: components.md
-  - Session Runtime: session-runtime.md
-  - Reference: reference.md
+  - Core Orchestration: core-orchestration.md
+  - Getting Started:
+      - Installation: getting-started.md
+      - LLM Setup: llm-setup.md
+  - Clients:
+      - CLI: clients-cli.md
+      - Web + API: clients-web-api.md
+      - Home Assistant Voice: clients-home-assistant.md
+  - Developers:
+      - Developer Guide: developer-guide.md
+      - Session Runtime: session-runtime.md
+      - Reference: reference.md

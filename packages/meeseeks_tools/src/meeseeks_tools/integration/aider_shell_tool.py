@@ -35,7 +35,7 @@ def _resolve_cwd(root: str, cwd: str | None) -> str:
 def _parse_shell_request(action_step: ActionStep | None) -> ShellRequest:
     if action_step is None:
         raise ValueError("Action step is required.")
-    argument = action_step.action_argument
+    argument = action_step.tool_input
     if isinstance(argument, str):
         command = argument.strip()
         if not command:
@@ -48,7 +48,7 @@ def _parse_shell_request(action_step: ActionStep | None) -> ShellRequest:
         root = str(argument.get("root") or os.getcwd())
         cwd = _resolve_cwd(root, argument.get("cwd"))
         return ShellRequest(command=command, cwd=cwd)
-    raise ValueError("Action argument must be a string command or an object payload.")
+    raise ValueError("Tool input must be a string command or an object payload.")
 
 
 def _run_command(command: str, cwd: str) -> tuple[int, str]:

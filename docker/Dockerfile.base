@@ -5,7 +5,7 @@ FROM python:3.11-slim-bookworm
 
 # Set the title, GitHub repo URL, version, and author
 ARG TITLE="Meeseeks Base" \
-    VERSION="2.1.0-alpha" \
+    VERSION="0.0.7" \
     AUTHOR="Krishnakanth Alagiri" \
     GITHUB_REPO_URL="https://github.com/bearlike/Assistant"
 

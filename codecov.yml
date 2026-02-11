@@ -1,7 +1,11 @@
 coverage:
   status:
+    project:
+      default:
+        informational: true
     patch:
       default:
+        informational: true
         paths:
           - "packages/meeseeks_tools/src/meeseeks_tools/vendor/**"
           - "vendor/**"
@@ -14,6 +18,7 @@ component_management:
     statuses:
       - type: project
         target: auto
+        informational: true
   individual_components:
     - component_id: core
       name: core

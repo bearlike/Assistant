@@ -70,7 +70,7 @@ class ActionPlanRunner:
             logging.debug("Processing ActionStep: {}", action_step)
             if (
                 self._allowed_tool_ids is not None
-                and action_step.action_consumer not in self._allowed_tool_ids
+                and action_step.tool_id not in self._allowed_tool_ids
             ):
                 reason = "tool not allowed in plan mode"
                 self._record_failure(action_step, reason, task_queue)
@@ -83,14 +83,14 @@ class ActionPlanRunner:
 
             action_step = self._hook_manager.run_pre_tool_use(action_step)
             task_queue.action_steps[idx] = action_step
-            tool = self._tool_registry.get(action_step.action_consumer)
+            tool = self._tool_registry.get(action_step.tool_id)
             if tool is None:
                 self._record_failure(action_step, "tool not available", task_queue)
                 continue
 
-            spec = self._tool_registry.get_spec(action_step.action_consumer)
+            spec = self._tool_registry.get_spec(action_step.tool_id)
             if spec is not None:
-                schema_error = self._coerce_mcp_action_argument(action_step, spec)
+                schema_error = self._coerce_mcp_tool_input(action_step, spec)
                 if schema_error:
                     self._record_failure(action_step, schema_error, task_queue)
                     self._emit_tool_result(action_step, None, error=schema_error)
@@ -103,16 +103,21 @@ class ActionPlanRunner:
                 continue
 
             if outcome.reflection is not None and outcome.reflection.status != "ok":
+                status = outcome.reflection.status
+                reason = f"step reflection requested {status}"
+                if outcome.reflection.notes:
+                    reason = f"{reason}: {outcome.reflection.notes}"
+                self._record_reflection_failure(action_step, reason, task_queue)
+                self._emit_tool_result(action_step, outcome.content, error=reason)
                 if outcome.reflection.revised_argument:
-                    action_step.action_argument = outcome.reflection.revised_argument
-                action_step.result = None
+                    action_step.tool_input = outcome.reflection.revised_argument
                 self._emit_event(
                     {
                         "type": "step_reflection",
                         "payload": {
-                            "action_consumer": action_step.action_consumer,
-                            "action_type": action_step.action_type,
-                            "action_argument": action_step.action_argument,
+                            "tool_id": action_step.tool_id,
+                            "operation": action_step.operation,
+                            "tool_input": action_step.tool_input,
                             "status": outcome.reflection.status,
                             "notes": outcome.reflection.notes,
                         },
@@ -137,8 +142,8 @@ class ActionPlanRunner:
         decision_logged = False
         logging.debug(
             "Permission check: tool={} action={} decision={} callback_present={}",
-            action_step.action_consumer,
-            action_step.action_type,
+            action_step.tool_id,
+            action_step.operation,
             decision.value if isinstance(decision, PermissionDecision) else decision,
             self._approval_callback is not None,
         )
@@ -146,8 +151,8 @@ class ActionPlanRunner:
             approved = self._approval_callback(action_step) if self._approval_callback else False
             logging.debug(
                 "Permission prompt result: tool={} action={} approved={}",
-                action_step.action_consumer,
-                action_step.action_type,
+                action_step.tool_id,
+                action_step.operation,
                 approved,
             )
             decision = PermissionDecision.ALLOW if approved else PermissionDecision.DENY
@@ -155,9 +160,9 @@ class ActionPlanRunner:
                 {
                     "type": "permission",
                     "payload": {
-                        "action_consumer": action_step.action_consumer,
-                        "action_type": action_step.action_type,
-                        "action_argument": action_step.action_argument,
+                        "tool_id": action_step.tool_id,
+                        "operation": action_step.operation,
+                        "tool_input": action_step.tool_input,
                         "decision": decision.value,
                     },
                 }
@@ -165,18 +170,16 @@ class ActionPlanRunner:
             decision_logged = True
         if decision == PermissionDecision.DENY:
             mock = get_mock_speaker()
-            message = (
-                "Permission denied for " f"{action_step.action_consumer}:{action_step.action_type}."
-            )
+            message = f"Permission denied for {action_step.tool_id}:{action_step.operation}."
             action_step.result = mock(content=message)
             if not decision_logged:
                 self._emit_event(
                     {
                         "type": "permission",
                         "payload": {
-                            "action_consumer": action_step.action_consumer,
-                            "action_type": action_step.action_type,
-                            "action_argument": action_step.action_argument,
+                            "tool_id": action_step.tool_id,
+                            "operation": action_step.operation,
+                            "tool_input": action_step.tool_input,
                             "decision": decision.value,
                         },
                     }
@@ -185,7 +188,7 @@ class ActionPlanRunner:
         return True
 
     def _execute_step(self, action_step: ActionStep) -> StepOutcome:
-        tool = self._tool_registry.get(action_step.action_consumer)
+        tool = self._tool_registry.get(action_step.tool_id)
         if tool is None:
             raise RuntimeError("Tool unavailable during execution")
         action_result = tool.run(action_step)
@@ -204,16 +207,16 @@ class ActionPlanRunner:
     ) -> None:
         logging.error("Error processing action step: {}", exc)
         self._record_failure(action_step, str(exc), task_queue)
-        spec = self._tool_registry.get_spec(action_step.action_consumer)
+        spec = self._tool_registry.get_spec(action_step.tool_id)
         is_mcp = spec is not None and spec.kind == "mcp"
         if not isinstance(exc, ToolInputError) and not is_mcp:
-            self._tool_registry.disable(action_step.action_consumer, f"Runtime error: {exc}")
+            self._tool_registry.disable(action_step.tool_id, f"Runtime error: {exc}")
         self._emit_tool_result(action_step, None, error=str(exc))
         mock = get_mock_speaker()
         self._hook_manager.run_post_tool_use(action_step, mock(content=f"Tool error: {exc}"))
 
     def _record_failure(self, step: ActionStep, reason: str, task_queue: TaskQueue) -> None:
-        note = f"{step.action_consumer} ({step.action_type}) failed"
+        note = f"{step.tool_id} ({step.operation}) failed"
         if reason:
             note = f"{note}: {reason}"
         task_queue.last_error = note
@@ -221,14 +224,22 @@ class ActionPlanRunner:
             mock = get_mock_speaker()
             step.result = mock(content=f"ERROR: {reason}")
 
+    def _record_reflection_failure(
+        self, step: ActionStep, reason: str, task_queue: TaskQueue
+    ) -> None:
+        note = f"{step.tool_id} ({step.operation}) needs revision"
+        if reason:
+            note = f"{note}: {reason}"
+        task_queue.last_error = note
+
     def _emit_tool_result(
         self, action_step: ActionStep, result: str | None, *, error: str | None = None
     ) -> None:
         summary = self._summarize_result(result, error)
         payload: ToolResultPayload = {
-            "action_consumer": action_step.action_consumer,
-            "action_type": action_step.action_type,
-            "action_argument": action_step.action_argument,
+            "tool_id": action_step.tool_id,
+            "operation": action_step.operation,
+            "tool_input": action_step.tool_input,
             "result": result,
             "success": error is None,
             "summary": summary,
@@ -242,7 +253,7 @@ class ActionPlanRunner:
             self._event_logger(event)
 
     @staticmethod
-    def _coerce_mcp_action_argument(action_step: ActionStep, spec: ToolSpec) -> str | None:
+    def _coerce_mcp_tool_input(action_step: ActionStep, spec: ToolSpec) -> str | None:
         if spec.kind != "mcp":
             return None
         schema = spec.metadata.get("schema") if spec.metadata else None
@@ -254,7 +265,7 @@ class ActionPlanRunner:
             properties = {}
         expected_fields = list(required) or list(properties.keys())
 
-        argument = action_step.action_argument
+        argument = action_step.tool_input
         if isinstance(argument, str):
             stripped = argument.strip()
             if stripped.startswith("{") and stripped.endswith("}"):
@@ -263,7 +274,7 @@ class ActionPlanRunner:
                 except json.JSONDecodeError:
                     parsed = None
                 if isinstance(parsed, dict):
-                    action_step.action_argument = parsed
+                    action_step.tool_input = parsed
                     argument = parsed
             if isinstance(argument, str):
                 if expected_fields:
@@ -277,7 +288,7 @@ class ActionPlanRunner:
                                 target_field = preferred
                                 break
                     if target_field:
-                        action_step.action_argument = {target_field: argument}
+                        action_step.tool_input = {target_field: argument}
                         return None
                 fields = ", ".join(expected_fields) if expected_fields else "schema-defined fields"
                 return f"Expected JSON object with fields: {fields}."
@@ -305,12 +316,12 @@ class ActionPlanRunner:
                             and len(value) == 1
                         ):
                             value = value[0]
-                        action_step.action_argument = {required_field: value}
+                        action_step.tool_input = {required_field: value}
                         return None
                     return f"Missing required fields: {', '.join(missing)}."
             return None
 
-        return "Unsupported action_argument type for MCP tool."
+        return "Unsupported tool_input type for MCP tool."
 
     @staticmethod
     def _summarize_result(result: str | None, error: str | None) -> str:
@@ -331,7 +342,7 @@ class ActionPlanRunner:
         summary = cls._summarize_result(str(content), None)
         if not summary:
             return ""
-        return f"{step.action_consumer}:{step.action_type} -> {summary}"
+        return f"{step.tool_id}:{step.operation} -> {summary}"
 
 
 __all__ = ["ActionPlanRunner", "EventLogger"]

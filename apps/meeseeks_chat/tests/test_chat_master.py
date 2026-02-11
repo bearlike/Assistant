@@ -6,7 +6,7 @@ import os
 import types
 
 from meeseeks_chat import chat_master
-from meeseeks_core.classes import ActionStep, TaskQueue
+from meeseeks_core.classes import ActionStep, Plan, PlanStep, TaskQueue
 from meeseeks_core.session_store import SessionStore
 
 
@@ -18,24 +18,15 @@ def _make_task_queue(action_steps):
 
 def test_generate_action_plan_helper(monkeypatch):
     """Return a formatted action plan with the generated queue."""
-    steps = [
-        ActionStep(
-            action_consumer="home_assistant_tool",
-            action_type="get",
-            action_argument="hello",
-        )
-    ]
-    task_queue = _make_task_queue(steps)
+    plan = Plan(steps=[PlanStep(title="Say hello", description="Respond to the user.")])
 
     def fake_generate(*args, **kwargs):
-        return task_queue
+        return plan
 
     monkeypatch.setattr(chat_master, "generate_action_plan", fake_generate)
-    plan, returned = chat_master.generate_action_plan_helper("hello")
-    assert returned == task_queue
-    assert plan == [
-        "Using `home_assistant_tool` with `get` to `hello`",
-    ]
+    plan_list, returned = chat_master.generate_action_plan_helper("hello")
+    assert returned == plan
+    assert plan_list == ["Say hello: Respond to the user."]
 
 
 def test_run_action_plan_helper(monkeypatch, tmp_path):
@@ -48,27 +39,28 @@ def test_run_action_plan_helper(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(chat_master, "st", types.SimpleNamespace(session_state=fake_state))
 
-    steps = [
-        ActionStep(
-            action_consumer="home_assistant_tool",
-            action_type="get",
-            action_argument="hello",
-        )
-    ]
-    task_queue = _make_task_queue(steps)
+    plan = Plan(steps=[PlanStep(title="Say hello", description="Respond to the user.")])
 
     captured = {}
 
     def fake_orchestrate(*args, **kwargs):
         captured["session_id"] = kwargs.get("session_id")
         captured["session_store"] = kwargs.get("session_store")
-        MockSpeaker = type("Result", (), {"content": "ok"})
-        task_queue.action_steps[0].result = MockSpeaker()
-        task_queue.task_result = "ok"
-        return task_queue
+        queue = _make_task_queue(
+            [
+                ActionStep(
+                    tool_id="home_assistant_tool",
+                    operation="get",
+                    tool_input="hello",
+                    result=type("Result", (), {"content": "ok"})(),
+                )
+            ]
+        )
+        queue.task_result = "ok"
+        return queue
 
     monkeypatch.setattr(chat_master, "orchestrate_session", fake_orchestrate)
-    response = chat_master.run_action_plan_helper(task_queue)
+    response = chat_master.run_action_plan_helper(plan)
     assert response == "ok"
     assert captured["session_id"] == session_id
     assert captured["session_store"] is session_store
@@ -134,14 +126,8 @@ def test_main_flow(monkeypatch, tmp_path):
     monkeypatch.chdir(chat_root)
 
     def fake_generate(user_input):
-        steps = [
-            ActionStep(
-                action_consumer="home_assistant_tool",
-                action_type="get",
-                action_argument="hello",
-            )
-        ]
-        return ["Using `home_assistant_tool` with `get` to `hello`"], TaskQueue(action_steps=steps)
+        plan = Plan(steps=[PlanStep(title="Say hello", description="Respond to the user.")])
+        return ["Say hello: Respond to the user."], plan
 
     monkeypatch.setattr(chat_master, "generate_action_plan_helper", fake_generate)
     monkeypatch.setattr(chat_master, "run_action_plan_helper", lambda *_: "ok")

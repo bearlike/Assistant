@@ -14,12 +14,15 @@
 
 
 
-https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
+<video controls preload="metadata" width="960">
+  <source src="docs/meeseeks-cli-01-video.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
 > Meeseeks runs right in your terminal, browser, or hosted as an API.
 
 # Intro
 
-Meeseeks is an AI task agent assistant built on a plan-act-observe orchestration loop. It breaks a request into steps, runs tools, and synthesizes a final reply. It keeps a session transcript, compacts long histories, and stores summaries for continuity across longer conversations.
+Meeseeks is an AI task agent assistant built on a plan → tool selection → step execution loop. It breaks a request into steps, chooses tools per step, runs them, and synthesizes a final reply. It keeps a session transcript, compacts long histories, and stores summaries for continuity across longer conversations.
 
 <details>
 <summary><i>Legends (Expand to View) </i></summary>
@@ -55,14 +58,15 @@ We are upgrading the API backend to better support a task-orchestration frontend
         <th>Landing console (coming soon)</th>
     </tr>
     <tr>
-        <td align="center"><img src="https://github.com/user-attachments/assets/258af242-c9b0-4c7d-a2c8-fc00d59ade4d" alt="Meeseeks task detail page preview" height="512px"></td>
-        <td align="center"><img src="https://github.com/user-attachments/assets/d015c3fe-b902-42d3-819c-d4cf2fa8b2ca" alt="Meeseeks landing console preview" height="512px"></td>
+        <td align="center"><img src="docs/meeseeks-console-02-tasks.jpg" alt="Meeseeks task detail page preview" height="512px"></td>
+        <td align="center"><img src="docs/meeseeks-console-01-front.jpg" alt="Meeseeks landing console preview" height="512px"></td>
     </tr>
 </table>
 
 ## Core workflow
-- (✅) **Plan → act → observe loop:** Builds a short action plan, executes tools, and replans when needed.
-- (✅) **Step-level reflection:** Validates tool outcomes and adjusts step arguments when required.
+- (✅) **Plan → select tools → execute:** Builds a short plan, chooses the right tools per step, and executes them.
+- (✅) **Step-level reflection:** Validates tool outcomes and adjusts tool inputs when required.
+- (✅) **Plan updates:** Emits updated action plans after each step so UIs can refresh the to‑do list.
 - (✅) **Synthesized replies:** Produces a final answer after tool results are collected and summarized.
 
 ## Memory and context management
@@ -101,6 +105,7 @@ Optional features that can be installed when needed.
 - **Inline approvals.** Rich-based approval prompts render with padded, dotted borders and clear after input.
 - **Unified experience.** Web, API, Home Assistant, and CLI interfaces share the same core engine to reduce duplicated maintenance.
 - **Shared session runtime.** The API exposes polling endpoints; the CLI runs the same runtime in-process for sync execution, cancellation, and summaries.
+- **Event payloads.** `action_plan` steps are `{title, description}`; `tool_result`/`permission` use `tool_id`, `operation`, and `tool_input`.
 
 ## Monorepo layout
 
@@ -134,6 +139,10 @@ flowchart LR
   subgraph Core["Core Orchestration\n(packages/meeseeks_core)"]
     TaskMaster["orchestrate_session\n(task_master.py)"]
     Orchestrator["Orchestrator\n(orchestrator.py)"]
+    Planner["Planner\n(planning.py)"]
+    ToolSelector["ToolSelector\n(planning.py)"]
+    StepExecutor["StepExecutor\n(planning.py)"]
+    PlanUpdater["PlanUpdater\n(planning.py)"]
     ActionPlanRunner["ActionPlanRunner\n(action_runner.py)"]
     ContextBuilder["ContextBuilder\n(context.py)"]
     ActionStep["ActionStep\n(classes.py)"]
@@ -176,6 +185,10 @@ flowchart LR
   SessionRuntime --> RunRegistry
 
   TaskMaster --> Orchestrator
+  Orchestrator --> Planner
+  Orchestrator --> ToolSelector
+  Orchestrator --> StepExecutor
+  Orchestrator --> PlanUpdater
   Orchestrator --> ActionPlanRunner
   Orchestrator --> ContextBuilder
   Orchestrator --> ToolRegistry

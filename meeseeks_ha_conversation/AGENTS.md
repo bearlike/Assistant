@@ -8,7 +8,7 @@ Scope: this file applies to `meeseeks_ha_conversation/` (home automation integra
 - Returns a parsed `MeeseeksQueryResponse` to the home automation host.
 
 ## Hidden dependencies / assumptions
-- Uses a hardcoded API key in `MeeseeksApiClient` (`msk-strong-password`). Override if you change the API auth behavior.
+- Uses a hardcoded API key in `MeeseeksApiClient` (`msk-strong-password`). Override for real deployments.
 - Assumes `base_url` includes protocol and is reachable from the host.
 - `async_get_models` is currently stubbed (static response).
 

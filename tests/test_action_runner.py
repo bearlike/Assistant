@@ -19,9 +19,9 @@ def test_execute_step_raises_when_tool_missing():
         hook_manager=default_hook_manager(),
     )
     step = ActionStep(
-        action_consumer="missing_tool",
-        action_type="get",
-        action_argument="ping",
+        tool_id="missing_tool",
+        operation="get",
+        tool_input="ping",
     )
     with pytest.raises(RuntimeError):
         runner._execute_step(step)
@@ -50,9 +50,9 @@ def test_execute_step_content_fallback():
         hook_manager=default_hook_manager(),
     )
     step = ActionStep(
-        action_consumer="dummy_tool",
-        action_type="get",
-        action_argument="ping",
+        tool_id="dummy_tool",
+        operation="get",
+        tool_input="ping",
     )
     outcome = runner._execute_step(step)
     assert outcome.content == ""
@@ -89,9 +89,9 @@ def test_action_runner_blocks_tools_in_plan_mode():
     task_queue = TaskQueue(
         action_steps=[
             ActionStep(
-                action_consumer="unsafe_tool",
-                action_type="set",
-                action_argument="payload",
+                tool_id="unsafe_tool",
+                operation="set",
+                tool_input="payload",
             )
         ]
     )
@@ -135,9 +135,9 @@ def test_action_runner_allows_set_when_approved():
     task_queue = TaskQueue(
         action_steps=[
             ActionStep(
-                action_consumer="dummy_tool",
-                action_type="set",
-                action_argument="payload",
+                tool_id="dummy_tool",
+                operation="set",
+                tool_input="payload",
             )
         ]
     )
@@ -179,9 +179,9 @@ def test_action_runner_denies_set_without_approval():
     task_queue = TaskQueue(
         action_steps=[
             ActionStep(
-                action_consumer="dummy_tool",
-                action_type="set",
-                action_argument="payload",
+                tool_id="dummy_tool",
+                operation="set",
+                tool_input="payload",
             )
         ]
     )
@@ -219,9 +219,9 @@ def test_action_runner_records_tool_errors_in_task_result():
     task_queue = TaskQueue(
         action_steps=[
             ActionStep(
-                action_consumer="exploding_tool",
-                action_type="get",
-                action_argument="payload",
+                tool_id="exploding_tool",
+                operation="get",
+                tool_input="payload",
             )
         ]
     )
@@ -258,9 +258,9 @@ def test_action_runner_preserves_tool_on_input_error():
     task_queue = TaskQueue(
         action_steps=[
             ActionStep(
-                action_consumer="input_error_tool",
-                action_type="get",
-                action_argument="payload",
+                tool_id="input_error_tool",
+                operation="get",
+                tool_input="payload",
             )
         ]
     )
@@ -300,9 +300,9 @@ def test_action_runner_preserves_mcp_tool_on_runtime_error():
     task_queue = TaskQueue(
         action_steps=[
             ActionStep(
-                action_consumer="mcp_tool",
-                action_type="get",
-                action_argument="payload",
+                tool_id="mcp_tool",
+                operation="get",
+                tool_input="payload",
             )
         ]
     )
@@ -324,9 +324,9 @@ def test_summarize_result_truncates_long_text():
 def test_format_step_summary_skips_empty_result():
     """Skip summaries when tool output is empty."""
     step = ActionStep(
-        action_consumer="dummy",
-        action_type="get",
-        action_argument="payload",
+        tool_id="dummy",
+        operation="get",
+        tool_input="payload",
     )
     step.result = get_mock_speaker()(content="")
     assert ActionPlanRunner._format_step_summary(step) == ""
@@ -336,3 +336,81 @@ def test_summarize_result_none_returns_empty():
     """Return empty summaries for None results."""
     summary = ActionPlanRunner._summarize_result(None, None)
     assert summary == ""
+
+
+def test_action_runner_coerces_json_string_payload():
+    """Parse JSON string tool_input into a structured payload."""
+    step = ActionStep(
+        tool_id="mcp_json_tool",
+        operation="get",
+        tool_input='{"query": "hello"}',
+    )
+    spec = ToolSpec(
+        tool_id="mcp_json_tool",
+        name="JSON tool",
+        description="MCP tool",
+        factory=lambda: object(),
+        kind="mcp",
+        metadata={
+            "schema": {
+                "required": ["query"],
+                "properties": {"query": {"type": "string"}},
+            }
+        },
+    )
+    error = ActionPlanRunner._coerce_mcp_tool_input(step, spec)
+    assert error is None
+    assert step.tool_input == {"query": "hello"}
+
+
+def test_action_runner_preserves_output_on_reflection():
+    """Keep tool output in tool_result payload when reflection requests retry/revise."""
+    registry = ToolRegistry()
+    events = []
+
+    class DummyTool:
+        def run(self, _step):
+            return get_mock_speaker()(content="raw output")
+
+    class DummyReflector:
+        def reflect(self, *_args, **_kwargs):
+            class DummyReflection:
+                status = "retry"
+                notes = "needs more"
+                revised_argument = None
+
+            return DummyReflection()
+
+    registry.register(
+        ToolSpec(
+            tool_id="dummy_tool",
+            name="Dummy",
+            description="Dummy tool",
+            factory=lambda: DummyTool(),
+        )
+    )
+    runner = ActionPlanRunner(
+        tool_registry=registry,
+        permission_policy=PermissionPolicy(),
+        approval_callback=lambda _step: True,
+        hook_manager=default_hook_manager(),
+        event_logger=events.append,
+        reflector=DummyReflector(),
+    )
+    task_queue = TaskQueue(
+        action_steps=[
+            ActionStep(
+                tool_id="dummy_tool",
+                operation="get",
+                tool_input="payload",
+            )
+        ]
+    )
+    task_queue = runner.run(task_queue)
+    tool_events = [event for event in events if event.get("type") == "tool_result"]
+    assert tool_events
+    payload = tool_events[-1]["payload"]
+    assert payload.get("success") is False
+    assert payload.get("error")
+    assert payload.get("result") == "raw output"
+    assert task_queue.action_steps[0].result is not None

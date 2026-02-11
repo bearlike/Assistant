@@ -91,7 +91,7 @@ def _parse_request(action_step: ActionStep | None) -> EditBlockRequest:
     if action_step is None:
         raise EditBlockApplyError("Action step is required for edit block operations.")
 
-    argument = action_step.action_argument
+    argument = action_step.tool_input
     if isinstance(argument, str):
         return EditBlockRequest(content=argument, root=os.getcwd(), files=None)
 
@@ -108,7 +108,7 @@ def _parse_request(action_step: ActionStep | None) -> EditBlockRequest:
                 raise EditBlockApplyError("files must be a list of strings.")
         return EditBlockRequest(content=content, root=root, files=files)
 
-    raise EditBlockApplyError("Action argument must be a string or object payload.")
+    raise EditBlockApplyError("Tool input must be a string or object payload.")
 
 
 def _collect_target_paths(request: EditBlockRequest) -> dict[str, Path]:

@@ -15,7 +15,7 @@ from importlib import resources
 
 # Third-party modules
 import streamlit as st
-from meeseeks_core.classes import TaskQueue
+from meeseeks_core.classes import Plan
 from meeseeks_core.common import get_logger
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.session_store import SessionStore
@@ -40,40 +40,36 @@ class ConversationBufferWindowMemory:
 logging = get_logger(name="Meeseeks-Chat")
 
 
-def generate_action_plan_helper(user_input: str) -> tuple[list[str], TaskQueue]:
+def generate_action_plan_helper(user_input: str) -> tuple[list[str], Plan]:
     """Build the action plan preview for a user query.
 
     Args:
         user_input: Raw user query text.
 
     Returns:
-        Tuple of human-readable action plan entries and the task queue.
+        Tuple of human-readable action plan entries and the plan.
     """
     action_plan_list = []
-    task_queue = generate_action_plan(user_query=user_input)
-    for action_step in task_queue.action_steps:
-        # * Append action step to the action plan list
-        action_plan_list.append(
-            f"Using `{action_step.action_consumer}` with "
-            f"`{action_step.action_type}` to `{action_step.action_argument}`"
-        )
-    return action_plan_list, task_queue
+    plan = generate_action_plan(user_query=user_input)
+    for step in plan.steps:
+        action_plan_list.append(f"{step.title}: {step.description}")
+    return action_plan_list, plan
 
 
-def run_action_plan_helper(task_queue: TaskQueue) -> str:
+def run_action_plan_helper(plan: Plan) -> str:
     """Execute an action plan and combine tool responses.
 
     Args:
-        task_queue: Precomputed task queue to run.
+        plan: Precomputed plan to run.
 
     Returns:
         Combined tool responses as a single string.
     """
     responses: list[str] = []
     task_queue = orchestrate_session(
-        user_query=task_queue.human_message or "",
+        user_query=plan.human_message or "",
         model_name=None,
-        initial_task_queue=task_queue,
+        initial_plan=plan,
         session_id=st.session_state.session_id,
         session_store=st.session_state.session_store,
         approval_callback=auto_approve,

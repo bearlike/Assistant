@@ -10,7 +10,7 @@ from typing import cast
 from langchain_core._api.beta_decorator import LangChainBetaWarning
 
 from meeseeks_core.action_runner import ActionPlanRunner
-from meeseeks_core.classes import ActionStep, OrchestrationState, TaskQueue
+from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
 from meeseeks_core.common import get_logger
 from meeseeks_core.config import get_config_value
 from meeseeks_core.context import ContextSnapshot
@@ -57,8 +57,8 @@ def generate_action_plan(
     selected_events: list[EventRecord] | None = None,
     *,
     mode: str = "act",
-) -> TaskQueue:
-    """Generate an action plan for a user query."""
+) -> Plan:
+    """Generate a plan for a user query."""
     tool_registry = tool_registry or load_registry()
     resolved_model = cast(
         str,
@@ -107,7 +107,7 @@ def orchestrate_session(
     user_query: str,
     model_name: str | None = None,
     max_iters: int = 3,
-    initial_task_queue: TaskQueue | None = None,
+    initial_plan: Plan | None = None,
     return_state: bool = False,
     session_id: str | None = None,
     session_store: SessionStore | None = None,
@@ -129,7 +129,7 @@ def orchestrate_session(
     ).run(
         user_query,
         max_iters=max_iters,
-        initial_task_queue=initial_task_queue,
+        initial_plan=initial_plan,
         return_state=return_state,
         session_id=session_id,
         mode=mode,

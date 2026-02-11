@@ -19,14 +19,7 @@ from meeseeks_tools.integration.aider_edit_blocks import (
 
 
 def _block(path: str, search: str, replace: str) -> str:
-    return (
-        f"{path}\n"
-        "```text\n"
-        "<<<<<<< SEARCH\n"
-        f"{search}=======\n"
-        f"{replace}>>>>>>> REPLACE\n"
-        "```\n"
-    )
+    return f"{path}\n```text\n<<<<<<< SEARCH\n{search}=======\n{replace}>>>>>>> REPLACE\n```\n"
 
 
 def test_apply_search_replace_block(tmp_path):
@@ -95,7 +88,7 @@ def test_search_miss_includes_hint(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("action_type", "content", "files", "expected"),
+    ("operation", "content", "files", "expected"),
     [
         ("set", "no edits here", None, "SEARCH/REPLACE blocks"),
         ("get", "no edits here", None, "SEARCH/REPLACE blocks"),
@@ -104,20 +97,33 @@ def test_search_miss_includes_hint(tmp_path):
         ("set", _block("hello.txt", "world\n", "there\n"), "hello.txt", "files must be a list"),
     ],
 )
-def test_edit_block_tool_rejects_invalid_inputs(tmp_path, action_type, content, files, expected):
+def test_edit_block_tool_rejects_invalid_inputs(tmp_path, operation, content, files, expected):
     """Reject invalid tool inputs with guidance."""
     tool = AiderEditBlockTool()
     argument = {"content": content, "root": str(tmp_path)}
     if files is not None:
         argument["files"] = files
     step = ActionStep(
-        action_consumer="aider_edit_block_tool",
-        action_type=action_type,
-        action_argument=argument,
+        tool_id="aider_edit_block_tool",
+        operation=operation,
+        tool_input=argument,
     )
     with pytest.raises(ToolInputError) as exc:
         tool.run(step)
     assert expected in str(exc.value)
+
+
+def test_edit_block_tool_rejects_invalid_payload_type(tmp_path):
+    """Reject non-string/non-object payloads."""
+    tool = AiderEditBlockTool()
+    step = ActionStep.construct(
+        tool_id="aider_edit_block_tool",
+        operation="set",
+        tool_input=123,
+    )
+    with pytest.raises(ToolInputError) as exc:
+        tool.run(step)
+    assert "Tool input must be a string or object payload" in str(exc.value)
 
 
 def test_edit_block_tool_wraps_apply_errors(tmp_path):
@@ -126,9 +132,9 @@ def test_edit_block_tool_wraps_apply_errors(tmp_path):
     target.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8")
     tool = AiderEditBlockTool()
     step = ActionStep(
-        action_consumer="aider_edit_block_tool",
-        action_type="set",
-        action_argument={
+        tool_id="aider_edit_block_tool",
+        operation="set",
+        tool_input={
             "content": _block("hello.txt", "alpha\nbeta\ngamaa\ndelta\n", "there\n"),
             "root": str(tmp_path),
         },
@@ -146,9 +152,9 @@ def test_edit_block_tool_set_state_returns_diff(tmp_path):
     target.write_text("hello\nworld\n", encoding="utf-8")
     tool = AiderEditBlockTool()
     step = ActionStep(
-        action_consumer="aider_edit_block_tool",
-        action_type="set",
-        action_argument={
+        tool_id="aider_edit_block_tool",
+        operation="set",
+        tool_input={
             "content": _block("hello.txt", "world\n", "there\n"),
             "root": str(tmp_path),
         },
@@ -167,9 +173,9 @@ def test_edit_block_tool_set_state_summary_when_no_diff(tmp_path):
     target.write_text("hello\nworld\n", encoding="utf-8")
     tool = AiderEditBlockTool()
     step = ActionStep(
-        action_consumer="aider_edit_block_tool",
-        action_type="set",
-        action_argument={
+        tool_id="aider_edit_block_tool",
+        operation="set",
+        tool_input={
             "content": _block("hello.txt", "world\n", "world\n"),
             "root": str(tmp_path),
         },
@@ -185,9 +191,9 @@ def test_edit_block_tool_get_state_summary(tmp_path):
     target.write_text("hello\nworld\n", encoding="utf-8")
     tool = AiderEditBlockTool()
     step = ActionStep(
-        action_consumer="aider_edit_block_tool",
-        action_type="get",
-        action_argument={
+        tool_id="aider_edit_block_tool",
+        operation="get",
+        tool_input={
             "content": _block("hello.txt", "world\n", "there\n"),
             "root": str(tmp_path),
         },
@@ -204,15 +210,12 @@ def test_edit_block_tool_uses_cwd_for_string_argument(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     tool = AiderEditBlockTool()
     step = ActionStep(
-        action_consumer="aider_edit_block_tool",
-        action_type="set",
-        action_argument=_block("hello.txt", "world\n", "there\n"),
+        tool_id="aider_edit_block_tool",
+        operation="set",
+        tool_input=_block("hello.txt", "world\n", "there\n"),
     )
     tool.set_state(step)
     assert target.read_text(encoding="utf-8") == "hello\nthere\n"
-
-
- 
 
 
 def test_edit_block_tool_input_error_guidance_when_blank():
@@ -257,14 +260,7 @@ def test_apply_search_replace_block_missing_leading_whitespace(tmp_path):
 )
 def test_parse_search_replace_blocks_filename_variants(header, expected):
     """Normalize filename markers before SEARCH blocks."""
-    content = (
-        f"{header}\n"
-        "<<<<<<< SEARCH\n"
-        "old\n"
-        "=======\n"
-        "new\n"
-        ">>>>>>> REPLACE\n"
-    )
+    content = f"{header}\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n"
     edits, shell_blocks = parse_search_replace_blocks(content, valid_fnames=None)
     assert not shell_blocks
     assert edits[0].path == expected
@@ -272,13 +268,6 @@ def test_parse_search_replace_blocks_filename_variants(header, expected):
 
 def test_parse_search_replace_blocks_prefers_valid_fnames():
     """Prefer close matches from valid filename list."""
-    content = (
-        "file.txt\n"
-        "<<<<<<< SEARCH\n"
-        "old\n"
-        "=======\n"
-        "new\n"
-        ">>>>>>> REPLACE\n"
-    )
+    content = "file.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n"
     edits, _ = parse_search_replace_blocks(content, valid_fnames=["a/file.txt"])
     assert edits[0].path == "a/file.txt"

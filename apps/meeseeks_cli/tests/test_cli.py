@@ -5,7 +5,7 @@ import json
 import types
 from importlib.metadata import PackageNotFoundError
 
-from meeseeks_core.classes import ActionStep, TaskQueue, set_available_tools  # noqa: E402
+from meeseeks_core.classes import ActionStep, Plan, PlanStep, TaskQueue, set_available_tools  # noqa: E402
 from meeseeks_core.common import get_mock_speaker  # noqa: E402
 from meeseeks_core.config import get_config_value, set_config_override, set_mcp_config_path  # noqa: E402
 from meeseeks_core.session_runtime import SessionRuntime  # noqa: E402
@@ -33,13 +33,15 @@ from meeseeks_cli.cli_master import (
 
 
 class DummyStep:
-    """Minimal action step stub for CLI formatting."""
+    """Minimal plan step stub for CLI formatting."""
 
-    def __init__(self, tool: str, action: str, argument: str) -> None:
+    def __init__(self, title: str, description: str, tool_input: str | None = None) -> None:
         """Initialize the dummy step."""
-        self.action_consumer = tool
-        self.action_type = action
-        self.action_argument = argument
+        self.title = title
+        self.description = description
+        self.tool_id = title
+        self.operation = description
+        self.tool_input = "" if tool_input is None else tool_input
 
 
 def test_parse_command():
@@ -51,9 +53,9 @@ def test_parse_command():
 
 def test_format_steps():
     """Format action steps into display rows."""
-    steps = [DummyStep("tool_a", "get", "status")]
+    steps = [DummyStep("Check status", "Verify status response.")]
     rows = _format_steps(steps)
-    assert rows == [("tool_a", "get", "status")]
+    assert rows == [("Check status", "Verify status response.")]
 
 
 def test_resolve_session_id(tmp_path):
@@ -211,22 +213,17 @@ def test_run_query(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
     def fake_generate(*args, **kwargs):
-        step = ActionStep(
-            action_consumer="home_assistant_tool",
-            action_type="get",
-            action_argument="hi",
+        return Plan(
+            steps=[PlanStep(title="Check Home Assistant", description="Fetch status via HA.")]
         )
-        task_queue = TaskQueue(action_steps=[step])
-        task_queue.human_message = "hi"
-        return task_queue
 
     def fake_orchestrate(*args, **kwargs):
         captured["tool_registry"] = kwargs.get("tool_registry")
         captured["session_id"] = kwargs.get("session_id")
         step = ActionStep(
-            action_consumer="home_assistant_tool",
-            action_type="get",
-            action_argument="hi",
+            tool_id="home_assistant_tool",
+            operation="get",
+            tool_input="hi",
         )
         task_queue = TaskQueue(action_steps=[step])
         task_queue.task_result = "ok"
@@ -265,9 +262,9 @@ def test_run_query_auto_approves_in_headless(monkeypatch, tmp_path):
 
     def fake_orchestrate(*args, **kwargs):
         step = ActionStep(
-            action_consumer="home_assistant_tool",
-            action_type="get",
-            action_argument="hi",
+            tool_id="home_assistant_tool",
+            operation="get",
+            tool_input="hi",
         )
         task_queue = TaskQueue(action_steps=[step])
         task_queue.task_result = "ok"
@@ -316,15 +313,19 @@ def test_run_query_headless_auto_approves_set_tool(monkeypatch, tmp_path):
         )
     )
 
-    def fake_generate(_self, _query, *_args, **_kwargs):
-        step = ActionStep(
-            action_consumer="dummy_set_tool",
-            action_type="set",
-            action_argument="payload",
+    def fake_generate(*_args, **_kwargs):
+        return Plan(steps=[PlanStep(title="Run dummy tool", description="Execute the tool.")])
+
+    def fake_decide(*_args, **_kwargs):
+        return types.SimpleNamespace(
+            decision="tool",
+            tool_id="dummy_set_tool",
+            args="payload",
+            response=None,
         )
-        return TaskQueue(action_steps=[step])
 
     monkeypatch.setattr("meeseeks_core.planning.Planner.generate", fake_generate)
+    monkeypatch.setattr("meeseeks_core.planning.StepExecutor.decide", fake_decide)
     monkeypatch.setattr(
         "meeseeks_core.orchestrator.Orchestrator._should_synthesize_response",
         lambda *_a, **_k: False,
@@ -364,9 +365,9 @@ def test_run_query_renders_tool_output_and_response(monkeypatch, tmp_path):
 
     def fake_orchestrate(*_args, **_kwargs):
         step = ActionStep(
-            action_consumer="mcp_tool",
-            action_type="get",
-            action_argument="payload",
+            tool_id="mcp_tool",
+            operation="get",
+            tool_input="payload",
         )
         step.result = get_mock_speaker()(content={"foo": "bar"})
         task_queue = TaskQueue(action_steps=[step])
@@ -410,9 +411,9 @@ def test_run_query_renders_diff_tool_output(monkeypatch, tmp_path):
 
     def fake_orchestrate(*_args, **_kwargs):
         step = ActionStep(
-            action_consumer="diff_tool",
-            action_type="set",
-            action_argument="payload",
+            tool_id="diff_tool",
+            operation="set",
+            tool_input="payload",
         )
         step.result = get_mock_speaker()(
             content={"kind": "diff", "text": "--- a/file.txt\n+++ b/file.txt\n"}
@@ -458,9 +459,9 @@ def test_run_query_renders_shell_tool_output(monkeypatch, tmp_path):
 
     def fake_orchestrate(*_args, **_kwargs):
         step = ActionStep(
-            action_consumer="shell_tool",
-            action_type="get",
-            action_argument="payload",
+            tool_id="shell_tool",
+            operation="get",
+            tool_input="payload",
         )
         step.result = get_mock_speaker()(
             content={
@@ -512,9 +513,9 @@ def test_run_query_hides_output_when_not_verbose(monkeypatch, tmp_path):
 
     def fake_orchestrate(*_args, **_kwargs):
         step = ActionStep(
-            action_consumer="mcp_tool",
-            action_type="get",
-            action_argument="payload",
+            tool_id="mcp_tool",
+            operation="get",
+            tool_input="payload",
         )
         step.result = get_mock_speaker()(content={"foo": "bar"})
         return TaskQueue(action_steps=[step])
@@ -563,14 +564,14 @@ def test_run_query_renders_partial_tool_results(monkeypatch, tmp_path):
 
     def fake_orchestrate(*_args, **_kwargs):
         first = ActionStep(
-            action_consumer="tool_one",
-            action_type="get",
-            action_argument="payload",
+            tool_id="tool_one",
+            operation="get",
+            tool_input="payload",
         )
         second = ActionStep(
-            action_consumer="tool_two",
-            action_type="get",
-            action_argument="payload",
+            tool_id="tool_two",
+            operation="get",
+            tool_input="payload",
         )
         second.result = get_mock_speaker()(content="ok")
         queue = TaskQueue(action_steps=[first, second])
@@ -607,9 +608,9 @@ def test_run_query_dims_tool_panels_after_response(monkeypatch, tmp_path):
 
     def fake_orchestrate(*_args, **_kwargs):
         step = ActionStep(
-            action_consumer="tool",
-            action_type="get",
-            action_argument="payload",
+            tool_id="tool",
+            operation="get",
+            tool_input="payload",
         )
         step.result = get_mock_speaker()(content="ok")
         queue = TaskQueue(action_steps=[step])
@@ -730,9 +731,9 @@ def test_run_cli_single_query(monkeypatch, tmp_path):
 
     def fake_orchestrate(*args, **kwargs):
         step = ActionStep(
-            action_consumer="home_assistant_tool",
-            action_type="get",
-            action_argument="hi",
+            tool_id="home_assistant_tool",
+            operation="get",
+            tool_input="hi",
         )
         task_queue = TaskQueue(action_steps=[step])
         task_queue.task_result = "ok"

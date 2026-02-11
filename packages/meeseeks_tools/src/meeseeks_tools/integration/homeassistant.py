@@ -562,7 +562,7 @@ class HomeAssistant(AbstractTool):
         MockSpeaker = get_mock_speaker()
 
         try:
-            action_step_curr = str(action_step.action_argument).strip()
+            action_step_curr = str(action_step.tool_input).strip()
             call_service_values = chain.invoke(
                 {"action_step": action_step_curr, "context": rag_documents, "cache": self.cache},
             )
@@ -644,7 +644,7 @@ class HomeAssistant(AbstractTool):
         logging.info("Invoking `get` action chain using `{}`.", self.model_name)
         message = chain.invoke(
             {
-                "action_step": str(action_step.action_argument).strip(),
+                "action_step": str(action_step.tool_input).strip(),
                 "context": rag_documents,
             },
         )

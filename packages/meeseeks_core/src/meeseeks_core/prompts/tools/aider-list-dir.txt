@@ -2,9 +2,9 @@ Aider List Directory tool
 
 Use this tool to list files under a local directory.
 
-Action arguments (JSON):
+Tool inputs (JSON):
 - path: directory or file path to list (defaults to ".").
 - root: optional project root to resolve file paths (defaults to current working directory).
 - max_entries: optional integer limit for number of entries returned.
 
-Use action_type "get" to list entries.
+Provide the arguments required to list entries.

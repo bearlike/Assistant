@@ -1,6 +1,6 @@
 [project]
 name = "meeseeks-ha-conversation"
-version = "2.1.0-alpha"
+version = "0.0.7"
 description = "Home Assistant conversation integration for Meeseeks."
 readme = "README.md"
 requires-python = ">=3.10,<4.0"

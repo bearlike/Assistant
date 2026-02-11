@@ -1,5 +1,6 @@
 """Tests for core class behaviors."""
 
+import json
 import os
 
 import meeseeks_core.classes as classes
@@ -12,51 +13,51 @@ def test_action_step_normalization():
     """Normalize action step fields and tool identifiers."""
     set_available_tools(["home_assistant_tool"])
     step = ActionStep(
-        action_consumer="HOME_ASSISTANT_TOOL",
-        action_type="SET",
-        action_argument="hello",
+        tool_id="HOME_ASSISTANT_TOOL",
+        operation="SET",
+        tool_input="hello",
     )
     queue = TaskQueue(action_steps=[step])
-    assert queue.action_steps[0].action_consumer == "home_assistant_tool"
-    assert queue.action_steps[0].action_type == "set"
+    assert queue.action_steps[0].tool_id == "home_assistant_tool"
+    assert queue.action_steps[0].operation == "set"
 
 
 def test_action_step_accepts_dict_argument():
-    """Allow structured action arguments for schema-based tools."""
+    """Allow structured tool inputs for schema-based tools."""
     set_available_tools(["home_assistant_tool"])
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="set",
-        action_argument={"message": "hello"},
+        tool_id="home_assistant_tool",
+        operation="set",
+        tool_input={"message": "hello"},
     )
     queue = TaskQueue(action_steps=[step])
-    assert queue.action_steps[0].action_argument == {"message": "hello"}
+    assert queue.action_steps[0].tool_input == {"message": "hello"}
 
 
 def test_action_step_invalid_entries():
     """Normalize invalid tool/action entries to lower case."""
     set_available_tools(["home_assistant_tool"])
     step = ActionStep(
-        action_consumer="UNKNOWN_TOOL",
-        action_type="GET",
-        action_argument="hello",
+        tool_id="UNKNOWN_TOOL",
+        operation="GET",
+        tool_input="hello",
     )
     queue = TaskQueue(action_steps=[step])
-    assert queue.action_steps[0].action_consumer == "unknown_tool"
-    assert queue.action_steps[0].action_type == "get"
+    assert queue.action_steps[0].tool_id == "unknown_tool"
+    assert queue.action_steps[0].operation == "get"
 
 
 def test_action_step_validation_logs_for_invalid_entries():
     """Trigger validation warnings for invalid action data."""
     set_available_tools(["home_assistant_tool"])
     step = ActionStep.construct(
-        action_consumer="bad_tool",
-        action_type="bad",
-        action_argument=None,
+        tool_id="bad_tool",
+        operation="bad",
+        tool_input=None,
     )
     queue = TaskQueue(action_steps=[step])
-    assert queue.action_steps[0].action_consumer == "bad_tool"
-    assert queue.action_steps[0].action_type == "bad"
+    assert queue.action_steps[0].tool_id == "bad_tool"
+    assert queue.action_steps[0].operation == "bad"
 
 
 def test_save_json(tmp_path, monkeypatch):
@@ -81,15 +82,15 @@ def test_create_task_queue_and_examples():
     """Create task queues and validate example lookup errors."""
     action_data = [
         {
-            "action_consumer": "home_assistant_tool",
-            "action_type": "get",
-            "action_argument": "hello",
+            "tool_id": "home_assistant_tool",
+            "operation": "get",
+            "tool_input": "hello",
         }
     ]
     queue = create_task_queue(action_data=action_data, is_example=False)
-    assert queue.action_steps[0].action_argument == "hello"
+    assert queue.action_steps[0].tool_input == "hello"
     examples = classes.get_task_master_examples(0, available_tools=["home_assistant_tool"])
-    assert "action_steps" in examples
+    assert "steps" in examples
     with pytest.raises(ValueError):
         classes.get_task_master_examples(99, available_tools=["home_assistant_tool"])
 
@@ -100,17 +101,25 @@ def test_create_task_queue_requires_data():
         create_task_queue(action_data=None)
 
 
+def test_create_plan_requires_data():
+    """Raise when plan data is missing."""
+    with pytest.raises(ValueError):
+        classes.create_plan(step_data=None)
+
+
 def test_examples_skip_home_assistant_when_unavailable():
     """Ensure examples omit disabled tools."""
     examples = classes.get_task_master_examples(0, available_tools=[])
-    assert "home_assistant_tool" not in examples
+    payload = json.loads(examples)
+    assert payload["steps"] == []
 
 
 def test_examples_use_available_tools_by_default():
     """Use global available tools when not provided."""
     set_available_tools(["home_assistant_tool"])
     examples = classes.get_task_master_examples(0, available_tools=None)
-    assert "home_assistant_tool" in examples
+    payload = json.loads(examples)
+    assert payload["steps"]
 
 
 def test_abstract_tool_init_and_run(monkeypatch, tmp_path):
@@ -136,9 +145,9 @@ def test_abstract_tool_init_and_run(monkeypatch, tmp_path):
     tool = DummyTool()
     set_available_tools(["home_assistant_tool"])
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="set",
-        action_argument="hello",
+        tool_id="home_assistant_tool",
+        operation="set",
+        tool_input="hello",
     )
     result = tool.run(step)
     assert result.content == "Not implemented yet."
@@ -193,15 +202,15 @@ def test_abstract_tool_run_variants(monkeypatch, tmp_path):
     tool = DummyTool()
     set_available_tools(["home_assistant_tool"])
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="get",
-        action_argument="hello",
+        tool_id="home_assistant_tool",
+        operation="get",
+        tool_input="hello",
     )
     assert tool.run(step).content == "Not implemented yet."
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="bad",
-        action_argument="hello",
+        tool_id="home_assistant_tool",
+        operation="bad",
+        tool_input="hello",
     )
     with pytest.raises(ValueError):
         tool.run(step)

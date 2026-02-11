@@ -18,13 +18,13 @@ def test_default_policy_allows_get():
     """Allow default get actions under permissive policy."""
     policy = PermissionPolicy(
         rules=[],
-        default_by_action={"get": PermissionDecision.ALLOW, "set": PermissionDecision.ASK},
+        default_by_operation={"get": PermissionDecision.ALLOW, "set": PermissionDecision.ASK},
         default_decision=PermissionDecision.ASK,
     )
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="get",
-        action_argument="lights",
+        tool_id="home_assistant_tool",
+        operation="get",
+        tool_input="lights",
     )
     assert policy.decide(step) == PermissionDecision.ALLOW
 
@@ -35,17 +35,17 @@ def test_rule_override_denies():
         rules=[
             PermissionRule(
                 tool_id="home_assistant_tool",
-                action_type="set",
+                operation="set",
                 decision=PermissionDecision.DENY,
             )
         ],
-        default_by_action={"get": PermissionDecision.ALLOW, "set": PermissionDecision.ASK},
+        default_by_operation={"get": PermissionDecision.ALLOW, "set": PermissionDecision.ASK},
         default_decision=PermissionDecision.ASK,
     )
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="set",
-        action_argument="heater",
+        tool_id="home_assistant_tool",
+        operation="set",
+        tool_input="heater",
     )
     assert policy.decide(step) == PermissionDecision.DENY
 
@@ -54,13 +54,13 @@ def test_default_decision_fallback():
     """Use default decision when no rule or action-specific match exists."""
     policy = PermissionPolicy(
         rules=[],
-        default_by_action={},
+        default_by_operation={},
         default_decision=PermissionDecision.DENY,
     )
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="custom",
-        action_argument="lights",
+        tool_id="home_assistant_tool",
+        operation="custom",
+        tool_input="lights",
     )
     assert policy.decide(step) == PermissionDecision.DENY
 
@@ -72,9 +72,9 @@ def test_load_policy_from_json(tmp_path, monkeypatch):
         """
         {
           "rules": [
-            {"tool_id": "home_assistant_tool", "action_type": "set", "decision": "deny"}
+            {"tool_id": "home_assistant_tool", "operation": "set", "decision": "deny"}
           ],
-          "default_by_action": {"get": "allow", "set": "ask"},
+          "default_by_operation": {"get": "allow", "set": "ask"},
           "default_decision": "ask"
         }
         """,
@@ -83,9 +83,9 @@ def test_load_policy_from_json(tmp_path, monkeypatch):
     set_config_override({"permissions": {"policy_path": str(policy_path)}})
     policy = load_permission_policy()
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="set",
-        action_argument="lights",
+        tool_id="home_assistant_tool",
+        operation="set",
+        tool_input="lights",
     )
     assert policy.decide(step) == PermissionDecision.DENY
 
@@ -97,10 +97,10 @@ def test_load_policy_from_toml(tmp_path, monkeypatch):
         """
         [[rules]]
         tool_id = "home_assistant_tool"
-        action_type = "set"
+        operation = "set"
         decision = "deny"
 
-        [default_by_action]
+        [default_by_operation]
         get = "allow"
         set = "ask"
 
@@ -111,9 +111,9 @@ def test_load_policy_from_toml(tmp_path, monkeypatch):
     set_config_override({"permissions": {"policy_path": str(policy_path)}})
     policy = load_permission_policy()
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="set",
-        action_argument="lights",
+        tool_id="home_assistant_tool",
+        operation="set",
+        tool_input="lights",
     )
     assert policy.decide(step) == PermissionDecision.DENY
 
@@ -125,9 +125,9 @@ def test_load_policy_skips_invalid_rules_and_defaults(tmp_path, monkeypatch):
         """
         {
           "rules": [
-            {"tool_id": "home_assistant_tool", "action_type": "set", "decision": "maybe"}
+            {"tool_id": "home_assistant_tool", "operation": "set", "decision": "maybe"}
           ],
-          "default_by_action": {},
+          "default_by_operation": {},
           "default_decision": "unknown"
         }
         """,
@@ -136,9 +136,9 @@ def test_load_policy_skips_invalid_rules_and_defaults(tmp_path, monkeypatch):
     set_config_override({"permissions": {"policy_path": str(policy_path)}})
     policy = load_permission_policy()
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="set",
-        action_argument="lights",
+        tool_id="home_assistant_tool",
+        operation="set",
+        tool_input="lights",
     )
     assert policy.decide(step) == PermissionDecision.ASK
 
@@ -155,9 +155,9 @@ def test_load_policy_missing_file(monkeypatch):
     set_config_override({"permissions": {"policy_path": "/tmp/missing-policy.json"}})
     policy = load_permission_policy()
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="get",
-        action_argument="lights",
+        tool_id="home_assistant_tool",
+        operation="get",
+        tool_input="lights",
     )
     assert policy.decide(step) == PermissionDecision.ALLOW
 
@@ -169,9 +169,9 @@ def test_load_policy_invalid_json(tmp_path, monkeypatch):
     set_config_override({"permissions": {"policy_path": str(policy_path)}})
     policy = load_permission_policy()
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="get",
-        action_argument="lights",
+        tool_id="home_assistant_tool",
+        operation="get",
+        tool_input="lights",
     )
     assert policy.decide(step) == PermissionDecision.ALLOW
 
@@ -181,18 +181,12 @@ def test_approval_callback_from_config(monkeypatch):
     set_config_override({"permissions": {"approval_mode": "allow"}})
     callback = approval_callback_from_config()
     assert callback is not None
-    assert callback(
-        ActionStep(action_consumer="home_assistant_tool", action_type="get", action_argument="x")
-    )
+    assert callback(ActionStep(tool_id="home_assistant_tool", operation="get", tool_input="x"))
     set_config_override({"permissions": {"approval_mode": "deny"}})
     callback = approval_callback_from_config()
     assert callback is not None
     assert (
-        callback(
-            ActionStep(
-                action_consumer="home_assistant_tool", action_type="get", action_argument="x"
-            )
-        )
+        callback(ActionStep(tool_id="home_assistant_tool", operation="get", tool_input="x"))
         is False
     )
     set_config_override({"permissions": {"approval_mode": "maybe"}})
@@ -202,9 +196,9 @@ def test_approval_callback_from_config(monkeypatch):
 def test_auto_approve_and_deny():
     """Cover explicit approve/deny helpers."""
     step = ActionStep(
-        action_consumer="home_assistant_tool",
-        action_type="get",
-        action_argument="lights",
+        tool_id="home_assistant_tool",
+        operation="get",
+        tool_input="lights",
     )
     assert auto_approve(step) is True
     assert auto_deny(step) is False

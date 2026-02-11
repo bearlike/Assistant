@@ -325,7 +325,7 @@ class MCPToolRunner:
         if action_step is None:
             raise ValueError("Action step cannot be None.")
         MockSpeakerType = get_mock_speaker()
-        result = asyncio.run(self._invoke_async(action_step.action_argument))
+        result = asyncio.run(self._invoke_async(action_step.tool_input))
         return MockSpeakerType(content=result)
 
 

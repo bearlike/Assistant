@@ -61,7 +61,7 @@ def test_manifest_local_tool(tmp_path, monkeypatch):
     """Load a local tool from a manifest entry."""
     module_path = tmp_path / "dummy_tool.py"
     module_path.write_text(
-        "class DummyTool:\n" "    def run(self, action_step):\n" "        return None\n",
+        "class DummyTool:\n    def run(self, action_step):\n        return None\n",
         encoding="utf-8",
     )
     manifest_path = tmp_path / "manifest.json"

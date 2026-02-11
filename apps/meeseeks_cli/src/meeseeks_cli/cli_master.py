@@ -67,8 +67,8 @@ def _bootstrap_cli_logging_env(argv: list[str]) -> None:
 
 _bootstrap_cli_logging_env(sys.argv)
 
-from meeseeks_core.classes import ActionStep, TaskQueue
-from meeseeks_core.common import MockSpeaker, format_action_argument, get_logger
+from meeseeks_core.classes import ActionStep, Plan, PlanStep, TaskQueue
+from meeseeks_core.common import MockSpeaker, format_tool_input, get_logger
 from meeseeks_core.components import resolve_langfuse_status
 from meeseeks_core.config import (
     AppConfig,
@@ -118,16 +118,10 @@ def _resolve_session_id(
     )
 
 
-def _format_steps(steps: Iterable[ActionStep]) -> list[tuple[str, str, str]]:
-    rows: list[tuple[str, str, str]] = []
+def _format_steps(steps: Iterable[PlanStep]) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
     for step in steps:
-        rows.append(
-            (
-                step.action_consumer,
-                step.action_type,
-                format_action_argument(step.action_argument),
-            )
-        )
+        rows.append((step.title, step.description))
     return rows
 
 
@@ -522,16 +516,16 @@ def _run_query(
     args: argparse.Namespace,
     prompt_func: Callable[[str], str] | None,
 ) -> None:
-    initial_task_queue = None
+    initial_plan = None
     mode = _resolve_query_mode(query, state)
     if state.show_plan:
-        initial_task_queue = generate_action_plan(
+        initial_plan = generate_action_plan(
             user_query=query,
             model_name=state.model_name,
             session_summary=store.load_summary(state.session_id),
             mode=mode,
         )
-        _render_plan_with_registry(console, initial_task_queue, tool_registry)
+        _render_plan_with_registry(console, initial_plan)
 
     auto_approve_enabled = bool(
         state.auto_approve_all or getattr(args, "auto_approve", False) or prompt_func is None
@@ -558,7 +552,7 @@ def _run_query(
         user_query=query,
         model_name=state.model_name,
         max_iters=args.max_iters,
-        initial_task_queue=initial_task_queue,
+        initial_plan=initial_plan,
         session_id=state.session_id,
         tool_registry=tool_registry,
         approval_callback=approval_callback,
@@ -697,28 +691,17 @@ def _tool_specs_by_id(tool_registry: ToolRegistry) -> dict[str, object]:
 
 def _render_plan_with_registry(
     console: Console,
-    task_queue: TaskQueue,
-    tool_registry: ToolRegistry,
+    plan: Plan,
 ) -> None:
-    specs = _tool_specs_by_id(tool_registry)
     lines: list[Text] = []
-    for index, (tool, action, argument) in enumerate(
-        _format_steps(task_queue.action_steps), start=1
-    ):
-        spec = specs.get(tool)
-        step = task_queue.action_steps[index - 1]
-        label = step.title or tool
-        if spec is not None and getattr(spec, "kind", "") == "mcp":
-            label = f"{label} (MCP)"
+    for index, (title, description) in enumerate(_format_steps(plan.steps), start=1):
         line = Text()
         line.append("[ ] ", style="dim")
         line.append(f"{index}. ", style="bold")
-        line.append(label, style="cyan")
-        line.append(" • ", style="dim")
-        line.append(action, style="magenta")
-        if argument:
+        line.append(title, style="cyan")
+        if description:
             line.append(" — ", style="dim")
-            line.append(argument)
+            line.append(description)
         lines.append(line)
     if not lines:
         lines.append(Text("No planned steps.", style="dim"))
@@ -743,8 +726,8 @@ def _render_results_with_registry(
     steps = task_queue.action_steps
     last_index = len(steps) - 1
     for index, step in enumerate(steps):
-        spec = specs.get(step.action_consumer)
-        label = step.action_consumer
+        spec = specs.get(step.tool_id)
+        label = step.tool_id
         if spec is not None and getattr(spec, "kind", "") == "mcp":
             label = f"{label} (MCP)"
         label = f":wrench: {label}"
@@ -870,8 +853,8 @@ def _build_cli_hook_manager(
     specs = _tool_specs_by_id(tool_registry)
 
     def _start_spinner(action_step: ActionStep) -> ActionStep:
-        spec = specs.get(action_step.action_consumer)
-        label = action_step.action_consumer
+        spec = specs.get(action_step.tool_id)
+        label = action_step.tool_id
         if spec is not None and getattr(spec, "kind", "") == "mcp":
             label = f"{label} (MCP)"
         status = console.status(f"Running {label}...", spinner="dots")
@@ -916,7 +899,7 @@ def _build_approval_callback(
     specs_by_id = _tool_specs_by_id(tool_registry)
 
     def _approve(action_step: ActionStep) -> bool:
-        spec = specs_by_id.get(action_step.action_consumer)
+        spec = specs_by_id.get(action_step.tool_id)
         is_mcp = spec is not None and getattr(spec, "kind", "") == "mcp"
         server_name = None
         tool_name = None
@@ -933,8 +916,8 @@ def _build_approval_callback(
                     pass
 
         subject = (
-            f"{action_step.action_consumer}:{action_step.action_type} "
-            f"({format_action_argument(action_step.action_argument)})"
+            f"{action_step.tool_id}:{action_step.operation} "
+            f"({format_tool_input(action_step.tool_input)})"
         )
         if approval_style in {"aider", "inline", "rich"}:
             rich_decision = _confirm_rich_panel(

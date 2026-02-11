@@ -1,6 +1,6 @@
 [project]
 name = "meeseeks-workspace"
-version = "2.1.0-alpha"
+version = "0.0.7"
 description = "Workspace package for the Meeseeks monorepo."
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
@@ -9,18 +9,19 @@ authors = [
 ]
 license = { text = "MIT" }
 dependencies = [
-  "meeseeks-core>=2.1.0-alpha",
+  "aniso8601>=10.0.1",
+  "meeseeks-core>=0.0.7",
 ]
 
 [project.scripts]
 meeseeks = "meeseeks_cli.cli_master:main"
 
 [project.optional-dependencies]
-cli = ["meeseeks-cli>=2.1.0-alpha"]
-api = ["meeseeks-api>=2.1.0-alpha"]
-chat = ["meeseeks-chat>=2.1.0-alpha"]
-ha = ["meeseeks-ha-conversation>=2.1.0-alpha"]
-tools = ["meeseeks-tools>=2.1.0-alpha"]
+cli = ["meeseeks-cli>=0.0.7"]
+api = ["meeseeks-api>=0.0.7"]
+chat = ["meeseeks-chat>=0.0.7"]
+ha = ["meeseeks-ha-conversation>=0.0.7"]
+tools = ["meeseeks-tools>=0.0.7"]
 
 [dependency-groups]
 dev = [
@@ -38,8 +39,9 @@ dev = [
 docs = [
   "mike",
   "mkdocs",
-  "mkdocs-material",
+  "mkdocs-shadcn>=0.9.9",
   "mkdocstrings[python]",
+  "pymdown-extensions>=10.20.1",
 ]
 
 [tool.uv.workspace]

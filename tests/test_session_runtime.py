@@ -79,6 +79,7 @@ def test_runtime_list_sessions_skips_empty(tmp_path):
     store = SessionStore(root_dir=str(tmp_path))
     runtime = SessionRuntime(session_store=store)
     empty_session = store.create_session()
+    store.append_event(empty_session, {"type": "session", "payload": {"event": "created"}})
     filled_session = store.create_session()
     store.append_event(filled_session, {"type": "user", "payload": {"text": "hello"}})
 

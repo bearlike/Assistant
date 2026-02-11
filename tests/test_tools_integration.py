@@ -47,7 +47,7 @@ def test_mcp_tool_runner_uses_async(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(runner, "_invoke_async", _fake_invoke)
-    step = types.SimpleNamespace(action_argument="ping")
+    step = types.SimpleNamespace(tool_input="ping")
     result = runner.run(step)
     assert result.content == "ok"
 
@@ -488,7 +488,7 @@ def test_homeassistant_invoke_service(monkeypatch):
             return DummyCall()
 
     monkeypatch.setattr(ha, "call_service", lambda **kwargs: (True, {"ok": True}))
-    step = types.SimpleNamespace(action_argument="turn on lamp")
+    step = types.SimpleNamespace(tool_input="turn on lamp")
     result = ha._invoke_service_and_set_state(DummyChain(), [], step)
     assert "Successfully called service" in result.content
 
@@ -522,7 +522,7 @@ def test_homeassistant_set_state(monkeypatch):
         "_invoke_service_and_set_state",
         lambda *a, **k: get_mock_speaker()(content="ok"),
     )
-    step = types.SimpleNamespace(action_argument="turn on")
+    step = types.SimpleNamespace(tool_input="turn on")
     result = ha.set_state(step)
     assert result.content == "ok"
 
@@ -543,7 +543,7 @@ def test_homeassistant_get_state(monkeypatch):
         "meeseeks_tools.integration.homeassistant.ha_render_system_prompt",
         lambda *args, **kwargs: "prompt",
     )
-    step = types.SimpleNamespace(action_argument="status")
+    step = types.SimpleNamespace(tool_input="status")
     result = ha.get_state(step)
     assert result.content == "answer"
 

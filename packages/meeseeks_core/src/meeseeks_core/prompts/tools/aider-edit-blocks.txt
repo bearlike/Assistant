@@ -20,9 +20,9 @@ Rules:
 - To create a new file, leave SEARCH empty and put full content in REPLACE.
 - Do not include shell code blocks; use the shell tool for commands.
 
-Action arguments (JSON):
+Tool inputs (JSON):
 - content: string containing one or more SEARCH/REPLACE blocks.
 - root: optional project root to resolve file paths (defaults to current working directory).
 - files: optional list of file paths to validate fuzzy filename matches.
 
-Use action_type "set" to apply changes and "get" to validate without writing.
+Provide the arguments required to apply edits or validate without writing.

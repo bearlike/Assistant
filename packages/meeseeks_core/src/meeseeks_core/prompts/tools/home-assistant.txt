@@ -1,10 +1,10 @@
-Tool: Home Assistant (action_consumer="home_assistant_tool")
+Tool: Home Assistant (tool_id="home_assistant_tool")
 - This API manages smart home devices by calling services within domains like "light" or "switch".
 - For example, the "turn_on" service in the "light" domain can turn on a specified light by passing its ID as service_data.
 - The API also provides scenes to automate tasks and returns a list of states that changed during the service execution.
 - This API should contain most user's current information available as sensors.
-- action_type=set: Change the state of a Home Assistant device or entity.
-- action_type=get: Directly talks to the user about information revolving sensors and devices within Home Assistant.
+- Change the state of a Home Assistant device or entity.
+- Ask for information about sensors and devices within Home Assistant.
 - Information on weather, servers, and self-hosted services can be found in Home Assistant.
 - If the user is requesting information about their own details, you can try accessing Home Assistant. Even if you're unsure if Home Assistant has access to a sensor, you can still query it and it will return an error to the user.
 

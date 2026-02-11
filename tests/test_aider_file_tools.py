@@ -13,9 +13,9 @@ def test_aider_read_file_tool_reads(tmp_path):
 
     tool = AiderReadFileTool()
     step = ActionStep(
-        action_consumer="aider_read_file_tool",
-        action_type="get",
-        action_argument={"path": "hello.txt", "root": str(tmp_path)},
+        tool_id="aider_read_file_tool",
+        operation="get",
+        tool_input={"path": "hello.txt", "root": str(tmp_path)},
     )
     result = tool.get_state(step)
 
@@ -33,9 +33,9 @@ def test_aider_list_dir_tool_lists(tmp_path):
 
     tool = AiderListDirTool()
     step = ActionStep(
-        action_consumer="aider_list_dir_tool",
-        action_type="get",
-        action_argument={"path": "a", "root": str(tmp_path)},
+        tool_id="aider_list_dir_tool",
+        operation="get",
+        tool_input={"path": "a", "root": str(tmp_path)},
     )
     result = tool.get_state(step)
 
@@ -52,9 +52,9 @@ def test_aider_read_file_blocks_escape(tmp_path):
     """Reject path traversal attempts."""
     tool = AiderReadFileTool()
     step = ActionStep(
-        action_consumer="aider_read_file_tool",
-        action_type="get",
-        action_argument={"path": "../oops.txt", "root": str(tmp_path)},
+        tool_id="aider_read_file_tool",
+        operation="get",
+        tool_input={"path": "../oops.txt", "root": str(tmp_path)},
     )
     result = tool.get_state(step)
     assert isinstance(result.content, str)
@@ -68,9 +68,9 @@ def test_aider_read_file_truncates(tmp_path):
 
     tool = AiderReadFileTool()
     step = ActionStep(
-        action_consumer="aider_read_file_tool",
-        action_type="get",
-        action_argument={"path": "long.txt", "root": str(tmp_path), "max_bytes": "5"},
+        tool_id="aider_read_file_tool",
+        operation="get",
+        tool_input={"path": "long.txt", "root": str(tmp_path), "max_bytes": "5"},
     )
     result = tool.get_state(step)
 
@@ -83,13 +83,26 @@ def test_aider_read_file_invalid_argument_type():
     """Reject missing path payloads."""
     tool = AiderReadFileTool()
     step = ActionStep(
-        action_consumer="aider_read_file_tool",
-        action_type="get",
-        action_argument={"path": ""},
+        tool_id="aider_read_file_tool",
+        operation="get",
+        tool_input={"path": ""},
     )
     result = tool.get_state(step)
     assert isinstance(result.content, str)
     assert "path is required" in result.content
+
+
+def test_aider_read_file_rejects_non_string_payload():
+    """Reject invalid tool input types."""
+    tool = AiderReadFileTool()
+    step = ActionStep.construct(
+        tool_id="aider_read_file_tool",
+        operation="get",
+        tool_input=123,
+    )
+    result = tool.get_state(step)
+    assert isinstance(result.content, str)
+    assert "Tool input must be a string path" in result.content
 
 
 def test_aider_list_dir_limits_entries(tmp_path):
@@ -100,9 +113,9 @@ def test_aider_list_dir_limits_entries(tmp_path):
 
     tool = AiderListDirTool()
     step = ActionStep(
-        action_consumer="aider_list_dir_tool",
-        action_type="get",
-        action_argument={"path": "a", "root": str(tmp_path), "max_entries": 1},
+        tool_id="aider_list_dir_tool",
+        operation="get",
+        tool_input={"path": "a", "root": str(tmp_path), "max_entries": 1},
     )
     result = tool.get_state(step)
 
@@ -116,11 +129,24 @@ def test_aider_list_dir_defaults_to_root(tmp_path):
     (tmp_path / "root.txt").write_text("data", encoding="utf-8")
     tool = AiderListDirTool()
     step = ActionStep(
-        action_consumer="aider_list_dir_tool",
-        action_type="get",
-        action_argument={"path": "", "root": str(tmp_path), "max_entries": 10},
+        tool_id="aider_list_dir_tool",
+        operation="get",
+        tool_input={"path": "", "root": str(tmp_path), "max_entries": 10},
     )
     result = tool.get_state(step)
     payload = result.content
     assert isinstance(payload, dict)
     assert payload.get("kind") == "dir"
+
+
+def test_aider_list_dir_rejects_invalid_payload_type():
+    """Reject invalid tool input types."""
+    tool = AiderListDirTool()
+    step = ActionStep.construct(
+        tool_id="aider_list_dir_tool",
+        operation="get",
+        tool_input=123,
+    )
+    result = tool.get_state(step)
+    assert isinstance(result.content, str)
+    assert "Tool input must be a string path" in result.content

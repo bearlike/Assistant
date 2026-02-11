@@ -1,6 +1,6 @@
 [project]
 name = "meeseeks-api"
-version = "2.1.0-alpha"
+version = "0.0.7"
 description = "REST API Engine wrapped around the Meeseeks core."
 readme = "../../README.md"
 requires-python = ">=3.10,<4.0"
@@ -10,8 +10,8 @@ authors = [
 license = { text = "MIT" }
 
 dependencies = [
-  "meeseeks-core>=2.1.0-alpha",
-  "meeseeks-tools>=2.1.0-alpha",
+  "meeseeks-core>=0.0.7",
+  "meeseeks-tools>=0.0.7",
   "flask>=3.0.3,<4.0.0",
   "flask-restx>=1.3.0,<2.0.0",
 ]
