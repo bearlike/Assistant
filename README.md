@@ -14,10 +14,7 @@
 
 
 
-<video controls preload="metadata" width="960">
-  <source src="docs/meeseeks-cli-01-video.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
 > Meeseeks runs right in your terminal, browser, or hosted as an API.
 
 # Intro
