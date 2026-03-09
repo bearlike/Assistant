@@ -32,9 +32,9 @@ dev = [
   "pylint==3.3.9",
   "pytest==8.4.2",
   "pytest-cov==7.0.0",
-  "ruff==0.15.2",
+  "ruff==0.15.5",
   "types-requests==2.32.4.20260107",
-  "vulture==2.14",
+  "vulture==2.15",
 ]
 docs = [
   "mike",
