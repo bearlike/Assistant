@@ -57,8 +57,14 @@ class StepReflector:
                 SystemMessage(
                     content=(
                         "Reflect on whether the tool result satisfies the step objective. "
-                        "Return status 'ok' if complete, 'retry' if the step should be "
-                        "re-executed, or 'revise' if the tool input needs adjustment."
+                        "Return status 'ok' unless there is a CLEAR failure: "
+                        "the tool returned an explicit error message, "
+                        "the tool produced completely empty output when output was expected, "
+                        "or the result directly contradicts the objective. "
+                        "In all other cases, return 'ok'. "
+                        "Partial or imperfect results are acceptable. "
+                        "Do NOT return 'retry' or 'revise' for cosmetic issues "
+                        "or minor imperfections."
                     )
                 ),
                 HumanMessagePromptTemplate.from_template(

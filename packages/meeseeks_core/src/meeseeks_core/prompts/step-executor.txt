@@ -10,4 +10,5 @@ Rules:
 - Use only tool IDs listed under "Allowed tools".
 - If a tool has a schema, args must match it.
 - Prefer calling a tool when the step requires external information, file/system access, or verification.
-- Respond directly only if you can answer from the given context or you need a single clarifying question from the user.
+- If the plan step's purpose is already satisfied by prior context or the user's query can be answered directly, choose "respond".
+- Prefer "respond" over "tool" when uncertain.

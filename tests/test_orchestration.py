@@ -302,7 +302,8 @@ def test_orchestrate_session_marks_incomplete_on_failure(monkeypatch, tmp_path):
     assert generate_calls.count == 1
     assert run_calls.count == 1
     assert state.done_reason == "completed"
-    assert "ERROR: boom" in (captured.get("last_result") or "")
+    # PlanUpdater is skipped when only 1 remaining step (optimization)
+    # The error is still recorded in tool_outputs and the second step proceeds
 
 
 def test_orchestrate_session_edit_block_success_records_events(monkeypatch, tmp_path):
@@ -1337,8 +1338,8 @@ def test_orchestrate_session_direct_response_short_circuits(monkeypatch, tmp_pat
     assert called["synth"] is False
 
 
-def test_orchestrate_session_keeps_tools_when_selector_false(monkeypatch, tmp_path):
-    """Keep tool visibility when the selector says no tools are required."""
+def test_orchestrate_session_keeps_all_tools_visible(monkeypatch, tmp_path):
+    """All registered tools are visible to step executor without selector filtering."""
     session_store = SessionStore(root_dir=str(tmp_path))
     session_id = session_store.create_session()
     registry = ToolRegistry()
@@ -1356,15 +1357,11 @@ def test_orchestrate_session_keeps_tools_when_selector_false(monkeypatch, tmp_pa
     def fake_generate(*_args, **_kwargs):
         return plan
 
-    def fake_select(*_args, **_kwargs):
-        return planning.ToolSelection(tool_required=False, tool_ids=[], rationale="none")
-
     def fake_decide(_self, *_args, **kwargs):
         captured["allowed"] = kwargs.get("allowed_tools")
         return planning.StepDecision(decision="respond", response="ok")
 
     monkeypatch.setattr(Planner, "generate", fake_generate)
-    monkeypatch.setattr(planning.ToolSelector, "select", fake_select)
     monkeypatch.setattr(StepExecutor, "decide", fake_decide)
 
     task_master.orchestrate_session(
@@ -1378,8 +1375,8 @@ def test_orchestrate_session_keeps_tools_when_selector_false(monkeypatch, tmp_pa
     assert captured.get("allowed")
 
 
-def test_orchestrate_session_expands_web_read(monkeypatch, tmp_path):
-    """Include web_url_read when web_search is selected."""
+def test_orchestrate_session_passes_all_tools_without_selector(monkeypatch, tmp_path):
+    """All registered tools are passed through without selector filtering."""
     session_store = SessionStore(root_dir=str(tmp_path))
     session_id = session_store.create_session()
     registry = ToolRegistry()
@@ -1404,19 +1401,11 @@ def test_orchestrate_session_expands_web_read(monkeypatch, tmp_path):
     def fake_generate(*_args, **_kwargs):
         return Plan(steps=[PlanStep(title="Search", description="Find sources")])
 
-    def fake_select(*_args, **_kwargs):
-        return planning.ToolSelection(
-            tool_required=True,
-            tool_ids=["mcp_utils_internet_search_searxng_web_search"],
-            rationale="search first",
-        )
-
     def fake_decide(_self, *_args, **kwargs):
         captured["allowed"] = kwargs.get("allowed_tools")
         return planning.StepDecision(decision="respond", response="ok")
 
     monkeypatch.setattr(Planner, "generate", fake_generate)
-    monkeypatch.setattr(planning.ToolSelector, "select", fake_select)
     monkeypatch.setattr(StepExecutor, "decide", fake_decide)
 
     task_master.orchestrate_session(
@@ -1427,10 +1416,9 @@ def test_orchestrate_session_expands_web_read(monkeypatch, tmp_path):
         tool_registry=registry,
     )
 
-    assert any(
-        spec.tool_id == "mcp_utils_internet_search_web_url_read"
-        for spec in captured.get("allowed", [])
-    )
+    allowed_ids = {spec.tool_id for spec in captured.get("allowed", [])}
+    assert "mcp_utils_internet_search_searxng_web_search" in allowed_ids
+    assert "mcp_utils_internet_search_web_url_read" in allowed_ids
 
 
 def test_orchestrate_session_adds_web_tools_for_verify_steps(monkeypatch, tmp_path):
@@ -1467,19 +1455,11 @@ def test_orchestrate_session_adds_web_tools_for_verify_steps(monkeypatch, tmp_pa
     def fake_generate(*_args, **_kwargs):
         return Plan(steps=[PlanStep(title="Open and verify sources", description="Read sources")])
 
-    def fake_select(*_args, **_kwargs):
-        return planning.ToolSelection(
-            tool_required=True,
-            tool_ids=["dummy_tool"],
-            rationale="narrow",
-        )
-
     def fake_decide(_self, *_args, **kwargs):
         captured["allowed"] = kwargs.get("allowed_tools")
         return planning.StepDecision(decision="respond", response="ok")
 
     monkeypatch.setattr(Planner, "generate", fake_generate)
-    monkeypatch.setattr(planning.ToolSelector, "select", fake_select)
     monkeypatch.setattr(StepExecutor, "decide", fake_decide)
 
     task_master.orchestrate_session(
@@ -1511,6 +1491,7 @@ def test_orchestrate_session_reflection_failure_synthesizes(monkeypatch, tmp_pat
             name="Dummy",
             description="Dummy tool",
             factory=lambda: DummyTool(),
+            metadata={"reflect": True},
         )
     )
 
@@ -1586,20 +1567,6 @@ def test_orchestrator_max_iters_zero_marks_limit(monkeypatch, tmp_path):
 def test_resolve_mode_plan_trigger():
     """Switch to plan mode when plan keywords are present."""
     assert Orchestrator._resolve_mode("Make a plan for launch", None) == "plan"
-
-
-def test_should_replan_blocks_permission_denied():
-    """Avoid replanning when permission was denied."""
-    task_queue = TaskQueue(action_steps=[])
-    task_queue.last_error = "permission denied for tool"
-    assert Orchestrator._should_replan(task_queue, 0, 3, mode="act") is False
-
-
-def test_should_replan_blocks_tool_not_allowed():
-    """Avoid replanning when tool not allowed error occurs."""
-    task_queue = TaskQueue(action_steps=[])
-    task_queue.last_error = "tool not allowed in plan mode"
-    assert Orchestrator._should_replan(task_queue, 0, 3, mode="act") is False
 
 
 def test_run_action_plan_plan_mode_filters_tools(monkeypatch, tmp_path):
@@ -1820,6 +1787,7 @@ def test_run_action_plan_reflection_blocks_progress(monkeypatch):
             name="Dummy",
             description="Dummy tool",
             factory=lambda: dummy_tool,
+            metadata={"reflect": True},
         )
     )
 

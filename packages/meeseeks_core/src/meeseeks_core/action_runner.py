@@ -199,7 +199,10 @@ class ActionPlanRunner:
             content = "" if action_result is None else str(action_result)
         reflection = None
         if self._reflector is not None:
-            reflection = self._reflector.reflect(action_step, content)
+            spec = self._tool_registry.get_spec(action_step.tool_id)
+            should_reflect = spec is not None and spec.metadata.get("reflect", False)
+            if should_reflect:
+                reflection = self._reflector.reflect(action_step, content)
         return StepOutcome(content=str(content), reflection=reflection)
 
     def _handle_tool_error(
