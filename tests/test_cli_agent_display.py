@@ -3,9 +3,8 @@
 
 from __future__ import annotations
 
-from meeseeks_core.agent_context import AgentHandle
 from meeseeks_cli.cli_agent_display import AgentDisplayManager, AgentDisplayState
-
+from meeseeks_core.agent_context import AgentHandle
 
 # ---------------------------------------------------------------------------
 # AgentDisplayState
@@ -110,8 +109,9 @@ class TestAgentDisplayManager:
 
     def test_render_tree_structure(self):
         """Verify parent-child tree lines are rendered."""
-        from rich.console import Console
         from io import StringIO
+
+        from rich.console import Console
 
         mgr = AgentDisplayManager()
         mgr.on_start(AgentHandle(
@@ -134,8 +134,9 @@ class TestAgentDisplayManager:
         assert "childage" in output
 
     def test_completed_agent_shows_done(self):
-        from rich.console import Console
         from io import StringIO
+
+        from rich.console import Console
 
         mgr = AgentDisplayManager()
         handle = AgentHandle(

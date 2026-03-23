@@ -7,7 +7,6 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage
-
 from meeseeks_core.agent_context import AgentContext, AgentRegistry
 from meeseeks_core.classes import ActionStep, Plan, PlanStep
 from meeseeks_core.context import ContextSnapshot

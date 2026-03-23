@@ -11,11 +11,10 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
+from meeseeks_core.agent_context import AgentHandle
 from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.text import Text
-
-from meeseeks_core.agent_context import AgentHandle
 
 
 @dataclass
@@ -40,6 +39,7 @@ class AgentDisplayManager:
     """
 
     def __init__(self) -> None:
+        """Initialize empty display state."""
         self._lock = threading.Lock()
         self._agents: dict[str, AgentDisplayState] = {}
 

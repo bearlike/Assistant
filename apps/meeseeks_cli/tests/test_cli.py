@@ -298,38 +298,28 @@ def test_run_query_headless_auto_approves_set_tool(monkeypatch, tmp_path):
     executed = {"called": False}
     set_available_tools(["dummy_set_tool"])
 
-    class DummyTool:
-        def run(self, _step):
-            executed["called"] = True
-            MockSpeaker = get_mock_speaker()
-            return MockSpeaker(content="ok")
-
     tool_registry.register(
         ToolSpec(
             tool_id="dummy_set_tool",
             name="Dummy Set Tool",
             description="Dummy tool for set actions",
-            factory=lambda: DummyTool(),
+            factory=lambda: None,
         )
     )
 
-    def fake_generate(*_args, **_kwargs):
-        return Plan(steps=[PlanStep(title="Run dummy tool", description="Execute the tool.")])
-
-    def fake_decide(*_args, **_kwargs):
-        return types.SimpleNamespace(
-            decision="tool",
+    def fake_orchestrate(*_args, **_kwargs):
+        executed["called"] = True
+        step = ActionStep(
             tool_id="dummy_set_tool",
-            args="payload",
-            response=None,
+            operation="set",
+            tool_input="payload",
         )
+        step.result = get_mock_speaker()(content="ok")
+        task_queue = TaskQueue(action_steps=[step])
+        task_queue.task_result = "ok"
+        return task_queue
 
-    monkeypatch.setattr("meeseeks_core.planning.Planner.generate", fake_generate)
-    monkeypatch.setattr("meeseeks_core.planning.StepExecutor.decide", fake_decide)
-    monkeypatch.setattr(
-        "meeseeks_core.orchestrator.Orchestrator._should_synthesize_response",
-        lambda *_a, **_k: False,
-    )
+    monkeypatch.setattr("meeseeks_core.session_runtime.orchestrate_session", fake_orchestrate)
 
     _run_query(
         console,

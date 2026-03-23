@@ -6,13 +6,13 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
+# TYPE_CHECKING avoids circular import with agent_context.
+from typing import TYPE_CHECKING
+
 from meeseeks_core.classes import ActionStep
 from meeseeks_core.common import MockSpeaker
 from meeseeks_core.permissions import PermissionDecision
 from meeseeks_core.types import EventRecord
-
-# TYPE_CHECKING avoids circular import with agent_context.
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from meeseeks_core.agent_context import AgentHandle

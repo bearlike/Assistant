@@ -7,14 +7,12 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage
-
 from meeseeks_core.agent_context import AgentContext, AgentRegistry
 from meeseeks_core.classes import ActionStep
 from meeseeks_core.hooks import HookManager
 from meeseeks_core.permissions import PermissionDecision, PermissionPolicy
 from meeseeks_core.spawn_agent import SpawnAgentTool
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
-
 
 # ---------------------------------------------------------------------------
 # Helpers

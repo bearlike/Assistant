@@ -91,6 +91,7 @@ class SpawnAgentTool:
         permission_policy: PermissionPolicy,
         hook_manager: HookManager,
     ) -> None:
+        """Initialize with parent context and shared registries."""
         self._agent_context = agent_context
         self._tool_registry = tool_registry
         self._permission_policy = permission_policy

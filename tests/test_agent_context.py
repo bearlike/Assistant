@@ -6,14 +6,12 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from meeseeks_core.agent_context import (
     AgentContext,
     AgentDepthExceeded,
     AgentHandle,
     AgentRegistry,
 )
-
 
 # ---------------------------------------------------------------------------
 # AgentContext

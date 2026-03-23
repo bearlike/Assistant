@@ -76,7 +76,7 @@ extend-exclude = [
 [tool.ruff.lint]
 select = ["D", "E", "F", "I", "UP"]
 fixable = ["ALL"]
-per-file-ignores = { "packages/meeseeks_tools/src/meeseeks_tools/aider_bridge/edit_blocks.py" = ["D"], "vendor/**" = ["D"] }
+per-file-ignores = { "packages/meeseeks_tools/src/meeseeks_tools/aider_bridge/edit_blocks.py" = ["D"], "vendor/**" = ["D"], "tests/**" = ["D"] }
 
 [tool.ruff.lint.isort]
 combine-as-imports = true

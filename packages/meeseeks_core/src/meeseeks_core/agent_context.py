@@ -25,6 +25,7 @@ class AgentDepthExceeded(Exception):
     """Raised when attempting to spawn beyond max_depth."""
 
     def __init__(self, attempted: int, maximum: int) -> None:
+        """Initialize with the attempted and maximum depth values."""
         super().__init__(f"Agent depth {attempted} exceeds maximum {maximum}")
         self.attempted = attempted
         self.maximum = maximum
@@ -133,6 +134,7 @@ class AgentRegistry:
     """
 
     def __init__(self, *, max_concurrent: int = 20) -> None:
+        """Initialize registry with a concurrency limit."""
         self._agents: dict[str, AgentHandle] = {}
         self._lock: asyncio.Lock = asyncio.Lock()
         self._semaphore: asyncio.Semaphore = asyncio.Semaphore(max_concurrent)
