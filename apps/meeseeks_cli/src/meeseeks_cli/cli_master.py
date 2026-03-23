@@ -518,7 +518,38 @@ def _run_query(
 ) -> None:
     initial_plan = None
     mode = _resolve_query_mode(query, state)
-    if state.show_plan:
+
+    # In plan mode with interactive prompt, allow plan iteration.
+    if mode == "plan" and prompt_func is not None:
+        plan = generate_action_plan(
+            user_query=query,
+            model_name=state.model_name,
+            session_summary=store.load_summary(state.session_id),
+            mode="plan",
+        )
+        _render_plan_with_registry(console, plan)
+        state.last_plan = plan
+        while True:
+            choice = (prompt_func("[E]xecute  [R]evise  [D]one > ") or "d").strip().lower()
+            if choice.startswith("e"):
+                initial_plan = plan
+                mode = "act"
+                break
+            elif choice.startswith("r"):
+                feedback = prompt_func("Feedback > ")
+                plan = generate_action_plan(
+                    user_query=query,
+                    model_name=state.model_name,
+                    session_summary=store.load_summary(state.session_id),
+                    mode="plan",
+                    feedback=feedback,
+                )
+                _render_plan_with_registry(console, plan)
+                state.last_plan = plan
+            else:
+                console.print("Plan saved.", style="dim")
+                return
+    elif state.show_plan and mode != "plan":
         initial_plan = generate_action_plan(
             user_query=query,
             model_name=state.model_name,
