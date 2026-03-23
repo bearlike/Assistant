@@ -23,7 +23,6 @@ from meeseeks_core.planning import (
     PlanUpdater,
     ResponseSynthesizer,
     StepExecutor,
-    ToolSelector,
 )
 from meeseeks_core.reflection import StepReflector
 from meeseeks_core.session_store import SessionStore
@@ -59,7 +58,6 @@ class Orchestrator:
         self._hook_manager = hook_manager or default_hook_manager()
         self._context_builder = ContextBuilder(self._session_store)
         self._planner = Planner(self._tool_registry)
-        self._tool_selector = ToolSelector(self._tool_registry)
         self._step_executor = StepExecutor(self._tool_registry)
         self._plan_updater = PlanUpdater(self._tool_registry)
         self._synthesizer = ResponseSynthesizer(self._tool_registry)
@@ -146,16 +144,8 @@ class Orchestrator:
                 else self._tool_registry.list_specs_for_mode("act")
             )
             if plan is None:
-                if resolved_mode != "plan":
-                    selection = self._tool_selector.select(
-                        user_query,
-                        self._model_name,
-                        tool_specs=tool_specs,
-                        context=context,
-                    )
-                    if selection.tool_required and selection.tool_ids:
-                        selected_ids = self._expand_tool_ids(set(selection.tool_ids), tool_specs)
-                        tool_specs = [spec for spec in tool_specs if spec.tool_id in selected_ids]
+                # Tool filtering is handled by Planner._filter_specs_by_intent()
+                # No separate ToolSelector LLM call needed in act mode
                 plan = self._planner.generate(
                     user_query,
                     self._model_name,
@@ -183,7 +173,7 @@ class Orchestrator:
                 state.done = True
                 state.done_reason = "planned"
             else:
-                max_steps = max(0, max_iters) * 5
+                max_steps = max(0, max_iters) * 3
                 steps_run = 0
                 allowed_tool_ids = {spec.tool_id for spec in tool_specs}
                 while remaining_steps and steps_run < max_steps:
@@ -250,7 +240,8 @@ class Orchestrator:
                         state.done = True
                         state.done_reason = "canceled"
                         break
-                    if remaining_steps:
+                    if remaining_steps and len(remaining_steps) > 1:
+                        old_count = len(remaining_steps)
                         remaining_steps = self._plan_updater.update(
                             user_query,
                             self._model_name,
@@ -258,7 +249,12 @@ class Orchestrator:
                             last_result=tool_outputs[-1] if tool_outputs else None,
                             remaining_steps=remaining_steps,
                             context=context,
+                            steps_run=steps_run,
+                            max_steps=max_steps,
                         )
+                        # Hard guard: never allow plan inflation
+                        if len(remaining_steps) > old_count:
+                            remaining_steps = remaining_steps[:old_count]
                     state.plan = completed_steps + remaining_steps
                     self._append_action_plan(session_id, state.plan)
 
@@ -542,17 +538,6 @@ class Orchestrator:
         return bool(Orchestrator._collect_tool_outputs(task_queue))
 
     @staticmethod
-    def _build_revised_query(user_query: str, task_queue: TaskQueue) -> str:
-        failure_note = (
-            f"Last tool failure: {task_queue.last_error}\n" if task_queue.last_error else ""
-        )
-        return (
-            f"{user_query}\n\nPrevious tool results:\n{task_queue.task_result or ''}\n"
-            f"{failure_note}"
-            "Please revise the action plan to resolve remaining tasks."
-        )
-
-    @staticmethod
     def _resolve_mode(user_query: str, mode: str | None) -> str:
         if mode in {"plan", "act"}:
             return mode
@@ -569,17 +554,6 @@ class Orchestrator:
             return "plan"
         return "act"
 
-    @staticmethod
-    def _should_replan(task_queue: TaskQueue, iteration: int, max_iters: int, *, mode: str) -> bool:
-        if iteration >= max_iters - 1:
-            return False
-        if mode == "plan":
-            return False
-        if task_queue.last_error:
-            lowered = task_queue.last_error.lower()
-            if "permission denied" in lowered or "tool not allowed" in lowered:
-                return False
-        return True
 
 
 __all__ = ["Orchestrator"]

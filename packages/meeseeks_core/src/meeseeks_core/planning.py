@@ -526,12 +526,20 @@ class PlanUpdater:
         last_result: str | None,
         remaining_steps: list[PlanStep],
         context: ContextSnapshot | None = None,
+        steps_run: int = 0,
+        max_steps: int = 0,
     ) -> list[PlanStep]:
         """Return updated remaining steps."""
         parser = PydanticOutputParser(pydantic_object=PlanUpdate)  # type: ignore[type-var]
         system_prompt = get_system_prompt("plan-updater")
         remaining_lines = [f"- {step.title}: {step.description}" for step in remaining_steps]
         remaining_text = "\n".join(remaining_lines) or "(none)"
+        budget_note = ""
+        if max_steps > 0:
+            budget_note = (
+                f"Steps completed so far: {steps_run} of {max_steps} maximum.\n"
+                "If most steps are used, prioritize completing the goal over thoroughness.\n\n"
+            )
         prompt = ChatPromptTemplate(
             messages=[
                 SystemMessage(content=system_prompt),
@@ -539,12 +547,15 @@ class PlanUpdater:
                     "User request:\n{user_query}\n\n"
                     "Completed step:\n- {title}\n- {description}\n\n"
                     "Latest result:\n{result}\n\n"
+                    "{budget_note}"
                     "Remaining steps:\n{remaining}\n\n"
                     "{format_instructions}"
                 ),
             ],
             partial_variables={"format_instructions": parser.get_format_instructions()},
-            input_variables=["user_query", "title", "description", "result", "remaining"],
+            input_variables=[
+                "user_query", "title", "description", "result", "budget_note", "remaining",
+            ],
         )
         model = build_chat_model(
             model_name=model_name,
@@ -557,6 +568,7 @@ class PlanUpdater:
                 "title": completed_step.title,
                 "description": completed_step.description,
                 "result": last_result or "",
+                "budget_note": budget_note,
                 "remaining": remaining_text,
             }
         )

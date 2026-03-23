@@ -181,6 +181,7 @@ def _default_registry() -> ToolRegistry:
                 "AiderEditBlockTool",
             ),
             prompt_path="tools/aider-edit-blocks",
+            metadata={"reflect": True},
         )
     )
     registry.register(
@@ -219,6 +220,7 @@ def _default_registry() -> ToolRegistry:
                 "AiderShellTool",
             ),
             prompt_path="tools/aider-shell",
+            metadata={"reflect": True},
         )
     )
     return registry
@@ -262,6 +264,7 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "kind": "local",
             "enabled": True,
             "prompt": "tools/aider-edit-blocks",
+            "reflect": True,
         },
         {
             "tool_id": "aider_read_file_tool",
@@ -294,6 +297,7 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "kind": "local",
             "enabled": True,
             "prompt": "tools/aider-shell",
+            "reflect": True,
         },
     ]
     if not ha_status.enabled and ha_status.reason:

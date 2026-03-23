@@ -387,6 +387,7 @@ def test_action_runner_preserves_output_on_reflection():
             name="Dummy",
             description="Dummy tool",
             factory=lambda: DummyTool(),
+            metadata={"reflect": True},
         )
     )
     runner = ActionPlanRunner(
