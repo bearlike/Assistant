@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 from meeseeks_core.agent_context import AgentContext, AgentRegistry
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, PlanStep, TaskQueue
-from meeseeks_core.common import get_logger, session_log_context
+from meeseeks_core.common import discover_project_instructions, get_logger, session_log_context
 from meeseeks_core.compaction import should_compact, summarize_events
 from meeseeks_core.components import langfuse_session_context
 from meeseeks_core.config import get_config_value
@@ -54,6 +54,7 @@ class Orchestrator:
         self._hook_manager = hook_manager or default_hook_manager()
         self._context_builder = ContextBuilder(self._session_store)
         self._planner = Planner(self._tool_registry)
+        self._project_instructions = discover_project_instructions()
 
     def run(
         self,
@@ -140,6 +141,7 @@ class Orchestrator:
                     context=context,
                     tool_specs=self._tool_registry.list_specs(),
                     mode="plan",
+                    project_instructions=self._project_instructions,
                 )
                 state.plan = plan.steps
                 state.done = True
@@ -170,6 +172,7 @@ class Orchestrator:
                     permission_policy=self._permission_policy,
                     approval_callback=self._approval_callback,
                     hook_manager=self._hook_manager,
+                    project_instructions=self._project_instructions,
                 )
                 max_steps = max(1, max_iters) * 3
                 try:

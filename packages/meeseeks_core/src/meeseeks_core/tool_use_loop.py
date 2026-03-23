@@ -21,7 +21,7 @@ from meeseeks_core.agent_context import AgentContext, AgentHandle
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
 from meeseeks_core.common import get_logger, get_mock_speaker, get_system_prompt
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
-from meeseeks_core.config import get_config_value
+from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.context import ContextSnapshot, render_event_lines
 from meeseeks_core.hooks import HookManager
 from meeseeks_core.llm import build_chat_model, specs_to_langchain_tools
@@ -73,6 +73,7 @@ class ToolUseLoop:
         permission_policy: PermissionPolicy,
         approval_callback: Callable[[ActionStep], bool] | None = None,
         hook_manager: HookManager,
+        project_instructions: str | None = None,
     ) -> None:
         """Initialize the tool-use loop.
 
@@ -82,12 +83,14 @@ class ToolUseLoop:
             permission_policy: Permission rules for tool execution.
             approval_callback: Optional callback for ASK decisions (None for sub-agents).
             hook_manager: Lifecycle hooks.
+            project_instructions: CLAUDE.md / AGENTS.md content discovered at session start.
         """
         self._ctx = agent_context
         self._tool_registry = tool_registry
         self._permission_policy = permission_policy
         self._approval_callback = approval_callback
         self._hook_manager = hook_manager
+        self._project_instructions = project_instructions
 
         # Create SpawnAgentTool when this agent can spawn children.
         self._spawn_agent_tool: Any = None
@@ -99,6 +102,7 @@ class ToolUseLoop:
                 tool_registry=tool_registry,
                 permission_policy=permission_policy,
                 hook_manager=hook_manager,
+                project_instructions=project_instructions,
             )
 
     # ------------------------------------------------------------------
@@ -140,7 +144,7 @@ class ToolUseLoop:
                 user_id="meeseeks-tool-use",
                 session_id=f"tool-use-{self._ctx.agent_id}",
                 trace_name="meeseeks-tool-use",
-                version=get_config_value("runtime", "version", default="Not Specified"),
+                version=get_version(),
                 release=get_config_value("runtime", "envmode", default="Not Specified"),
             )
             invoke_config: dict[str, Any] = {}
@@ -304,6 +308,12 @@ class ToolUseLoop:
         """Build the initial message list for the conversation."""
         system_parts: list[str] = [get_system_prompt("system")]
 
+        # Project instructions (CLAUDE.md / AGENTS.md).
+        if self._project_instructions:
+            system_parts.append(
+                f"Project instructions:\n{self._project_instructions}"
+            )
+
         # Session context.
         if context and context.summary:
             system_parts.append(f"Session summary:\n{context.summary}")
@@ -451,7 +461,12 @@ class ToolUseLoop:
                     content="ERROR: Tool not available", success=False,
                 )
             try:
-                result = await asyncio.to_thread(tool.run, action_step)
+                # Prefer async execution for tools that support it (MCP tools).
+                # Falls back to to_thread for sync-only tools (aider_*, etc.).
+                if hasattr(tool, "arun"):
+                    result = await tool.arun(action_step)
+                else:
+                    result = await asyncio.to_thread(tool.run, action_step)
             except Exception as exc:
                 logging.error("Tool execution failed: {}", exc)
                 self._emit_tool_result_event(action_step, None, error=str(exc))

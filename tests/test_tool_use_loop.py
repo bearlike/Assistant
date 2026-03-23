@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from meeseeks_core.agent_context import AgentContext, AgentRegistry
 from meeseeks_core.classes import ActionStep, Plan, PlanStep
 from meeseeks_core.context import ContextSnapshot
@@ -416,3 +416,128 @@ class TestToolUseLoopCancel:
         assert state.done is True
         assert state.done_reason == "canceled"
         assert fake_model.ainvoke.call_count == 0
+
+
+class TestToolUseLoopToolError:
+    """Test that tool execution errors are propagated to the LLM, not crashes."""
+
+    def test_tool_error_becomes_tool_message(self):
+        """When a tool raises an exception, the error is fed back as a ToolMessage."""
+        spec = _make_spec("aider_shell_tool", "Run shell")
+        registry = _make_registry(spec)
+
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(
+            side_effect=[
+                _tool_call_response("aider_shell_tool", {"command": "bad"}, "call_1"),
+                _text_response("The tool failed, so I adapted."),
+            ]
+        )
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        mock_tool = MagicMock(spec=["run"])  # Only has run(), no arun()
+        mock_tool.run.side_effect = RuntimeError("Connection refused")
+
+        with (
+            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            tq, state = asyncio.run(
+                loop.run("do something", tool_specs=[spec], context=_make_context())
+            )
+
+        # Loop did NOT crash — LLM saw the error and produced a text response.
+        assert state.done is True
+        assert state.done_reason == "completed"
+        assert "adapted" in (tq.task_result or "").lower()
+        # The error was recorded.
+        assert tq.last_error is not None
+        assert "Connection refused" in tq.last_error
+
+    def test_async_tool_error_becomes_tool_message(self):
+        """When an async tool (arun) raises, the error is fed back as a ToolMessage."""
+        spec = _make_spec("mcp_search_tool", "Search")
+        registry = _make_registry(spec)
+
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(
+            side_effect=[
+                _tool_call_response("mcp_search_tool", {"query": "test"}, "call_1"),
+                _text_response("Search failed, but I can answer directly."),
+            ]
+        )
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        # Mock an MCP-like tool with arun that raises.
+        mock_tool = MagicMock()
+        mock_tool.arun = AsyncMock(
+            side_effect=RuntimeError("MCP error -32603: Website Error (403)")
+        )
+
+        with (
+            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            tq, state = asyncio.run(
+                loop.run("search for info", tool_specs=[spec], context=_make_context())
+            )
+
+        assert state.done is True
+        assert state.done_reason == "completed"
+        assert tq.last_error is not None
+        assert "403" in tq.last_error
+
+
+# ---------------------------------------------------------------------------
+# Project instructions injection
+# ---------------------------------------------------------------------------
+
+
+class TestProjectInstructionsInjection:
+    """Verify project instructions appear in the system prompt."""
+
+    def test_instructions_in_system_prompt(self):
+        loop = ToolUseLoop(
+            agent_context=_make_agent_context(),
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+            project_instructions="Follow DRY principle.",
+        )
+        messages = loop._build_messages("hello", None, None)
+        system_msg = messages[0]
+        assert isinstance(system_msg, SystemMessage)
+        assert "Project instructions:" in system_msg.content
+        assert "Follow DRY principle." in system_msg.content
+
+    def test_no_instructions_section_when_none(self):
+        loop = ToolUseLoop(
+            agent_context=_make_agent_context(),
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        messages = loop._build_messages("hello", None, None)
+        system_msg = messages[0]
+        assert isinstance(system_msg, SystemMessage)
+        assert "Project instructions:" not in system_msg.content

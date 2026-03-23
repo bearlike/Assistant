@@ -284,17 +284,24 @@ class MCPToolRunner:
             _log_runtime_failure(self.server_name, self.tool_name, exc)
             raise
 
+    async def arun(self, action_step: ActionStep) -> MockSpeaker:
+        """Async execution — preferred when called from an async context.
+
+        Calls ``_invoke_async`` directly, avoiding the ``asyncio.run()``
+        wrapper that would fail inside a running event loop.
+        """
+        if action_step is None:
+            raise ValueError("Action step cannot be None.")
+        MockSpeakerType = get_mock_speaker()
+        result = await self._invoke_async(action_step.tool_input)
+        return MockSpeakerType(content=result)
+
     def run(self, action_step: ActionStep) -> MockSpeaker:
-        """Execute the MCP tool using the action step argument.
-
-        Args:
-            action_step: Action step containing the prompt argument.
-
-        Returns:
-            MockSpeaker with the tool response content.
+        """Sync execution — for use from sync-only callers.
 
         Raises:
             ValueError: If action_step is None.
+            RuntimeError: If called from inside a running event loop.
         """
         if action_step is None:
             raise ValueError("Action step cannot be None.")

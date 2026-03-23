@@ -8,7 +8,6 @@ import os
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -77,6 +76,7 @@ from meeseeks_core.config import (
     get_config,
     get_config_value,
     get_mcp_config_path,
+    get_version,
     start_preflight,
 )
 from meeseeks_core.hooks import HookManager
@@ -223,13 +223,7 @@ def _format_model(model: str, max_len: int) -> Text:
 
 
 def _resolve_cli_version() -> str:
-    configured = get_config_value("runtime", "version")
-    if configured:
-        return str(configured)
-    try:
-        return version("meeseeks-cli")
-    except PackageNotFoundError:
-        return "0.0.0"
+    return get_version()
 
 
 def _brand_line(ctx: HeaderContext, width: int) -> Text:

@@ -25,7 +25,7 @@ def test_app_config_write_and_load_roundtrip(tmp_path):
     target = tmp_path / "app.json"
     AppConfig().write(target)
     loaded = AppConfig.load(target)
-    assert loaded.runtime.version
+    assert loaded.runtime.envmode
     assert loaded.llm.default_model == "gpt-5.2"
 
 

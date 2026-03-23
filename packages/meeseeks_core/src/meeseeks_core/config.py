@@ -14,6 +14,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
 from pydantic.v1 import BaseModel, Field, validator
 
 _APP_CONFIG_PATH = Path("configs/app.json")
@@ -28,6 +30,16 @@ _CONFIG_CACHE: AppConfig | None = None
 _CONFIG_WARNED = False
 _LAST_PREFLIGHT: dict[str, dict[str, Any]] | None = None
 _logger = logging.getLogger("core.config")
+
+_PACKAGE_NAME = "meeseeks-workspace"
+
+
+def get_version() -> str:
+    """Return the package version from pyproject.toml (via importlib.metadata)."""
+    try:
+        return _pkg_version(_PACKAGE_NAME)
+    except PackageNotFoundError:
+        return "0.0.0"
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -59,7 +71,6 @@ def _coerce_list(value: Any) -> list[str]:
 
 
 class RuntimeConfig(BaseModel):
-    version: str = Field("0.0.7", example="0.0.7")
     envmode: str = Field("dev", example="dev")
     log_level: str = Field("DEBUG", example="INFO")
     log_style: str = Field("", example="")

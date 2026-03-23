@@ -19,7 +19,7 @@ from meeseeks_core.components import (
     langfuse_trace_span,
     resolve_langfuse_status,
 )
-from meeseeks_core.config import get_config_value
+from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.context import ContextSnapshot, render_event_lines
 from meeseeks_core.llm import build_chat_model
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
@@ -68,9 +68,12 @@ class PromptBuilder:
         tool_specs=None,
         include_tool_schemas: bool = True,
         include_tool_guidance: bool = True,
+        project_instructions: str | None = None,
     ) -> str:
         """Build an augmented system prompt string."""
         sections = [base_prompt]
+        if project_instructions:
+            sections.append(f"Project instructions:\n{project_instructions}")
         if context and context.summary:
             sections.append(f"Session summary:\n{context.summary}")
         if context and context.selected_events:
@@ -153,6 +156,7 @@ class Planner:
         tool_specs: list[ToolSpec] | None = None,
         mode: str = "act",
         feedback: str | None = None,
+        project_instructions: str | None = None,
     ) -> Plan:
         """Generate a plan from the user query."""
         if self._tool_registry is None:
@@ -163,7 +167,7 @@ class Planner:
             user_id=user_id,
             session_id=session_id,
             trace_name=user_id,
-            version=get_config_value("runtime", "version", default="Not Specified"),
+            version=get_version(),
             release=get_config_value("runtime", "envmode", default="Not Specified"),
         )
         model = build_chat_model(
@@ -190,6 +194,7 @@ class Planner:
             tool_specs=specs,
             include_tool_schemas=False,
             include_tool_guidance=False,
+            project_instructions=project_instructions,
         )
         example_messages = self._build_example_messages(available_tool_ids, mode=mode)
         if mode == "act":

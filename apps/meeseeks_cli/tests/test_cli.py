@@ -3,8 +3,6 @@
 # ruff: noqa: I001
 import json
 import types
-from importlib.metadata import PackageNotFoundError
-
 from meeseeks_core.classes import ActionStep, Plan, PlanStep, TaskQueue, set_available_tools  # noqa: E402
 from meeseeks_core.common import get_mock_speaker  # noqa: E402
 from meeseeks_core.config import get_config_value, set_config_override, set_mcp_config_path  # noqa: E402
@@ -674,19 +672,7 @@ def test_cli_bootstrap_and_format_helpers(monkeypatch):
     _bootstrap_cli_logging_env(["prog", "-vv"])
     assert get_config_value("runtime", "log_level") == "TRACE"
 
-    set_config_override({"runtime": {"version": "9.9.9"}})
-    assert _resolve_cli_version() == "9.9.9"
-    set_config_override({"runtime": {"version": ""}})
-    assert _resolve_cli_version()
-
-    def _raise_missing(_name):
-        raise PackageNotFoundError()
-
-    monkeypatch.setattr(
-        "meeseeks_cli.cli_master.version",
-        _raise_missing,
-    )
-    assert _resolve_cli_version() == "0.0.0"
+    assert _resolve_cli_version()  # returns package version string
     assert _format_model("gpt-4o", 10).plain == "gpt-4o"
 
 

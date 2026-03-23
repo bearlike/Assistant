@@ -90,12 +90,14 @@ class SpawnAgentTool:
         tool_registry: ToolRegistry,
         permission_policy: PermissionPolicy,
         hook_manager: HookManager,
+        project_instructions: str | None = None,
     ) -> None:
         """Initialize with parent context and shared registries."""
         self._agent_context = agent_context
         self._tool_registry = tool_registry
         self._permission_policy = permission_policy
         self._hook_manager = hook_manager
+        self._project_instructions = project_instructions
 
     async def run_async(self, action_step: ActionStep) -> MockSpeaker:
         """Execute a sub-agent asynchronously. Returns result as MockSpeaker."""
@@ -150,6 +152,7 @@ class SpawnAgentTool:
                 permission_policy=self._permission_policy,
                 approval_callback=None,  # Sub-agents auto-deny on ASK.
                 hook_manager=self._hook_manager,
+                project_instructions=self._project_instructions,
             )
             max_steps = int(
                 get_config_value("agent", "sub_agent_max_steps", default=10)
