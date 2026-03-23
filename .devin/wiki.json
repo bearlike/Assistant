@@ -20,8 +20,13 @@
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
-      "title": "Orchestration Engine",
-      "purpose": "orchestrate_session, Orchestrator, ActionPlanRunner, and plan-act-observe-replan flow.",
+      "title": "Unified Tool-Use Loop",
+      "purpose": "ToolUseLoop as the single async execution engine: message construction, LLM invocation, tool dispatch, depth-aware prompts, and project instructions (CLAUDE.md/AGENTS.md) autoloading.",
+      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+    },
+    {
+      "title": "Agent Hypervisor & Sub-Agents",
+      "purpose": "AgentHypervisor (hypervisor.py) control plane, AgentContext propagation, SpawnAgentTool, tool scoping (filter-before-binding), admission control, lifecycle tracking, and structured cleanup.",
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
@@ -35,8 +40,8 @@
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
-      "title": "Permissions, Hooks, Reflection",
-      "purpose": "Approval callbacks, hook pipeline, and step reflection behavior.",
+      "title": "Permissions & Hooks",
+      "purpose": "PermissionPolicy, approval callbacks, HookManager pipeline, and agent lifecycle hooks (on_agent_start, on_agent_stop).",
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
@@ -76,7 +81,7 @@
     },
     {
       "title": "CLI Project (meeseeks_cli)",
-      "purpose": "CLI flow, dialogs, in-process runtime usage, and command handling.",
+      "purpose": "CLI flow, dialogs, agent tree display (AgentDisplayManager + Rich Live), in-process runtime usage, and command handling.",
       "parent": "Overview & Repo Map"
     },
     {
@@ -91,7 +96,7 @@
     },
     {
       "title": "Configuration & Runtime Settings",
-      "purpose": "configs/app.json, configs/mcp.json, env layering, and runtime defaults.",
+      "purpose": "configs/app.json, configs/mcp.json, AgentConfig, env layering, and runtime defaults.",
       "parent": "Overview & Repo Map"
     },
     {
@@ -101,7 +106,7 @@
     },
     {
       "title": "Testing & Quality",
-      "purpose": "Integration-first test patterns, boundaries, and coverage targets from tests/AGENTS.md.",
+      "purpose": "Integration-first test patterns, boundaries, and coverage targets from tests/CLAUDE.md.",
       "parent": "Overview & Repo Map"
     },
     {
@@ -122,15 +127,19 @@
     },
     {
       "title": "Core Runtime & Orchestration (meeseeks_core)",
-      "notes": "Mermaid: runtime facade flow (SessionRuntime -> Orchestrator -> ActionPlanRunner) and how clients call it."
+      "notes": "Mermaid: runtime facade flow (SessionRuntime -> Orchestrator -> ToolUseLoop) and how clients call it."
     },
     {
       "title": "Session Runtime & Store",
       "notes": "Mermaid: sequence for async run + JSONL event log + API polling (explicitly API-only); include RunRegistry and SessionStore."
     },
     {
-      "title": "Orchestration Engine",
-      "notes": "Mermaid: state machine for plan -> act -> observe -> replan -> respond; label orchestrate_session/Orchestrator/ActionPlanRunner."
+      "title": "Unified Tool-Use Loop",
+      "notes": "Mermaid: ToolUseLoop step cycle (build messages -> LLM invoke -> tool dispatch -> gather results -> repeat or done). Show spawn_agent as a recursive call back into ToolUseLoop."
+    },
+    {
+      "title": "Agent Hypervisor & Sub-Agents",
+      "notes": "Mermaid: agent tree diagram showing AgentContext.root() -> child() propagation, AgentHypervisor (admission, registration, cleanup), and SpawnAgentTool filter-before-binding flow."
     },
     {
       "title": "LLM Abstraction",
@@ -141,8 +150,8 @@
       "notes": "Mermaid: data flow from EventRecord -> summary -> ContextBuilder snapshot."
     },
     {
-      "title": "Permissions, Hooks, Reflection",
-      "notes": "Mermaid: sequence diagram of tool call -> hooks -> permission -> tool result -> reflection."
+      "title": "Permissions & Hooks",
+      "notes": "Mermaid: sequence diagram of tool call -> hooks -> permission -> tool result; include on_agent_start/on_agent_stop lifecycle hooks."
     },
     {
       "title": "Core Data Models & Events",
@@ -174,7 +183,7 @@
     },
     {
       "title": "CLI Project (meeseeks_cli)",
-      "notes": "Mermaid: sync flow CLI -> SessionRuntime -> Orchestrator -> response (no polling)."
+      "notes": "Mermaid: sync flow CLI -> SessionRuntime -> Orchestrator -> ToolUseLoop -> response; include AgentDisplayManager + Rich Live rendering of agent tree via lifecycle hooks."
     },
     {
       "title": "Chat UI Project (meeseeks_chat)",
@@ -186,7 +195,7 @@
     },
     {
       "title": "Configuration & Runtime Settings",
-      "notes": "Mermaid: config resolution flow (configs/app.json, configs/mcp.json, env overrides)."
+      "notes": "Mermaid: config resolution flow (configs/app.json, configs/mcp.json, env overrides); include AgentConfig section (max_depth, max_concurrent, allowed_models, default_denied_tools)."
     },
     {
       "title": "CI/CD & Docs Pipeline",
