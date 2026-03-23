@@ -2,7 +2,7 @@
 """Sub-agent spawning tool for the agent hypervisor.
 
 ``SpawnAgentTool`` creates a child ``ToolUseLoop`` instance, registers it
-in the ``AgentRegistry``, runs it to completion, and returns the result.
+in the ``AgentHypervisor``, runs it to completion, and returns the result.
 Tool scoping follows Claude Code's "filter before binding" pattern: denied
 tools are removed from the child's ``bind_tools()`` list so the child LLM
 never sees them.
@@ -13,11 +13,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from meeseeks_core.agent_context import AgentContext, AgentDepthExceeded, AgentHandle
+from meeseeks_core.agent_context import AgentContext, AgentDepthExceeded
 from meeseeks_core.classes import ActionStep
 from meeseeks_core.common import MockSpeaker, get_logger
 from meeseeks_core.config import get_config_value
 from meeseeks_core.hooks import HookManager
+from meeseeks_core.hypervisor import AgentHandle
 from meeseeks_core.permissions import PermissionPolicy
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 from meeseeks_core.types import Event

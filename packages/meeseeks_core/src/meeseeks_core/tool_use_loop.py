@@ -17,13 +17,14 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from meeseeks_core.agent_context import AgentContext, AgentHandle
+from meeseeks_core.agent_context import AgentContext
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
 from meeseeks_core.common import get_logger, get_mock_speaker, get_system_prompt
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
 from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.context import ContextSnapshot, render_event_lines
 from meeseeks_core.hooks import HookManager
+from meeseeks_core.hypervisor import AgentHandle
 from meeseeks_core.llm import build_chat_model, specs_to_langchain_tools
 from meeseeks_core.permissions import PermissionDecision, PermissionPolicy
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec

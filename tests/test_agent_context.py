@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Tests for AgentContext, AgentHandle, and AgentRegistry."""
+"""Tests for AgentContext, AgentHandle, and AgentHypervisor."""
 
 from __future__ import annotations
 
 import asyncio
 
 import pytest
-from meeseeks_core.agent_context import (
-    AgentContext,
-    AgentDepthExceeded,
-    AgentHandle,
-    AgentRegistry,
-)
+from meeseeks_core.agent_context import AgentContext, AgentDepthExceeded
+from meeseeks_core.hypervisor import AgentHandle, AgentHypervisor
 
 # ---------------------------------------------------------------------------
 # AgentContext
@@ -101,10 +97,10 @@ class TestAgentContext:
 # ---------------------------------------------------------------------------
 
 
-class TestAgentRegistry:
+class TestAgentHypervisor:
     def test_register_and_get(self):
         async def _test():
-            reg = AgentRegistry()
+            reg = AgentHypervisor()
             handle = AgentHandle(
                 agent_id="a1", parent_id=None, depth=0,
                 model_name="m", task_description="test",
@@ -117,7 +113,7 @@ class TestAgentRegistry:
 
     def test_unregister(self):
         async def _test():
-            reg = AgentRegistry()
+            reg = AgentHypervisor()
             handle = AgentHandle(
                 agent_id="a1", parent_id=None, depth=0,
                 model_name="m", task_description="test",
@@ -131,7 +127,7 @@ class TestAgentRegistry:
 
     def test_list_children(self):
         async def _test():
-            reg = AgentRegistry()
+            reg = AgentHypervisor()
             root = AgentHandle(
                 agent_id="root", parent_id=None, depth=0,
                 model_name="m", task_description="root",
@@ -158,7 +154,7 @@ class TestAgentRegistry:
 
     def test_list_descendants(self):
         async def _test():
-            reg = AgentRegistry()
+            reg = AgentHypervisor()
             for h in [
                 AgentHandle(agent_id="r", parent_id=None, depth=0,
                             model_name="m", task_description="r"),
@@ -176,7 +172,7 @@ class TestAgentRegistry:
 
     def test_mark_done(self):
         async def _test():
-            reg = AgentRegistry()
+            reg = AgentHypervisor()
             handle = AgentHandle(
                 agent_id="a1", parent_id=None, depth=0,
                 model_name="m", task_description="test",
@@ -192,7 +188,7 @@ class TestAgentRegistry:
 
     def test_update_step(self):
         async def _test():
-            reg = AgentRegistry()
+            reg = AgentHypervisor()
             handle = AgentHandle(
                 agent_id="a1", parent_id=None, depth=0,
                 model_name="m", task_description="test",
@@ -208,7 +204,7 @@ class TestAgentRegistry:
 
     def test_admit_and_release(self):
         async def _test():
-            reg = AgentRegistry(max_concurrent=2)
+            reg = AgentHypervisor(max_concurrent=2)
             assert await reg.admit() is True
             assert await reg.admit() is True
             # Third should timeout (set very short timeout for test).
@@ -223,7 +219,7 @@ class TestAgentRegistry:
 
     def test_cleanup_empties_registry(self):
         async def _test():
-            reg = AgentRegistry()
+            reg = AgentHypervisor()
             handle = AgentHandle(
                 agent_id="a1", parent_id=None, depth=0,
                 model_name="m", task_description="test",
@@ -237,7 +233,7 @@ class TestAgentRegistry:
 
     def test_cancel_agent(self):
         async def _test():
-            reg = AgentRegistry()
+            reg = AgentHypervisor()
 
             async def _dummy():
                 await asyncio.sleep(100)

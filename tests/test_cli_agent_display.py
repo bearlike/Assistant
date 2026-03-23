@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from meeseeks_cli.cli_agent_display import AgentDisplayManager, AgentDisplayState
-from meeseeks_core.agent_context import AgentHandle
+from meeseeks_core.hypervisor import AgentHandle
 
 # ---------------------------------------------------------------------------
 # AgentDisplayState

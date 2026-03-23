@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 
-from meeseeks_core.agent_context import AgentContext, AgentRegistry
+from meeseeks_core.agent_context import AgentContext
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, PlanStep, TaskQueue
 from meeseeks_core.common import discover_project_instructions, get_logger, session_log_context
 from meeseeks_core.compaction import should_compact, summarize_events
@@ -14,6 +14,7 @@ from meeseeks_core.components import langfuse_session_context
 from meeseeks_core.config import get_config_value
 from meeseeks_core.context import ContextBuilder
 from meeseeks_core.hooks import HookManager, default_hook_manager
+from meeseeks_core.hypervisor import AgentHypervisor
 from meeseeks_core.permissions import (
     PermissionPolicy,
     approval_callback_from_config,
@@ -156,7 +157,7 @@ class Orchestrator:
                 max_concurrent = int(
                     get_config_value("agent", "max_concurrent", default=20)
                 )
-                registry = AgentRegistry(max_concurrent=max_concurrent)
+                registry = AgentHypervisor(max_concurrent=max_concurrent)
                 root_ctx = AgentContext.root(
                     model_name=self._model_name,
                     max_depth=max_depth,

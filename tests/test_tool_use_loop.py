@@ -7,10 +7,11 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage, SystemMessage
-from meeseeks_core.agent_context import AgentContext, AgentRegistry
+from meeseeks_core.agent_context import AgentContext
 from meeseeks_core.classes import ActionStep, Plan, PlanStep
 from meeseeks_core.context import ContextSnapshot
 from meeseeks_core.hooks import HookManager
+from meeseeks_core.hypervisor import AgentHypervisor
 from meeseeks_core.permissions import PermissionDecision, PermissionPolicy
 from meeseeks_core.token_budget import TokenBudget
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
@@ -93,7 +94,7 @@ def _make_agent_context(
         model_name=model_name,
         max_depth=max_depth,
         should_cancel=should_cancel,
-        registry=AgentRegistry(max_concurrent=100),
+        registry=AgentHypervisor(max_concurrent=100),
     )
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Real-time agent tree display for the CLI.
 
-Thread-safe bridge between the async AgentRegistry lifecycle hooks and
+Thread-safe bridge between the async AgentHypervisor lifecycle hooks and
 the Rich Live rendering loop. Updated by ``HookManager.on_agent_start``
 / ``on_agent_stop`` callbacks; queried by Rich Live's refresh thread.
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
-from meeseeks_core.agent_context import AgentHandle
+from meeseeks_core.hypervisor import AgentHandle
 from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.text import Text

@@ -4,7 +4,7 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 
 ## What we test
 - **Async tool-use loop** (`test_tool_use_loop.py`): text response, tool calls, max_steps, permission denial, plan context, cancellation. Uses `asyncio.run()` + `AgentContext.root()` + `AsyncMock` for `model.ainvoke`.
-- **Agent hypervisor** (`test_agent_context.py`): AgentContext depth/child/root, AgentRegistry CRUD, admission control, cancellation, cleanup.
+- **Agent hypervisor** (`test_agent_context.py`): AgentContext depth/child/root, AgentHypervisor CRUD, admission control, cancellation, cleanup.
 - **Sub-agent spawning** (`test_spawn_agent.py`): SpawnAgentTool execution, tool scoping (allowed/denied), model validation, depth gate.
 - **CLI agent display** (`test_cli_agent_display.py`): AgentDisplayManager state, hook callbacks, Rich rendering, tree structure, thread safety.
 - **Orchestration** (`test_task_master.py`): `orchestrate_session` completion, max-iter, error paths.
@@ -15,7 +15,7 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 ## Hidden dependencies / assumptions
 - Many tests rely on `monkeypatch` for env vars (LLM config, MCP config, log levels).
 - LLM calls are mocked at the orchestration boundary (`orchestrate_session`) or via `AsyncMock` on `model.ainvoke`.
-- `ToolUseLoop` tests require `AgentContext.root()` with an `AgentRegistry` — do not use the old `model_name=` kwarg.
+- `ToolUseLoop` tests require `AgentContext.root()` with an `AgentHypervisor` — do not use the old `model_name=` kwarg.
 - Avoid pulling in real MCP servers or external HTTP.
 
 ## Pitfalls / gotchas

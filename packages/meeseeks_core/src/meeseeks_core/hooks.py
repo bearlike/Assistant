@@ -15,7 +15,7 @@ from meeseeks_core.permissions import PermissionDecision
 from meeseeks_core.types import EventRecord
 
 if TYPE_CHECKING:
-    from meeseeks_core.agent_context import AgentHandle
+    from meeseeks_core.hypervisor import AgentHandle
 
 
 @dataclass

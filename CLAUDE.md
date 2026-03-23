@@ -1,11 +1,12 @@
 # Agents Guide - Personal Assistant (Meeseeks)
 
 ## What this codebase is
-Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervisor. The core engine uses a single async `ToolUseLoop` that the LLM drives via native `bind_tools` / `tool_use`. Sub-agents are spawned via a `spawn_agent` tool, tracked by an `AgentRegistry` hypervisor, and cleaned up via structured concurrency. It ships multiple interfaces (CLI, chat UI, REST API, Home Assistant) that share the same core engine.
+Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervisor. The core engine uses a single async `ToolUseLoop` that the LLM drives via native `bind_tools` / `tool_use`. Sub-agents are spawned via a `spawn_agent` tool, tracked by an `AgentHypervisor`, and cleaned up via structured concurrency. It ships multiple interfaces (CLI, chat UI, REST API, Home Assistant) that share the same core engine.
 
 ## Core entry points
 - `packages/meeseeks_core/src/meeseeks_core/tool_use_loop.py`: async tool-use conversation loop (`ToolUseLoop`) — the core execution engine
-- `packages/meeseeks_core/src/meeseeks_core/agent_context.py`: `AgentContext` (immutable per-agent state), `AgentHandle`, `AgentRegistry` (hypervisor control plane)
+- `packages/meeseeks_core/src/meeseeks_core/agent_context.py`: `AgentContext` (immutable per-agent state)
+- `packages/meeseeks_core/src/meeseeks_core/hypervisor.py`: `AgentHypervisor` (control plane), `AgentHandle` (per-agent runtime state)
 - `packages/meeseeks_core/src/meeseeks_core/spawn_agent.py`: `SpawnAgentTool` + `SPAWN_AGENT_SCHEMA` — sub-agent creation with tool scoping
 - `packages/meeseeks_core/src/meeseeks_core/orchestrator.py`: session lifecycle, sync→async bridge via `asyncio.run()`
 - `packages/meeseeks_core/src/meeseeks_core/task_master.py`: `generate_action_plan` + `orchestrate_session` entry points
@@ -116,7 +117,7 @@ Official library/framework documentation and code examples.
 ## Orchestration architecture
 - **Single async loop**: `ToolUseLoop.run()` is the only execution engine. The LLM decides which tools to call via native `bind_tools`. No separate planner→executor→synthesizer pipeline.
 - **Sub-agent spawning**: The LLM can call `spawn_agent(task, model, allowed_tools, denied_tools)` to create child `ToolUseLoop` instances. Tool scoping follows Claude Code's "filter before binding" pattern.
-- **Agent hypervisor**: `AgentRegistry` tracks all agents, enforces admission control (max_concurrent via Semaphore), and guarantees cleanup via structured concurrency (`asyncio.gather` + `finally` blocks).
+- **Agent hypervisor**: `AgentHypervisor` tracks all agents, enforces admission control (max_concurrent via Semaphore), and guarantees cleanup via structured concurrency (`asyncio.gather` + `finally` blocks).
 - **Depth control**: Max depth 5 (configurable). At max depth, `spawn_agent` is removed from the tool schema entirely. Depth-aware prompts guide spawn behavior.
 - **User steering**: Root agent has a `message_queue` (drained between steps as HumanMessage) and `interrupt_step` event. Sub-agents do not receive user messages.
 - **Planning is root-only**: Sub-agents always execute (act mode). They bypass `Orchestrator` and its plan/mode logic entirely.
