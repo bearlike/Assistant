@@ -9,12 +9,11 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 from pydantic.v1 import BaseModel, Field, validator
 

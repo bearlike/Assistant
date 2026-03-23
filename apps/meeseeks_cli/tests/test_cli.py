@@ -5,7 +5,7 @@ import json
 import types
 from meeseeks_core.classes import ActionStep, Plan, PlanStep, TaskQueue, set_available_tools  # noqa: E402
 from meeseeks_core.common import get_mock_speaker  # noqa: E402
-from meeseeks_core.config import get_config_value, set_config_override, set_mcp_config_path  # noqa: E402
+from meeseeks_core.config import get_config_value, set_mcp_config_path  # noqa: E402
 from meeseeks_core.session_runtime import SessionRuntime  # noqa: E402
 from meeseeks_core.session_store import SessionStore  # noqa: E402
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, load_registry  # noqa: E402
