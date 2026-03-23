@@ -31,10 +31,10 @@ dev = [
   "pre-commit==3.8.0",
   "pylint==3.3.9",
   "pytest==8.4.2",
-  "pytest-cov==7.0.0",
-  "ruff==0.15.2",
+  "pytest-cov==7.1.0",
+  "ruff==0.15.7",
   "types-requests==2.32.4.20260107",
-  "vulture==2.14",
+  "vulture==2.15",
 ]
 docs = [
   "mike",
