@@ -592,7 +592,7 @@ def _run_query(
             refresh_per_second=4,
             transient=True,
         ) as live:
-            live.get_renderable = lambda: (  # type: ignore[assignment]
+            live.get_renderable = lambda: (  # type: ignore[method-assign]
                 agent_display.render() if agent_display.has_agents else Text("")
             )
             task_queue = runtime.run_sync(

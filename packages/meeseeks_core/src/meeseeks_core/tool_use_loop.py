@@ -195,12 +195,13 @@ class ToolUseLoop:
                         break
 
                     # Execute all tool calls concurrently with error isolation.
-                    async with asyncio.TaskGroup() as tg:
-                        tasks = [
-                            tg.create_task(self._safe_execute(tc, tool_specs))
+                    # Using gather (not TaskGroup) for Python 3.10 compatibility.
+                    results: list[ToolCallResult] = await asyncio.gather(
+                        *(
+                            self._safe_execute(tc, tool_specs)
                             for tc in response.tool_calls
-                        ]
-                    results = [t.result() for t in tasks]
+                        )
+                    )
 
                     for tool_call, result in zip(response.tool_calls, results):
                         messages.append(
@@ -274,7 +275,7 @@ class ToolUseLoop:
 
     async def _safe_execute(
         self,
-        tool_call: dict[str, Any],
+        tool_call: Any,
         tool_specs: list[ToolSpec],
     ) -> ToolCallResult:
         """Execute a tool call, catching exceptions so TaskGroup doesn't cancel siblings."""
@@ -399,7 +400,7 @@ class ToolUseLoop:
 
     async def _execute_tool_call(
         self,
-        tool_call: dict[str, Any],
+        tool_call: Any,
         tool_specs: list[ToolSpec],
     ) -> ToolCallResult:
         """Execute a single LLM tool_call: permission → hooks → run → emit event."""
@@ -479,7 +480,7 @@ class ToolUseLoop:
     # ActionStep construction
     # ------------------------------------------------------------------
 
-    def _tool_call_to_action_step(self, tool_call: dict[str, Any]) -> ActionStep:
+    def _tool_call_to_action_step(self, tool_call: Any) -> ActionStep:
         """Convert an LLM tool_call dict to an ActionStep."""
         tool_id: str = tool_call.get("name") or ""
         args: Any = tool_call.get("args") or {}
