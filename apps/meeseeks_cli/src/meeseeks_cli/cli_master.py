@@ -16,9 +16,9 @@ from prompt_toolkit.history import FileHistory
 from rich import box
 from rich.columns import Columns
 from rich.console import Console, Group, RenderableType
+from rich.live import Live
 from rich.panel import Panel
 from rich.rule import Rule
-from rich.live import Live
 from rich.status import Status
 from rich.syntax import Syntax
 from rich.text import Text
