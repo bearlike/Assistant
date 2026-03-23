@@ -1,18 +1,24 @@
 # Agents Guide - Personal Assistant (Meeseeks)
 
 ## What this codebase is
-Meeseeks is a multi-agent LLM personal assistant that decomposes user requests into atomic actions, runs them through tools, and returns a synthesized response. It ships multiple interfaces (CLI, chat UI, REST API, Home Assistant) that share the same core engine.
+Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervisor. The core engine uses a single async `ToolUseLoop` that the LLM drives via native `bind_tools` / `tool_use`. Sub-agents are spawned via a `spawn_agent` tool, tracked by an `AgentHypervisor`, and cleaned up via structured concurrency. It ships multiple interfaces (CLI, chat UI, REST API, Home Assistant) that share the same core engine.
 
 ## Core entry points
-- `packages/meeseeks_core/src/meeseeks_core/task_master.py`: action planning + task execution loop
+- `packages/meeseeks_core/src/meeseeks_core/tool_use_loop.py`: async tool-use conversation loop (`ToolUseLoop`) — the core execution engine
+- `packages/meeseeks_core/src/meeseeks_core/agent_context.py`: `AgentContext` (immutable per-agent state)
+- `packages/meeseeks_core/src/meeseeks_core/hypervisor.py`: `AgentHypervisor` (control plane), `AgentHandle` (per-agent runtime state)
+- `packages/meeseeks_core/src/meeseeks_core/spawn_agent.py`: `SpawnAgentTool` + `SPAWN_AGENT_SCHEMA` — sub-agent creation with tool scoping
+- `packages/meeseeks_core/src/meeseeks_core/orchestrator.py`: session lifecycle, sync→async bridge via `asyncio.run()`
+- `packages/meeseeks_core/src/meeseeks_core/task_master.py`: `generate_action_plan` + `orchestrate_session` entry points
 - `packages/meeseeks_core/src/meeseeks_core/classes.py`: `ActionStep` (tool_id/operation/tool_input), `TaskQueue`, `AbstractTool` contracts
-- `packages/meeseeks_core/src/meeseeks_core/planning.py`: `Planner`, `ToolSelector`, `StepExecutor`, `PlanUpdater`
-- `packages/meeseeks_core/src/meeseeks_core/session_runtime.py`: session lifecycle, listing, archiving, and async runs
+- `packages/meeseeks_core/src/meeseeks_core/planning.py`: `Planner`, `PromptBuilder`
+- `packages/meeseeks_core/src/meeseeks_core/session_runtime.py`: session lifecycle, listing, user steering (`enqueue_message`, `interrupt_step`)
 - `packages/meeseeks_core/src/meeseeks_core/session_store.py`: transcript storage, tags, and archive state
+- `packages/meeseeks_core/src/meeseeks_core/config.py`: `AppConfig` including `AgentConfig` (max_depth, max_concurrent, allowed_models, etc.)
 - `packages/meeseeks_tools/src/meeseeks_tools/`: tool implementations and integration glue
 - `apps/meeseeks_chat/src/meeseeks_chat/chat_master.py`: Streamlit UI
 - `apps/meeseeks_api/src/meeseeks_api/backend.py`: Flask API
-- `apps/meeseeks_cli/src/meeseeks_cli/cli_master.py`: terminal CLI
+- `apps/meeseeks_cli/src/meeseeks_cli/cli_master.py`: terminal CLI with Rich Live agent display
 - `meeseeks_ha_conversation/`: Home Assistant integration
 
 ## How to get context fast
@@ -50,7 +56,7 @@ Observability platform for LLM traces. Meeseeks instruments all LLM calls with L
 #### Investigation workflow (most common path)
 1. **Start broad**: `get_error_count(age=1440)` to check if there are recent errors (last 24h).
 2. **List recent sessions**: `fetch_sessions(age=1440)` to find Meeseeks session IDs.
-3. **List traces for a session**: `fetch_traces(age=1440, session_id="...", name="meeseeks-task-master")` to find planning traces, or `name="meeseeks-response"` for synthesis traces.
+3. **List traces for a session**: `fetch_traces(age=1440, session_id="...", name="meeseeks-tool-use")` to find tool-use loop traces, or `name="meeseeks-task-master"` for planning traces.
 4. **Inspect a trace**: `fetch_trace(trace_id="...", include_observations=True)` to see all LLM calls within a trace, including prompts, completions, token counts, and latency.
 5. **Drill into a specific LLM call**: `fetch_observation(observation_id="...")` to inspect a single generation's input/output.
 6. **Check exceptions**: `get_exception_details(trace_id="...")` when a trace has errors.
@@ -59,7 +65,7 @@ Observability platform for LLM traces. Meeseeks instruments all LLM calls with L
 - **`get_error_count(age)`**: Quick health check — returns count of traces with exceptions in the last N minutes (max 10080 = 7 days).
 - **`fetch_sessions(age)`**: List Langfuse sessions. Meeseeks sessions map to Langfuse sessions via the session ID in `orchestrator.py`.
 - **`get_session_details(session_id, include_observations=True)`**: Deep-dive into a session with all its traces and observations.
-- **`fetch_traces(age, ...)`**: Find traces by name, user_id, session_id, tags, or metadata. Key trace names in Meeseeks: `meeseeks-task-master` (planning), `meeseeks-response` (synthesis), `meeseeks-reflection` (step reflection), `meeseeks-context` (context selection).
+- **`fetch_traces(age, ...)`**: Find traces by name, user_id, session_id, tags, or metadata. Key trace names in Meeseeks: `meeseeks-tool-use` (main tool-use loop), `meeseeks-task-master` (planning), `meeseeks-context` (context selection).
 - **`fetch_trace(trace_id, include_observations=True)`**: Full trace with all child observations. Use `output_mode="full_json_file"` for large traces.
 - **`fetch_observations(age, type="GENERATION")`**: Find all LLM generations in a time window. Filter by `name`, `user_id`, `trace_id`, or `parent_observation_id`.
 - **`fetch_observation(observation_id)`**: Single observation detail — includes full input/output, model name, token usage, latency.
@@ -93,7 +99,7 @@ Official library/framework documentation and code examples.
 - **Parallel queries**: When investigating, fire multiple MCP calls in parallel (e.g., DeepWiki for architecture + Langfuse for traces + SearXNG for docs).
 - **Cross-reference**: Use DeepWiki/Devin wiki for "how should it work" and Langfuse for "how did it actually work" during debugging.
 - **Session IDs bridge Meeseeks and Langfuse**: The `session_id` from `SessionStore` is the same ID used in Langfuse traces. Use it to jump between local transcript analysis and Langfuse observability.
-- **Trace names in Meeseeks**: Planning traces use `user_id="meeseeks-task-master"`, response synthesis uses `user_id="meeseeks-response"`, reflection uses `user_id="meeseeks-reflection"`, context selection uses `user_id="meeseeks-context"`.
+- **Trace names in Meeseeks**: Tool-use loop traces use `user_id="meeseeks-tool-use"`, planning uses `user_id="meeseeks-task-master"`, context selection uses `user_id="meeseeks-context"`. Sub-agent traces share the same session_id but have distinct agent_id tags in event payloads.
 - **Age parameter**: Langfuse tools use `age` in minutes (not timestamps). Common values: 60 (1h), 1440 (24h), 10080 (7 days max).
 
 ## Engineering principles (project-specific)
@@ -108,9 +114,13 @@ Official library/framework documentation and code examples.
 - Treat language models as black-box APIs with non-deterministic output; avoid anthropomorphic language and describe changes objectively (e.g., “updated prompts/instructions”).
 - Keep type hints precise; avoid loosening to `Any` unless no accurate alternative exists.
 
-## Orchestration insights (transferable)
-- Separate tool execution from user-facing response: synthesize after tool results, don't dump raw tool output.
-- Keep the loop explicit: plan -> act -> observe -> decide; re-plan only when needed.
+## Orchestration architecture
+- **Single async loop**: `ToolUseLoop.run()` is the only execution engine. The LLM decides which tools to call via native `bind_tools`. No separate planner→executor→synthesizer pipeline.
+- **Sub-agent spawning**: The LLM can call `spawn_agent(task, model, allowed_tools, denied_tools)` to create child `ToolUseLoop` instances. Tool scoping follows Claude Code's "filter before binding" pattern.
+- **Agent hypervisor**: `AgentHypervisor` tracks all agents, enforces admission control (max_concurrent via Semaphore), and guarantees cleanup via structured concurrency (`asyncio.gather` + `finally` blocks).
+- **Depth control**: Max depth 5 (configurable). At max depth, `spawn_agent` is removed from the tool schema entirely. Depth-aware prompts guide spawn behavior.
+- **User steering**: Root agent has a `message_queue` (drained between steps as HumanMessage) and `interrupt_step` event. Sub-agents do not receive user messages.
+- **Planning is root-only**: Sub-agents always execute (act mode). They bypass `Orchestrator` and its plan/mode logic entirely.
 - Make tool inputs schema-aware; prefer structured `tool_input` for MCP tools.
 - Surface tool activity clearly (permissions, tool IDs, arguments) to reduce user confusion.
 

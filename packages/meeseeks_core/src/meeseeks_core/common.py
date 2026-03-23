@@ -10,6 +10,7 @@ import sys
 import time
 from contextlib import contextmanager
 from importlib import resources
+from pathlib import Path
 from typing import NamedTuple
 
 import tiktoken
@@ -164,6 +165,40 @@ def get_system_prompt(name: str = "action-planner") -> str:
         logging.debug("Getting system prompt from `{}`", system_prompt_path)
     del logging
     return system_prompt.strip()
+
+
+_NOLOAD_MARKER = "<!-- meeseeks:noload -->"
+
+
+def discover_project_instructions(cwd: str | None = None) -> str | None:
+    """Discover and load CLAUDE.md/AGENTS.md instruction files from the working directory.
+
+    CLAUDE.md takes priority. Falls back to AGENTS.md if CLAUDE.md is absent.
+    Files containing ``<!-- meeseeks:noload -->`` on the first line are skipped.
+
+    Returns the instruction text, or ``None`` if no files are found.
+    """
+    logging = get_logger(name="core.common.discover_project_instructions")
+    base = Path(cwd) if cwd else Path.cwd()
+
+    for filename in ("CLAUDE.md", "AGENTS.md"):
+        candidate = base / filename
+        if not candidate.is_file():
+            continue
+        try:
+            content = candidate.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            logging.warning("Failed to read {}: {}", candidate, exc)
+            continue
+        if not content:
+            continue
+        if content.startswith(_NOLOAD_MARKER):
+            logging.debug("Skipping {} (noload marker)", candidate)
+            continue
+        logging.info("Loaded project instructions from {}", candidate)
+        return content
+
+    return None
 
 
 def format_tool_input(tool_input: object) -> str:

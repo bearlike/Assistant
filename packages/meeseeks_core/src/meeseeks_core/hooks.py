@@ -6,10 +6,16 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
+# TYPE_CHECKING avoids circular import with agent_context.
+from typing import TYPE_CHECKING
+
 from meeseeks_core.classes import ActionStep
 from meeseeks_core.common import MockSpeaker
 from meeseeks_core.permissions import PermissionDecision
 from meeseeks_core.types import EventRecord
+
+if TYPE_CHECKING:
+    from meeseeks_core.hypervisor import AgentHandle
 
 
 @dataclass
@@ -26,6 +32,8 @@ class HookManager:
     pre_compact: list[Callable[[list[EventRecord]], list[EventRecord]]] = field(
         default_factory=list
     )
+    on_agent_start: list[Callable[[AgentHandle], None]] = field(default_factory=list)
+    on_agent_stop: list[Callable[[AgentHandle], None]] = field(default_factory=list)
 
     def run_pre_tool_use(self, action_step: ActionStep) -> ActionStep:
         """Apply pre-tool hooks to an action step.
@@ -83,6 +91,17 @@ class HookManager:
         for hook in self.pre_compact:
             event_list = hook(event_list)
         return event_list
+
+
+    def run_on_agent_start(self, handle: AgentHandle) -> None:
+        """Notify hooks that an agent has started."""
+        for hook in self.on_agent_start:
+            hook(handle)
+
+    def run_on_agent_stop(self, handle: AgentHandle) -> None:
+        """Notify hooks that an agent has stopped."""
+        for hook in self.on_agent_stop:
+            hook(handle)
 
 
 def default_hook_manager() -> HookManager:

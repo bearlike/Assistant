@@ -13,7 +13,7 @@ from pydantic.v1 import BaseModel, Field
 
 from meeseeks_core.common import format_tool_input, get_logger
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
-from meeseeks_core.config import get_config_value
+from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.llm import build_chat_model
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.token_budget import TokenBudget, get_token_budget
@@ -168,7 +168,7 @@ class ContextBuilder:
             user_id="meeseeks-context",
             session_id=f"context-{os.getpid()}-{os.urandom(4).hex()}",
             trace_name="meeseeks-context",
-            version=get_config_value("runtime", "version", default="Not Specified"),
+            version=get_version(),
             release=get_config_value("runtime", "envmode", default="Not Specified"),
         )
         config: dict[str, object] = {}

@@ -9,24 +9,18 @@ from typing import cast
 
 from langchain_core._api.beta_decorator import LangChainBetaWarning
 
-from meeseeks_core.action_runner import ActionPlanRunner
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
 from meeseeks_core.common import get_logger
 from meeseeks_core.config import get_config_value
 from meeseeks_core.context import ContextSnapshot
-from meeseeks_core.hooks import HookManager, default_hook_manager
+from meeseeks_core.hooks import HookManager
 from meeseeks_core.orchestrator import Orchestrator
-from meeseeks_core.permissions import (
-    PermissionPolicy,
-    approval_callback_from_config,
-    load_permission_policy,
-)
+from meeseeks_core.permissions import PermissionPolicy
 from meeseeks_core.planning import Planner
-from meeseeks_core.reflection import StepReflector
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.token_budget import get_token_budget
 from meeseeks_core.tool_registry import ToolRegistry, load_registry
-from meeseeks_core.types import Event, EventRecord
+from meeseeks_core.types import EventRecord
 
 logging = get_logger(name="core.task_master")
 
@@ -57,6 +51,7 @@ def generate_action_plan(
     selected_events: list[EventRecord] | None = None,
     *,
     mode: str = "act",
+    feedback: str | None = None,
 ) -> Plan:
     """Generate a plan for a user query."""
     tool_registry = tool_registry or load_registry()
@@ -72,35 +67,9 @@ def generate_action_plan(
         selected_events,
         resolved_model,
     )
-    return Planner(tool_registry).generate(user_query, resolved_model, context=context, mode=mode)
-
-
-def run_action_plan(
-    task_queue: TaskQueue,
-    tool_registry: ToolRegistry | None = None,
-    event_logger: Callable[[Event], None] | None = None,
-    permission_policy: PermissionPolicy | None = None,
-    approval_callback: Callable[[ActionStep], bool] | None = None,
-    hook_manager: HookManager | None = None,
-    model_name: str | None = None,
-    *,
-    mode: str = "act",
-) -> TaskQueue:
-    """Execute a task queue with permissions and hooks."""
-    tool_registry = tool_registry or load_registry()
-    permission_policy = permission_policy or load_permission_policy()
-    approval_callback = approval_callback or approval_callback_from_config()
-    hook_manager = hook_manager or default_hook_manager()
-    runner = ActionPlanRunner(
-        tool_registry=tool_registry,
-        permission_policy=permission_policy,
-        approval_callback=approval_callback,
-        hook_manager=hook_manager,
-        event_logger=event_logger,
-        reflector=StepReflector(model_name),
-        mode=mode,
+    return Planner(tool_registry).generate(
+        user_query, resolved_model, context=context, mode=mode, feedback=feedback,
     )
-    return runner.run(task_queue)
 
 
 def orchestrate_session(
@@ -118,7 +87,7 @@ def orchestrate_session(
     mode: str | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
-    """Run the plan-act-observe orchestration loop."""
+    """Run the orchestration loop."""
     return Orchestrator(
         model_name=model_name,
         session_store=session_store,
@@ -137,4 +106,4 @@ def orchestrate_session(
     )
 
 
-__all__ = ["generate_action_plan", "orchestrate_session", "run_action_plan"]
+__all__ = ["generate_action_plan", "orchestrate_session"]

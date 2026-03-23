@@ -6,14 +6,23 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Protocol, cast
 
+from langchain_core.messages import BaseMessage
+
 from meeseeks_core.config import get_config_value
 
 
 class ChatModel(Protocol):
     """Protocol for LangChain-compatible chat models."""
 
-    def invoke(self, input_data: object, config: object | None = None, **kwargs: object) -> object:
-        """Invoke the model with structured input."""
+    def invoke(
+        self, input_data: object, config: object | None = None, **kwargs: object
+    ) -> BaseMessage:
+        """Invoke the model synchronously."""
+
+    async def ainvoke(
+        self, input_data: object, config: object | None = None, **kwargs: object
+    ) -> BaseMessage:
+        """Invoke the model asynchronously."""
 
 
 def _normalize_model_list(raw: object) -> list[str]:
@@ -110,9 +119,37 @@ def build_chat_model(
     return cast(ChatModel, ChatLiteLLM(**kwargs))
 
 
+def specs_to_langchain_tools(specs: list[object]) -> list[dict[str, Any]]:
+    """Convert ToolSpecs to LangChain bind_tools() format.
+
+    Each spec must have ``tool_id``, ``description``, and ``metadata["schema"]``.
+    Specs without a schema are silently skipped.
+    """
+    tools: list[dict[str, Any]] = []
+    for spec in specs:
+        if not getattr(spec, "enabled", True):
+            continue
+        metadata = getattr(spec, "metadata", None) or {}
+        schema = metadata.get("schema")
+        if not isinstance(schema, dict):
+            continue
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": getattr(spec, "tool_id", ""),
+                    "description": getattr(spec, "description", ""),
+                    "parameters": schema,
+                },
+            }
+        )
+    return tools
+
+
 __all__ = [
     "build_chat_model",
     "ChatModel",
     "model_supports_reasoning_effort",
     "resolve_reasoning_effort",
+    "specs_to_langchain_tools",
 ]

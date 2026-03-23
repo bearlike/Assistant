@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from meeseeks_core.classes import Plan, TaskQueue
@@ -45,6 +46,8 @@ class RunHandle:
     thread: threading.Thread
     cancel_event: threading.Event
     started_at: str
+    message_queue: asyncio.Queue[str] | None = field(default=None)
+    interrupt_step: asyncio.Event | None = field(default=None)
 
 
 class RunRegistry:
@@ -113,6 +116,11 @@ class RunRegistry:
         with self._lock:
             handle = self._runs.get(session_id)
             return handle.cancel_event if handle else None
+
+    def get_handle(self, session_id: str) -> RunHandle | None:
+        """Return the run handle for a session, if present."""
+        with self._lock:
+            return self._runs.get(session_id)
 
 
 def _filter_events(events: list[EventRecord], after_ts: str | None) -> list[EventRecord]:
@@ -316,3 +324,26 @@ class SessionRuntime:
     def is_running(self, session_id: str) -> bool:
         """Return True if session has an active run."""
         return self._run_registry.is_running(session_id)
+
+    def enqueue_message(self, session_id: str, text: str) -> bool:
+        """Enqueue a steering message for the root agent of a running session.
+
+        Returns False if no active run or no message queue.
+        """
+        handle = self._run_registry.get_handle(session_id)
+        if handle and handle.message_queue is not None:
+            handle.message_queue.put_nowait(text)
+            return True
+        return False
+
+    def interrupt_step(self, session_id: str) -> bool:
+        """Interrupt the current tool execution step.
+
+        The loop continues after the interrupted step with error results.
+        Returns False if no active run or no interrupt event.
+        """
+        handle = self._run_registry.get_handle(session_id)
+        if handle and handle.interrupt_step is not None:
+            handle.interrupt_step.set()
+            return True
+        return False

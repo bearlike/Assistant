@@ -157,6 +157,17 @@ def _default_registry() -> ToolRegistry:
     """Create the built-in registry for local tools."""
     registry = ToolRegistry()
     ha_status = resolve_home_assistant_status()
+    ha_metadata: dict[str, JsonValue] = {
+        "schema": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "Task to perform"},
+            },
+            "required": ["task"],
+        },
+    }
+    if not ha_status.enabled:
+        ha_metadata["disabled_reason"] = ha_status.reason
     registry.register(
         ToolSpec(
             tool_id="home_assistant_tool",
@@ -168,7 +179,7 @@ def _default_registry() -> ToolRegistry:
             ),
             enabled=ha_status.enabled,
             prompt_path="tools/home-assistant",
-            metadata={"disabled_reason": ha_status.reason} if not ha_status.enabled else {},
+            metadata=ha_metadata,
         )
     )
     registry.register(
@@ -181,7 +192,23 @@ def _default_registry() -> ToolRegistry:
                 "AiderEditBlockTool",
             ),
             prompt_path="tools/aider-edit-blocks",
-            metadata={"reflect": True},
+            metadata={
+                "reflect": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "SEARCH/REPLACE block content",
+                        },
+                        "root": {
+                            "type": "string",
+                            "description": "Project root directory",
+                        },
+                    },
+                    "required": ["content"],
+                },
+            },
         )
     )
     registry.register(
@@ -194,7 +221,21 @@ def _default_registry() -> ToolRegistry:
                 "AiderReadFileTool",
             ),
             prompt_path="tools/aider-read-file",
-            metadata={"plan_safe": True},
+            metadata={
+                "plan_safe": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "File path to read"},
+                        "root": {"type": "string", "description": "Project root"},
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Truncation limit in bytes",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            },
         )
     )
     registry.register(
@@ -207,7 +248,16 @@ def _default_registry() -> ToolRegistry:
                 "AiderListDirTool",
             ),
             prompt_path="tools/aider-list-dir",
-            metadata={"plan_safe": True},
+            metadata={
+                "plan_safe": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory path to list"},
+                    },
+                    "required": ["path"],
+                },
+            },
         )
     )
     registry.register(
@@ -220,7 +270,20 @@ def _default_registry() -> ToolRegistry:
                 "AiderShellTool",
             ),
             prompt_path="tools/aider-shell",
-            metadata={"reflect": True},
+            metadata={
+                "reflect": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command to execute",
+                        },
+                        "cwd": {"type": "string", "description": "Working directory"},
+                    },
+                    "required": ["command"],
+                },
+            },
         )
     )
     return registry
@@ -254,6 +317,11 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "kind": "local",
             "enabled": ha_status.enabled,
             "prompt": "tools/home-assistant",
+            "schema": {
+                "type": "object",
+                "properties": {"task": {"type": "string", "description": "Task to perform"}},
+                "required": ["task"],
+            },
         },
         {
             "tool_id": "aider_edit_block_tool",
@@ -265,6 +333,14 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "enabled": True,
             "prompt": "tools/aider-edit-blocks",
             "reflect": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "SEARCH/REPLACE block content"},
+                    "root": {"type": "string", "description": "Project root directory"},
+                },
+                "required": ["content"],
+            },
         },
         {
             "tool_id": "aider_read_file_tool",
@@ -276,6 +352,15 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "enabled": True,
             "prompt": "tools/aider-read-file",
             "plan_safe": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to read"},
+                    "root": {"type": "string", "description": "Project root"},
+                    "max_bytes": {"type": "integer", "description": "Truncation limit in bytes"},
+                },
+                "required": ["path"],
+            },
         },
         {
             "tool_id": "aider_list_dir_tool",
@@ -287,6 +372,13 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "enabled": True,
             "prompt": "tools/aider-list-dir",
             "plan_safe": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory path to list"},
+                },
+                "required": ["path"],
+            },
         },
         {
             "tool_id": "aider_shell_tool",
@@ -298,6 +390,14 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "enabled": True,
             "prompt": "tools/aider-shell",
             "reflect": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to execute"},
+                    "cwd": {"type": "string", "description": "Working directory"},
+                },
+                "required": ["command"],
+            },
         },
     ]
     if not ha_status.enabled and ha_status.reason:

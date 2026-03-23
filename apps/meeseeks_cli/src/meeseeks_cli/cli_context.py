@@ -2,8 +2,9 @@
 """Shared CLI context types."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from meeseeks_core.classes import Plan
 from meeseeks_core.session_runtime import SessionRuntime
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.tool_registry import ToolRegistry
@@ -19,6 +20,7 @@ class CliState:
     model_name: str | None = None
     auto_approve_all: bool = False
     mode: str = "act"
+    last_plan: Plan | None = field(default=None, repr=False)
 
 
 @dataclass

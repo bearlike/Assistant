@@ -15,7 +15,7 @@ from pydantic.v1 import BaseModel, Field, validator
 
 from meeseeks_core.common import MockSpeaker, get_logger, get_mock_speaker, get_unique_timestamp
 from meeseeks_core.components import build_langfuse_handler
-from meeseeks_core.config import get_config_value
+from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.llm import build_chat_model
 from meeseeks_core.types import ActionStepPayload, ToolInput
 
@@ -180,7 +180,7 @@ class AbstractTool(abc.ABC):
             user_id=f"meeseeks-{name}",
             session_id=session_id,
             trace_name=f"meeseeks-{self._id}",
-            version=get_config_value("runtime", "version", default="Not Specified"),
+            version=get_version(),
             release=get_config_value("runtime", "envmode", default="Not Specified"),
         )
         self.model = None
