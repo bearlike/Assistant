@@ -6,14 +6,23 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Protocol, cast
 
+from langchain_core.messages import BaseMessage
+
 from meeseeks_core.config import get_config_value
 
 
 class ChatModel(Protocol):
     """Protocol for LangChain-compatible chat models."""
 
-    def invoke(self, input_data: object, config: object | None = None, **kwargs: object) -> object:
-        """Invoke the model with structured input."""
+    def invoke(
+        self, input_data: object, config: object | None = None, **kwargs: object
+    ) -> BaseMessage:
+        """Invoke the model synchronously."""
+
+    async def ainvoke(
+        self, input_data: object, config: object | None = None, **kwargs: object
+    ) -> BaseMessage:
+        """Invoke the model asynchronously."""
 
 
 def _normalize_model_list(raw: object) -> list[str]:

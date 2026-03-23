@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import threading
 from typing import Any
 
 from meeseeks_core.classes import ActionStep
@@ -92,31 +91,6 @@ def save_mcp_config(config: dict[str, Any], path: str | None = None) -> None:
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
         handle.write("\n")
-
-
-def _run_async(coro: Any) -> Any:
-    """Run an async coroutine safely from sync code."""
-    try:
-        return asyncio.run(coro)
-    except RuntimeError as exc:
-        if "asyncio.run()" not in str(exc):
-            raise
-
-    result: dict[str, Any] = {}
-    error: dict[str, Exception] = {}
-
-    def _runner() -> None:
-        try:
-            result["value"] = asyncio.run(coro)
-        except Exception as inner_exc:  # pragma: no cover - defensive
-            error["value"] = inner_exc
-
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join()
-    if error:
-        raise error["value"]
-    return result.get("value")
 
 
 def _schema_from_args_schema(args_schema: Any) -> dict[str, Any] | None:
@@ -205,14 +179,14 @@ def discover_mcp_tools(config: dict[str, Any]) -> dict[str, list[str]]:
 
 def discover_mcp_tool_details(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Discover MCP tool names and schemas per server from configuration."""
-    return _run_async(_discover_mcp_tool_details_async(_normalize_mcp_config(config)))
+    return asyncio.run(_discover_mcp_tool_details_async(_normalize_mcp_config(config)))
 
 
 def discover_mcp_tool_details_with_failures(
     config: dict[str, Any],
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Exception]]:
     """Discover MCP tool names, schemas, and per-server failures."""
-    discovered, failures = _run_async(
+    discovered, failures = asyncio.run(
         _discover_mcp_tool_details_with_failures_async(_normalize_mcp_config(config))
     )
     _record_discovery_failures(failures)

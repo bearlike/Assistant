@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Tests for the unified tool-use conversation loop."""
+"""Tests for the async tool-use conversation loop."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage
+
+from meeseeks_core.agent_context import AgentContext, AgentRegistry
 from meeseeks_core.classes import ActionStep, Plan, PlanStep
 from meeseeks_core.context import ContextSnapshot
 from meeseeks_core.hooks import HookManager
@@ -78,6 +81,21 @@ def _make_hook_manager() -> HookManager:
     hm.run_post_tool_use.side_effect = lambda step, result: result
     hm.run_permission_request.side_effect = lambda step, decision: decision
     return hm
+
+
+def _make_agent_context(
+    *,
+    model_name: str = "test-model",
+    should_cancel=None,
+    max_depth: int = 5,
+) -> AgentContext:
+    """Create a root AgentContext for tests."""
+    return AgentContext.root(
+        model_name=model_name,
+        max_depth=max_depth,
+        should_cancel=should_cancel,
+        registry=AgentRegistry(max_concurrent=100),
+    )
 
 
 def _text_response(content: str) -> AIMessage:
@@ -168,7 +186,7 @@ class TestCoerceMcpToolInput:
 
 
 # ---------------------------------------------------------------------------
-# ToolUseLoop
+# ToolUseLoop (async)
 # ---------------------------------------------------------------------------
 
 
@@ -179,28 +197,29 @@ class TestToolUseLoopTextResponse:
         spec = _make_spec()
         registry = _make_registry(spec)
         fake_model = MagicMock()
-        fake_model.invoke.return_value = _text_response("The answer is 42.")
+        fake_model.ainvoke = AsyncMock(return_value=_text_response("The answer is 42."))
         bound = MagicMock()
-        bound.invoke = fake_model.invoke
+        bound.ainvoke = fake_model.ainvoke
 
         with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = bound
 
             loop = ToolUseLoop(
-                model_name="test-model",
+                agent_context=_make_agent_context(),
                 tool_registry=registry,
                 permission_policy=_allow_all_policy(),
                 hook_manager=_make_hook_manager(),
             )
-            tq, state = loop.run("What is 6*7?", tool_specs=[spec], context=_make_context())
+            tq, state = asyncio.run(
+                loop.run("What is 6*7?", tool_specs=[spec], context=_make_context())
+            )
 
         assert state.done is True
         assert state.done_reason == "completed"
         assert "42" in (tq.task_result or "")
         assert len(tq.action_steps) == 0
-        # Only 1 LLM call for a direct answer.
-        assert fake_model.invoke.call_count == 1
+        assert fake_model.ainvoke.call_count == 1
 
 
 class TestToolUseLoopToolCall:
@@ -210,14 +229,15 @@ class TestToolUseLoopToolCall:
         spec = _make_spec("aider_shell_tool", "Run shell commands")
         registry = _make_registry(spec)
 
-        # First call: tool call. Second call: text response.
         fake_model = MagicMock()
-        fake_model.invoke.side_effect = [
-            _tool_call_response("aider_shell_tool", {"command": "echo hello"}, "call_1"),
-            _text_response("Done. Output: hello"),
-        ]
+        fake_model.ainvoke = AsyncMock(
+            side_effect=[
+                _tool_call_response("aider_shell_tool", {"command": "echo hello"}, "call_1"),
+                _text_response("Done. Output: hello"),
+            ]
+        )
         bound = MagicMock()
-        bound.invoke = fake_model.invoke
+        bound.ainvoke = fake_model.ainvoke
 
         mock_tool = MagicMock()
         mock_speaker = MagicMock()
@@ -232,23 +252,20 @@ class TestToolUseLoopToolCall:
             mock_build.return_value.bind_tools.return_value = bound
 
             loop = ToolUseLoop(
-                model_name="test-model",
+                agent_context=_make_agent_context(),
                 tool_registry=registry,
                 permission_policy=_allow_all_policy(),
                 hook_manager=_make_hook_manager(),
             )
-            tq, state = loop.run(
-                "Run echo hello",
-                tool_specs=[spec],
-                context=_make_context(),
+            tq, state = asyncio.run(
+                loop.run("Run echo hello", tool_specs=[spec], context=_make_context())
             )
 
         assert state.done is True
         assert state.done_reason == "completed"
         assert len(tq.action_steps) == 1
         assert tq.action_steps[0].tool_id == "aider_shell_tool"
-        # 2 LLM calls: tool call + final text.
-        assert fake_model.invoke.call_count == 2
+        assert fake_model.ainvoke.call_count == 2
 
 
 class TestToolUseLoopMaxSteps:
@@ -258,13 +275,12 @@ class TestToolUseLoopMaxSteps:
         spec = _make_spec("aider_shell_tool", "Run shell")
         registry = _make_registry(spec)
 
-        # Always return a tool call — never a text response.
         fake_model = MagicMock()
-        fake_model.invoke.return_value = _tool_call_response(
-            "aider_shell_tool", {"command": "ls"}, "call_loop"
+        fake_model.ainvoke = AsyncMock(
+            return_value=_tool_call_response("aider_shell_tool", {"command": "ls"}, "call_loop")
         )
         bound = MagicMock()
-        bound.invoke = fake_model.invoke
+        bound.ainvoke = fake_model.ainvoke
 
         mock_tool = MagicMock()
         mock_speaker = MagicMock()
@@ -279,16 +295,13 @@ class TestToolUseLoopMaxSteps:
             mock_build.return_value.bind_tools.return_value = bound
 
             loop = ToolUseLoop(
-                model_name="test-model",
+                agent_context=_make_agent_context(),
                 tool_registry=registry,
                 permission_policy=_allow_all_policy(),
                 hook_manager=_make_hook_manager(),
             )
-            tq, state = loop.run(
-                "keep looping",
-                tool_specs=[spec],
-                context=_make_context(),
-                max_steps=3,
+            tq, state = asyncio.run(
+                loop.run("keep looping", tool_specs=[spec], context=_make_context(), max_steps=3)
             )
 
         assert state.done is True
@@ -304,12 +317,14 @@ class TestToolUseLoopPermissionDenied:
         registry = _make_registry(spec)
 
         fake_model = MagicMock()
-        fake_model.invoke.side_effect = [
-            _tool_call_response("aider_shell_tool", {"command": "rm -rf /"}, "call_1"),
-            _text_response("Permission was denied."),
-        ]
+        fake_model.ainvoke = AsyncMock(
+            side_effect=[
+                _tool_call_response("aider_shell_tool", {"command": "rm -rf /"}, "call_1"),
+                _text_response("Permission was denied."),
+            ]
+        )
         bound = MagicMock()
-        bound.invoke = fake_model.invoke
+        bound.ainvoke = fake_model.ainvoke
 
         deny_policy = MagicMock(spec=PermissionPolicy)
         deny_policy.decide.return_value = PermissionDecision.DENY
@@ -319,19 +334,16 @@ class TestToolUseLoopPermissionDenied:
             mock_build.return_value.bind_tools.return_value = bound
 
             loop = ToolUseLoop(
-                model_name="test-model",
+                agent_context=_make_agent_context(),
                 tool_registry=registry,
                 permission_policy=deny_policy,
                 hook_manager=_make_hook_manager(),
             )
-            tq, state = loop.run(
-                "destroy everything",
-                tool_specs=[spec],
-                context=_make_context(),
+            tq, state = asyncio.run(
+                loop.run("destroy everything", tool_specs=[spec], context=_make_context())
             )
 
         assert state.done is True
-        # The model saw the denial and responded with text.
         assert "denied" in (tq.task_result or "").lower() or tq.last_error is not None
 
 
@@ -341,35 +353,33 @@ class TestToolUseLoopWithPlan:
     def test_plan_in_system_prompt(self):
         spec = _make_spec()
         registry = _make_registry(spec)
-        plan = Plan(steps=[
-            PlanStep(title="Step 1", description="Do the first thing"),
-            PlanStep(title="Step 2", description="Do the second thing"),
-        ])
+        plan = Plan(
+            steps=[
+                PlanStep(title="Step 1", description="Do the first thing"),
+                PlanStep(title="Step 2", description="Do the second thing"),
+            ]
+        )
 
         fake_model = MagicMock()
-        fake_model.invoke.return_value = _text_response("Plan executed.")
+        fake_model.ainvoke = AsyncMock(return_value=_text_response("Plan executed."))
         bound = MagicMock()
-        bound.invoke = fake_model.invoke
+        bound.ainvoke = fake_model.ainvoke
 
         with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = bound
 
             loop = ToolUseLoop(
-                model_name="test-model",
+                agent_context=_make_agent_context(),
                 tool_registry=registry,
                 permission_policy=_allow_all_policy(),
                 hook_manager=_make_hook_manager(),
             )
-            tq, state = loop.run(
-                "Execute my plan",
-                tool_specs=[spec],
-                context=_make_context(),
-                plan=plan,
+            tq, state = asyncio.run(
+                loop.run("Execute my plan", tool_specs=[spec], context=_make_context(), plan=plan)
             )
 
-        # Verify plan was in the system message.
-        call_args = fake_model.invoke.call_args
+        call_args = fake_model.ainvoke.call_args
         messages = call_args[0][0]
         system_content = messages[0].content
         assert "Step 1" in system_content
@@ -385,36 +395,25 @@ class TestToolUseLoopCancel:
         registry = _make_registry(spec)
 
         fake_model = MagicMock()
-        fake_model.invoke.return_value = _text_response("should not reach")
+        fake_model.ainvoke = AsyncMock(return_value=_text_response("should not reach"))
         bound = MagicMock()
-        bound.invoke = fake_model.invoke
-
-        cancel_called = False
-
-        def should_cancel():
-            nonlocal cancel_called
-            if cancel_called:
-                return True
-            cancel_called = True
-            return True
+        bound.ainvoke = fake_model.ainvoke
 
         with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = bound
 
+            ctx = _make_agent_context(should_cancel=lambda: True)
             loop = ToolUseLoop(
-                model_name="test-model",
+                agent_context=ctx,
                 tool_registry=registry,
                 permission_policy=_allow_all_policy(),
                 hook_manager=_make_hook_manager(),
             )
-            tq, state = loop.run(
-                "do stuff",
-                tool_specs=[spec],
-                context=_make_context(),
-                should_cancel=should_cancel,
+            tq, state = asyncio.run(
+                loop.run("do stuff", tool_specs=[spec], context=_make_context())
             )
 
         assert state.done is True
         assert state.done_reason == "canceled"
-        assert fake_model.invoke.call_count == 0
+        assert fake_model.ainvoke.call_count == 0

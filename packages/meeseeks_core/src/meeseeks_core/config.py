@@ -354,6 +354,50 @@ class APIConfig(BaseModel):
     master_token: str = Field("msk-strong-password", example="msk-strong-password")
 
 
+class AgentConfig(BaseModel):
+    """Configuration for the sub-agent hypervisor."""
+
+    enabled: bool = Field(True, example=True)
+    max_depth: int = Field(5, example=5)
+    max_concurrent: int = Field(20, example=20)
+    default_sub_model: str = Field("", example="openai/claude-haiku-4-5")
+    allowed_models: list[str] = Field(default_factory=list)
+    sub_agent_max_steps: int = Field(10, example=10)
+    default_denied_tools: list[str] = Field(default_factory=list)
+
+    @validator("enabled", pre=True, always=True)
+    def _normalize_enabled(cls, value: Any) -> bool:
+        return _coerce_bool(value, default=True)
+
+    @validator("max_depth", pre=True, always=True)
+    def _normalize_max_depth(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 5
+        return max(parsed, 1)
+
+    @validator("max_concurrent", pre=True, always=True)
+    def _normalize_max_concurrent(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 20
+        return max(parsed, 1)
+
+    @validator("sub_agent_max_steps", pre=True, always=True)
+    def _normalize_sub_agent_max_steps(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 10
+        return max(parsed, 1)
+
+    @validator("allowed_models", "default_denied_tools", pre=True, always=True)
+    def _normalize_string_lists(cls, value: Any) -> list[str]:
+        return _coerce_list(value)
+
+
 def _runtime_config_default() -> RuntimeConfig:
     return RuntimeConfig.parse_obj({})
 
@@ -398,6 +442,10 @@ def _api_config_default() -> APIConfig:
     return APIConfig.parse_obj({})
 
 
+def _agent_config_default() -> AgentConfig:
+    return AgentConfig.parse_obj({})
+
+
 class AppConfig(BaseModel):
     """Typed configuration for the Meeseeks runtime."""
 
@@ -412,6 +460,7 @@ class AppConfig(BaseModel):
     cli: CLIConfig = Field(default_factory=_cli_config_default)
     chat: ChatConfig = Field(default_factory=_chat_config_default)
     api: APIConfig = Field(default_factory=_api_config_default)
+    agent: AgentConfig = Field(default_factory=_agent_config_default)
 
     class Config:
         """Pydantic configuration settings."""

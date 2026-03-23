@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 
+from meeseeks_core.agent_context import AgentContext, AgentRegistry
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, PlanStep, TaskQueue
 from meeseeks_core.common import get_logger, session_log_context
 from meeseeks_core.compaction import should_compact, summarize_events
@@ -145,24 +147,47 @@ class Orchestrator:
                 self._append_action_plan(session_id, plan.steps)
                 task_queue = TaskQueue(plan_steps=plan.steps, action_steps=[])
             else:
-                # Act mode: run the tool-use loop.
-                loop = ToolUseLoop(
+                # Act mode: run the async tool-use loop via the agent hypervisor.
+                max_depth = int(
+                    get_config_value("agent", "max_depth", default=5)
+                )
+                max_concurrent = int(
+                    get_config_value("agent", "max_concurrent", default=20)
+                )
+                registry = AgentRegistry(max_concurrent=max_concurrent)
+                root_ctx = AgentContext.root(
                     model_name=self._model_name,
+                    max_depth=max_depth,
+                    should_cancel=should_cancel,
+                    event_logger=lambda event: self._session_store.append_event(
+                        session_id, event
+                    ),
+                    registry=registry,
+                )
+                loop = ToolUseLoop(
+                    agent_context=root_ctx,
                     tool_registry=self._tool_registry,
                     permission_policy=self._permission_policy,
                     approval_callback=self._approval_callback,
                     hook_manager=self._hook_manager,
-                    event_logger=lambda event: self._session_store.append_event(session_id, event),
                 )
                 max_steps = max(1, max_iters) * 3
-                task_queue, state = loop.run(
-                    user_query,
-                    tool_specs=tool_specs,
-                    context=context,
-                    max_steps=max_steps,
-                    plan=initial_plan,
-                    should_cancel=should_cancel,
-                )
+                try:
+                    task_queue, state = asyncio.run(
+                        loop.run(
+                            user_query,
+                            tool_specs=tool_specs,
+                            context=context,
+                            max_steps=max_steps,
+                            plan=initial_plan,
+                        )
+                    )
+                finally:
+                    # Belt-and-suspenders: ensure all agents cleaned up.
+                    try:
+                        asyncio.run(registry.cleanup(timeout=5.0))
+                    except Exception:
+                        pass
                 state.session_id = session_id
 
             # Emit assistant response event.
