@@ -620,7 +620,8 @@
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/orchestrator.py</code></summary>
-                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 36</span>
+                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 35</span>
+<span class="normal"> 36</span>
 <span class="normal"> 37</span>
 <span class="normal"> 38</span>
 <span class="normal"> 39</span>
@@ -1139,34 +1140,7 @@
 <span class="normal">552</span>
 <span class="normal">553</span>
 <span class="normal">554</span>
-<span class="normal">555</span>
-<span class="normal">556</span>
-<span class="normal">557</span>
-<span class="normal">558</span>
-<span class="normal">559</span>
-<span class="normal">560</span>
-<span class="normal">561</span>
-<span class="normal">562</span>
-<span class="normal">563</span>
-<span class="normal">564</span>
-<span class="normal">565</span>
-<span class="normal">566</span>
-<span class="normal">567</span>
-<span class="normal">568</span>
-<span class="normal">569</span>
-<span class="normal">570</span>
-<span class="normal">571</span>
-<span class="normal">572</span>
-<span class="normal">573</span>
-<span class="normal">574</span>
-<span class="normal">575</span>
-<span class="normal">576</span>
-<span class="normal">577</span>
-<span class="normal">578</span>
-<span class="normal">579</span>
-<span class="normal">580</span>
-<span class="normal">581</span>
-<span class="normal">582</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Orchestrator</span><span class="p">:</span>
+<span class="normal">555</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Orchestrator</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Plan-act-observe orchestration loop.&quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
@@ -1192,7 +1166,6 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">_hook_manager</span> <span class="o">=</span> <span class="n">hook_manager</span> <span class="ow">or</span> <span class="n">default_hook_manager</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_context_builder</span> <span class="o">=</span> <span class="n">ContextBuilder</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_session_store</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_planner</span> <span class="o">=</span> <span class="n">Planner</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_tool_selector</span> <span class="o">=</span> <span class="n">ToolSelector</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_step_executor</span> <span class="o">=</span> <span class="n">StepExecutor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_plan_updater</span> <span class="o">=</span> <span class="n">PlanUpdater</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_synthesizer</span> <span class="o">=</span> <span class="n">ResponseSynthesizer</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
@@ -1279,16 +1252,8 @@
                 <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="o">.</span><span class="n">list_specs_for_mode</span><span class="p">(</span><span class="s2">&quot;act&quot;</span><span class="p">)</span>
             <span class="p">)</span>
             <span class="k">if</span> <span class="n">plan</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="k">if</span> <span class="n">resolved_mode</span> <span class="o">!=</span> <span class="s2">&quot;plan&quot;</span><span class="p">:</span>
-                    <span class="n">selection</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tool_selector</span><span class="o">.</span><span class="n">select</span><span class="p">(</span>
-                        <span class="n">user_query</span><span class="p">,</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">_model_name</span><span class="p">,</span>
-                        <span class="n">tool_specs</span><span class="o">=</span><span class="n">tool_specs</span><span class="p">,</span>
-                        <span class="n">context</span><span class="o">=</span><span class="n">context</span><span class="p">,</span>
-                    <span class="p">)</span>
-                    <span class="k">if</span> <span class="n">selection</span><span class="o">.</span><span class="n">tool_required</span> <span class="ow">and</span> <span class="n">selection</span><span class="o">.</span><span class="n">tool_ids</span><span class="p">:</span>
-                        <span class="n">selected_ids</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_expand_tool_ids</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">selection</span><span class="o">.</span><span class="n">tool_ids</span><span class="p">),</span> <span class="n">tool_specs</span><span class="p">)</span>
-                        <span class="n">tool_specs</span> <span class="o">=</span> <span class="p">[</span><span class="n">spec</span> <span class="k">for</span> <span class="n">spec</span> <span class="ow">in</span> <span class="n">tool_specs</span> <span class="k">if</span> <span class="n">spec</span><span class="o">.</span><span class="n">tool_id</span> <span class="ow">in</span> <span class="n">selected_ids</span><span class="p">]</span>
+                <span class="c1"># Tool filtering is handled by Planner._filter_specs_by_intent()</span>
+                <span class="c1"># No separate ToolSelector LLM call needed in act mode</span>
                 <span class="n">plan</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_planner</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span>
                     <span class="n">user_query</span><span class="p">,</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">_model_name</span><span class="p">,</span>
@@ -1316,7 +1281,7 @@
                 <span class="n">state</span><span class="o">.</span><span class="n">done</span> <span class="o">=</span> <span class="kc">True</span>
                 <span class="n">state</span><span class="o">.</span><span class="n">done_reason</span> <span class="o">=</span> <span class="s2">&quot;planned&quot;</span>
             <span class="k">else</span><span class="p">:</span>
-                <span class="n">max_steps</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_iters</span><span class="p">)</span> <span class="o">*</span> <span class="mi">5</span>
+                <span class="n">max_steps</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">max_iters</span><span class="p">)</span> <span class="o">*</span> <span class="mi">3</span>
                 <span class="n">steps_run</span> <span class="o">=</span> <span class="mi">0</span>
                 <span class="n">allowed_tool_ids</span> <span class="o">=</span> <span class="p">{</span><span class="n">spec</span><span class="o">.</span><span class="n">tool_id</span> <span class="k">for</span> <span class="n">spec</span> <span class="ow">in</span> <span class="n">tool_specs</span><span class="p">}</span>
                 <span class="k">while</span> <span class="n">remaining_steps</span> <span class="ow">and</span> <span class="n">steps_run</span> <span class="o">&lt;</span> <span class="n">max_steps</span><span class="p">:</span>
@@ -1383,7 +1348,8 @@
                         <span class="n">state</span><span class="o">.</span><span class="n">done</span> <span class="o">=</span> <span class="kc">True</span>
                         <span class="n">state</span><span class="o">.</span><span class="n">done_reason</span> <span class="o">=</span> <span class="s2">&quot;canceled&quot;</span>
                         <span class="k">break</span>
-                    <span class="k">if</span> <span class="n">remaining_steps</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">remaining_steps</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">remaining_steps</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                        <span class="n">old_count</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">remaining_steps</span><span class="p">)</span>
                         <span class="n">remaining_steps</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_plan_updater</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
                             <span class="n">user_query</span><span class="p">,</span>
                             <span class="bp">self</span><span class="o">.</span><span class="n">_model_name</span><span class="p">,</span>
@@ -1391,7 +1357,12 @@
                             <span class="n">last_result</span><span class="o">=</span><span class="n">tool_outputs</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">tool_outputs</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
                             <span class="n">remaining_steps</span><span class="o">=</span><span class="n">remaining_steps</span><span class="p">,</span>
                             <span class="n">context</span><span class="o">=</span><span class="n">context</span><span class="p">,</span>
+                            <span class="n">steps_run</span><span class="o">=</span><span class="n">steps_run</span><span class="p">,</span>
+                            <span class="n">max_steps</span><span class="o">=</span><span class="n">max_steps</span><span class="p">,</span>
                         <span class="p">)</span>
+                        <span class="c1"># Hard guard: never allow plan inflation</span>
+                        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">remaining_steps</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">old_count</span><span class="p">:</span>
+                            <span class="n">remaining_steps</span> <span class="o">=</span> <span class="n">remaining_steps</span><span class="p">[:</span><span class="n">old_count</span><span class="p">]</span>
                     <span class="n">state</span><span class="o">.</span><span class="n">plan</span> <span class="o">=</span> <span class="n">completed_steps</span> <span class="o">+</span> <span class="n">remaining_steps</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">_append_action_plan</span><span class="p">(</span><span class="n">session_id</span><span class="p">,</span> <span class="n">state</span><span class="o">.</span><span class="n">plan</span><span class="p">)</span>
 
@@ -1675,17 +1646,6 @@
         <span class="k">return</span> <span class="nb">bool</span><span class="p">(</span><span class="n">Orchestrator</span><span class="o">.</span><span class="n">_collect_tool_outputs</span><span class="p">(</span><span class="n">task_queue</span><span class="p">))</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_build_revised_query</span><span class="p">(</span><span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">task_queue</span><span class="p">:</span> <span class="n">TaskQueue</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-        <span class="n">failure_note</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;Last tool failure: </span><span class="si">{</span><span class="n">task_queue</span><span class="o">.</span><span class="n">last_error</span><span class="si">}</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">task_queue</span><span class="o">.</span><span class="n">last_error</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
-        <span class="p">)</span>
-        <span class="k">return</span> <span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">user_query</span><span class="si">}</span><span class="se">\n\n</span><span class="s2">Previous tool results:</span><span class="se">\n</span><span class="si">{</span><span class="n">task_queue</span><span class="o">.</span><span class="n">task_result</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="si">}</span><span class="se">\n</span><span class="s2">&quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">failure_note</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="s2">&quot;Please revise the action plan to resolve remaining tasks.&quot;</span>
-        <span class="p">)</span>
-
-    <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_resolve_mode</span><span class="p">(</span><span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;plan&quot;</span><span class="p">,</span> <span class="s2">&quot;act&quot;</span><span class="p">}:</span>
             <span class="k">return</span> <span class="n">mode</span>
@@ -1701,18 +1661,6 @@
         <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">trigger</span> <span class="ow">in</span> <span class="n">lowered</span> <span class="k">for</span> <span class="n">trigger</span> <span class="ow">in</span> <span class="n">plan_triggers</span><span class="p">):</span>
             <span class="k">return</span> <span class="s2">&quot;plan&quot;</span>
         <span class="k">return</span> <span class="s2">&quot;act&quot;</span>
-
-    <span class="nd">@staticmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_should_replan</span><span class="p">(</span><span class="n">task_queue</span><span class="p">:</span> <span class="n">TaskQueue</span><span class="p">,</span> <span class="n">iteration</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">max_iters</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">iteration</span> <span class="o">&gt;=</span> <span class="n">max_iters</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
-            <span class="k">return</span> <span class="kc">False</span>
-        <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;plan&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="kc">False</span>
-        <span class="k">if</span> <span class="n">task_queue</span><span class="o">.</span><span class="n">last_error</span><span class="p">:</span>
-            <span class="n">lowered</span> <span class="o">=</span> <span class="n">task_queue</span><span class="o">.</span><span class="n">last_error</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
-            <span class="k">if</span> <span class="s2">&quot;permission denied&quot;</span> <span class="ow">in</span> <span class="n">lowered</span> <span class="ow">or</span> <span class="s2">&quot;tool not allowed&quot;</span> <span class="ow">in</span> <span class="n">lowered</span><span class="p">:</span>
-                <span class="k">return</span> <span class="kc">False</span>
-        <span class="k">return</span> <span class="kc">True</span>
 </code></pre></div></td></tr></table></div></div>
               </details>
 
@@ -1745,7 +1693,8 @@
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/orchestrator.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">39</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">38</span>
+<span class="normal">39</span>
 <span class="normal">40</span>
 <span class="normal">41</span>
 <span class="normal">42</span>
@@ -1769,9 +1718,7 @@
 <span class="normal">60</span>
 <span class="normal">61</span>
 <span class="normal">62</span>
-<span class="normal">63</span>
-<span class="normal">64</span>
-<span class="normal">65</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+<span class="normal">63</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -1794,7 +1741,6 @@
     <span class="bp">self</span><span class="o">.</span><span class="n">_hook_manager</span> <span class="o">=</span> <span class="n">hook_manager</span> <span class="ow">or</span> <span class="n">default_hook_manager</span><span class="p">()</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">_context_builder</span> <span class="o">=</span> <span class="n">ContextBuilder</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_session_store</span><span class="p">)</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">_planner</span> <span class="o">=</span> <span class="n">Planner</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
-    <span class="bp">self</span><span class="o">.</span><span class="n">_tool_selector</span> <span class="o">=</span> <span class="n">ToolSelector</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">_step_executor</span> <span class="o">=</span> <span class="n">StepExecutor</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">_plan_updater</span> <span class="o">=</span> <span class="n">PlanUpdater</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">_synthesizer</span> <span class="o">=</span> <span class="n">ResponseSynthesizer</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="p">)</span>
@@ -1820,7 +1766,9 @@
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/orchestrator.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">67</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">65</span>
+<span class="normal">66</span>
+<span class="normal">67</span>
 <span class="normal">68</span>
 <span class="normal">69</span>
 <span class="normal">70</span>
@@ -1843,9 +1791,7 @@
 <span class="normal">87</span>
 <span class="normal">88</span>
 <span class="normal">89</span>
-<span class="normal">90</span>
-<span class="normal">91</span>
-<span class="normal">92</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
+<span class="normal">90</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
@@ -2532,7 +2478,10 @@
 <span class="normal">342</span>
 <span class="normal">343</span>
 <span class="normal">344</span>
-<span class="normal">345</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ActionPlanRunner</span><span class="p">:</span>
+<span class="normal">345</span>
+<span class="normal">346</span>
+<span class="normal">347</span>
+<span class="normal">348</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ActionPlanRunner</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Execute TaskQueue steps with lifecycle hooks.&quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
@@ -2697,7 +2646,10 @@
             <span class="n">content</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span> <span class="k">if</span> <span class="n">action_result</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">str</span><span class="p">(</span><span class="n">action_result</span><span class="p">)</span>
         <span class="n">reflection</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_reflector</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">reflection</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_reflector</span><span class="o">.</span><span class="n">reflect</span><span class="p">(</span><span class="n">action_step</span><span class="p">,</span> <span class="n">content</span><span class="p">)</span>
+            <span class="n">spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tool_registry</span><span class="o">.</span><span class="n">get_spec</span><span class="p">(</span><span class="n">action_step</span><span class="o">.</span><span class="n">tool_id</span><span class="p">)</span>
+            <span class="n">should_reflect</span> <span class="o">=</span> <span class="n">spec</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">spec</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;reflect&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">should_reflect</span><span class="p">:</span>
+                <span class="n">reflection</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_reflector</span><span class="o">.</span><span class="n">reflect</span><span class="p">(</span><span class="n">action_step</span><span class="p">,</span> <span class="n">content</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">StepOutcome</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">content</span><span class="p">),</span> <span class="n">reflection</span><span class="o">=</span><span class="n">reflection</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_handle_tool_error</span><span class="p">(</span>
@@ -3343,7 +3295,19 @@
 <span class="normal">560</span>
 <span class="normal">561</span>
 <span class="normal">562</span>
-<span class="normal">563</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">PlanUpdater</span><span class="p">:</span>
+<span class="normal">563</span>
+<span class="normal">564</span>
+<span class="normal">565</span>
+<span class="normal">566</span>
+<span class="normal">567</span>
+<span class="normal">568</span>
+<span class="normal">569</span>
+<span class="normal">570</span>
+<span class="normal">571</span>
+<span class="normal">572</span>
+<span class="normal">573</span>
+<span class="normal">574</span>
+<span class="normal">575</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">PlanUpdater</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Update remaining plan steps after executing a step.&quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tool_registry</span><span class="p">:</span> <span class="n">ToolRegistry</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -3359,12 +3323,20 @@
         <span class="n">last_result</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">remaining_steps</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PlanStep</span><span class="p">],</span>
         <span class="n">context</span><span class="p">:</span> <span class="n">ContextSnapshot</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">steps_run</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="n">max_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">PlanStep</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return updated remaining steps.&quot;&quot;&quot;</span>
         <span class="n">parser</span> <span class="o">=</span> <span class="n">PydanticOutputParser</span><span class="p">(</span><span class="n">pydantic_object</span><span class="o">=</span><span class="n">PlanUpdate</span><span class="p">)</span>  <span class="c1"># type: ignore[type-var]</span>
         <span class="n">system_prompt</span> <span class="o">=</span> <span class="n">get_system_prompt</span><span class="p">(</span><span class="s2">&quot;plan-updater&quot;</span><span class="p">)</span>
         <span class="n">remaining_lines</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s2">&quot;- </span><span class="si">{</span><span class="n">step</span><span class="o">.</span><span class="n">title</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">step</span><span class="o">.</span><span class="n">description</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">step</span> <span class="ow">in</span> <span class="n">remaining_steps</span><span class="p">]</span>
         <span class="n">remaining_text</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">remaining_lines</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;(none)&quot;</span>
+        <span class="n">budget_note</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">max_steps</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">budget_note</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Steps completed so far: </span><span class="si">{</span><span class="n">steps_run</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="n">max_steps</span><span class="si">}</span><span class="s2"> maximum.</span><span class="se">\n</span><span class="s2">&quot;</span>
+                <span class="s2">&quot;If most steps are used, prioritize completing the goal over thoroughness.</span><span class="se">\n\n</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
         <span class="n">prompt</span> <span class="o">=</span> <span class="n">ChatPromptTemplate</span><span class="p">(</span>
             <span class="n">messages</span><span class="o">=</span><span class="p">[</span>
                 <span class="n">SystemMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="n">system_prompt</span><span class="p">),</span>
@@ -3372,12 +3344,15 @@
                     <span class="s2">&quot;User request:</span><span class="se">\n</span><span class="si">{user_query}</span><span class="se">\n\n</span><span class="s2">&quot;</span>
                     <span class="s2">&quot;Completed step:</span><span class="se">\n</span><span class="s2">- </span><span class="si">{title}</span><span class="se">\n</span><span class="s2">- </span><span class="si">{description}</span><span class="se">\n\n</span><span class="s2">&quot;</span>
                     <span class="s2">&quot;Latest result:</span><span class="se">\n</span><span class="si">{result}</span><span class="se">\n\n</span><span class="s2">&quot;</span>
+                    <span class="s2">&quot;</span><span class="si">{budget_note}</span><span class="s2">&quot;</span>
                     <span class="s2">&quot;Remaining steps:</span><span class="se">\n</span><span class="si">{remaining}</span><span class="se">\n\n</span><span class="s2">&quot;</span>
                     <span class="s2">&quot;</span><span class="si">{format_instructions}</span><span class="s2">&quot;</span>
                 <span class="p">),</span>
             <span class="p">],</span>
             <span class="n">partial_variables</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;format_instructions&quot;</span><span class="p">:</span> <span class="n">parser</span><span class="o">.</span><span class="n">get_format_instructions</span><span class="p">()},</span>
-            <span class="n">input_variables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;user_query&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">,</span> <span class="s2">&quot;result&quot;</span><span class="p">,</span> <span class="s2">&quot;remaining&quot;</span><span class="p">],</span>
+            <span class="n">input_variables</span><span class="o">=</span><span class="p">[</span>
+                <span class="s2">&quot;user_query&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">,</span> <span class="s2">&quot;result&quot;</span><span class="p">,</span> <span class="s2">&quot;budget_note&quot;</span><span class="p">,</span> <span class="s2">&quot;remaining&quot;</span><span class="p">,</span>
+            <span class="p">],</span>
         <span class="p">)</span>
         <span class="n">model</span> <span class="o">=</span> <span class="n">build_chat_model</span><span class="p">(</span>
             <span class="n">model_name</span><span class="o">=</span><span class="n">model_name</span><span class="p">,</span>
@@ -3390,6 +3365,7 @@
                 <span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="n">completed_step</span><span class="o">.</span><span class="n">title</span><span class="p">,</span>
                 <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="n">completed_step</span><span class="o">.</span><span class="n">description</span><span class="p">,</span>
                 <span class="s2">&quot;result&quot;</span><span class="p">:</span> <span class="n">last_result</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;budget_note&quot;</span><span class="p">:</span> <span class="n">budget_note</span><span class="p">,</span>
                 <span class="s2">&quot;remaining&quot;</span><span class="p">:</span> <span class="n">remaining_text</span><span class="p">,</span>
             <span class="p">}</span>
         <span class="p">)</span>
@@ -3441,7 +3417,7 @@
 
 
 <h4 id="meeseeks_core.planning.PlanUpdater.update" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">update</span><span class="p">(</span><span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">completed_step</span><span class="p">:</span> <span class="n">PlanStep</span><span class="p">,</span> <span class="n">last_result</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="n">remaining_steps</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PlanStep</span><span class="p">],</span> <span class="n">context</span><span class="p">:</span> <span class="n">ContextSnapshot</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">PlanStep</span><span class="p">]</span></code>
+            <code class="highlight language-python"><span class="n">update</span><span class="p">(</span><span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">completed_step</span><span class="p">:</span> <span class="n">PlanStep</span><span class="p">,</span> <span class="n">last_result</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="n">remaining_steps</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PlanStep</span><span class="p">],</span> <span class="n">context</span><span class="p">:</span> <span class="n">ContextSnapshot</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">steps_run</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">max_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">PlanStep</span><span class="p">]</span></code>
 
 </h4>
 
@@ -3496,7 +3472,19 @@
 <span class="normal">560</span>
 <span class="normal">561</span>
 <span class="normal">562</span>
-<span class="normal">563</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">update</span><span class="p">(</span>
+<span class="normal">563</span>
+<span class="normal">564</span>
+<span class="normal">565</span>
+<span class="normal">566</span>
+<span class="normal">567</span>
+<span class="normal">568</span>
+<span class="normal">569</span>
+<span class="normal">570</span>
+<span class="normal">571</span>
+<span class="normal">572</span>
+<span class="normal">573</span>
+<span class="normal">574</span>
+<span class="normal">575</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">update</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
@@ -3505,12 +3493,20 @@
     <span class="n">last_result</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">remaining_steps</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PlanStep</span><span class="p">],</span>
     <span class="n">context</span><span class="p">:</span> <span class="n">ContextSnapshot</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">steps_run</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">max_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">PlanStep</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Return updated remaining steps.&quot;&quot;&quot;</span>
     <span class="n">parser</span> <span class="o">=</span> <span class="n">PydanticOutputParser</span><span class="p">(</span><span class="n">pydantic_object</span><span class="o">=</span><span class="n">PlanUpdate</span><span class="p">)</span>  <span class="c1"># type: ignore[type-var]</span>
     <span class="n">system_prompt</span> <span class="o">=</span> <span class="n">get_system_prompt</span><span class="p">(</span><span class="s2">&quot;plan-updater&quot;</span><span class="p">)</span>
     <span class="n">remaining_lines</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s2">&quot;- </span><span class="si">{</span><span class="n">step</span><span class="o">.</span><span class="n">title</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">step</span><span class="o">.</span><span class="n">description</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">step</span> <span class="ow">in</span> <span class="n">remaining_steps</span><span class="p">]</span>
     <span class="n">remaining_text</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">remaining_lines</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;(none)&quot;</span>
+    <span class="n">budget_note</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">max_steps</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">budget_note</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Steps completed so far: </span><span class="si">{</span><span class="n">steps_run</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="n">max_steps</span><span class="si">}</span><span class="s2"> maximum.</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot;If most steps are used, prioritize completing the goal over thoroughness.</span><span class="se">\n\n</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
     <span class="n">prompt</span> <span class="o">=</span> <span class="n">ChatPromptTemplate</span><span class="p">(</span>
         <span class="n">messages</span><span class="o">=</span><span class="p">[</span>
             <span class="n">SystemMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="n">system_prompt</span><span class="p">),</span>
@@ -3518,12 +3514,15 @@
                 <span class="s2">&quot;User request:</span><span class="se">\n</span><span class="si">{user_query}</span><span class="se">\n\n</span><span class="s2">&quot;</span>
                 <span class="s2">&quot;Completed step:</span><span class="se">\n</span><span class="s2">- </span><span class="si">{title}</span><span class="se">\n</span><span class="s2">- </span><span class="si">{description}</span><span class="se">\n\n</span><span class="s2">&quot;</span>
                 <span class="s2">&quot;Latest result:</span><span class="se">\n</span><span class="si">{result}</span><span class="se">\n\n</span><span class="s2">&quot;</span>
+                <span class="s2">&quot;</span><span class="si">{budget_note}</span><span class="s2">&quot;</span>
                 <span class="s2">&quot;Remaining steps:</span><span class="se">\n</span><span class="si">{remaining}</span><span class="se">\n\n</span><span class="s2">&quot;</span>
                 <span class="s2">&quot;</span><span class="si">{format_instructions}</span><span class="s2">&quot;</span>
             <span class="p">),</span>
         <span class="p">],</span>
         <span class="n">partial_variables</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;format_instructions&quot;</span><span class="p">:</span> <span class="n">parser</span><span class="o">.</span><span class="n">get_format_instructions</span><span class="p">()},</span>
-        <span class="n">input_variables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;user_query&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">,</span> <span class="s2">&quot;result&quot;</span><span class="p">,</span> <span class="s2">&quot;remaining&quot;</span><span class="p">],</span>
+        <span class="n">input_variables</span><span class="o">=</span><span class="p">[</span>
+            <span class="s2">&quot;user_query&quot;</span><span class="p">,</span> <span class="s2">&quot;title&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">,</span> <span class="s2">&quot;result&quot;</span><span class="p">,</span> <span class="s2">&quot;budget_note&quot;</span><span class="p">,</span> <span class="s2">&quot;remaining&quot;</span><span class="p">,</span>
+        <span class="p">],</span>
     <span class="p">)</span>
     <span class="n">model</span> <span class="o">=</span> <span class="n">build_chat_model</span><span class="p">(</span>
         <span class="n">model_name</span><span class="o">=</span><span class="n">model_name</span><span class="p">,</span>
@@ -3536,6 +3535,7 @@
             <span class="s2">&quot;title&quot;</span><span class="p">:</span> <span class="n">completed_step</span><span class="o">.</span><span class="n">title</span><span class="p">,</span>
             <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="n">completed_step</span><span class="o">.</span><span class="n">description</span><span class="p">,</span>
             <span class="s2">&quot;result&quot;</span><span class="p">:</span> <span class="n">last_result</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;budget_note&quot;</span><span class="p">:</span> <span class="n">budget_note</span><span class="p">,</span>
             <span class="s2">&quot;remaining&quot;</span><span class="p">:</span> <span class="n">remaining_text</span><span class="p">,</span>
         <span class="p">}</span>
     <span class="p">)</span>
@@ -4568,19 +4568,7 @@
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/planning.py</code></summary>
-                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">566</span>
-<span class="normal">567</span>
-<span class="normal">568</span>
-<span class="normal">569</span>
-<span class="normal">570</span>
-<span class="normal">571</span>
-<span class="normal">572</span>
-<span class="normal">573</span>
-<span class="normal">574</span>
-<span class="normal">575</span>
-<span class="normal">576</span>
-<span class="normal">577</span>
-<span class="normal">578</span>
+                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">578</span>
 <span class="normal">579</span>
 <span class="normal">580</span>
 <span class="normal">581</span>
@@ -4641,7 +4629,19 @@
 <span class="normal">636</span>
 <span class="normal">637</span>
 <span class="normal">638</span>
-<span class="normal">639</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ResponseSynthesizer</span><span class="p">:</span>
+<span class="normal">639</span>
+<span class="normal">640</span>
+<span class="normal">641</span>
+<span class="normal">642</span>
+<span class="normal">643</span>
+<span class="normal">644</span>
+<span class="normal">645</span>
+<span class="normal">646</span>
+<span class="normal">647</span>
+<span class="normal">648</span>
+<span class="normal">649</span>
+<span class="normal">650</span>
+<span class="normal">651</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ResponseSynthesizer</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Synthesize a response from tool outputs.&quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tool_registry</span><span class="p">:</span> <span class="n">ToolRegistry</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -4747,9 +4747,9 @@
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/planning.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">569</span>
-<span class="normal">570</span>
-<span class="normal">571</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tool_registry</span><span class="p">:</span> <span class="n">ToolRegistry</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">581</span>
+<span class="normal">582</span>
+<span class="normal">583</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tool_registry</span><span class="p">:</span> <span class="n">ToolRegistry</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Initialize the response synthesizer.&quot;&quot;&quot;</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">_prompt_builder</span> <span class="o">=</span> <span class="n">PromptBuilder</span><span class="p">(</span><span class="n">tool_registry</span><span class="p">)</span>
 </code></pre></div></td></tr></table></div></div>
@@ -4774,19 +4774,7 @@
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/planning.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">573</span>
-<span class="normal">574</span>
-<span class="normal">575</span>
-<span class="normal">576</span>
-<span class="normal">577</span>
-<span class="normal">578</span>
-<span class="normal">579</span>
-<span class="normal">580</span>
-<span class="normal">581</span>
-<span class="normal">582</span>
-<span class="normal">583</span>
-<span class="normal">584</span>
-<span class="normal">585</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">585</span>
 <span class="normal">586</span>
 <span class="normal">587</span>
 <span class="normal">588</span>
@@ -4840,7 +4828,19 @@
 <span class="normal">636</span>
 <span class="normal">637</span>
 <span class="normal">638</span>
-<span class="normal">639</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">synthesize</span><span class="p">(</span>
+<span class="normal">639</span>
+<span class="normal">640</span>
+<span class="normal">641</span>
+<span class="normal">642</span>
+<span class="normal">643</span>
+<span class="normal">644</span>
+<span class="normal">645</span>
+<span class="normal">646</span>
+<span class="normal">647</span>
+<span class="normal">648</span>
+<span class="normal">649</span>
+<span class="normal">650</span>
+<span class="normal">651</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">synthesize</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">tool_outputs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
@@ -5918,7 +5918,13 @@
 <span class="normal">132</span>
 <span class="normal">133</span>
 <span class="normal">134</span>
-<span class="normal">135</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">StepReflector</span><span class="p">:</span>
+<span class="normal">135</span>
+<span class="normal">136</span>
+<span class="normal">137</span>
+<span class="normal">138</span>
+<span class="normal">139</span>
+<span class="normal">140</span>
+<span class="normal">141</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">StepReflector</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Reflect on tool results when objectives are provided.&quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -5947,8 +5953,14 @@
                 <span class="n">SystemMessage</span><span class="p">(</span>
                     <span class="n">content</span><span class="o">=</span><span class="p">(</span>
                         <span class="s2">&quot;Reflect on whether the tool result satisfies the step objective. &quot;</span>
-                        <span class="s2">&quot;Return status &#39;ok&#39; if complete, &#39;retry&#39; if the step should be &quot;</span>
-                        <span class="s2">&quot;re-executed, or &#39;revise&#39; if the tool input needs adjustment.&quot;</span>
+                        <span class="s2">&quot;Return status &#39;ok&#39; unless there is a CLEAR failure: &quot;</span>
+                        <span class="s2">&quot;the tool returned an explicit error message, &quot;</span>
+                        <span class="s2">&quot;the tool produced completely empty output when output was expected, &quot;</span>
+                        <span class="s2">&quot;or the result directly contradicts the objective. &quot;</span>
+                        <span class="s2">&quot;In all other cases, return &#39;ok&#39;. &quot;</span>
+                        <span class="s2">&quot;Partial or imperfect results are acceptable. &quot;</span>
+                        <span class="s2">&quot;Do NOT return &#39;retry&#39; or &#39;revise&#39; for cosmetic issues &quot;</span>
+                        <span class="s2">&quot;or minor imperfections.&quot;</span>
                     <span class="p">)</span>
                 <span class="p">),</span>
                 <span class="n">HumanMessagePromptTemplate</span><span class="o">.</span><span class="n">from_template</span><span class="p">(</span>
@@ -6179,7 +6191,13 @@
 <span class="normal">132</span>
 <span class="normal">133</span>
 <span class="normal">134</span>
-<span class="normal">135</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">reflect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">action_step</span><span class="p">:</span> <span class="n">ActionStep</span><span class="p">,</span> <span class="n">result_text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepReflection</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="normal">135</span>
+<span class="normal">136</span>
+<span class="normal">137</span>
+<span class="normal">138</span>
+<span class="normal">139</span>
+<span class="normal">140</span>
+<span class="normal">141</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">reflect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">action_step</span><span class="p">:</span> <span class="n">ActionStep</span><span class="p">,</span> <span class="n">result_text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StepReflection</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a reflection decision for a step.&quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span>
         <span class="n">action_step</span><span class="o">.</span><span class="n">objective</span> <span class="ow">or</span> <span class="n">action_step</span><span class="o">.</span><span class="n">expected_output</span> <span class="ow">or</span> <span class="n">action_step</span><span class="o">.</span><span class="n">execution_checklist</span>
@@ -6201,8 +6219,14 @@
             <span class="n">SystemMessage</span><span class="p">(</span>
                 <span class="n">content</span><span class="o">=</span><span class="p">(</span>
                     <span class="s2">&quot;Reflect on whether the tool result satisfies the step objective. &quot;</span>
-                    <span class="s2">&quot;Return status &#39;ok&#39; if complete, &#39;retry&#39; if the step should be &quot;</span>
-                    <span class="s2">&quot;re-executed, or &#39;revise&#39; if the tool input needs adjustment.&quot;</span>
+                    <span class="s2">&quot;Return status &#39;ok&#39; unless there is a CLEAR failure: &quot;</span>
+                    <span class="s2">&quot;the tool returned an explicit error message, &quot;</span>
+                    <span class="s2">&quot;the tool produced completely empty output when output was expected, &quot;</span>
+                    <span class="s2">&quot;or the result directly contradicts the objective. &quot;</span>
+                    <span class="s2">&quot;In all other cases, return &#39;ok&#39;. &quot;</span>
+                    <span class="s2">&quot;Partial or imperfect results are acceptable. &quot;</span>
+                    <span class="s2">&quot;Do NOT return &#39;retry&#39; or &#39;revise&#39; for cosmetic issues &quot;</span>
+                    <span class="s2">&quot;or minor imperfections.&quot;</span>
                 <span class="p">)</span>
             <span class="p">),</span>
             <span class="n">HumanMessagePromptTemplate</span><span class="o">.</span><span class="n">from_template</span><span class="p">(</span>
@@ -11117,11 +11141,7 @@
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/tool_registry.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">399</span>
-<span class="normal">400</span>
-<span class="normal">401</span>
-<span class="normal">402</span>
-<span class="normal">403</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">403</span>
 <span class="normal">404</span>
 <span class="normal">405</span>
 <span class="normal">406</span>
@@ -11215,7 +11235,11 @@
 <span class="normal">494</span>
 <span class="normal">495</span>
 <span class="normal">496</span>
-<span class="normal">497</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_registry</span><span class="p">(</span><span class="n">manifest_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ToolRegistry</span><span class="p">:</span>
+<span class="normal">497</span>
+<span class="normal">498</span>
+<span class="normal">499</span>
+<span class="normal">500</span>
+<span class="normal">501</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_registry</span><span class="p">(</span><span class="n">manifest_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ToolRegistry</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Load tool registry, auto-discovering MCP tools when configured.&quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">manifest_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">mcp_config_path</span> <span class="o">=</span> <span class="n">get_mcp_config_path</span><span class="p">()</span>
