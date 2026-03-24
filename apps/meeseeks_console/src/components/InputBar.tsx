@@ -13,12 +13,14 @@ import { QueryMode, SessionContext } from '../types';
 import { useMcpTools } from '../hooks/useMcpTools';
 import { useSkills } from '../hooks/useSkills';
 import { useProjects } from '../hooks/useProjects';
-import { McpSelector, McpOption } from './McpSelector';
+import { McpSelector, McpOption, McpStatus } from './McpSelector';
 import { SkillSelector } from './SkillSelector';
 import { ProjectSelector } from './ProjectSelector';
+import { Popover } from './Popover';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 type McpToolOption = McpOption & {
   server?: string;
+  disabled_reason?: string;
 };
 interface InputBarProps {
   mode: 'home' | 'detail';
@@ -49,20 +51,24 @@ export function InputBar({
   const [activeProject, setActiveProject] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>('act');
+  const popupDirection = mode === 'home' ? 'down' : 'up';
   const {
     tools: mcpTools,
     loading: mcpLoading,
-    error: mcpError
-  } = useMcpTools();
+    error: mcpError,
+    refresh: refreshMcp
+  } = useMcpTools(activeProject);
   const {
     skills: availableSkills,
     loading: skillsLoading,
-    error: skillsError
-  } = useSkills();
+    error: skillsError,
+    refresh: refreshSkills
+  } = useSkills(activeProject);
   const {
     projects: availableProjects,
     loading: projectsLoading,
-    error: projectsError
+    error: projectsError,
+    refresh: refreshProjects
   } = useProjects();
   const [mcps, setMcps] = useState<McpToolOption[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -96,13 +102,22 @@ export function InputBar({
         return prev.length ? prev : [];
       }
       const prevMap = new Map(prev.map((mcp) => [mcp.id, mcp.active]));
-      return mcpTools.map((tool) => ({
-        id: tool.tool_id,
-        name: tool.name,
-        active: prevMap.get(tool.tool_id) ?? tool.enabled,
-        enabled: tool.enabled,
-        server: tool.server
-      }));
+      return mcpTools.map((tool) => {
+        const reason = tool.disabled_reason ?? '';
+        const isFailed = reason.toLowerCase().includes('fail') || reason.toLowerCase().includes('error');
+        const status: McpStatus = tool.enabled ? 'active' : isFailed ? 'error' : 'disabled';
+        return {
+          id: tool.tool_id,
+          name: tool.name,
+          active: prevMap.get(tool.tool_id) ?? tool.enabled,
+          enabled: tool.enabled,
+          server: tool.server,
+          disabled_reason: tool.disabled_reason,
+          scope: tool.scope,
+          status,
+          count: undefined,
+        };
+      });
     });
   }, [mcpTools]);
   useEffect(() => {
@@ -123,12 +138,18 @@ export function InputBar({
       const selectable = tools.filter((tool) => tool.enabled);
       const active =
       selectable.length > 0 ? selectable.every((tool) => tool.active) : false;
+      // Worst status wins: error > disabled > active
+      const hasError = tools.some((t) => t.status === 'error');
+      const hasDisabled = tools.some((t) => t.status === 'disabled');
+      const status: McpStatus = hasError ? 'error' : hasDisabled ? 'disabled' : 'active';
       return {
         id: groupId,
         name: groupId,
         count: tools.length,
         active,
-        enabled: selectable.length > 0
+        enabled: selectable.length > 0,
+        status,
+        scope: tools[0]?.scope,
       } satisfies McpOption;
     });
   }, [mcps]);
@@ -191,7 +212,7 @@ export function InputBar({
     }
   };
   const PlusMenu = () =>
-  <div className="absolute bottom-full left-0 mb-2 w-48 bg-[hsl(var(--popover))] border border-[hsl(var(--border))] rounded-lg shadow-2xl shadow-black/40 ring-1 ring-white/[0.03] overflow-hidden z-50">
+  <Popover direction={popupDirection} width="w-48" maxHeight="">
       <div className="px-3 pt-2 pb-1">
         <span className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
           Built-in
@@ -220,7 +241,7 @@ export function InputBar({
         <Paperclip className="w-3.5 h-3.5" />
         Upload attachment
       </button>
-    </div>;
+    </Popover>;
 
   if (mode === 'home') {
     return (
@@ -295,12 +316,14 @@ export function InputBar({
                   isOpen={isMcpOpen}
                   loading={mcpLoading}
                   error={mcpError}
+                  direction={popupDirection}
                   onToggleOpen={() => {
                     setIsMcpOpen(!isMcpOpen);
                     setIsPlusMenuOpen(false);
                     setIsSkillOpen(false);
                   }}
-                  onToggle={toggleMcp} />
+                  onToggle={toggleMcp}
+                  onRefresh={refreshMcp} />
 
                 <SkillSelector
                   ref={skillRef}
@@ -309,6 +332,7 @@ export function InputBar({
                   isOpen={isSkillOpen}
                   loading={skillsLoading}
                   error={skillsError}
+                  direction={popupDirection}
                   onToggleOpen={() => {
                     setIsSkillOpen(!isSkillOpen);
                     setIsMcpOpen(false);
@@ -318,7 +342,8 @@ export function InputBar({
                   onSelect={(name) => {
                     setActiveSkill(name);
                     setIsSkillOpen(false);
-                  }} />
+                  }}
+                  onRefresh={refreshSkills} />
 
                 <ProjectSelector
                   ref={projectRef}
@@ -327,6 +352,7 @@ export function InputBar({
                   isOpen={isProjectOpen}
                   loading={projectsLoading}
                   error={projectsError}
+                  direction={popupDirection}
                   onToggleOpen={() => {
                     setIsProjectOpen(!isProjectOpen);
                     setIsMcpOpen(false);
@@ -336,7 +362,8 @@ export function InputBar({
                   onSelect={(name) => {
                     setActiveProject(name);
                     setIsProjectOpen(false);
-                  }} />
+                  }}
+                  onRefresh={refreshProjects} />
 
               </div>
 
@@ -447,12 +474,14 @@ export function InputBar({
                 isOpen={isMcpOpen}
                 loading={mcpLoading}
                 error={mcpError}
+                direction={popupDirection}
                 onToggleOpen={() => {
                   setIsMcpOpen(!isMcpOpen);
                   setIsPlusMenuOpen(false);
                   setIsSkillOpen(false);
                 }}
-                onToggle={toggleMcp} />
+                onToggle={toggleMcp}
+                onRefresh={refreshMcp} />
 
               <SkillSelector
                 ref={skillRef}
@@ -461,6 +490,7 @@ export function InputBar({
                 isOpen={isSkillOpen}
                 loading={skillsLoading}
                 error={skillsError}
+                direction={popupDirection}
                 onToggleOpen={() => {
                   setIsSkillOpen(!isSkillOpen);
                   setIsMcpOpen(false);
@@ -470,7 +500,8 @@ export function InputBar({
                 onSelect={(name) => {
                   setActiveSkill(name);
                   setIsSkillOpen(false);
-                }} />
+                }}
+                onRefresh={refreshSkills} />
 
               <ProjectSelector
                 ref={projectRef}
@@ -479,6 +510,7 @@ export function InputBar({
                 isOpen={isProjectOpen}
                 loading={projectsLoading}
                 error={projectsError}
+                direction={popupDirection}
                 onToggleOpen={() => {
                   setIsProjectOpen(!isProjectOpen);
                   setIsMcpOpen(false);
@@ -488,7 +520,8 @@ export function InputBar({
                 onSelect={(name) => {
                   setActiveProject(name);
                   setIsProjectOpen(false);
-                }} />
+                }}
+                onRefresh={refreshProjects} />
 
               <button
                 aria-label="Voice input"

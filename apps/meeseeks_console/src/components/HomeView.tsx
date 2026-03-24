@@ -66,7 +66,7 @@ export function HomeView({
   return (
     <div className="flex flex-col h-full w-full relative overflow-hidden">
       {/* Fixed Top Section */}
-      <div className="flex-none flex flex-col items-center pt-16 pb-6 px-4 w-full z-10 bg-[hsl(var(--background))]">
+      <div className="flex-none flex flex-col items-center pt-16 pb-6 px-4 w-full z-20 bg-[hsl(var(--background))]">
         <h1 className="text-3xl font-medium text-[hsl(var(--foreground))] mb-8">
           What should we do next?
         </h1>
