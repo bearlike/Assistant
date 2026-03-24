@@ -19,8 +19,8 @@ export function WorkspacePanel({
   filename
 }: WorkspacePanelProps) {
   return (
-    <div className="flex flex-col h-full border-l border-[hsl(var(--border))] bg-[hsl(var(--background))]">
-      <div className="flex items-center justify-between px-4 h-10 border-b border-[hsl(var(--border))] bg-[hsl(var(--background))]">
+    <div className="flex flex-col h-full border-l border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]">
+      <div className="flex items-center justify-between px-4 h-10 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]">
         <div className="flex gap-6 h-full">
           <button
             onClick={() => onTabChange('diff')}

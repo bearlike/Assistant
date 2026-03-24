@@ -97,7 +97,7 @@ export function HomeView({
       {/* Scrollable Bottom Section */}
       <div className="flex-1 overflow-y-auto w-full">
         <div className="max-w-3xl mx-auto px-4 pb-20">
-          <div className="sticky top-0 z-10 pt-2 pb-4 mb-2 flex items-center justify-between border-b border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-[0_4px_12px_hsl(var(--background))]">
+          <div className="sticky top-0 z-10 pt-2 pb-4 mb-2 flex items-center justify-between border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] shadow-[0_4px_12px_hsl(var(--background))]">
             <div className="flex gap-8">
               <button
                 onClick={() => setActiveTab('sessions')}

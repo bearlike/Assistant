@@ -141,7 +141,7 @@ export function NavBar({
     </span>;
 
   return (
-    <header className="sticky top-0 z-50 w-full h-12 border-b border-[hsl(var(--border))] bg-[hsl(var(--background))]/95 backdrop-blur flex items-center justify-between px-4">
+    <header className="sticky top-0 z-50 w-full h-12 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]/95 backdrop-blur flex items-center justify-between px-4">
       {mode === 'home' ?
       <>
           <div className="flex items-center gap-2">

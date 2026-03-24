@@ -402,7 +402,7 @@ export function InputBar({
 
   return (
     <div
-      className="border-t border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4"
+      className="border-t border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] p-4"
       data-testid="inputbar-detail">
 
       <input

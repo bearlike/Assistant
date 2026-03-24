@@ -19,7 +19,8 @@
     --popover: 60 2.7% 14.5%; /* same as bg — popover sits on overlay */
     --popover-foreground: 60 14% 97%;
 
-    --border: 55 9% 74% / 0.15; /* _gray-200 at 15% — subtle hairline */
+    --border: 55 9% 74% / 0.15; /* _gray-200 at 15% — subtle card hairline */
+    --border-strong: 55 9% 74% / 0.35; /* _gray-200 at 35% — structural dividers (nav, panels) */
     --input: 60 2% 17%; /* _gray-750 */
 
     --card: 60 2% 17%; /* _gray-750 — card surfaces above bg */
@@ -84,7 +85,8 @@
     --popover: 0 0% 100%; /* pure white */
     --popover-foreground: 0 0% 4%;
 
-    --border: 53 12% 87% / 0.4; /* _gray-100 at 40% (Anthropic hairline-shade) */
+    --border: 53 12% 87% / 0.4; /* _gray-100 at 40% — subtle card hairline */
+    --border-strong: 53 12% 74% / 0.5; /* _gray-200 at 50% — structural dividers */
     --input: 48 25% 92.2%; /* matches muted */
 
     --card: 0 0% 100%; /* white */
