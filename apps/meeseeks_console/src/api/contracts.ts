@@ -18,6 +18,7 @@ export type ToolSummary = {
   description?: string;
   disabled_reason?: string;
   server?: string;
+  scope?: string;
 };
 
 export type SkillSummary = {
@@ -61,8 +62,8 @@ export type ApiClient = {
   resolveShare: (token: string) => Promise<SessionExport>;
   sendMessage: (sessionId: string, text: string) => Promise<void>;
   interruptStep: (sessionId: string) => Promise<void>;
-  listTools: () => Promise<ToolSummary[]>;
-  listSkills: () => Promise<SkillSummary[]>;
+  listTools: (project?: string) => Promise<ToolSummary[]>;
+  listSkills: (project?: string) => Promise<SkillSummary[]>;
   streamEvents: (
     sessionId: string,
     onEvent: (event: EventRecord) => void,

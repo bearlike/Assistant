@@ -212,8 +212,9 @@ export function createRealClient(config: ApiConfig): ApiClient {
       await handleJson(response);
     },
 
-    async listTools(): Promise<ToolSummary[]> {
-      const response = await fetch(withBase(baseUrl, "/api/tools"), {
+    async listTools(project?: string): Promise<ToolSummary[]> {
+      const params = project ? `?project=${encodeURIComponent(project)}` : "";
+      const response = await fetch(withBase(baseUrl, `/api/tools${params}`), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ tools: ToolSummary[] }>(response);
@@ -257,8 +258,9 @@ export function createRealClient(config: ApiConfig): ApiClient {
       return payload.projects;
     },
 
-    async listSkills(): Promise<SkillSummary[]> {
-      const response = await fetch(withBase(baseUrl, "/api/skills"), {
+    async listSkills(project?: string): Promise<SkillSummary[]> {
+      const params = project ? `?project=${encodeURIComponent(project)}` : "";
+      const response = await fetch(withBase(baseUrl, `/api/skills${params}`), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ skills: SkillSummary[] }>(response);

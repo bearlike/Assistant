@@ -9,6 +9,9 @@ vi.mock("../api/client", () => ({
   postQuery: vi.fn(),
   fetchEvents: vi.fn(),
   listTools: vi.fn(),
+  listSkills: vi.fn(),
+  listProjects: vi.fn(),
+  invalidateCache: vi.fn(),
   archiveSession: vi.fn(),
   unarchiveSession: vi.fn(),
   listNotifications: vi.fn(),
@@ -24,6 +27,8 @@ const createSession = vi.mocked(client.createSession);
 const postQuery = vi.mocked(client.postQuery);
 const fetchEvents = vi.mocked(client.fetchEvents);
 const listTools = vi.mocked(client.listTools);
+const listSkills = vi.mocked(client.listSkills);
+const listProjects = vi.mocked(client.listProjects);
 const archiveSession = vi.mocked(client.archiveSession);
 const unarchiveSession = vi.mocked(client.unarchiveSession);
 const listNotifications = vi.mocked(client.listNotifications);
@@ -36,6 +41,8 @@ const resolveShare = vi.mocked(client.resolveShare);
 beforeEach(() => {
   vi.resetAllMocks();
   listTools.mockResolvedValue([]);
+  listSkills.mockResolvedValue([]);
+  listProjects.mockResolvedValue([]);
   fetchEvents.mockResolvedValue({
     events: [],
     running: false

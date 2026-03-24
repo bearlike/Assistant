@@ -56,8 +56,8 @@ const mockClient: ApiClient = {
   sendMessage: async () => { /* no-op mock */ },
   interruptStep: async () => { /* no-op mock */ },
   streamEvents: () => () => { /* no-op mock */ },
-  listTools: mockListTools,
-  listSkills: mockListSkills,
+  listTools: (_project?: string) => mockListTools(),
+  listSkills: (_project?: string) => mockListSkills(),
   listProjects: async () => [],
   listNotifications: mockListNotifications,
   dismissNotification: mockDismissNotification,
@@ -67,6 +67,37 @@ const mockClient: ApiClient = {
 // When true in auto mode, skip real fetch and use mocks directly.
 // Flips to true after the first network/API failure.
 let fallbackToMock = false;
+
+// ---------------------------------------------------------------------------
+// Simple in-memory TTL cache
+// ---------------------------------------------------------------------------
+
+type CacheEntry<T> = { data: T; ts: number };
+const _cache = new Map<string, CacheEntry<unknown>>();
+const CACHE_TTL = 60_000;
+
+function getCached<T>(key: string): T | undefined {
+  const e = _cache.get(key);
+  if (!e || Date.now() - e.ts > CACHE_TTL) {
+    _cache.delete(key);
+    return undefined;
+  }
+  return e.data as T;
+}
+
+function setCache<T>(key: string, data: T): void {
+  _cache.set(key, { data, ts: Date.now() });
+}
+
+export function invalidateCache(prefix?: string): void {
+  if (!prefix) {
+    _cache.clear();
+    return;
+  }
+  for (const k of _cache.keys()) {
+    if (k.startsWith(prefix)) _cache.delete(k);
+  }
+}
 
 function parseBool(value?: string): boolean {
   if (!value) {
@@ -204,25 +235,40 @@ export async function resolveShare(token: string): Promise<SessionExport> {
   );
 }
 
-export async function listTools(): Promise<ToolSummary[]> {
-  return withFallback(
-    () => realClient.listTools(),
-    () => mockClient.listTools()
+export async function listTools(project?: string): Promise<ToolSummary[]> {
+  const key = `tools:${project ?? ''}`;
+  const hit = getCached<ToolSummary[]>(key);
+  if (hit) return hit;
+  const result = await withFallback(
+    () => realClient.listTools(project),
+    () => mockClient.listTools(project)
   );
+  setCache(key, result);
+  return result;
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
-  return withFallback(
+  const key = 'projects';
+  const hit = getCached<ProjectSummary[]>(key);
+  if (hit) return hit;
+  const result = await withFallback(
     () => realClient.listProjects(),
     () => mockClient.listProjects()
   );
+  setCache(key, result);
+  return result;
 }
 
-export async function listSkills(): Promise<SkillSummary[]> {
-  return withFallback(
-    () => realClient.listSkills(),
-    () => mockClient.listSkills()
+export async function listSkills(project?: string): Promise<SkillSummary[]> {
+  const key = `skills:${project ?? ''}`;
+  const hit = getCached<SkillSummary[]>(key);
+  if (hit) return hit;
+  const result = await withFallback(
+    () => realClient.listSkills(project),
+    () => mockClient.listSkills(project)
   );
+  setCache(key, result);
+  return result;
 }
 
 export async function listNotifications(): Promise<NotificationItem[]> {
