@@ -16,11 +16,6 @@ from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Input, Label, OptionList, SelectionList
 
-_DOTTED_BOX = box.Box(
-    ".:.:\n: ::\n.:.:\n: ::\n.:.:\n.:.:\n: ::\n.:.:",
-    ascii=True,
-)
-
 
 def _textual_enabled() -> bool:
     if get_config_value("cli", "disable_textual", default=False):
@@ -220,81 +215,35 @@ def _confirm_fallback(
     return choice in {"y", "yes"}
 
 
-def _confirm_aider(
-    message: str,
-    *,
-    default: bool = False,
-    subject: str | None = None,
-    prompt_func: Callable[[str], str] | None = None,
-) -> bool | None:
-    try:
-        from meeseeks_tools.vendor.aider.io import InputOutput
-    except Exception:
-        return None
-
-    io = InputOutput(pretty=True, fancy_input=False)
-    default_char = "y" if default else "n"
-
-    if prompt_func is None:
-        return io.confirm_ask(message, default=default_char, subject=subject)
-
-    import builtins
-
-    original_input = builtins.input
-
-    def _fake_input(*args: object, **_kwargs: object) -> str:
-        prompt = str(args[0]) if args else ""
-        return prompt_func(prompt)
-
-    try:
-        builtins.input = _fake_input
-        return io.confirm_ask(message, default=default_char, subject=subject)
-    finally:
-        builtins.input = original_input
-
-
-def _clear_console_lines(console: Console, line_count: int) -> None:
-    if line_count <= 0 or not console.is_terminal:
-        return
-    try:
-        for _ in range(line_count):
-            sys.stdout.write("\x1b[1A\x1b[2K")
-        sys.stdout.flush()
-    except Exception:
-        return
-
-
 def _confirm_rich_panel(
-    console: Console | None,
-    prompt_func: Callable[[str], str] | None,
+    console: Console,
     message: str,
     *,
     subject: str | None = None,
     default: bool = False,
     allow_always: bool = False,
     allow_session: bool = False,
-) -> str | None:
-    if prompt_func is None or console is None:
-        return None
+) -> str:
+    """Show a Rich panel and prompt for approval via ``console.input()``.
 
+    Using ``console.input()`` ensures the Rich Live display is properly
+    paused while waiting for user input.
+
+    Returns one of: ``"yes"``, ``"no"``, ``"always"``, ``"session"``.
+    """
     body = Text()
     body.append(message, style="bold")
     if subject:
         body.append("\n")
-        body.append(subject, style="dim")
+        body.append(subject, style="cyan")
 
     panel = Panel(
         body,
-        title="Tool approval",
-        border_style="cyan",
+        title="[bold] Tool approval [/bold]",
+        border_style="bold cyan",
         padding=(1, 2),
-        box=_DOTTED_BOX,
+        box=box.ROUNDED,
     )
-
-    try:
-        line_count = len(console.render_lines(panel, console.options))
-    except Exception:
-        line_count = 0
 
     console.print(panel)
     suffix = "Y/n" if default else "y/N"
@@ -302,9 +251,8 @@ def _confirm_rich_panel(
         suffix = f"{suffix}/a"
     if allow_session:
         suffix = f"{suffix}/s"
-    prompt = f"{suffix}: "
     try:
-        response = prompt_func(prompt).strip().lower()
+        response = console.input(f"[bold]{suffix}[/bold]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         response = ""
 
@@ -312,16 +260,12 @@ def _confirm_rich_panel(
         response = "y" if default else "n"
 
     if response in {"a", "always"} and allow_always:
-        decision = "always"
-    elif response in {"s", "session"} and allow_session:
-        decision = "session"
-    elif response in {"y", "yes"}:
-        decision = "yes"
-    else:
-        decision = "no"
-
-    _clear_console_lines(console, line_count + 1)
-    return decision
+        return "always"
+    if response in {"s", "session"} and allow_session:
+        return "session"
+    if response in {"y", "yes"}:
+        return "yes"
+    return "no"
 
 
 class _BaseDialog(App):

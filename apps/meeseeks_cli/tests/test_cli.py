@@ -91,48 +91,31 @@ def test_handle_new_session_command(tmp_path):
     assert state.session_id != session_id
 
 
-def test_build_approval_callback_accepts():
+def test_build_approval_callback_accepts(monkeypatch):
     """Accept approval when prompt returns yes."""
+    monkeypatch.setattr(
+        "meeseeks_cli.cli_master._confirm_rich_panel", lambda *args, **kwargs: "yes"
+    )
     console = Console(record=True)
     state = CliState(session_id="s")
     registry = load_registry()
-    callback = _build_approval_callback(
-        lambda _: "y", console, state, registry, auto_approve_enabled=False
-    )
+    callback = _build_approval_callback(console, state, registry, auto_approve_enabled=False)
     step = DummyStep("tool", "set", "arg")
-    assert callback is not None
     assert callback(step) is True
 
 
-def test_build_approval_callback_none():
-    """Return None when approval prompting is disabled."""
-    console = Console(record=True)
-    state = CliState(session_id="s")
-    registry = load_registry()
-    assert (
-        _build_approval_callback(None, console, state, registry, auto_approve_enabled=False) is None
-    )
-
-
-def test_build_approval_callback_auto_approve(tmp_path, monkeypatch):
+def test_build_approval_callback_auto_approve():
     """Auto-approve when session flag is enabled."""
     console = Console(record=True)
     state = CliState(session_id="s", auto_approve_all=True)
     registry = load_registry()
-
-    def _boom(_prompt):
-        raise AssertionError("prompt should not be called")
-
-    callback = _build_approval_callback(_boom, console, state, registry, auto_approve_enabled=True)
+    callback = _build_approval_callback(console, state, registry, auto_approve_enabled=True)
     step = DummyStep("tool", "set", "arg")
-    assert callback is not None
     assert callback(step) is True
 
 
 def test_build_approval_callback_session_yes(monkeypatch, tmp_path):
     """Enable session-wide auto-approve when selected."""
-    from meeseeks_cli.cli_master import _build_approval_callback
-
     monkeypatch.setattr(
         "meeseeks_cli.cli_master._confirm_rich_panel", lambda *args, **kwargs: "session"
     )
@@ -147,17 +130,14 @@ def test_build_approval_callback_session_yes(monkeypatch, tmp_path):
     )
     console = Console(record=True)
     state = CliState(session_id="s")
-    callback = _build_approval_callback(
-        lambda _: "n", console, state, registry, auto_approve_enabled=False
-    )
+    callback = _build_approval_callback(console, state, registry, auto_approve_enabled=False)
     step = DummyStep("tool", "set", "arg")
-    assert callback is not None
     assert callback(step) is True
     assert state.auto_approve_all is True
 
 
 def test_mcp_yes_always_updates_config(tmp_path, monkeypatch):
-    """Persist MCP auto-approve when user selects Yes, always."""
+    """Persist MCP auto-approve when user selects always."""
     config_path = tmp_path / "mcp.json"
     config_path.write_text(
         '{"servers": {"srv": {"transport": "http", "url": "http://example"}}}',
@@ -165,17 +145,9 @@ def test_mcp_yes_always_updates_config(tmp_path, monkeypatch):
     )
     set_mcp_config_path(config_path)
 
-    class DummyDialogs:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def can_use_textual(self):
-            return True
-
-        def select_one(self, *args, **kwargs):
-            return "Yes, always"
-
-    monkeypatch.setattr("meeseeks_cli.cli_master.DialogFactory", DummyDialogs)
+    monkeypatch.setattr(
+        "meeseeks_cli.cli_master._confirm_rich_panel", lambda *args, **kwargs: "always"
+    )
 
     registry = ToolRegistry()
     registry.register(
@@ -190,11 +162,8 @@ def test_mcp_yes_always_updates_config(tmp_path, monkeypatch):
     )
     console = Console(record=True)
     state = CliState(session_id="s")
-    callback = _build_approval_callback(
-        lambda _: "y", console, state, registry, auto_approve_enabled=False
-    )
+    callback = _build_approval_callback(console, state, registry, auto_approve_enabled=False)
     step = DummyStep("mcp_srv_tool", "set", "arg")
-    assert callback is not None
     assert callback(step) is True
     config = json.loads(config_path.read_text(encoding="utf-8"))
     assert "tool" in config["servers"]["srv"]["auto_approve_tools"]
@@ -254,7 +223,7 @@ def test_run_query_auto_approves_in_headless(monkeypatch, tmp_path):
     console = Console(record=True)
     captured: dict[str, object] = {}
 
-    def fake_build(_prompt, _console, _state, _registry, *, auto_approve_enabled):
+    def fake_build(_console, _state, _registry, *, auto_approve_enabled):
         captured["auto_approve"] = auto_approve_enabled
         return lambda _step: True
 
