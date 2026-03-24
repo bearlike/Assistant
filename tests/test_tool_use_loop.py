@@ -633,3 +633,71 @@ class TestEnvironmentSectionInSystemPrompt:
         system_msg = messages[0]
         # Should contain some working directory path (the actual CWD)
         assert "Working directory:" in system_msg.content
+
+
+# ---------------------------------------------------------------------------
+# Delegation lifecycle guidance (research-grounded)
+# ---------------------------------------------------------------------------
+
+
+class TestDepthGuidance:
+    """Ref: [CoA §3.2], [DeepMind-Delegation §4.1], [Aletheia §3]
+    Lifecycle-aware prompting for root/sub/leaf agents."""
+
+    def test_root_agent_is_orchestrator(self):
+        ctx = _make_agent_context(max_depth=5)  # depth=0 root
+        loop = ToolUseLoop(
+            agent_context=ctx,
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        guidance = loop._build_depth_guidance()
+        assert "Root orchestrator" in guidance
+        assert "Delegation protocol" in guidance
+        assert "acceptance_criteria" in guidance
+        # Ref: [Aletheia §3] Verification instructions
+        assert "status" in guidance
+        assert "cannot_solve" in guidance
+
+    def test_leaf_agent_is_executor(self):
+        ctx = _make_agent_context(max_depth=1)
+        child_ctx = ctx.child()  # depth=1, max_depth=1 = leaf
+        loop = ToolUseLoop(
+            agent_context=child_ctx,
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        guidance = loop._build_depth_guidance()
+        assert "Leaf executor" in guidance
+        assert "Do NOT attempt to delegate" in guidance
+        # Ref: [Aletheia §3] Failure admission
+        assert "cannot complete the task" in guidance
+
+    def test_sub_orchestrator(self):
+        ctx = _make_agent_context(max_depth=5)
+        child_ctx = ctx.child()  # depth=1, can still spawn
+        loop = ToolUseLoop(
+            agent_context=child_ctx,
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        guidance = loop._build_depth_guidance()
+        assert "Sub-orchestrator" in guidance
+        assert "bounded" in guidance.lower() or "scope" in guidance.lower()
+
+    def test_delegation_boundary_warning(self):
+        """Ref: [DeepMind-Delegation §4.7] Liability firebreaks at chain boundaries."""
+        ctx = _make_agent_context(max_depth=3)
+        c1 = ctx.child()  # depth=1
+        c2 = c1.child()   # depth=2, remaining=1
+        loop = ToolUseLoop(
+            agent_context=c2,
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        guidance = loop._build_depth_guidance()
+        assert "DELEGATION BOUNDARY" in guidance or "deep in the agent tree" in guidance

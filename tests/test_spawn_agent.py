@@ -283,3 +283,96 @@ class TestSpawnAgentDepthGate:
             hook_manager=_make_hook_manager(),
         )
         assert loop._spawn_agent_tool is None
+
+
+# ---------------------------------------------------------------------------
+# Research-grounded tests: approval_callback, AgentResult, lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestSpawnAgentApprovalCallback:
+    """Ref: [DeepMind-Delegation §4.7] Sub-agents inherit parent's approval policy."""
+
+    def test_approval_callback_stored(self):
+        ctx = _make_context()
+        callback = lambda _step: True  # noqa: E731
+        tool = SpawnAgentTool(
+            agent_context=ctx,
+            tool_registry=_make_registry("shell"),
+            permission_policy=_allow_all_policy(),
+            approval_callback=callback,
+            hook_manager=_make_hook_manager(),
+        )
+        assert tool._approval_callback is callback
+
+    def test_approval_callback_defaults_to_none(self):
+        ctx = _make_context()
+        tool = SpawnAgentTool(
+            agent_context=ctx,
+            tool_registry=_make_registry("shell"),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        assert tool._approval_callback is None
+
+
+class TestSpawnAgentResult:
+    """Ref: [CoA §3.1] Sub-agents return structured AgentResult (Communication Unit)."""
+
+    def test_result_is_json_with_status(self):
+        """Successful spawn returns JSON AgentResult, not raw text."""
+        import json
+
+        async def _test():
+            registry = _make_registry("shell_tool")
+            ctx = _make_context()
+            tool = SpawnAgentTool(
+                agent_context=ctx,
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+            fake_model = MagicMock()
+            fake_model.ainvoke = AsyncMock(
+                return_value=_text_response("Done!")
+            )
+            bound = MagicMock()
+            bound.ainvoke = fake_model.ainvoke
+
+            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+                mock_build.return_value = MagicMock()
+                mock_build.return_value.bind_tools.return_value = bound
+
+                step = ActionStep(
+                    tool_id="spawn_agent",
+                    operation="set",
+                    tool_input={"task": "do work"},
+                )
+                result = await tool.run_async(step)
+
+            # Result should be valid JSON
+            parsed = json.loads(result.content)
+            assert "status" in parsed
+            assert "content" in parsed
+            assert "steps_used" in parsed
+            assert "summary" in parsed
+            assert parsed["status"] in ("completed", "failed")
+
+        asyncio.run(_test())
+
+
+class TestSpawnAgentSchema:
+    """Ref: [DeepMind-Delegation §4.1] Contract-first decomposition with acceptance criteria."""
+
+    def test_schema_includes_max_steps(self):
+        from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
+        props = SPAWN_AGENT_SCHEMA["function"]["parameters"]["properties"]
+        assert "max_steps" in props
+        assert props["max_steps"]["type"] == "integer"
+
+    def test_schema_includes_acceptance_criteria(self):
+        from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
+        props = SPAWN_AGENT_SCHEMA["function"]["parameters"]["properties"]
+        assert "acceptance_criteria" in props
+        assert props["acceptance_criteria"]["type"] == "string"

@@ -122,10 +122,13 @@ class ToolUseLoop:
         if agent_context.can_spawn:
             from meeseeks_core.spawn_agent import SpawnAgentTool
 
+            # Ref: [DeepMind-Delegation §4.7] Sub-agents inherit parent's approval
+            # policy so they can execute write/edit/shell tools.
             self._spawn_agent_tool = SpawnAgentTool(
                 agent_context=agent_context,
                 tool_registry=tool_registry,
                 permission_policy=permission_policy,
+                approval_callback=approval_callback,
                 hook_manager=hook_manager,
                 project_instructions=project_instructions,
                 cwd=cwd,
@@ -162,7 +165,13 @@ class ToolUseLoop:
         await self._ctx.registry.register(handle)
 
         try:
-            messages = self._build_messages(user_query, context, plan)
+            # Ref: [DeepMind-Delegation §4.5] Global eye for root agent
+            agent_tree = ""
+            if self._ctx.depth == 0:
+                agent_tree = await self._ctx.registry.render_agent_tree()
+            messages = self._build_messages(
+                user_query, context, plan, agent_tree=agent_tree,
+            )
             tool_schemas = specs_to_langchain_tools(tool_specs)
             model = self._bind_model(tool_schemas)
 
@@ -209,6 +218,14 @@ class ToolUseLoop:
                             )
                         except Exception:
                             pass
+
+                    # Ref: [AgentCgroup §4.2] Graduated enforcement — NL feedback, not kill.
+                    # Inject budget warning so the agent can adapt its strategy.
+                    if self._ctx.registry.budget_exhausted():
+                        messages.append(SystemMessage(
+                            content="BUDGET WARNING: Session step budget exhausted. "
+                            "Summarize your current findings and return results immediately."
+                        ))
 
                     response: AIMessage = await model.ainvoke(
                         messages, config=invoke_config or None
@@ -389,6 +406,7 @@ class ToolUseLoop:
         user_query: str,
         context: ContextSnapshot | None,
         plan: Plan | None,
+        agent_tree: str = "",
     ) -> list[BaseMessage]:
         """Build the initial message list for the conversation."""
         system_parts: list[str] = [get_system_prompt("system")]
@@ -409,6 +427,10 @@ class ToolUseLoop:
             system_parts.append(
                 f"Project instructions:\n{self._project_instructions}"
             )
+
+        # Ref: [DeepMind-Delegation §4.5] Root agent's global eye — live agent tree
+        if agent_tree:
+            system_parts.append(f"# Active agent tree\n{agent_tree}")
 
         # Git context (injected after project instructions).
         git_ctx = get_git_context(self._cwd)
@@ -464,29 +486,94 @@ class ToolUseLoop:
         return [SystemMessage(content=system_prompt), HumanMessage(content=user_query)]
 
     def _build_depth_guidance(self) -> str:
-        """Build depth-aware prompt guidance for sub-agent spawning."""
-        if self._ctx.can_spawn:
-            remaining = self._ctx.remaining_depth
+        """Build delegation-lifecycle-aware prompt guidance.
+
+        Ref: [DeepMind-Delegation §4.1] Contract-first decomposition — root
+        agents define verifiable acceptance criteria for sub-tasks.
+        Ref: [CoA §3.2] Manager/worker role separation — root synthesizes,
+        sub-agents execute.
+        Ref: [Aletheia §3] Verification by same model in different role
+        prevents confirmation bias.
+        Ref: [DeepMind-Delegation §4.7] Liability firebreaks at chain boundaries.
+        """
+        depth = self._ctx.depth
+        max_depth = self._ctx.max_depth
+        remaining = self._ctx.remaining_depth
+        is_root = depth == 0
+        is_leaf = not self._ctx.can_spawn
+
+        if is_root:
+            # Ref: [CoA §3.2] Root = manager agent. Synthesizes, doesn't duplicate.
             lines = [
-                f"Agent depth: {self._ctx.depth}/{self._ctx.max_depth} "
-                f"({remaining} spawn level{'s' if remaining != 1 else ''} remaining).",
-                "- Use spawn_agent to delegate independent subtasks to parallel sub-agents.",
-                "- Each sub-agent runs its own conversation with tool access scoped by you.",
-                "- Prefer spawn_agent for tasks that can run in parallel.",
-                "- Do not spawn sub-agents for simple, sequential steps — use tools directly.",
-                "- Sub-agents return their final result as text.",
-                "- You can specify allowed_tools/denied_tools to restrict sub-agent capabilities.",
-                "- You can specify a model for sub-agents via the model parameter.",
+                f"# Agent role: Root orchestrator (depth {depth}/{max_depth})",
+                f"You have {remaining} delegation levels available.",
+                "",
+                "## Delegation protocol",
+                "- Decompose complex work into bounded, verifiable sub-tasks.",
+                "- Use spawn_agent for tasks that can run independently.",
+                "- Define acceptance_criteria so you can verify each sub-task's result.",
+                "- Specify allowed_tools/denied_tools to scope sub-agent capabilities.",
+                "- Use max_steps to budget tool execution for complex sub-tasks.",
+                "",
+                "## Ref: [Aletheia §3] Verification of sub-agent results",
+                "Sub-agents return structured JSON with these fields:",
+                '  status: "completed" | "failed" | "partial" | "cannot_solve"',
+                "  content: the primary output text",
+                "  summary: compressed context (Communication Unit) for chaining",
+                "  steps_used: tool steps consumed",
+                "  warnings: non-fatal issues encountered",
+                "",
+                "ALWAYS check 'status' before using results:",
+                "- 'completed': result is reliable — verify and incorporate",
+                "- 'failed'/'cannot_solve': handle the failure — retry or adapt",
+                "- Pass relevant 'summary' values to subsequent sub-agents as context",
+                "",
+                "## Efficiency",
+                "- Prefer direct tool use for simple, sequential steps.",
+                "- Do not spawn sub-agents for trivial operations.",
+                "- You are the synthesizer — combine sub-agent outputs into a cohesive result.",
+            ]
+        elif is_leaf:
+            # Ref: [DeepMind-Delegation §4.7] Liability firebreak at leaf
+            lines = [
+                f"# Agent role: Leaf executor (depth {depth}/{max_depth})",
+                "You are a delegated sub-agent with a bounded task.",
+                "",
+                "## Execution protocol",
+                "- Complete your assigned task directly using available tools.",
+                "- Do NOT attempt to delegate — you cannot spawn sub-agents.",
+                "- When done, provide a clear, structured summary of what you accomplished.",
+                "",
+                "## Ref: [Aletheia §3] Explicit failure admission",
+                "- If you cannot complete the task, say so explicitly with the reason.",
+                "- Do NOT spin or retry endlessly — admit failure so the parent can adapt.",
+                "- Self-terminate by returning your result — do not continue past your task scope.",
+            ]
+        else:
+            # Sub-orchestrator: can delegate but has bounded scope
+            lines = [
+                f"# Agent role: Sub-orchestrator (depth {depth}/{max_depth}, "
+                f"{remaining} levels remaining)",
+                "You are a delegated sub-agent that can further delegate.",
+                "",
+                "## Execution protocol",
+                "- Focus on your assigned task scope — do not expand beyond it.",
+                "- You may spawn child agents for independent subtasks within your scope.",
+                "- Verify child agent results before incorporating them.",
+                "- Return a structured summary when your task is complete.",
+                "",
+                "## Ref: [Aletheia §3] Failure admission",
+                "- If you cannot complete the task, say so explicitly with the reason.",
+                "- Do NOT spin or retry endlessly.",
             ]
             if remaining <= 2:
+                # Ref: [DeepMind-Delegation §4.7] Approaching delegation boundary
                 lines.append(
-                    "- You are deep in the agent tree. Prefer direct tool use over spawning."
+                    "\nDELEGATION BOUNDARY: You are deep in the agent tree. "
+                    "Prefer direct tool use over spawning."
                 )
-            return "\n".join(lines)
-        return (
-            "You are a leaf agent. Complete your task directly using available tools. "
-            "Do not attempt to delegate."
-        )
+
+        return "\n".join(lines)
 
     def _render_tool_guidance(self) -> str:
         """Render tool-specific prompt guidance for local tools."""

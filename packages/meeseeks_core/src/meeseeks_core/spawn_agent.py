@@ -11,7 +11,9 @@ never sees them.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import json
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from meeseeks_core.agent_context import AgentContext, AgentDepthExceeded
@@ -90,6 +92,21 @@ SPAWN_AGENT_SCHEMA: dict[str, object] = {
                     "items": {"type": "string"},
                     "description": "Tool IDs explicitly denied to the sub-agent.",
                 },
+                "max_steps": {
+                    "type": "integer",
+                    "description": (
+                        "Maximum tool steps for this sub-agent "
+                        "(default: from config)."
+                    ),
+                },
+                "acceptance_criteria": {
+                    "type": "string",
+                    "description": (
+                        "How to verify this sub-task is complete "
+                        "(e.g., 'file exists and tests pass'). "
+                        "Ref: [DeepMind-Delegation §4.1] Contract-first decomposition."
+                    ),
+                },
             },
             "required": ["task"],
         },
@@ -111,6 +128,7 @@ class SpawnAgentTool:
         agent_context: AgentContext,
         tool_registry: ToolRegistry,
         permission_policy: PermissionPolicy,
+        approval_callback: Callable[[ActionStep], bool] | None = None,
         hook_manager: HookManager,
         project_instructions: str | None = None,
         cwd: str | None = None,
@@ -119,6 +137,7 @@ class SpawnAgentTool:
         self._agent_context = agent_context
         self._tool_registry = tool_registry
         self._permission_policy = permission_policy
+        self._approval_callback = approval_callback
         self._hook_manager = hook_manager
         self._project_instructions = project_instructions
         self._cwd = cwd
@@ -131,6 +150,11 @@ class SpawnAgentTool:
             else {"task": str(action_step.tool_input)}
         )
         task_desc = str(args.get("task", ""))
+        acceptance_criteria = str(args.get("acceptance_criteria", "") or "")
+        if acceptance_criteria:
+            # Ref: [DeepMind-Delegation §4.1] Contract-first decomposition —
+            # delegation is contingent upon the outcome having precise verification.
+            task_desc += f"\n\nAcceptance criteria: {acceptance_criteria}"
         model_override = args.get("model")
         registry = self._agent_context.registry
 
@@ -147,17 +171,21 @@ class SpawnAgentTool:
 
         child_ctx: AgentContext | None = None
         handle: AgentHandle | None = None
+        tq = None  # Initialized early so error handlers can read partial results
         try:
             # 3. Create child context.
             child_ctx = self._agent_context.child(model_name=resolved_model)
 
             # 4. Register in registry.
+            # Ref: [A2A v1.0] Agent starts as "submitted", transitions to "running"
             handle = AgentHandle(
                 agent_id=child_ctx.agent_id,
                 parent_id=child_ctx.parent_id,
                 depth=child_ctx.depth,
                 model_name=child_ctx.model_name,
                 task_description=task_desc[:200],
+                status="submitted",
+                message_queue=child_ctx.message_queue,
             )
             await registry.register(handle)
             self._hook_manager.run_on_agent_start(handle)
@@ -170,32 +198,46 @@ class SpawnAgentTool:
             # Import here to avoid circular import at module level.
             from meeseeks_core.tool_use_loop import ToolUseLoop
 
+            # Ref: [DeepMind-Delegation §4.7] Privilege attenuation — sub-agents
+            # inherit parent's approval policy (not None, which blocks all writes).
             child_loop = ToolUseLoop(
                 agent_context=child_ctx,
                 tool_registry=self._tool_registry,
                 permission_policy=self._permission_policy,
-                approval_callback=None,  # Sub-agents auto-deny on ASK.
+                approval_callback=self._approval_callback,
                 hook_manager=self._hook_manager,
                 project_instructions=self._project_instructions,
                 cwd=self._cwd,
             )
-            max_steps = int(
+            config_max = int(
                 get_config_value("agent", "sub_agent_max_steps", default=10)
             )
-            tq, state = await child_loop.run(
-                task_desc,
-                tool_specs=child_specs,
-                max_steps=max_steps,
+            # Ref: [AgentCgroup §4.2] Per-spawn resource budget with hard ceiling
+            requested = int(args.get("max_steps", config_max))
+            max_steps = min(requested, config_max * 5)  # Hard ceiling: 5x config
+            # Ref: [A2A v1.0] Transition to "running" when execution begins
+            handle.status = "running"
+            # Populate asyncio_task so cancel_agent() and 3-phase cleanup work
+            child_task = asyncio.create_task(
+                child_loop.run(task_desc, tool_specs=child_specs, max_steps=max_steps)
             )
+            handle.asyncio_task = child_task
+            tq, state = await child_task
 
             # 7. Mark done.
             await registry.mark_done(child_ctx.agent_id, "completed")
             self._hook_manager.run_on_agent_stop(handle)
             self._emit_event(child_ctx, "stop", state.done_reason or "completed")
 
-            return MockSpeaker(
-                content=tq.task_result or state.done_reason or "No result"
+            # Ref: [CoA §3.1] Build Communication Unit — compressed context for parent
+            from meeseeks_core.hypervisor import AgentResult
+            result = AgentResult(
+                content=tq.task_result or state.done_reason or "No result",
+                status="completed" if state.done else "failed",
+                steps_used=handle.steps_completed,
+                summary=(tq.task_result or "")[:500],
             )
+            return MockSpeaker(content=json.dumps(asdict(result)))
 
         except AgentDepthExceeded as exc:
             agent_error = AgentError(
@@ -209,7 +251,14 @@ class SpawnAgentTool:
                     handle.agent_id, "failed", error=agent_error,
                 )
                 self._hook_manager.run_on_agent_stop(handle)
-            return MockSpeaker(content=f"ERROR: {agent_error}")
+            from meeseeks_core.hypervisor import AgentResult
+            result = AgentResult(
+                content=f"Depth exceeded: {exc}",
+                status="cannot_solve",
+                steps_used=handle.steps_completed if handle else 0,
+                warnings=[str(exc)],
+            )
+            return MockSpeaker(content=json.dumps(asdict(result)))
 
         except asyncio.CancelledError:
             if child_ctx:
@@ -235,7 +284,17 @@ class SpawnAgentTool:
                 )
             if handle:
                 self._hook_manager.run_on_agent_stop(handle)
-            return MockSpeaker(content=f"ERROR: Sub-agent failed: {agent_error}")
+            from meeseeks_core.hypervisor import AgentResult
+            partial_result = (tq.task_result or "")[:500] if tq is not None else ""
+            result = AgentResult(
+                content=f"Sub-agent failed: {exc}",
+                status="failed",
+                steps_used=handle.steps_completed if handle else 0,
+                warnings=[str(exc)],
+                # Ref: [DeepMind-Delegation §6.1] Checkpoint — partial work survives failure
+                summary=partial_result,
+            )
+            return MockSpeaker(content=json.dumps(asdict(result)))
 
         finally:
             if child_ctx:
