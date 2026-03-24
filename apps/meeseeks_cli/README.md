@@ -30,6 +30,7 @@ uv run meeseeks
 - `/tag NAME` tag a session
 - `/fork [TAG]` fork the current session
 - `/new` start a new session
+- `/skills` list available skills (`/skills <name>` for details)
 - `/mcp` list MCP tools and servers
 - `/mcp init` scaffold an MCP config file
 - `/config init` scaffold a config example file
@@ -40,5 +41,6 @@ uv run meeseeks
 - `/quit` exit the CLI
 
 CLI flags:
+- `--config PATH` path to app config file (default: auto-discover via `CWD/configs/` → `$MEESEEKS_HOME/` → `~/.meeseeks/`).
 - `-v/--verbose` increase log verbosity (`-v` = debug, `-vv` = trace).
 - `--auto-approve` start the session with auto-approve enabled (skips the `/automatic` prompt).

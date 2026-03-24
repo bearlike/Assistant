@@ -7,7 +7,15 @@ Core orchestration engine for Meeseeks. This package owns the unified async tool
 - `AgentHypervisor` — control plane for sub-agent admission, lifecycle, and cleanup.
 - `Orchestrator` + `Planner` for session lifecycle and plan generation.
 - Permission policies and hooks for tool execution gating.
-- Session runtime, transcripts (JSONL), summaries, and compaction.
+- `HookManager` with error-isolated execution, session lifecycle hooks (`on_session_start`/`on_session_end`/`on_compact`), and external hook configuration via `HooksConfig`.
+- Session runtime, transcripts (JSONL), summaries, and two-mode compaction (full/partial) with structured summaries and post-compact file restoration.
+- `ToolSpec` with typed metadata: `concurrency_safe`, `read_only`, `max_result_chars`, `timeout` for fine-grained tool execution control.
+- `ToolResult` for structured tool execution results.
+- Hierarchical instruction discovery (user → project → rules → local) via `discover_all_instructions()`.
+- Git context injection (`get_git_context()`) in the system prompt.
+- Concurrency-aware tool partitioning: concurrent-safe tools run in parallel, exclusive tools run alone.
+- Per-tool execution timeout via `asyncio.wait_for()`.
+- `AgentError` for structured sub-agent error propagation.
 - Event payloads used by the API and UIs (`action_plan`, `tool_result`, `permission`).
 
 ## Key contracts

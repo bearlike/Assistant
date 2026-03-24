@@ -1,0 +1,24 @@
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "5124:5124"
+    volumes:
+      - ../../configs:/app/configs:ro
+      - api-data:/app/data
+    environment:
+      - MASTER_API_TOKEN=${MASTER_API_TOKEN:-msk-strong-password}
+
+  console:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.console
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  api-data:

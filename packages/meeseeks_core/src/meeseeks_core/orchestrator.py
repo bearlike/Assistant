@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import queue
+import threading
 from collections.abc import Callable
 
 from meeseeks_core.agent_context import AgentContext
@@ -22,8 +24,9 @@ from meeseeks_core.permissions import (
 )
 from meeseeks_core.planning import Planner
 from meeseeks_core.session_store import SessionStore
+from meeseeks_core.skills import SkillRegistry, activate_skill
 from meeseeks_core.token_budget import get_token_budget
-from meeseeks_core.tool_registry import ToolRegistry, load_registry
+from meeseeks_core.tool_registry import ToolRegistry, filter_specs, load_registry
 from meeseeks_core.tool_use_loop import ToolUseLoop
 
 logging = get_logger(name="core.orchestrator")
@@ -41,21 +44,27 @@ class Orchestrator:
         permission_policy: PermissionPolicy | None = None,
         approval_callback: Callable[[ActionStep], bool] | None = None,
         hook_manager: HookManager | None = None,
+        cwd: str | None = None,
+        session_step_budget: int = 0,
     ) -> None:
         """Initialize orchestration dependencies."""
+        self._cwd = cwd
+        self._session_step_budget = session_step_budget
         self._model_name = (
             model_name
             or get_config_value("llm", "action_plan_model")
             or get_config_value("llm", "default_model", default="gpt-5.2")
         )
         self._session_store = session_store or SessionStore()
-        self._tool_registry = tool_registry or load_registry()
+        self._tool_registry = tool_registry or load_registry(cwd=cwd)
         self._permission_policy = permission_policy or load_permission_policy()
         self._approval_callback = approval_callback or approval_callback_from_config()
         self._hook_manager = hook_manager or default_hook_manager()
         self._context_builder = ContextBuilder(self._session_store)
         self._planner = Planner(self._tool_registry)
-        self._project_instructions = discover_project_instructions()
+        self._project_instructions = discover_project_instructions(cwd)
+        self._skill_registry = SkillRegistry()
+        self._skill_registry.load(cwd)
 
     def run(
         self,
@@ -67,6 +76,10 @@ class Orchestrator:
         session_id: str | None = None,
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
+        allowed_tools: list[str] | None = None,
+        skill_instructions: str | None = None,
+        message_queue: queue.Queue[str] | None = None,
+        interrupt_step: threading.Event | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration for a session."""
         if session_id is None:
@@ -82,6 +95,10 @@ class Orchestrator:
                     session_id=session_id,
                     mode=mode,
                     should_cancel=should_cancel,
+                    allowed_tools=allowed_tools,
+                    skill_instructions=skill_instructions,
+                    message_queue=message_queue,
+                    interrupt_step=interrupt_step,
                 )
 
     def _run_with_session_context(
@@ -94,6 +111,10 @@ class Orchestrator:
         session_id: str,
         mode: str | None,
         should_cancel: Callable[[], bool] | None,
+        allowed_tools: list[str] | None = None,
+        skill_instructions: str | None = None,
+        message_queue: queue.Queue[str] | None = None,
+        interrupt_step: threading.Event | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration with Langfuse session context set."""
         state = OrchestrationState(goal=user_query, session_id=session_id)
@@ -103,6 +124,8 @@ class Orchestrator:
         state.open_questions = state.open_questions or []
         task_queue: TaskQueue | None = None
 
+        self._hook_manager.run_on_session_start(session_id)
+        error_msg: str | None = None
         try:
             self._session_store.append_event(
                 session_id, {"type": "user", "payload": {"text": user_query}}
@@ -133,6 +156,17 @@ class Orchestrator:
                 model_name=self._model_name,
             )
             tool_specs = self._tool_registry.list_specs_for_mode(resolved_mode)
+            if allowed_tools:
+                tool_specs = filter_specs(tool_specs, allowed=allowed_tools)
+
+            # Skill invocation detection and hot-reload.
+            self._skill_registry.maybe_reload()
+            if skill_instructions is None:
+                _si, _ts = self._try_skill_invocation(user_query, tool_specs)
+                if _si is not None:
+                    skill_instructions = _si
+                if _ts is not None:
+                    tool_specs = _ts
 
             if resolved_mode == "plan":
                 # Plan-only mode: generate plan, return without executing.
@@ -157,7 +191,10 @@ class Orchestrator:
                 max_concurrent = int(
                     get_config_value("agent", "max_concurrent", default=20)
                 )
-                registry = AgentHypervisor(max_concurrent=max_concurrent)
+                registry = AgentHypervisor(
+                    max_concurrent=max_concurrent,
+                    session_step_budget=self._session_step_budget,
+                )
                 root_ctx = AgentContext.root(
                     model_name=self._model_name,
                     max_depth=max_depth,
@@ -166,6 +203,8 @@ class Orchestrator:
                         session_id, event
                     ),
                     registry=registry,
+                    message_queue=message_queue,
+                    interrupt_step=interrupt_step,
                 )
                 loop = ToolUseLoop(
                     agent_context=root_ctx,
@@ -174,6 +213,9 @@ class Orchestrator:
                     approval_callback=self._approval_callback,
                     hook_manager=self._hook_manager,
                     project_instructions=self._project_instructions,
+                    skill_instructions=skill_instructions,
+                    skill_registry=self._skill_registry,
+                    cwd=self._cwd,
                 )
                 max_steps = max(1, max_iters) * 3
                 try:
@@ -224,6 +266,7 @@ class Orchestrator:
 
             return (task_queue, state) if return_state else task_queue
         except Exception as exc:
+            error_msg = str(exc)
             logging.exception("Orchestration failed for session {}", session_id)
             if task_queue is None:
                 task_queue = TaskQueue(_human_message=user_query, action_steps=[])
@@ -244,6 +287,8 @@ class Orchestrator:
                 },
             )
             return (task_queue, state) if return_state else task_queue
+        finally:
+            self._hook_manager.run_on_session_end(session_id, error_msg)
 
     # ------------------------------------------------------------------
     # Session helpers (kept from original)
@@ -255,7 +300,23 @@ class Orchestrator:
         summary = self._session_store.load_summary(session_id)
         budget = get_token_budget(events, summary, self._model_name)
         if budget.needs_compact or should_compact(events):
-            summary = summarize_events(events)
+            try:
+                from meeseeks_core.compact import CompactionMode, compact_conversation
+
+                result = asyncio.get_event_loop().run_until_complete(
+                    compact_conversation(
+                        events,
+                        CompactionMode.PARTIAL,
+                        model_name=self._model_name,
+                    )
+                )
+                summary = result.summary
+            except Exception:
+                logging.warning(
+                    "Structured compaction failed, falling back to simple summary",
+                    exc_info=True,
+                )
+                summary = summarize_events(events)
             self._session_store.save_summary(session_id, summary)
             return summary
         return None
@@ -290,6 +351,32 @@ class Orchestrator:
         task_queue = TaskQueue(action_steps=[])
         task_queue.task_result = message
         return task_queue
+
+    def _try_skill_invocation(
+        self,
+        user_query: str,
+        tool_specs: list,
+    ) -> tuple[str | None, list | None]:
+        """Detect ``/skill-name args`` in the query and activate the skill.
+
+        Returns ``(skill_instructions, scoped_tool_specs)`` on match,
+        or ``(None, None)`` if the query is not a skill invocation.
+        """
+        query = user_query.strip()
+        if not query.startswith("/"):
+            return None, None
+
+        parts = query.split(None, 1)
+        name = parts[0].lstrip("/")
+        args = parts[1] if len(parts) > 1 else ""
+
+        skill = self._skill_registry.get(name)
+        if skill is None:
+            return None, None
+
+        logging.info("Activating skill '{}' with args '{}'", name, args)
+        instructions, scoped_specs = activate_skill(skill, args, tool_specs)
+        return instructions, scoped_specs
 
     @staticmethod
     def _resolve_mode(user_query: str, mode: str | None) -> str:

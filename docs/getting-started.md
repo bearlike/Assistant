@@ -17,7 +17,7 @@ uv sync
 ### Optional components (from project root)
 - CLI: `uv sync --extra cli`
 - API: `uv sync --extra api`
-- Chat UI: `uv sync --extra chat`
+- Console: `cd apps/meeseeks_console && npm install`
 - Home Assistant integration: `uv sync --extra ha`
 - Tools bundle: `uv sync --extra tools`
 - Everything optional: `uv sync --all-extras`
@@ -70,7 +70,9 @@ See [LLM setup](llm-setup.md) for MCP configuration and auto-discovery details.
 
 ## Run interfaces (local)
 - CLI: `uv run meeseeks` (details in [CLI client](clients-cli.md))
-- API + Web: `uv run meeseeks-api` and `uv run meeseeks-chat` (details in [Web + API](clients-web-api.md))
+- CLI (global): `uv tool install .` then `meeseeks` from anywhere (see [CLI client](clients-cli.md))
+- API: `uv run meeseeks-api` (details in [Console + API](clients-web-api.md))
+- Console: `cd apps/meeseeks_console && npm run dev` (details in [Console + API](clients-web-api.md))
 - Home Assistant: see [Home Assistant voice](clients-home-assistant.md)
 
 ## Aider edit blocks (local tool)
@@ -93,7 +95,7 @@ Rules:
 - Use a line with `...` in both SEARCH and REPLACE to skip unchanged sections.
 
 ## Docker (optional)
-- Build images using `docker/Dockerfile.api` and `docker/Dockerfile.chat`.
+- Build images using `docker/Dockerfile.api` and `docker/Dockerfile.console`.
 - Mount `configs/app.json` (and `configs/mcp.json` if you use MCP).
 - Persist `data/sessions` if you want transcripts across restarts.
 

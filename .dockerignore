@@ -1,29 +1,46 @@
-# Ignore environment files
-.env
-.env.example
+# ── Virtual environments & caches ──────────────────────────────
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+**/__pycache__/
+**/*.pyc
+*.egg-info/
 
-# Ignore git files
+# ── Git ───────────────────────────────────────────────────────
+.git/
 .gitattributes
 .gitignore
 
-# Ignore build scripts
-build-install.sh
+# ── Node / frontend build artifacts ──────────────────────────
+**/node_modules/
+apps/meeseeks_console/dist/
 
-# Ignore Python cache files
-**/__pycache__/
+# ── Environment & secrets ─────────────────────────────────────
+.env
+.env.*
+docker.env
 
-# Ignore documentation
+# ── IDE / editor ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Documentation & meta ─────────────────────────────────────
 docs/
+*.md
+LICENSE
 
-# Ignore specific application directories
-# meeseeks-api/
+# ── Test / CI artifacts ───────────────────────────────────────
+tests/
+.coverage
+htmlcov/
+.github/
 
-# (when needed) Ignore poetry lock files
-poetry.lock
-
-
-# Ignore codemod scripts
+# ── Build scripts / misc ─────────────────────────────────────
+build-install.sh
 repo-to-prompt.codemod.js
-
-# Ignore requirements file (if any)
 requirements.txt
+poetry.lock
+Makefile

@@ -8,10 +8,14 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 from meeseeks_core.common import get_logger
 from meeseeks_core.config import get_config_value
 from meeseeks_core.types import Event, EventRecord
+
+if TYPE_CHECKING:
+    from meeseeks_core.compact import CompactionMode, CompactionResult
 
 logging = get_logger(name="core.session_store")
 
@@ -81,6 +85,10 @@ class SessionStore:
     def _paths(self, session_id: str) -> SessionPaths:
         """Build filesystem paths for a session."""
         return SessionPaths(root=self.root_dir, session_id=session_id)
+
+    def session_dir(self, session_id: str) -> str:
+        """Return the directory path for a session."""
+        return self._paths(session_id).session_dir
 
     def append_event(self, session_id: str, event: Event) -> None:
         """Append a single event record to the session transcript."""
@@ -195,3 +203,34 @@ class SessionStore:
         index = self._load_index()
         archived = index.get("archived", {})
         return session_id in archived
+
+    async def compact_session(
+        self,
+        session_id: str,
+        mode: CompactionMode | None = None,
+        **kwargs: Any,
+    ) -> CompactionResult:
+        """Compact a session's transcript using structured summarization.
+
+        Args:
+            session_id: The session to compact.
+            mode: Compaction mode (FULL or PARTIAL). Defaults to PARTIAL.
+            **kwargs: Forwarded to ``compact_conversation()``.
+
+        Returns:
+            CompactionResult with summary, kept events, and restored attachments.
+        """
+        from meeseeks_core.compact import (
+            CompactionMode as CM,
+            CompactionResult as CR,
+            compact_conversation,
+        )
+
+        resolved_mode: CM = CM(mode) if mode is not None else CM.PARTIAL
+        events = self.load_transcript(session_id)
+        result: CR = await compact_conversation(events, resolved_mode, **kwargs)
+
+        # Persist the new summary
+        self.save_summary(session_id, result.summary)
+
+        return result

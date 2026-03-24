@@ -58,7 +58,7 @@ This page is generated from inline docstrings via mkdocstrings. The sections bel
 
 ## Clients (apps/)
 - API entry point: `apps/meeseeks_api/src/meeseeks_api/backend.py`
-- Chat entry point: `apps/meeseeks_chat/src/meeseeks_chat/chat_master.py`
+- Console: `apps/meeseeks_console/` (React + Vite, connects via REST API)
 - CLI entry point: `apps/meeseeks_cli/src/meeseeks_cli/cli_master.py`
 
 ## Home Assistant integration (meeseeks_ha_conversation)

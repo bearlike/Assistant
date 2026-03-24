@@ -12,7 +12,6 @@ SOURCE_PATHS = [
     os.path.join(ROOT, "packages", "meeseeks_tools", "src"),
     os.path.join(ROOT, "apps", "meeseeks_cli", "src"),
     os.path.join(ROOT, "apps", "meeseeks_api", "src"),
-    os.path.join(ROOT, "apps", "meeseeks_chat", "src"),
     os.path.join(ROOT, "meeseeks_ha_conversation"),
 ]
 for path in SOURCE_PATHS:
@@ -39,3 +38,16 @@ def app_config_file(tmp_path: Path):
     set_mcp_config_path(tmp_path / "mcp.json")
     yield config_path
     reset_config()
+
+
+@pytest.fixture(autouse=True)
+def _reset_mcp_pool():
+    """Reset the MCP connection pool singleton between tests."""
+    try:
+        from meeseeks_tools.integration.mcp_pool import reset_mcp_pool
+    except ImportError:
+        yield
+        return
+    reset_mcp_pool()
+    yield
+    reset_mcp_pool()

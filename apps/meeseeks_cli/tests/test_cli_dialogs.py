@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-
 from meeseeks_cli import cli_dialogs
 from rich.console import Console
 
@@ -85,45 +83,25 @@ def test_confirm_fallback_negative_response():
     assert result is False
 
 
-def test_confirm_aider_uses_dummy_io(monkeypatch):
-    """Use Aider confirm helper when available."""
-    import types
-
-    class DummyIO:
-        def __init__(self, **_kwargs):
-            pass
-
-        def confirm_ask(self, _question, default="n", subject=None):
-            return default == "y" or subject == "ok"
-
-    module = types.ModuleType("meeseeks_tools.vendor.aider.io")
-    module.InputOutput = DummyIO
-    monkeypatch.setitem(sys.modules, "meeseeks_tools.vendor.aider.io", module)
-
-    result = cli_dialogs._confirm_aider("Approve?", default=False, subject="ok")
-    assert result is True
-
-
-def test_confirm_rich_panel_accepts_yes():
+def test_confirm_rich_panel_accepts_yes(monkeypatch):
     """Return yes when prompt input is affirmative."""
     console = Console(record=True)
+    monkeypatch.setattr(console, "input", lambda _prompt="", **kw: "y")
     result = cli_dialogs._confirm_rich_panel(
         console,
-        lambda _prompt: "y",
         "Approve tool use?",
         subject="tool:action",
         default=False,
-        allow_always=False,
     )
     assert result == "yes"
 
 
-def test_confirm_rich_panel_allows_always():
+def test_confirm_rich_panel_allows_always(monkeypatch):
     """Return always when prompt input selects auto-approve."""
     console = Console(record=True)
+    monkeypatch.setattr(console, "input", lambda _prompt="", **kw: "a")
     result = cli_dialogs._confirm_rich_panel(
         console,
-        lambda _prompt: "a",
         "Approve tool use?",
         subject="tool:action",
         default=False,
@@ -132,16 +110,15 @@ def test_confirm_rich_panel_allows_always():
     assert result == "always"
 
 
-def test_confirm_rich_panel_allows_session():
+def test_confirm_rich_panel_allows_session(monkeypatch):
     """Return session when prompt input selects session-wide approval."""
     console = Console(record=True)
+    monkeypatch.setattr(console, "input", lambda _prompt="", **kw: "s")
     result = cli_dialogs._confirm_rich_panel(
         console,
-        lambda _prompt: "s",
         "Approve tool use?",
         subject="tool:action",
         default=False,
-        allow_always=False,
         allow_session=True,
     )
     assert result == "session"

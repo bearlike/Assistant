@@ -17,7 +17,15 @@ Scope: this file applies to the `apps/meeseeks_cli/` package only. It covers the
 - Tool results as cards (panel + columns).
 - Response panel (Markdown in a bold border).
 - Logging is gated by `-v/--verbose` and themed darker for CLI runs.
-- **Agent display**: During execution, a Rich Live panel shows the agent tree (root + sub-agents) with status, model, and step count. Managed by `AgentDisplayManager` in `cli_agent_display.py`. Replaces per-tool spinners when active. Falls back to legacy spinners when output is piped or `--no-color` is set.
+- **Agent display**: During execution, a Rich Live panel shows the agent tree with status, model, elapsed time, and step count. Managed by `AgentDisplayManager` in `cli_agent_display.py`. Key features:
+  - **Collapsible tree**: Ctrl+O toggles between expanded (full tree) and collapsed (summary line) during execution. Starts expanded.
+  - **Integrated spinner**: Braille spinner animates inside the Live renderable at 4 fps. Root tool activity (via `pre_tool_use`/`post_tool_use` hooks) drives the spinner when no sub-agents exist.
+  - **Status footer**: Shows the deepest running agent's task label + elapsed time below the tree.
+  - **Elapsed time**: Each agent line shows time since start; token count renders when the core surfaces it.
+  - **KeyListener** (`cli_keys.py`): stdlib-only (`tty.setcbreak` + daemon reader thread) keystroke capture during Live rendering. Pauses cbreak mode via `pause()`/`resume()` when approval prompts need `console.input()`.
+  - **Lifecycle states**: Agent display shows 6 states: submitted (⏳), running (●), completed (✓), failed (✗), cancelled (⊘), rejected (⊘ red). Failed agents show inline error details truncated to 80 chars.
+  - **Step budget**: `session_step_budget` is threaded from config through to the orchestrator.
+  - Falls back to legacy `console.status()` spinners when output is piped or `--no-color` is set.
 
 ### Section styles (keep consistent)
 - Action Plan: checklist in a panel titled `:clipboard: Action Plan`, border `cyan`.
@@ -67,6 +75,7 @@ If you add a new interactive flow, use `DialogFactory` instead of writing custom
 - `/tag NAME`: tag the current session (dialog when NAME omitted).
 - `/fork [TAG]`: fork current session (dialog when TAG omitted).
 - `/plan on|off`: toggle action plan display.
+- `/skills [name]`: list available skills or show skill detail.
 - `/mcp [select|init]`: list MCP tools, filter, or scaffold config.
 - `/config init`: scaffold a config example file.
 - `/init`: scaffold both config and MCP example files.
@@ -75,7 +84,8 @@ If you add a new interactive flow, use `DialogFactory` instead of writing custom
 
 ## Core Files (UI-related)
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_master.py`: main loop, output sections, startup panel, Rich Live agent display.
-- `apps/meeseeks_cli/src/meeseeks_cli/cli_agent_display.py`: `AgentDisplayManager` — thread-safe bridge between agent lifecycle hooks and Rich Live rendering.
+- `apps/meeseeks_cli/src/meeseeks_cli/cli_agent_display.py`: `AgentDisplayManager` — thread-safe bridge between agent lifecycle hooks and Rich Live rendering. Handles collapsed/expanded tree, spinner, footer, elapsed time.
+- `apps/meeseeks_cli/src/meeseeks_cli/cli_keys.py`: `KeyListener` — stdlib-only keystroke capture during Rich Live (cbreak mode + daemon thread). Reusable for future keybindings.
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_commands.py`: commands, model wizard, MCP listing.
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_dialogs.py`: dialog factory.
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_context.py`: state shared across commands.

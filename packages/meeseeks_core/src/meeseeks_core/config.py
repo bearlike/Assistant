@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -17,10 +18,6 @@ from urllib.request import Request, urlopen
 
 from pydantic.v1 import BaseModel, Field, validator
 
-_APP_CONFIG_PATH = Path("configs/app.json")
-_APP_EXAMPLE_PATH = Path("configs/app.example.json")
-_MCP_CONFIG_PATH = Path("configs/mcp.json")
-_MCP_EXAMPLE_PATH = Path("configs/mcp.example.json")
 _APP_CONFIG_PATH_OVERRIDE: Path | None = None
 _MCP_CONFIG_PATH_OVERRIDE: Path | None = None
 _MCP_CONFIG_DISABLED = False
@@ -31,6 +28,22 @@ _LAST_PREFLIGHT: dict[str, dict[str, Any]] | None = None
 _logger = logging.getLogger("core.config")
 
 _PACKAGE_NAME = "meeseeks-workspace"
+
+
+def resolve_meeseeks_home() -> Path:
+    """Return the Meeseeks home directory (``$MEESEEKS_HOME`` or ``~/.meeseeks``)."""
+    env = os.environ.get("MEESEEKS_HOME")
+    if env:
+        return Path(env).expanduser().resolve()
+    return Path.home() / ".meeseeks"
+
+
+def _resolve_config_path(filename: str) -> Path:
+    """Find a config file: ``CWD/configs/`` first, then ``MEESEEKS_HOME``."""
+    cwd_path = Path("configs") / filename
+    if cwd_path.exists():
+        return cwd_path
+    return resolve_meeseeks_home() / filename
 
 
 def get_version() -> str:
@@ -75,9 +88,9 @@ class RuntimeConfig(BaseModel):
     log_style: str = Field("", example="")
     cli_log_style: str = Field("dark", example="dark")
     preflight_enabled: bool = False
-    cache_dir: str = Field(".cache", example=".cache")
-    session_dir: str = Field("./data/sessions", example="./data/sessions")
-    config_dir: str = Field("~/.meeseeks", example="~/.meeseeks")
+    cache_dir: str = Field("", example="~/.meeseeks/cache")
+    session_dir: str = Field("", example="~/.meeseeks/sessions")
+    config_dir: str = Field("", example="~/.meeseeks")
 
     @validator("log_level", pre=True, always=True)
     def _normalize_log_level(cls, value: Any) -> str:
@@ -86,10 +99,17 @@ class RuntimeConfig(BaseModel):
         return str(value).strip().upper()
 
     @validator("cache_dir", "session_dir", "config_dir", pre=True, always=True)
-    def _normalize_paths(cls, value: Any, field) -> str:
-        if value is None:
-            return str(field.default)
-        return str(value)
+    def _normalize_paths(cls, value: Any, field: Any) -> str:  # noqa: N805
+        raw = str(value).strip() if value is not None else ""
+        if raw:
+            return raw
+        home = resolve_meeseeks_home()
+        defaults = {
+            "cache_dir": str(home / "cache"),
+            "session_dir": str(home / "sessions"),
+            "config_dir": str(home),
+        }
+        return defaults.get(field.name, str(home))
 
     @validator("preflight_enabled", pre=True, always=True)
     def _normalize_preflight_enabled(cls, value: Any) -> bool:
@@ -348,10 +368,12 @@ class CLIConfig(BaseModel):
 
 
 class ChatConfig(BaseModel):
-    streamlit_port: int = Field(8501, example=8501)
-    streamlit_address: str = Field("127.0.0.1", example="127.0.0.1")
+    """Legacy config section kept for backward compatibility with app.json files."""
 
-    @validator("streamlit_port", pre=True, always=True)
+    port: int = Field(8501, example=8501)
+    address: str = Field("127.0.0.1", example="127.0.0.1")
+
+    @validator("port", pre=True, always=True)
     def _normalize_port(cls, value: Any) -> int:
         try:
             parsed = int(value)
@@ -362,6 +384,42 @@ class ChatConfig(BaseModel):
 
 class APIConfig(BaseModel):
     master_token: str = Field("msk-strong-password", example="msk-strong-password")
+
+
+class HookEntry(BaseModel):
+    """A single hook configuration entry."""
+
+    type: str = "command"
+    command: str = ""
+    matcher: str | None = None
+    timeout: int = 30
+
+
+class HooksConfig(BaseModel):
+    """Configuration for external hooks."""
+
+    pre_tool_use: list[HookEntry] = Field(default_factory=list)
+    post_tool_use: list[HookEntry] = Field(default_factory=list)
+    on_session_start: list[HookEntry] = Field(default_factory=list)
+    on_session_end: list[HookEntry] = Field(default_factory=list)
+
+
+class ProjectConfig(BaseModel):
+    """A configured project accessible via the API."""
+
+    path: str = ""
+    description: str = ""
+
+    @validator("path", pre=True, always=True)
+    def _normalize_path(cls, value: Any) -> str:
+        raw = str(value).strip() if value else ""
+        if raw:
+            return str(Path(raw).expanduser().resolve())
+        return ""
+
+
+def _projects_config_default() -> dict[str, ProjectConfig]:
+    return {}
 
 
 class AgentConfig(BaseModel):
@@ -456,6 +514,10 @@ def _agent_config_default() -> AgentConfig:
     return AgentConfig.parse_obj({})
 
 
+def _hooks_config_default() -> HooksConfig:
+    return HooksConfig.parse_obj({})
+
+
 class AppConfig(BaseModel):
     """Typed configuration for the Meeseeks runtime."""
 
@@ -471,6 +533,20 @@ class AppConfig(BaseModel):
     chat: ChatConfig = Field(default_factory=_chat_config_default)
     api: APIConfig = Field(default_factory=_api_config_default)
     agent: AgentConfig = Field(default_factory=_agent_config_default)
+    hooks: HooksConfig = Field(default_factory=_hooks_config_default)
+    projects: dict[str, ProjectConfig] = Field(default_factory=_projects_config_default)
+
+    @validator("projects", pre=True, always=True)
+    def _normalize_projects(cls, value: Any) -> dict[str, ProjectConfig]:
+        if not isinstance(value, dict):
+            return {}
+        result: dict[str, ProjectConfig] = {}
+        for name, cfg in value.items():
+            if isinstance(cfg, dict):
+                result[str(name)] = ProjectConfig.parse_obj(cfg)
+            elif isinstance(cfg, ProjectConfig):
+                result[str(name)] = cfg
+        return result
 
     class Config:
         """Pydantic configuration settings."""
@@ -705,14 +781,18 @@ def set_config_override(payload: dict[str, Any], *, replace: bool = False) -> No
 
 def get_app_config_path() -> str:
     """Return the configured app JSON path."""
-    return str(_APP_CONFIG_PATH_OVERRIDE or _APP_CONFIG_PATH)
+    if _APP_CONFIG_PATH_OVERRIDE:
+        return str(_APP_CONFIG_PATH_OVERRIDE)
+    return str(_resolve_config_path("app.json"))
 
 
 def get_mcp_config_path() -> str:
     """Return the configured MCP JSON path."""
     if _MCP_CONFIG_DISABLED:
         return ""
-    return str(_MCP_CONFIG_PATH_OVERRIDE or _MCP_CONFIG_PATH)
+    if _MCP_CONFIG_PATH_OVERRIDE:
+        return str(_MCP_CONFIG_PATH_OVERRIDE)
+    return str(_resolve_config_path("mcp.json"))
 
 
 def get_config() -> AppConfig:
@@ -781,16 +861,27 @@ def _example_app_payload() -> dict[str, Any]:
     return payload
 
 
+def _default_example_path(filename: str) -> Path:
+    """Return the example config path: ``CWD/configs/`` if present, else ``MEESEEKS_HOME``."""
+    cwd_configs = Path("configs")
+    if cwd_configs.is_dir():
+        return cwd_configs / filename
+    return resolve_meeseeks_home() / filename
+
+
 def ensure_example_configs(
     app_path: str | Path | None = None,
     mcp_path: str | Path | None = None,
-) -> None:
-    """Write example config files if missing."""
-    app_target = Path(app_path) if app_path else _APP_EXAMPLE_PATH
+) -> tuple[Path, Path]:
+    """Write example config files if missing. Returns ``(app_path, mcp_path)``."""
+    app_target = Path(app_path) if app_path else _default_example_path("app.example.json")
     if not app_target.exists():
         app_target.parent.mkdir(parents=True, exist_ok=True)
-        app_target.write_text(json.dumps(_example_app_payload(), indent=2) + "\n", encoding="utf-8")
-    mcp_target = Path(mcp_path) if mcp_path else _MCP_EXAMPLE_PATH
+        app_target.write_text(
+            json.dumps(_example_app_payload(), indent=2) + "\n",
+            encoding="utf-8",
+        )
+    mcp_target = Path(mcp_path) if mcp_path else _default_example_path("mcp.example.json")
     if not mcp_target.exists():
         mcp_target.parent.mkdir(parents=True, exist_ok=True)
         mcp_target.write_text(
@@ -809,11 +900,74 @@ def ensure_example_configs(
             + "\n",
             encoding="utf-8",
         )
+    return app_target, mcp_target
+
+
+def _discover_cwd_mcp_json(cwd: str | None = None) -> dict[str, Any] | None:
+    """Read ``.mcp.json`` from *cwd* and return parsed config, or ``None``.
+
+    Supports both ``{"mcpServers": {...}}`` (Claude Code style) and
+    ``{"servers": {...}}`` (Meeseeks native) schemas.
+    """
+    work_dir = Path(cwd) if cwd else Path.cwd()
+    mcp_json = work_dir / ".mcp.json"
+    if not mcp_json.is_file():
+        return None
+    try:
+        with mcp_json.open(encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger.warning("Failed to read %s: %s", mcp_json, exc)
+        return None
+    if not isinstance(raw, dict):
+        return None
+    # Normalize Claude Code schema: mcpServers → servers
+    if "mcpServers" in raw and "servers" not in raw:
+        raw["servers"] = raw.pop("mcpServers")
+    return raw
+
+
+def get_merged_mcp_config(cwd: str | None = None) -> dict[str, Any]:
+    """Load and merge MCP configs: global config + CWD ``.mcp.json``.
+
+    CWD servers override global servers with the same name.
+    Returns the merged config dict with a ``servers`` key.
+    When MCP is disabled (via ``set_mcp_config_path(None)``), returns ``{}``.
+    """
+    if _MCP_CONFIG_DISABLED:
+        return {}
+
+    # 1. Load global config
+    global_config: dict[str, Any] = {}
+    global_path = get_mcp_config_path()
+    if global_path and Path(global_path).is_file():
+        try:
+            with open(global_path, encoding="utf-8") as fh:
+                global_config = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            _logger.warning("Failed to read global MCP config %s: %s", global_path, exc)
+
+    if not isinstance(global_config, dict):
+        global_config = {}
+
+    # 2. Discover CWD .mcp.json
+    cwd_config = _discover_cwd_mcp_json(cwd)
+
+    # 3. Merge: CWD overrides global
+    if cwd_config:
+        merged = _deep_merge(dict(global_config), cwd_config)
+    else:
+        merged = global_config
+
+    return merged
 
 
 __all__ = [
     "AppConfig",
     "ConfigCheck",
+    "HookEntry",
+    "HooksConfig",
+    "ProjectConfig",
     "ensure_app_config",
     "ensure_example_configs",
     "get_app_config_path",
@@ -822,7 +976,9 @@ __all__ = [
     "get_config_value",
     "get_last_preflight",
     "get_mcp_config_path",
+    "get_merged_mcp_config",
     "reset_config",
+    "resolve_meeseeks_home",
     "set_app_config_path",
     "set_config_override",
     "set_mcp_config_path",

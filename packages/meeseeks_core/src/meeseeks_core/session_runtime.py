@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import queue
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -46,8 +46,8 @@ class RunHandle:
     thread: threading.Thread
     cancel_event: threading.Event
     started_at: str
-    message_queue: asyncio.Queue[str] | None = field(default=None)
-    interrupt_step: asyncio.Event | None = field(default=None)
+    message_queue: queue.Queue[str] | None = field(default=None)
+    interrupt_step: threading.Event | None = field(default=None)
 
 
 class RunRegistry:
@@ -62,6 +62,9 @@ class RunRegistry:
         self,
         session_id: str,
         target: Callable[[threading.Event], None],
+        *,
+        message_queue: queue.Queue[str] | None = None,
+        interrupt_step: threading.Event | None = None,
     ) -> bool:
         """Start a new run for the session if one is not already active."""
         with self._lock:
@@ -78,6 +81,8 @@ class RunRegistry:
                 thread=thread,
                 cancel_event=cancel_event,
                 started_at=_utc_now(),
+                message_queue=message_queue,
+                interrupt_step=interrupt_step,
             )
             thread.start()
             return True
@@ -212,6 +217,12 @@ class SessionRuntime:
                 if isinstance(payload, dict):
                     done_reason = payload.get("done_reason")
                     status = "completed" if payload.get("done") else "incomplete"
+                    if done_reason == "canceled":
+                        status = "canceled"
+                    elif done_reason == "error":
+                        status = "failed"
+                    elif done_reason == "max_steps_reached":
+                        status = "incomplete"
         running = self.is_running(session_id)
         if running:
             status = "running"
@@ -266,8 +277,14 @@ class SessionRuntime:
         approval_callback=None,
         hook_manager=None,
         mode: str | None = None,
+        allowed_tools: list[str] | None = None,
+        skill_instructions: str | None = None,
+        cwd: str | None = None,
+        session_step_budget: int = 0,
     ) -> bool:
         """Start an asynchronous orchestration run for the session."""
+        msg_queue: queue.Queue[str] = queue.Queue()
+        interrupt_event = threading.Event()
 
         def _run(cancel_event: threading.Event) -> None:
             self.run_sync(
@@ -282,9 +299,20 @@ class SessionRuntime:
                 hook_manager=hook_manager,
                 mode=mode,
                 should_cancel=cancel_event.is_set,
+                allowed_tools=allowed_tools,
+                skill_instructions=skill_instructions,
+                message_queue=msg_queue,
+                interrupt_step=interrupt_event,
+                cwd=cwd,
+                session_step_budget=session_step_budget,
             )
 
-        return self._run_registry.start(session_id, target=_run)
+        return self._run_registry.start(
+            session_id,
+            target=_run,
+            message_queue=msg_queue,
+            interrupt_step=interrupt_event,
+        )
 
     def run_sync(
         self,
@@ -300,6 +328,12 @@ class SessionRuntime:
         hook_manager=None,
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
+        allowed_tools: list[str] | None = None,
+        skill_instructions: str | None = None,
+        message_queue: queue.Queue[str] | None = None,
+        interrupt_step: threading.Event | None = None,
+        cwd: str | None = None,
+        session_step_budget: int = 0,
     ) -> TaskQueue:
         """Run an orchestration request synchronously."""
         return orchestrate_session(
@@ -315,6 +349,12 @@ class SessionRuntime:
             hook_manager=hook_manager,
             mode=mode,
             should_cancel=should_cancel,
+            allowed_tools=allowed_tools,
+            skill_instructions=skill_instructions,
+            message_queue=message_queue,
+            interrupt_step=interrupt_step,
+            cwd=cwd,
+            session_step_budget=session_step_budget,
         )
 
     def cancel(self, session_id: str) -> bool:

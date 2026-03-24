@@ -53,6 +53,11 @@ class ToolSpec:
     kind: str = "local"
     prompt_path: str | None = None
     metadata: dict[str, JsonValue] = field(default_factory=dict)
+    concurrency_safe: bool = True  # Can run in parallel (True for backward compat)
+    read_only: bool = False  # No side effects
+    interrupt_behavior: str = "block"  # "cancel" or "block" on user interrupt
+    max_result_chars: int = 2000  # Per-tool result size cap (0 = unlimited)
+    timeout: float = 120.0  # Per-tool execution timeout in seconds
 
     def is_plan_safe(self) -> bool:
         """Return True if the tool is safe to use in plan mode."""
@@ -83,6 +88,11 @@ class ToolRegistry:
             kind=spec.kind,
             prompt_path=spec.prompt_path,
             metadata=metadata,
+            concurrency_safe=spec.concurrency_safe,
+            read_only=spec.read_only,
+            interrupt_behavior=spec.interrupt_behavior,
+            max_result_chars=spec.max_result_chars,
+            timeout=spec.timeout,
         )
         if tool_id in self._instances:
             self._instances.pop(tool_id, None)
@@ -192,6 +202,7 @@ def _default_registry() -> ToolRegistry:
                 "AiderEditBlockTool",
             ),
             prompt_path="tools/aider-edit-blocks",
+            concurrency_safe=False,
             metadata={
                 "reflect": True,
                 "schema": {
@@ -270,6 +281,7 @@ def _default_registry() -> ToolRegistry:
                 "AiderShellTool",
             ),
             prompt_path="tools/aider-shell",
+            concurrency_safe=False,
             metadata={
                 "reflect": True,
                 "schema": {
@@ -429,7 +441,46 @@ def _build_manifest_payload(
     return {"tools": tools}
 
 
-def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
+def _try_pool_discovery(
+    mcp_config_path: str,
+    *,
+    cwd: str | None = None,
+) -> dict[str, list[dict[str, object]]] | None:
+    """Attempt MCP tool discovery via the connection pool.
+
+    Returns the tool details dict on success, or ``None`` if the pool
+    path is unavailable or fails.
+    """
+    try:
+        from meeseeks_tools.integration.mcp import _load_mcp_config, _normalize_mcp_config
+        from meeseeks_tools.integration.mcp_pool import get_mcp_pool
+    except Exception:
+        return None
+
+    try:
+        import asyncio
+
+        config = _normalize_mcp_config(_load_mcp_config(mcp_config_path, cwd=cwd))
+        pool = get_mcp_pool()
+        asyncio.run(pool.connect_all(config))
+        details = pool.get_all_tool_details()
+        # If pool connected but discovered zero tools across all servers,
+        # treat that as a failure and fall through to the legacy path.
+        total_tools = sum(len(tools) for tools in details.values())
+        if total_tools == 0:
+            logging.debug("Pool connected but found no tools, falling back to legacy")
+            return None
+        return details
+    except Exception as exc:
+        logging.debug("Pool-based MCP discovery failed, will use legacy path: {}", exc)
+        return None
+
+
+def _ensure_auto_manifest(
+    mcp_config_path: str,
+    *,
+    cwd: str | None = None,
+) -> str | None:
     manifest_path = _default_manifest_cache_path()
     existing_manifest: dict[str, JsonValue] | None = None
     if os.path.exists(manifest_path):
@@ -439,15 +490,24 @@ def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
         except Exception as exc:
             logging.warning("Failed to read existing MCP manifest: {}", exc)
 
+    # Try pool-based discovery first (faster, persistent connections)
+    pool_tools = _try_pool_discovery(mcp_config_path, cwd=cwd)
+
     mcp_module = _load_mcp_support()
     mcp_tools: dict[str, list[dict[str, object]]] = {}
     failures: dict[str, Exception] = {}
     global_failure: Exception | None = None
-    if mcp_module is None:
+
+    if pool_tools is not None:
+        mcp_tools = pool_tools
+        logging.debug("MCP tools discovered via connection pool")
+    elif mcp_module is None:
         global_failure = RuntimeError("MCP support is not installed.")
     else:
         try:
-            config = mcp_module._load_mcp_config(mcp_config_path)
+            config = mcp_module._load_mcp_config(
+                mcp_config_path if mcp_config_path else None, cwd=cwd
+            )
             mcp_tools, failures = mcp_module.discover_mcp_tool_details_with_failures(config)
         except Exception as exc:
             logging.warning("Failed to auto-discover MCP tools: {}", exc)
@@ -500,12 +560,24 @@ def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
     return manifest_path
 
 
-def load_registry(manifest_path: str | None = None) -> ToolRegistry:
+def load_registry(
+    manifest_path: str | None = None,
+    *,
+    cwd: str | None = None,
+) -> ToolRegistry:
     """Load tool registry, auto-discovering MCP tools when configured."""
     if manifest_path is None:
         mcp_config_path = get_mcp_config_path()
-        if mcp_config_path and os.path.exists(mcp_config_path):
-            manifest_path = _ensure_auto_manifest(mcp_config_path)
+        # Check for CWD .mcp.json even when no global config exists
+        has_cwd_mcp = False
+        if cwd:
+            from pathlib import Path as _Path
+
+            has_cwd_mcp = (_Path(cwd) / ".mcp.json").is_file()
+        if (mcp_config_path and os.path.exists(mcp_config_path)) or has_cwd_mcp:
+            manifest_path = _ensure_auto_manifest(
+                mcp_config_path or "", cwd=cwd
+            )
 
     if not manifest_path:
         return _default_registry()
@@ -601,8 +673,38 @@ def load_registry(manifest_path: str | None = None) -> ToolRegistry:
     return registry
 
 
+def filter_specs(
+    specs: list[ToolSpec],
+    *,
+    allowed: list[str] | None = None,
+    denied: list[str] | None = None,
+) -> list[ToolSpec]:
+    """Filter tool specs by allowlist and/or denylist.
+
+    If *allowed* is non-empty only specs whose ``tool_id`` is in the list
+    are kept.  Then any spec whose ``tool_id`` appears in *denied* (merged
+    with the config ``agent.default_denied_tools``) is removed.  Deny
+    always takes precedence over allow.
+    """
+    if allowed:
+        allowed_set = set(allowed)
+        specs = [s for s in specs if s.tool_id in allowed_set]
+
+    denied_set: set[str] = set(denied or [])
+    config_denied_raw = get_config_value("agent", "default_denied_tools", default=[])
+    if isinstance(config_denied_raw, str):
+        config_denied_raw = [s.strip() for s in config_denied_raw.split(",") if s.strip()]
+    denied_set |= set(config_denied_raw or [])
+
+    if denied_set:
+        specs = [s for s in specs if s.tool_id not in denied_set]
+
+    return specs
+
+
 __all__ = [
     "ToolRegistry",
     "ToolSpec",
+    "filter_specs",
     "load_registry",
 ]

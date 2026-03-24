@@ -124,8 +124,9 @@ celerybeat.pid
 # Environments
 .env
 .env.*
-!.env.example
 *.env
+!.env.example
+!docker.example.env
 .venv
 env/
 venv/
@@ -154,6 +155,8 @@ apps/meeseeks_cli/data/
 # Local config files (MCP/tool manifests, secrets)
 **/app.json
 **/*config.json
+!apps/meeseeks_console/tsconfig.json
+!apps/meeseeks_console/tsconfig.node.json
 configs/*.toml
 configs/*.yaml
 configs/*.yml
@@ -175,3 +178,6 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+docker.env
+/.claude/settings.json
+/.playwright-mcp

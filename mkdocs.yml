@@ -28,7 +28,6 @@ plugins:
             - packages/meeseeks_core/src
             - packages/meeseeks_tools/src
             - apps/meeseeks_api/src
-            - apps/meeseeks_chat/src
             - apps/meeseeks_cli/src
           options:
             docstring_style: google

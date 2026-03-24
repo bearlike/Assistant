@@ -3,19 +3,22 @@
 
 from __future__ import annotations
 
+import fnmatch
+import subprocess
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-
-# TYPE_CHECKING avoids circular import with agent_context.
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from meeseeks_core.classes import ActionStep
-from meeseeks_core.common import MockSpeaker
+from meeseeks_core.common import MockSpeaker, get_logger
 from meeseeks_core.permissions import PermissionDecision
 from meeseeks_core.types import EventRecord
 
 if TYPE_CHECKING:
+    from meeseeks_core.config import HookEntry, HooksConfig
     from meeseeks_core.hypervisor import AgentHandle
+
+logger = get_logger(name="core.hooks")
 
 
 @dataclass
@@ -34,6 +37,9 @@ class HookManager:
     )
     on_agent_start: list[Callable[[AgentHandle], None]] = field(default_factory=list)
     on_agent_stop: list[Callable[[AgentHandle], None]] = field(default_factory=list)
+    on_session_start: list[Callable[[str], None]] = field(default_factory=list)
+    on_session_end: list[Callable[[str, str | None], None]] = field(default_factory=list)
+    on_compact: list[Callable[..., None]] = field(default_factory=list)
 
     def run_pre_tool_use(self, action_step: ActionStep) -> ActionStep:
         """Apply pre-tool hooks to an action step.
@@ -45,7 +51,10 @@ class HookManager:
             Updated action step after hooks run.
         """
         for hook in self.pre_tool_use:
-            action_step = hook(action_step)
+            try:
+                action_step = hook(action_step)
+            except Exception:
+                logger.warning("Pre-tool hook failed", exc_info=True)
         return action_step
 
     def run_post_tool_use(self, action_step: ActionStep, result: MockSpeaker) -> MockSpeaker:
@@ -59,7 +68,10 @@ class HookManager:
             Updated result after hooks run.
         """
         for hook in self.post_tool_use:
-            result = hook(action_step, result)
+            try:
+                result = hook(action_step, result)
+            except Exception:
+                logger.warning("Post-tool hook failed", exc_info=True)
         return result
 
     def run_permission_request(
@@ -75,7 +87,10 @@ class HookManager:
             Updated permission decision after hooks run.
         """
         for hook in self.permission_request:
-            decision = hook(action_step, decision)
+            try:
+                decision = hook(action_step, decision)
+            except Exception:
+                logger.warning("Permission hook failed", exc_info=True)
         return decision
 
     def run_pre_compact(self, events: Iterable[EventRecord]) -> list[EventRecord]:
@@ -89,19 +104,145 @@ class HookManager:
         """
         event_list: list[EventRecord] = list(events)
         for hook in self.pre_compact:
-            event_list = hook(event_list)
+            try:
+                event_list = hook(event_list)
+            except Exception:
+                logger.warning("Pre-compact hook failed", exc_info=True)
         return event_list
-
 
     def run_on_agent_start(self, handle: AgentHandle) -> None:
         """Notify hooks that an agent has started."""
         for hook in self.on_agent_start:
-            hook(handle)
+            try:
+                hook(handle)
+            except Exception:
+                logger.warning("on_agent_start hook failed", exc_info=True)
 
     def run_on_agent_stop(self, handle: AgentHandle) -> None:
         """Notify hooks that an agent has stopped."""
         for hook in self.on_agent_stop:
-            hook(handle)
+            try:
+                hook(handle)
+            except Exception:
+                logger.warning("on_agent_stop hook failed", exc_info=True)
+
+    def run_on_session_start(self, session_id: str) -> None:
+        """Notify hooks that a session has started."""
+        for hook in self.on_session_start:
+            try:
+                hook(session_id)
+            except Exception:
+                logger.warning("on_session_start hook failed", exc_info=True)
+
+    def run_on_session_end(self, session_id: str, error: str | None = None) -> None:
+        """Notify hooks that a session has ended."""
+        for hook in self.on_session_end:
+            try:
+                hook(session_id, error)
+            except Exception:
+                logger.warning("on_session_end hook failed", exc_info=True)
+
+    def run_on_compact(self, *args: Any, **kwargs: Any) -> None:
+        """Notify hooks that compaction occurred."""
+        for hook in self.on_compact:
+            try:
+                hook(*args, **kwargs)
+            except Exception:
+                logger.warning("on_compact hook failed", exc_info=True)
+
+    @classmethod
+    def load_from_config(cls, hooks_config: HooksConfig) -> HookManager:
+        """Create a HookManager with hooks loaded from config."""
+        manager = cls()
+        for entry in hooks_config.pre_tool_use:
+            manager.pre_tool_use.append(_make_command_hook(entry))
+        for entry in hooks_config.post_tool_use:
+            manager.post_tool_use.append(_make_post_tool_hook(entry))
+        for entry in hooks_config.on_session_start:
+            manager.on_session_start.append(_make_session_hook(entry))
+        for entry in hooks_config.on_session_end:
+            manager.on_session_end.append(_make_session_end_hook(entry))
+        return manager
+
+
+def _matches(matcher: str | None, tool_id: str) -> bool:
+    """Check if a tool_id matches a hook's matcher pattern."""
+    if matcher is None:
+        return True
+    return fnmatch.fnmatch(tool_id, matcher)
+
+
+def _hook_env(action_step: ActionStep, result_content: str | None = None) -> dict[str, str]:
+    """Build env vars to pass to command hooks."""
+    import os
+
+    env = dict(os.environ)
+    env["MEESEEKS_TOOL_ID"] = action_step.tool_id or ""
+    env["MEESEEKS_OPERATION"] = action_step.operation or ""
+    if result_content is not None:
+        env["MEESEEKS_TOOL_RESULT"] = result_content[:2000]
+    return env
+
+
+def _make_command_hook(entry: HookEntry) -> Callable[[ActionStep], ActionStep]:
+    """Create a pre-tool-use hook from a config entry."""
+    def hook(action_step: ActionStep) -> ActionStep:
+        if not _matches(entry.matcher, action_step.tool_id):
+            return action_step
+        try:
+            subprocess.run(
+                entry.command, shell=True, timeout=entry.timeout,
+                capture_output=True, text=True,
+                env=_hook_env(action_step),
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            logger.warning("Command hook timed out or failed: %s", entry.command)
+        return action_step
+    return hook
+
+
+def _make_post_tool_hook(entry: HookEntry) -> Callable[[ActionStep, MockSpeaker], MockSpeaker]:
+    """Create a post-tool-use hook from a config entry."""
+    def hook(action_step: ActionStep, result: MockSpeaker) -> MockSpeaker:
+        if not _matches(entry.matcher, action_step.tool_id):
+            return result
+        content = getattr(result, "content", None)
+        try:
+            subprocess.run(
+                entry.command, shell=True, timeout=entry.timeout,
+                capture_output=True, text=True,
+                env=_hook_env(action_step, str(content) if content else None),
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            logger.warning("Command hook timed out or failed: %s", entry.command)
+        return result
+    return hook
+
+
+def _make_session_hook(entry: HookEntry) -> Callable[[str], None]:
+    """Create a session lifecycle hook from a config entry."""
+    def hook(session_id: str) -> None:
+        try:
+            subprocess.run(
+                entry.command, shell=True, timeout=entry.timeout,
+                capture_output=True, text=True,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            logger.warning("Session hook timed out or failed: %s", entry.command)
+    return hook
+
+
+def _make_session_end_hook(entry: HookEntry) -> Callable[[str, str | None], None]:
+    """Create a session end hook from a config entry."""
+    def hook(session_id: str, error: str | None = None) -> None:
+        try:
+            subprocess.run(
+                entry.command, shell=True, timeout=entry.timeout,
+                capture_output=True, text=True,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            logger.warning("Session end hook timed out or failed: %s", entry.command)
+    return hook
 
 
 def default_hook_manager() -> HookManager:

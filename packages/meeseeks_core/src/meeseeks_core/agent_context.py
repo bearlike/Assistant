@@ -11,7 +11,8 @@ in :mod:`meeseeks_core.hypervisor`.
 
 from __future__ import annotations
 
-import asyncio
+import queue
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -50,8 +51,8 @@ class AgentContext:
     should_cancel: Callable[[], bool] | None
     event_logger: Callable[[Event], None] | None
     registry: AgentHypervisor
-    message_queue: asyncio.Queue[str] | None = None
-    interrupt_step: asyncio.Event | None = None
+    message_queue: queue.Queue[str] | None = None
+    interrupt_step: threading.Event | None = None
 
     @property
     def can_spawn(self) -> bool:
@@ -81,7 +82,10 @@ class AgentContext:
             should_cancel=self.should_cancel,
             event_logger=self.event_logger,
             registry=self.registry,
-            message_queue=None,
+            # Ref: [DeepMind-Delegation §4.4] Bidirectional message passing —
+            # each agent gets its own queue for parent→child steering.
+            # Ref: [AgentCgroup §4.2] System→agent NL feedback channel.
+            message_queue=queue.Queue(),
             interrupt_step=None,
         )
 
@@ -93,6 +97,8 @@ class AgentContext:
         should_cancel: Callable[[], bool] | None = None,
         event_logger: Callable[[Event], None] | None = None,
         registry: AgentHypervisor | None = None,
+        message_queue: queue.Queue[str] | None = None,
+        interrupt_step: threading.Event | None = None,
     ) -> AgentContext:
         """Create the root agent context."""
         reg = registry or AgentHypervisor()
@@ -105,8 +111,8 @@ class AgentContext:
             should_cancel=should_cancel,
             event_logger=event_logger,
             registry=reg,
-            message_queue=asyncio.Queue(),
-            interrupt_step=asyncio.Event(),
+            message_queue=message_queue or queue.Queue(),
+            interrupt_step=interrupt_step or threading.Event(),
         )
 
 

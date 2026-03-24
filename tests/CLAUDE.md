@@ -3,10 +3,11 @@
 Scope: this file applies to the root `tests/` suite and shared test patterns.
 
 ## What we test
-- **Async tool-use loop** (`test_tool_use_loop.py`): text response, tool calls, max_steps, permission denial, plan context, cancellation. Uses `asyncio.run()` + `AgentContext.root()` + `AsyncMock` for `model.ainvoke`.
-- **Agent hypervisor** (`test_agent_context.py`): AgentContext depth/child/root, AgentHypervisor CRUD, admission control, cancellation, cleanup.
-- **Sub-agent spawning** (`test_spawn_agent.py`): SpawnAgentTool execution, tool scoping (allowed/denied), model validation, depth gate.
-- **CLI agent display** (`test_cli_agent_display.py`): AgentDisplayManager state, hook callbacks, Rich rendering, tree structure, thread safety.
+- **Async tool-use loop** (`test_tool_use_loop.py`): text response, tool calls, max_steps, permission denial, plan context, cancellation, lifecycle-aware depth guidance (root/sub/leaf), budget warning injection. Uses `asyncio.run()` + `AgentContext.root()` + `AsyncMock` for `model.ainvoke`.
+- **Agent hypervisor** (`test_agent_context.py`): AgentContext depth/child/root, AgentHypervisor CRUD, admission control, cancellation, cleanup, budget tracking, stall detection, message passing, global eye rendering, AgentResult serialization, expanded 6-state lifecycle.
+- **Sub-agent spawning** (`test_spawn_agent.py`): SpawnAgentTool execution, tool scoping (allowed/denied), model validation, depth gate, approval_callback inheritance, AgentResult structured JSON return, max_steps + acceptance_criteria schema. Note: tool filtering now uses `filter_specs()` from `tool_registry` — mock `meeseeks_core.tool_registry.get_config_value` (not `spawn_agent.get_config_value`) when testing config-denied tools.
+- **CLI agent display** (`test_cli_agent_display.py`): AgentDisplayManager state, hook callbacks, Rich rendering, tree structure, thread safety, submitted/rejected state rendering, error message display.
+- **Hierarchical instruction discovery** (`test_project_instructions.py`): four-level hierarchy discovery (user/project/rules/local), priority ordering, git context formatting, noload marker, empty/missing files.
 - **Orchestration** (`test_task_master.py`): `orchestrate_session` completion, max-iter, error paths.
 - **Tool registry** behavior and tool disabling when init fails.
 - **MCP discovery**: schema normalization, per-server failures, and CLI visibility even when tools are missing.

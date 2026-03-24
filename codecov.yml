@@ -36,10 +36,6 @@ component_management:
       name: api
       paths:
         - "apps/meeseeks_api/**"
-    - component_id: chat
-      name: chat
-      paths:
-        - "apps/meeseeks_chat/**"
     - component_id: ha
       name: ha
       paths:

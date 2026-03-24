@@ -1,26 +1,44 @@
 # syntax=docker/dockerfile:1
 
-# Dockerfile.api
+# Dockerfile.api — Meeseeks API with Gunicorn
 ARG BASE_IMAGE="ghcr.io/bearlike/meeseeks-base:latest"
 FROM $BASE_IMAGE
 
-ARG TITLE="Meeseeks API: Personal Assistant"
+ARG VERSION="0.0.8"
 
-LABEL title=$TITLE
+LABEL org.opencontainers.image.title="Meeseeks API" \
+      org.opencontainers.image.description="REST API for the Meeseeks task-agent assistant" \
+      org.opencontainers.image.source="https://github.com/bearlike/Assistant" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.vendor="Krishnakanth Alagiri" \
+      org.opencontainers.image.licenses="MIT"
 
-# Install uv if base image doesn't have it
+USER root
+WORKDIR /app
+
+# 1. Copy only dependency metadata first (layer caching — survives source changes)
+COPY pyproject.toml uv.lock ./
+COPY packages/meeseeks_core/pyproject.toml packages/meeseeks_core/pyproject.toml
+COPY packages/meeseeks_tools/pyproject.toml packages/meeseeks_tools/pyproject.toml
+COPY apps/meeseeks_api/pyproject.toml apps/meeseeks_api/pyproject.toml
+
+# 2. Copy source
+COPY packages/ packages/
+COPY apps/meeseeks_api/ apps/meeseeks_api/
+COPY configs/ configs/
+
+# 3. Install with BuildKit cache mount (pip wheels survive rebuilds)
 RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
+        -e packages/meeseeks_core \
+        -e packages/meeseeks_tools \
+        -e apps/meeseeks_api \
+        gunicorn
 
-# Install the meeseeks-api dependencies
-WORKDIR /app/apps/meeseeks_api
-RUN uv pip install --system -e . \
-    && rm -rf /root/.cache/uv
+ENV MASTER_API_TOKEN='msk-strong-password' \
+    API_PORT=5125
 
-# Set API specific environment variable
-ENV MASTER_API_TOKEN='msk-strong-password'
-
-# Expose port 5123 for the API
-EXPOSE 5123
-
-# Run the API application
-ENTRYPOINT ["meeseeks-api"]
+# Single worker (RunRegistry is in-memory), 8 HTTP threads, 5-min timeout
+ENTRYPOINT ["sh", "-c", \
+    "exec gunicorn --bind 0.0.0.0:${API_PORT} --workers 1 --threads 8 --timeout 300 --graceful-timeout 30 --access-logfile - meeseeks_api.backend:app"]

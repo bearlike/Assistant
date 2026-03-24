@@ -60,11 +60,11 @@ jobs:
             type=raw,value=stable,enable=${{ steps.extract_version.outputs.release_type == 'stable' }}
             type=raw,value=dev,enable=${{ steps.extract_version.outputs.release_type == 'dev' }}
 
-      - name: Docker meta for meeseeks-chat
-        id: meta_chat
+      - name: Docker meta for meeseeks-console
+        id: meta_console
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/bearlike/meeseeks-chat
+          images: ghcr.io/bearlike/meeseeks-console
           tags: |
             type=raw,value=${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
             type=raw,value=latest,enable=${{ steps.extract_version.outputs.release_type == 'latest' }}
@@ -106,15 +106,15 @@ jobs:
           tags: ${{ steps.meta_base.outputs.tags }}
           labels: ${{ steps.meta_base.outputs.labels }}
 
-      - name: Build and push meeseeks-chat
+      - name: Build and push meeseeks-console
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: docker/Dockerfile.chat
+          file: docker/Dockerfile.console
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta_chat.outputs.tags }}
-          labels: ${{ steps.meta_chat.outputs.labels }}
+          tags: ${{ steps.meta_console.outputs.tags }}
+          labels: ${{ steps.meta_console.outputs.labels }}
           build-args: |
             BASE_IMAGE=ghcr.io/bearlike/meeseeks-base:${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
 
