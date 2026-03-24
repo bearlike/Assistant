@@ -12,21 +12,17 @@ from meeseeks_core.llm import (
 )
 
 
-def test_resolve_reasoning_effort_defaults(monkeypatch):
-    """Default to medium for GPT-5 family models."""
+def test_resolve_reasoning_effort_defaults_to_high(monkeypatch):
+    """Default to high for all models when config is empty."""
     set_config_override({"llm": {"reasoning_effort": "", "reasoning_effort_models": []}})
-    assert resolve_reasoning_effort("gpt-5.2") == "medium"
-    assert resolve_reasoning_effort("gpt-5.1") == "medium"
-
-
-def test_resolve_reasoning_effort_gpt5_pro(monkeypatch):
-    """Use high reasoning effort for GPT-5 pro."""
-    set_config_override({"llm": {"reasoning_effort": ""}})
-    assert resolve_reasoning_effort("gpt-5-pro") == "high"
+    assert resolve_reasoning_effort("gpt-5.2") == "high"
+    assert resolve_reasoning_effort("openai/claude-sonnet-4-6") == "high"
+    assert resolve_reasoning_effort("gemini/gemini-2.5-pro") == "high"
+    assert resolve_reasoning_effort("unknown-model") == "high"
 
 
 def test_build_chat_model_includes_reasoning_effort(monkeypatch):
-    """Attach reasoning_effort to model kwargs when supported."""
+    """Attach reasoning_effort to model kwargs — defaults to high."""
     set_config_override({"llm": {"reasoning_effort": "", "reasoning_effort_models": []}})
     captured: dict[str, object] = {}
 
@@ -40,8 +36,10 @@ def test_build_chat_model_includes_reasoning_effort(monkeypatch):
 
     build_chat_model(model_name="gpt-5.2", openai_api_base=None)
     model_kwargs = captured.get("model_kwargs") or {}
-    assert model_kwargs.get("reasoning_effort") == "medium"
+    assert model_kwargs.get("reasoning_effort") == "high"
     assert "temperature" not in captured
+    # drop_params must be set for graceful degradation
+    assert captured.get("drop_params") is True
 
 
 def test_build_chat_model_prefixes_openai_model(monkeypatch):
@@ -134,6 +132,28 @@ def test_model_supports_reasoning_effort_with_provider_prefix():
     """Treat provider-prefixed model names as GPT-5 family."""
     set_config_override({"llm": {"reasoning_effort_models": []}})
     assert model_supports_reasoning_effort("openai/gpt-5.2") is True
+
+
+def test_model_supports_reasoning_effort_claude():
+    """Claude models support reasoning_effort via LiteLLM."""
+    set_config_override({"llm": {"reasoning_effort_models": []}})
+    assert model_supports_reasoning_effort("openai/claude-sonnet-4-6") is True
+    assert model_supports_reasoning_effort("claude-opus-4-6") is True
+    assert model_supports_reasoning_effort("anthropic/claude-3.5-sonnet") is True
+
+
+def test_model_supports_reasoning_effort_gemini():
+    """Gemini models support reasoning_effort via LiteLLM."""
+    set_config_override({"llm": {"reasoning_effort_models": []}})
+    assert model_supports_reasoning_effort("gemini/gemini-2.5-pro") is True
+    assert model_supports_reasoning_effort("vertex_ai/gemini-2.5-flash") is True
+
+
+def test_model_supports_reasoning_effort_o3():
+    """O3 models support reasoning_effort."""
+    set_config_override({"llm": {"reasoning_effort_models": []}})
+    assert model_supports_reasoning_effort("openai/o3") is True
+    assert model_supports_reasoning_effort("o3-mini") is True
 
 
 def test_resolve_litellm_model_keeps_prefixed_name():
