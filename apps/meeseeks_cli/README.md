@@ -30,6 +30,7 @@ uv run meeseeks
 - `/tag NAME` tag a session
 - `/fork [TAG]` fork the current session
 - `/new` start a new session
+- `/skills` list available skills (`/skills <name>` for details)
 - `/mcp` list MCP tools and servers
 - `/mcp init` scaffold an MCP config file
 - `/config init` scaffold a config example file

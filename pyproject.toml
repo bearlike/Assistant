@@ -1,6 +1,6 @@
 [project]
 name = "meeseeks-workspace"
-version = "0.0.7"
+version = "0.0.8"
 description = "Workspace package for the Meeseeks monorepo."
 readme = "README.md"
 requires-python = ">=3.10,<4.0"

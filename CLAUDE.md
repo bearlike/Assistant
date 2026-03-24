@@ -8,6 +8,7 @@ Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervi
 - `packages/meeseeks_core/src/meeseeks_core/agent_context.py`: `AgentContext` (immutable per-agent state)
 - `packages/meeseeks_core/src/meeseeks_core/hypervisor.py`: `AgentHypervisor` (control plane), `AgentHandle` (per-agent runtime state)
 - `packages/meeseeks_core/src/meeseeks_core/spawn_agent.py`: `SpawnAgentTool` + `SPAWN_AGENT_SCHEMA` — sub-agent creation with tool scoping
+- `packages/meeseeks_core/src/meeseeks_core/skills.py`: `SkillSpec`, `SkillRegistry`, `discover_skills()`, `activate_skill()`, `ACTIVATE_SKILL_SCHEMA` — Agent Skills standard support
 - `packages/meeseeks_core/src/meeseeks_core/orchestrator.py`: session lifecycle, sync→async bridge via `asyncio.run()`
 - `packages/meeseeks_core/src/meeseeks_core/task_master.py`: `generate_action_plan` + `orchestrate_session` entry points
 - `packages/meeseeks_core/src/meeseeks_core/classes.py`: `ActionStep` (tool_id/operation/tool_input), `TaskQueue`, `AbstractTool` contracts
@@ -130,6 +131,7 @@ Official library/framework documentation and code examples.
 - **User steering**: Root agent has a `message_queue` (`queue.Queue`, thread-safe) drained between steps as HumanMessage, and an `interrupt_step` (`threading.Event`). Both are created in `RunRegistry.start()` and shared with the `AgentContext` via the orchestration chain. Sub-agents do not receive user messages. The API exposes `/message` and `/interrupt` endpoints for this.
 - **Attachment handling**: `ContextBuilder` reads uploaded text files from disk (via context events with attachment metadata) and injects their content into `ContextSnapshot.attachment_texts`, which is included in the system prompt.
 - **Planning is root-only**: Sub-agents always execute (act mode). They bypass `Orchestrator` and its plan/mode logic entirely.
+- **Skills**: `SkillRegistry` discovers `SKILL.md` files from `~/.claude/skills/` and `.claude/skills/` following the [Agent Skills](https://agentskills.io) open standard. The skill catalog is injected into the system prompt for LLM auto-invocation via `activate_skill`. User `/skill-name` invocations are detected in the `Orchestrator` and rendered into `skill_instructions` passed to `ToolUseLoop`. Skills can scope tools via `allowed-tools` (reuses `filter_specs()`) and preprocess shell commands via `` !`cmd` `` syntax.
 - Make tool inputs schema-aware; prefer structured `tool_input` for MCP tools.
 - Surface tool activity clearly (permissions, tool IDs, arguments) to reduce user confusion.
 
