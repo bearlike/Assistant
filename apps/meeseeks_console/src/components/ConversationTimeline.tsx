@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { ChevronRight, Loader2, Copy } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { DiffFile, EventRecord, TimelineEntry, TurnMeta } from '../types';

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Search, X, Archive, RotateCcw, Loader2 } from 'lucide-react';
 import { SessionItem } from './SessionItem';
 import { InputBar } from './InputBar';
@@ -220,7 +220,7 @@ export function HomeView({
                       <div className="text-xs text-[hsl(var(--muted-foreground))]">
                         {session.status}
                       </div>
-                      {(onArchive || onUnarchive) &&
+                      {(onArchive != null || onUnarchive != null) &&
                       <button
                         onClick={(event) => {
                           event.stopPropagation();

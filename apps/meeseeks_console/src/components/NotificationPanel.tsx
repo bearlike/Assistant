@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import { X, CheckCircle2, XCircle, Square } from 'lucide-react';
 import { NotificationItem } from '../types';
 interface NotificationPanelProps {

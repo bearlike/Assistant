@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   ArrowLeft,
   Archive,

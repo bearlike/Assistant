@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { InputBar } from "./InputBar";

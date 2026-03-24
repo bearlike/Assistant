@@ -1,4 +1,4 @@
-import React, { forwardRef } from 'react';
+import { forwardRef } from 'react';
 import { ChevronDown, ChevronUp, Circle } from 'lucide-react';
 export type McpOption = {
   id: string;

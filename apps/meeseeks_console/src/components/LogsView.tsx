@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { ShellBlock } from './ShellBlock';
 import { SummaryBlock } from './SummaryBlock';
 import { EventRecord } from '../types';

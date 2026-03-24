@@ -1,4 +1,3 @@
-import React from 'react';
 import { Check } from 'lucide-react';
 interface SummaryBlockProps {
   summary: string[];

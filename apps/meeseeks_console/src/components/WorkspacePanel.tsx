@@ -1,4 +1,3 @@
-import React from 'react';
 import { X, Maximize2 } from 'lucide-react';
 import { DiffView } from './DiffView';
 import { LogsView } from './LogsView';

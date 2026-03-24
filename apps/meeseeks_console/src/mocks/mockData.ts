@@ -494,7 +494,7 @@ ids: string[])
 }
 
 export async function mockClearNotifications(
-_clearAll = false)
+_clearAll?: boolean)
 : Promise<void> {
   await delay(100);
   notifications = [];

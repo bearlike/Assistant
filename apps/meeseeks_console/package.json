@@ -4,23 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "npx vite",
-    "build": "npx vite build",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
-    "preview": "npx vite preview",
+    "lint:ci": "eslint . --ext .js,.jsx,.ts,.tsx --max-warnings=0",
+    "typecheck": "tsc --noEmit",
     "test": "vitest",
+    "test:ci": "vitest run",
     "test:e2e": "playwright test"
   },
   "dependencies": {
     "@emotion/react": "^11.13.3",
-    "@testing-library/react": "latest",
-    "@testing-library/user-event": "latest",
     "lucide-react": "0.522.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
-    "remark-gfm": "^4.0.0",
-    "vitest": "latest"
+    "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
