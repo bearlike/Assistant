@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -17,10 +18,6 @@ from urllib.request import Request, urlopen
 
 from pydantic.v1 import BaseModel, Field, validator
 
-_APP_CONFIG_PATH = Path("configs/app.json")
-_APP_EXAMPLE_PATH = Path("configs/app.example.json")
-_MCP_CONFIG_PATH = Path("configs/mcp.json")
-_MCP_EXAMPLE_PATH = Path("configs/mcp.example.json")
 _APP_CONFIG_PATH_OVERRIDE: Path | None = None
 _MCP_CONFIG_PATH_OVERRIDE: Path | None = None
 _MCP_CONFIG_DISABLED = False
@@ -31,6 +28,22 @@ _LAST_PREFLIGHT: dict[str, dict[str, Any]] | None = None
 _logger = logging.getLogger("core.config")
 
 _PACKAGE_NAME = "meeseeks-workspace"
+
+
+def resolve_meeseeks_home() -> Path:
+    """Return the Meeseeks home directory (``$MEESEEKS_HOME`` or ``~/.meeseeks``)."""
+    env = os.environ.get("MEESEEKS_HOME")
+    if env:
+        return Path(env).expanduser().resolve()
+    return Path.home() / ".meeseeks"
+
+
+def _resolve_config_path(filename: str) -> Path:
+    """Find a config file: ``CWD/configs/`` first, then ``MEESEEKS_HOME``."""
+    cwd_path = Path("configs") / filename
+    if cwd_path.exists():
+        return cwd_path
+    return resolve_meeseeks_home() / filename
 
 
 def get_version() -> str:
@@ -75,9 +88,9 @@ class RuntimeConfig(BaseModel):
     log_style: str = Field("", example="")
     cli_log_style: str = Field("dark", example="dark")
     preflight_enabled: bool = False
-    cache_dir: str = Field(".cache", example=".cache")
-    session_dir: str = Field("./data/sessions", example="./data/sessions")
-    config_dir: str = Field("~/.meeseeks", example="~/.meeseeks")
+    cache_dir: str = Field("", example="~/.meeseeks/cache")
+    session_dir: str = Field("", example="~/.meeseeks/sessions")
+    config_dir: str = Field("", example="~/.meeseeks")
 
     @validator("log_level", pre=True, always=True)
     def _normalize_log_level(cls, value: Any) -> str:
@@ -86,10 +99,17 @@ class RuntimeConfig(BaseModel):
         return str(value).strip().upper()
 
     @validator("cache_dir", "session_dir", "config_dir", pre=True, always=True)
-    def _normalize_paths(cls, value: Any, field) -> str:
-        if value is None:
-            return str(field.default)
-        return str(value)
+    def _normalize_paths(cls, value: Any, field: Any) -> str:  # noqa: N805
+        raw = str(value).strip() if value is not None else ""
+        if raw:
+            return raw
+        home = resolve_meeseeks_home()
+        defaults = {
+            "cache_dir": str(home / "cache"),
+            "session_dir": str(home / "sessions"),
+            "config_dir": str(home),
+        }
+        return defaults.get(field.name, str(home))
 
     @validator("preflight_enabled", pre=True, always=True)
     def _normalize_preflight_enabled(cls, value: Any) -> bool:
@@ -730,14 +750,18 @@ def set_config_override(payload: dict[str, Any], *, replace: bool = False) -> No
 
 def get_app_config_path() -> str:
     """Return the configured app JSON path."""
-    return str(_APP_CONFIG_PATH_OVERRIDE or _APP_CONFIG_PATH)
+    if _APP_CONFIG_PATH_OVERRIDE:
+        return str(_APP_CONFIG_PATH_OVERRIDE)
+    return str(_resolve_config_path("app.json"))
 
 
 def get_mcp_config_path() -> str:
     """Return the configured MCP JSON path."""
     if _MCP_CONFIG_DISABLED:
         return ""
-    return str(_MCP_CONFIG_PATH_OVERRIDE or _MCP_CONFIG_PATH)
+    if _MCP_CONFIG_PATH_OVERRIDE:
+        return str(_MCP_CONFIG_PATH_OVERRIDE)
+    return str(_resolve_config_path("mcp.json"))
 
 
 def get_config() -> AppConfig:
@@ -806,16 +830,27 @@ def _example_app_payload() -> dict[str, Any]:
     return payload
 
 
+def _default_example_path(filename: str) -> Path:
+    """Return the example config path: ``CWD/configs/`` if present, else ``MEESEEKS_HOME``."""
+    cwd_configs = Path("configs")
+    if cwd_configs.is_dir():
+        return cwd_configs / filename
+    return resolve_meeseeks_home() / filename
+
+
 def ensure_example_configs(
     app_path: str | Path | None = None,
     mcp_path: str | Path | None = None,
-) -> None:
-    """Write example config files if missing."""
-    app_target = Path(app_path) if app_path else _APP_EXAMPLE_PATH
+) -> tuple[Path, Path]:
+    """Write example config files if missing. Returns ``(app_path, mcp_path)``."""
+    app_target = Path(app_path) if app_path else _default_example_path("app.example.json")
     if not app_target.exists():
         app_target.parent.mkdir(parents=True, exist_ok=True)
-        app_target.write_text(json.dumps(_example_app_payload(), indent=2) + "\n", encoding="utf-8")
-    mcp_target = Path(mcp_path) if mcp_path else _MCP_EXAMPLE_PATH
+        app_target.write_text(
+            json.dumps(_example_app_payload(), indent=2) + "\n",
+            encoding="utf-8",
+        )
+    mcp_target = Path(mcp_path) if mcp_path else _default_example_path("mcp.example.json")
     if not mcp_target.exists():
         mcp_target.parent.mkdir(parents=True, exist_ok=True)
         mcp_target.write_text(
@@ -834,6 +869,7 @@ def ensure_example_configs(
             + "\n",
             encoding="utf-8",
         )
+    return app_target, mcp_target
 
 
 __all__ = [
@@ -850,6 +886,7 @@ __all__ = [
     "get_last_preflight",
     "get_mcp_config_path",
     "reset_config",
+    "resolve_meeseeks_home",
     "set_app_config_path",
     "set_config_override",
     "set_mcp_config_path",

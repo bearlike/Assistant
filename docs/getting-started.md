@@ -70,6 +70,7 @@ See [LLM setup](llm-setup.md) for MCP configuration and auto-discovery details.
 
 ## Run interfaces (local)
 - CLI: `uv run meeseeks` (details in [CLI client](clients-cli.md))
+- CLI (global): `uv tool install .` then `meeseeks` from anywhere (see [CLI client](clients-cli.md))
 - API: `uv run meeseeks-api` (details in [Console + API](clients-web-api.md))
 - Console: `cd apps/meeseeks_console && npm run dev` (details in [Console + API](clients-web-api.md))
 - Home Assistant: see [Home Assistant voice](clients-home-assistant.md)

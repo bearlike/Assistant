@@ -335,14 +335,13 @@ def test_render_mcp_invalid_json(tmp_path):
 
 def test_command_config_init_creates_example(monkeypatch, tmp_path):
     """Create example config file via CLI command."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "configs").mkdir()
     context = _make_context(tmp_path)
     registry = get_registry()
 
-    example_path = tmp_path / "app.example.json"
-    monkeypatch.setattr("meeseeks_core.config._APP_EXAMPLE_PATH", example_path)
-
     registry.execute("/config", context, ["init", "--force"])
-    assert example_path.exists()
+    assert (tmp_path / "configs" / "app.example.json").exists()
     assert "Created config example" in context.console.export_text()
 
 

@@ -17,7 +17,7 @@ Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervi
 - `packages/meeseeks_core/src/meeseeks_core/session_store.py`: transcript storage, tags, archive state, and `session_dir()` for attachment paths
 - `packages/meeseeks_core/src/meeseeks_core/context.py`: `ContextBuilder`, `ContextSnapshot` (includes `attachment_texts` for uploaded file content)
 - `packages/meeseeks_core/src/meeseeks_core/tool_registry.py`: `ToolRegistry`, `ToolSpec` (typed fields: `concurrency_safe`, `read_only`, `max_result_chars`, `timeout`), `filter_specs()` (reusable allowlist/denylist filtering), `load_registry()`
-- `packages/meeseeks_core/src/meeseeks_core/config.py`: `AppConfig` including `AgentConfig` (max_depth, max_concurrent, allowed_models, etc.) and `HooksConfig` (external hook configuration)
+- `packages/meeseeks_core/src/meeseeks_core/config.py`: `AppConfig` including `AgentConfig` (max_depth, max_concurrent, allowed_models, etc.), `HooksConfig` (external hook configuration), and `resolve_meeseeks_home()` / `_resolve_config_path()` for location-independent config discovery
 - `packages/meeseeks_core/src/meeseeks_core/compact.py`: `CompactionMode`, `CompactionResult`, `compact_conversation()` — two-mode (full/partial) context compaction with structured summaries and post-compact file restoration
 - `packages/meeseeks_core/src/meeseeks_core/hooks.py`: `HookManager` — error-isolated hook execution with lifecycle hooks (`on_session_start`, `on_session_end`, `on_compact`), external command hooks via `HooksConfig`, and `fnmatch`-based tool matcher filtering
 - `packages/meeseeks_tools/src/meeseeks_tools/integration/mcp_pool.py`: `MCPConnectionPool` — persistent MCP connection manager with memoized connections, error-based reconnection, and config change detection
@@ -163,6 +163,7 @@ Official library/framework documentation and code examples.
 - Core-only install: `uv sync`.
 - Full dev install: `uv sync --all-extras --all-groups`.
 - Run interfaces from repo root with `uv run meeseeks`, `uv run meeseeks-api`, or `cd apps/meeseeks_console && npm run dev`.
+- **Global install**: `uv tool install .` from the repo root installs `meeseeks` system-wide. Config files are discovered via a priority chain: `CWD/configs/` → `$MEESEEKS_HOME/` → `~/.meeseeks/`. Copy `configs/app.json` and `configs/mcp.json` to `~/.meeseeks/` for global use, or run `/init` to scaffold examples. Use `--config /path/to/app.json` to override.
 - Dockerfiles live under `docker/` for base, console, and API; Compose is supported when needed.
 
 ## Linting & formatting
