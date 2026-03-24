@@ -51,6 +51,7 @@ const mockClient: ApiClient = {
   resolveShare: mockResolveShare,
   sendMessage: async () => { /* no-op mock */ },
   interruptStep: async () => { /* no-op mock */ },
+  streamEvents: () => () => { /* no-op mock */ },
   listTools: mockListTools,
   listSkills: mockListSkills,
   listProjects: async () => [],

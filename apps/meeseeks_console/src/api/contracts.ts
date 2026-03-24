@@ -63,6 +63,11 @@ export type ApiClient = {
   interruptStep: (sessionId: string) => Promise<void>;
   listTools: () => Promise<ToolSummary[]>;
   listSkills: () => Promise<SkillSummary[]>;
+  streamEvents: (
+    sessionId: string,
+    onEvent: (event: EventRecord) => void,
+    onEnd: () => void
+  ) => () => void;
   listProjects: () => Promise<ProjectSummary[]>;
   listNotifications: () => Promise<NotificationItem[]>;
   dismissNotification: (ids: string[]) => Promise<void>;

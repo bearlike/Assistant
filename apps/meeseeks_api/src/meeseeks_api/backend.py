@@ -6,12 +6,14 @@ Single-user REST API with session-based orchestration and event polling.
 
 from __future__ import annotations
 
+import json
 import os
+import time
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from flask import Flask, Response, request
+from flask import Flask, Response, request, stream_with_context
 from flask_restx import Api, Resource, fields
 from meeseeks_core.classes import TaskQueue
 from meeseeks_core.common import get_logger
@@ -227,8 +229,8 @@ def _add_cors_headers(response: Response) -> Response:
 
 
 def _require_api_key() -> tuple[dict, int] | None:
-    """Validate the API key header for protected routes."""
-    api_token = request.headers.get("X-API-Key", None)
+    """Validate the API key header (or query param for SSE) for protected routes."""
+    api_token = request.headers.get("X-API-Key") or request.args.get("api_key")
     if api_token is None:
         return {"message": "API token is not provided."}, 401
     if api_token != MASTER_API_TOKEN:
@@ -500,6 +502,55 @@ class SessionEvents(Resource):
             "events": events,
             "running": runtime.is_running(session_id),
         }, 200
+
+
+@ns.route("/sessions/<string:session_id>/stream")
+class SessionStream(Resource):
+    """Stream session events via Server-Sent Events."""
+
+    @api.doc(security="apikey")
+    def get(self, session_id: str) -> Response:
+        """Open an SSE stream for real-time session events."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return Response(
+                json.dumps(auth_error[0]),
+                status=auth_error[1],
+                mimetype="application/json",
+            )
+
+        def generate():
+            last_count = 0
+            idle_cycles = 0
+            while True:
+                events = runtime.session_store.load_transcript(session_id)
+                new_events = events[last_count:]
+                if new_events:
+                    for event in new_events:
+                        yield f"data: {json.dumps(event)}\n\n"
+                    last_count = len(events)
+                    idle_cycles = 0
+                else:
+                    idle_cycles += 1
+
+                running = runtime.is_running(session_id)
+                if not running and not new_events:
+                    yield 'data: {"type": "stream_end"}\n\n'
+                    break
+                # Auto-close after 5 min of inactivity
+                if idle_cycles > 600:
+                    break
+                time.sleep(0.5)
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
 
 
 @ns.route("/sessions/<string:session_id>/message")
