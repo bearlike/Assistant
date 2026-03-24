@@ -20,7 +20,8 @@ vi.mock("../api/client", () => ({
   uploadAttachments: vi.fn(),
   createShare: vi.fn(),
   exportSession: vi.fn(),
-  resolveShare: vi.fn()
+  resolveShare: vi.fn(),
+  listAgents: vi.fn()
 }));
 const listSessions = vi.mocked(client.listSessions);
 const createSession = vi.mocked(client.createSession);

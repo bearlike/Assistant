@@ -65,9 +65,10 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
       const operation =
         typeof payload.operation === "string" ? payload.operation : "run";
       const toolInput = formatToolInput(payload.tool_input);
+      const result = payload.result;
       const summary =
         payload.summary ||
-        payload.result ||
+        result ||
         payload.error ||
         "";
       const detailLines = [];
@@ -85,6 +86,22 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         content,
         timestamp: event.ts
       });
+      if (toolId === "spawn_agent" && typeof result === "string") {
+        try {
+          const ar = JSON.parse(result);
+          if (ar.status && ar.steps_used !== undefined) {
+            const statusIcon = ar.status === "completed" ? "✅" :
+                               ar.status === "failed" ? "❌" :
+                               ar.status === "cannot_solve" ? "⚠" : "•";
+            logs.push({
+              id: `agent-result-${idx++}`,
+              type: "system" as const,
+              content: `${statusIcon} Sub-agent: ${ar.status} (${ar.steps_used} steps)${ar.summary ? "\n" + (ar.summary as string).slice(0, 200) : ""}`,
+              timestamp: event.ts,
+            });
+          }
+        } catch { /* not JSON, ignore */ }
+      }
     }
     if (event.type === "action_plan") {
       const steps = Array.isArray(event.payload?.steps)
@@ -157,10 +174,11 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
       const decision =
         typeof payload.decision === "string" ? payload.decision : "pending";
       const inputSegment = toolInput ? `, tool_input: ${toolInput}` : "";
+      const icon = decision === "deny" ? "⛔" : decision === "allow" ? "✓" : "?";
       logs.push({
         id: `permission-${idx++}`,
         type: "system",
-        content: `Permission requested (decision: ${decision}) — tool_id: ${toolId}, operation: ${operation}${inputSegment}.`,
+        content: `${icon} Permission ${decision}: ${toolId}:${operation}${inputSegment}`,
         timestamp: event.ts
       });
     }
@@ -172,9 +190,11 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
       const model = typeof payload.model === "string" ? payload.model : "";
       const detail = typeof payload.detail === "string" ? payload.detail : "";
       const indent = "\u00A0\u00A0".repeat(depth);
+      const status = typeof payload.status === "string" ? payload.status : action;
+      const steps = typeof payload.steps_completed === "number" ? payload.steps_completed : 0;
       const label = action === "start"
-        ? `${indent}Agent ${agentId} started (${model}): ${detail}`
-        : `${indent}Agent ${agentId} stopped: ${detail}`;
+        ? `${indent}▶ Agent ${agentId} started (${model}): ${detail}`
+        : `${indent}■ Agent ${agentId} ${status} (${steps} steps): ${detail}`;
       logs.push({
         id: `agent-${idx++}`,
         type: "system",

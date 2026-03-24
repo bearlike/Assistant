@@ -9,7 +9,7 @@ import {
   SessionSummary,
   ShareRecord
 } from "../types";
-import { ApiClient, ApiConfig, ProjectSummary, SkillSummary, ToolSummary } from "./contracts";
+import { AgentSummary, ApiClient, ApiConfig, ProjectSummary, SkillSummary, ToolSummary } from "./contracts";
 
 function withBase(baseUrl: string, path: string) {
   if (!baseUrl) {
@@ -303,6 +303,22 @@ export function createRealClient(config: ApiConfig): ApiClient {
         }
       );
       await handleJson(response);
-    }
+    },
+
+    async listAgents(sessionId: string): Promise<{
+      agents: AgentSummary[];
+      running: boolean;
+      total_steps: number;
+    }> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/agents`),
+        { headers: headers(apiKey) }
+      );
+      return handleJson<{
+        agents: AgentSummary[];
+        running: boolean;
+        total_steps: number;
+      }>(response);
+    },
   };
 }

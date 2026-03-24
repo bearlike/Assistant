@@ -37,6 +37,18 @@ export type ProjectSummary = {
   description?: string;
 };
 
+export type AgentSummary = {
+  agent_id: string;
+  parent_id: string | null;
+  depth: number;
+  model: string;
+  action: "start" | "stop";
+  status: string;
+  steps_completed: number;
+  detail: string;
+  ts: string;
+};
+
 export type ApiClient = {
   listSessions: (includeArchived?: boolean) => Promise<SessionSummary[]>;
   createSession: (context?: SessionContext) => Promise<string>;
@@ -73,6 +85,11 @@ export type ApiClient = {
   listNotifications: () => Promise<NotificationItem[]>;
   dismissNotification: (ids: string[]) => Promise<void>;
   clearNotifications: (clearAll?: boolean) => Promise<void>;
+  listAgents: (sessionId: string) => Promise<{
+    agents: AgentSummary[];
+    running: boolean;
+    total_steps: number;
+  }>;
 };
 
 export type ApiConfig = {

@@ -33,19 +33,23 @@ export function ConversationTimeline({
   events = [],
   systemBlock
 }: ConversationTimelineProps) {
-  const activeAgentCount = useMemo(() => {
-    let count = 0;
+  const activeAgents = useMemo(() => {
+    const agents = new Map<string, { detail: string; model: string }>();
     for (const event of events) {
       if (event.type === 'sub_agent') {
-        const action = (event.payload as Record<string, unknown>)?.action;
-        if (action === 'start') {
-          count++;
-        } else if (action === 'stop') {
-          count--;
+        const p = event.payload as Record<string, unknown>;
+        const id = ((p.agent_id as string) ?? '').slice(0, 8);
+        if (p.action === 'start') {
+          agents.set(id, {
+            detail: ((p.detail as string) ?? '').slice(0, 60),
+            model: (p.model as string) ?? '',
+          });
+        } else if (p.action === 'stop') {
+          agents.delete(id);
         }
       }
     }
-    return Math.max(0, count);
+    return agents;
   }, [events]);
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-10">
@@ -72,10 +76,13 @@ export function ConversationTimeline({
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                         }
                         <span>{isRunning ? 'Running...' : 'Trace available'}</span>
-                        {isRunning && activeAgentCount > 0 &&
-                          <span className="text-[10px] font-medium text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-1.5 py-0.5 rounded-full">
-                            {activeAgentCount} agent{activeAgentCount !== 1 ? 's' : ''}
-                          </span>
+                        {isRunning && activeAgents.size > 0 &&
+                          <div className="text-xs text-[hsl(var(--muted-foreground))] px-4 py-1.5 border-b border-[hsl(var(--border))] bg-[hsl(var(--accent))]/30">
+                            <span className="font-medium">{activeAgents.size} agent{activeAgents.size !== 1 ? 's' : ''} running</span>
+                            {[...activeAgents.entries()].map(([id, a]) => (
+                              <span key={id} className="ml-2 opacity-70">[{id}] {a.detail}</span>
+                            ))}
+                          </div>
                         }
                       </div>
                       {onShowActiveTrace &&

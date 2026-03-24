@@ -9,7 +9,7 @@ import {
   SessionSummary,
   ShareRecord
 } from '../types';
-import { ApiClient, ApiMode, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
+import { AgentSummary, ApiClient, ApiMode, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
 import { createRealClient } from './realClient';
 import {
   mockListSessions,
@@ -61,7 +61,8 @@ const mockClient: ApiClient = {
   listProjects: async () => [],
   listNotifications: mockListNotifications,
   dismissNotification: mockDismissNotification,
-  clearNotifications: mockClearNotifications
+  clearNotifications: mockClearNotifications,
+  listAgents: async () => ({ agents: [], running: false, total_steps: 0 }),
 };
 
 // When true in auto mode, skip real fetch and use mocks directly.
@@ -306,4 +307,15 @@ export async function interruptStep(sessionId: string): Promise<void> {
   );
 }
 
-export type { ProjectSummary, SkillSummary, ToolSummary };
+export async function listAgents(sessionId: string): Promise<{
+  agents: AgentSummary[];
+  running: boolean;
+  total_steps: number;
+}> {
+  return withFallback(
+    () => realClient.listAgents(sessionId),
+    () => mockClient.listAgents(sessionId)
+  );
+}
+
+export type { AgentSummary, ProjectSummary, SkillSummary, ToolSummary };
