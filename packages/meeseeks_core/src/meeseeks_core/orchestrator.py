@@ -120,6 +120,8 @@ class Orchestrator:
         state.open_questions = state.open_questions or []
         task_queue: TaskQueue | None = None
 
+        self._hook_manager.run_on_session_start(session_id)
+        error_msg: str | None = None
         try:
             self._session_store.append_event(
                 session_id, {"type": "user", "payload": {"text": user_query}}
@@ -256,6 +258,7 @@ class Orchestrator:
 
             return (task_queue, state) if return_state else task_queue
         except Exception as exc:
+            error_msg = str(exc)
             logging.exception("Orchestration failed for session {}", session_id)
             if task_queue is None:
                 task_queue = TaskQueue(_human_message=user_query, action_steps=[])
@@ -276,6 +279,8 @@ class Orchestrator:
                 },
             )
             return (task_queue, state) if return_state else task_queue
+        finally:
+            self._hook_manager.run_on_session_end(session_id, error_msg)
 
     # ------------------------------------------------------------------
     # Session helpers (kept from original)
@@ -287,7 +292,23 @@ class Orchestrator:
         summary = self._session_store.load_summary(session_id)
         budget = get_token_budget(events, summary, self._model_name)
         if budget.needs_compact or should_compact(events):
-            summary = summarize_events(events)
+            try:
+                from meeseeks_core.compact import CompactionMode, compact_conversation
+
+                result = asyncio.get_event_loop().run_until_complete(
+                    compact_conversation(
+                        events,
+                        CompactionMode.PARTIAL,
+                        model_name=self._model_name,
+                    )
+                )
+                summary = result.summary
+            except Exception:
+                logging.warning(
+                    "Structured compaction failed, falling back to simple summary",
+                    exc_info=True,
+                )
+                summary = summarize_events(events)
             self._session_store.save_summary(session_id, summary)
             return summary
         return None
