@@ -116,8 +116,10 @@ export function SessionDetailView({
         }
       } : undefined} />
 
-        <InputBar mode="detail" onSubmit={async (query, context, mode, attachments) => {
-        await send(query, context, mode, attachments);
+        <InputBar mode="detail" onSubmit={async (query, newContext, mode, attachments) => {
+        // Merge stored session context (project, skill, etc.) with new selections
+        const mergedContext = { ...session.context, ...newContext };
+        await send(query, mergedContext, mode, attachments);
         resume();
       }} onStop={async () => {
         await stop();
