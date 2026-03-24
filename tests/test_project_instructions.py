@@ -182,15 +182,24 @@ class TestGetGitContext:
         result = get_git_context(str(tmp_path))
         assert result is None
 
+    @staticmethod
+    def _git_init(path) -> None:
+        """Initialize a git repo with identity (required in CI)."""
+        os.system(
+            f"cd {path} && git init -q"
+            f" && git config user.email 'test@test.com'"
+            f" && git config user.name 'Test'"
+            f" && git commit --allow-empty -m 'init' -q"
+        )
+
     def test_git_repo_returns_branch(self, tmp_path):
-        # Initialize a git repo
-        os.system(f"cd {tmp_path} && git init -q && git commit --allow-empty -m 'init' -q")
+        self._git_init(tmp_path)
         result = get_git_context(str(tmp_path))
         assert result is not None
         assert "Current branch:" in result
 
     def test_git_repo_shows_status(self, tmp_path):
-        os.system(f"cd {tmp_path} && git init -q && git commit --allow-empty -m 'init' -q")
+        self._git_init(tmp_path)
         (tmp_path / "test.txt").write_text("hello", encoding="utf-8")
         result = get_git_context(str(tmp_path))
         assert result is not None
@@ -200,14 +209,13 @@ class TestGetGitContext:
     def test_clean_repo_shows_clean(self, tmp_path):
         repo = tmp_path / "clean_repo"
         repo.mkdir()
-        os.system(f"cd {repo} && git init -q && git commit --allow-empty -m 'init' -q")
+        self._git_init(repo)
         result = get_git_context(str(repo))
         assert result is not None
         assert "Status: clean" in result
 
     def test_truncates_long_status(self, tmp_path):
-        os.system(f"cd {tmp_path} && git init -q && git commit --allow-empty -m 'init' -q")
-        # Create many files to generate a long status
+        self._git_init(tmp_path)
         for i in range(200):
             (tmp_path / f"file_{i:04d}.txt").write_text(f"content {i}", encoding="utf-8")
         result = get_git_context(str(tmp_path), max_status_chars=100)
