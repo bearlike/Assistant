@@ -369,15 +369,16 @@ def _cmd_mcp_init(context: CommandContext, args: list[str]) -> bool:
 def _cmd_config_init(context: CommandContext, args: list[str]) -> bool:
     """Create app config example file for quick setup."""
     force = "--force" in args or "--yes" in args
-    example_path = os.path.join("configs", "app.example.json")
-    if os.path.exists(example_path) and not force:
+    from meeseeks_core.config import _default_example_path, ensure_example_configs
+
+    example_path = _default_example_path("app.example.json")
+    if example_path.exists() and not force:
         context.console.print(f"Config example already exists at {example_path}.")
         context.console.print("Use /config init --force to overwrite.")
         return True
-    from meeseeks_core.config import ensure_example_configs
 
-    ensure_example_configs()
-    context.console.print(f"Created config example at {example_path}.")
+    app_path, _ = ensure_example_configs()
+    context.console.print(f"Created config example at {app_path}.")
     return True
 
 

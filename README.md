@@ -106,6 +106,21 @@ Developer install (all components + dev/test/docs):
 uv sync --all-extras --all-groups
 ```
 
+Global install (available system-wide as `meeseeks`):
+```bash
+uv tool install .
+# Set up global config:
+mkdir -p ~/.meeseeks
+cp configs/app.json ~/.meeseeks/app.json
+cp configs/mcp.json ~/.meeseeks/mcp.json
+# Or run `meeseeks` and use /init to scaffold example configs
+```
+
+Config discovery priority: `CWD/configs/` → `$MEESEEKS_HOME/` → `~/.meeseeks/`. Use `--config /path/to/app.json` for explicit override, or set `MEESEEKS_HOME` in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to permanently point to a custom config directory:
+```bash
+export MEESEEKS_HOME="/path/to/your/config"
+```
+
 ## Architecture
 
 See [docs/index.md](docs/index.md) for the full architecture diagram.

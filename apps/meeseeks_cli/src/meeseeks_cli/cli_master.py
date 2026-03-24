@@ -79,6 +79,7 @@ from meeseeks_core.config import (
     get_config_value,
     get_mcp_config_path,
     get_version,
+    set_app_config_path,
     start_preflight,
 )
 from meeseeks_core.hooks import HookManager
@@ -370,6 +371,8 @@ def run_cli(args: argparse.Namespace) -> int:
         Exit code for the CLI process.
     """
     console = Console(color_system=None if args.no_color else "auto")
+    if args.config:
+        set_app_config_path(args.config)
     config = get_config()
     logging.info(
         "Config paths: app={} mcp={}",
@@ -676,13 +679,14 @@ def _maybe_warn_missing_configs(
     tool_registry: ToolRegistry,
     config: AppConfig,
 ) -> None:
-    config_path = Path("configs/app.json")
-    mcp_path = Path(get_mcp_config_path())
+    config_path = Path(get_app_config_path())
+    mcp_path_str = get_mcp_config_path()
+    mcp_path = Path(mcp_path_str) if mcp_path_str else None
     missing: list[str] = []
     if not config_path.exists():
-        missing.append("configs/app.json")
-    if not mcp_path.exists():
-        missing.append("configs/mcp.json")
+        missing.append(str(config_path))
+    if mcp_path and not mcp_path.exists():
+        missing.append(str(mcp_path))
     if not missing:
         pass
     else:
@@ -768,6 +772,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto-approve",
         action="store_true",
         help="Automatically approve all permission prompts",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to app config file (default: auto-discover)",
     )
     return parser
 
