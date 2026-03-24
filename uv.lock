@@ -1893,7 +1893,7 @@ wheels = [
 
 [[package]]
 name = "meeseeks-api"
-version = "0.0.7"
+version = "0.0.8"
 source = { editable = "apps/meeseeks_api" }
 dependencies = [
     { name = "flask" },
@@ -1908,13 +1908,13 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0.3,<4.0.0" },
     { name = "flask-restx", specifier = ">=1.3.0,<2.0.0" },
     { name = "gunicorn", specifier = ">=22.0.0" },
-    { name = "meeseeks-core", specifier = ">=0.0.7" },
-    { name = "meeseeks-tools", specifier = ">=0.0.7" },
+    { name = "meeseeks-core", specifier = ">=0.0.8" },
+    { name = "meeseeks-tools", specifier = ">=0.0.8" },
 ]
 
 [[package]]
 name = "meeseeks-cli"
-version = "0.0.7"
+version = "0.0.8"
 source = { editable = "apps/meeseeks_cli" }
 dependencies = [
     { name = "meeseeks-core" },
@@ -1926,8 +1926,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "meeseeks-core", specifier = ">=0.0.7" },
-    { name = "meeseeks-tools", specifier = ">=0.0.7" },
+    { name = "meeseeks-core", specifier = ">=0.0.8" },
+    { name = "meeseeks-tools", specifier = ">=0.0.8" },
     { name = "prompt-toolkit", specifier = ">=3.0.47,<4.0.0" },
     { name = "rich", specifier = ">=14.2.0,<15.0.0" },
     { name = "textual", specifier = ">=7.5.0,<9.0.0" },
@@ -1935,7 +1935,7 @@ requires-dist = [
 
 [[package]]
 name = "meeseeks-core"
-version = "0.0.7"
+version = "0.0.8"
 source = { editable = "packages/meeseeks_core" }
 dependencies = [
     { name = "jinja2" },
@@ -1968,7 +1968,7 @@ requires-dist = [
 
 [[package]]
 name = "meeseeks-ha-conversation"
-version = "0.0.7"
+version = "0.0.8"
 source = { editable = "meeseeks_ha_conversation" }
 dependencies = [
     { name = "aiohttp" },
@@ -1987,7 +1987,7 @@ provides-extras = ["homeassistant"]
 
 [[package]]
 name = "meeseeks-tools"
-version = "0.0.7"
+version = "0.0.8"
 source = { editable = "packages/meeseeks_tools" }
 dependencies = [
     { name = "langchain-core" },

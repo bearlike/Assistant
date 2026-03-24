@@ -10,17 +10,17 @@ authors = [
 license = { text = "MIT" }
 dependencies = [
   "aniso8601>=10.0.1",
-  "meeseeks-core>=0.0.7",
+  "meeseeks-core>=0.0.8",
 ]
 
 [project.scripts]
 meeseeks = "meeseeks_cli.cli_master:main"
 
 [project.optional-dependencies]
-cli = ["meeseeks-cli>=0.0.7"]
-api = ["meeseeks-api>=0.0.7"]
-ha = ["meeseeks-ha-conversation>=0.0.7"]
-tools = ["meeseeks-tools>=0.0.7"]
+cli = ["meeseeks-cli>=0.0.8"]
+api = ["meeseeks-api>=0.0.8"]
+ha = ["meeseeks-ha-conversation>=0.0.8"]
+tools = ["meeseeks-tools>=0.0.8"]
 
 [dependency-groups]
 dev = [

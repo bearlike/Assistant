@@ -137,7 +137,7 @@ export function NavBar({
 
   const VersionBadge = () =>
   <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold leading-none bg-[hsl(var(--primary))]/15 text-[hsl(var(--primary))] border border-[hsl(var(--primary))]/20">
-      v0.0.7
+      v0.0.8
     </span>;
 
   return (
