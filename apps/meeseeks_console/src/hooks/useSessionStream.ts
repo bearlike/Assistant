@@ -1,11 +1,15 @@
 import { useEffect, useRef } from "react";
 import { EventRecord } from "../types";
 
+const _rc = (window as unknown as Record<string, unknown>).__MEESEEKS_CONFIG__ as
+  Record<string, string> | undefined;
+
+const _useProxy = (_rc?.VITE_API_USE_PROXY ?? import.meta.env.VITE_API_USE_PROXY) || "";
 const API_BASE =
-  import.meta.env.VITE_API_USE_PROXY === "1" || import.meta.env.VITE_API_USE_PROXY === "true"
+  _useProxy === "1" || _useProxy === "true"
     ? ""
-    : import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || "";
-const API_KEY = import.meta.env.VITE_API_KEY || "";
+    : _rc?.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? "";
+const API_KEY = _rc?.VITE_API_KEY ?? import.meta.env.VITE_API_KEY ?? "";
 
 /**
  * Subscribe to real-time session events via SSE.

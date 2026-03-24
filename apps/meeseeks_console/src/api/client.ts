@@ -29,13 +29,17 @@ import {
   mockClearNotifications
 } from '../mocks/mockData';
 
-const USE_PROXY = parseBool(import.meta.env.VITE_API_USE_PROXY);
+// Runtime config injected by nginx (docker), falls back to Vite build-time env.
+const _rc = (window as unknown as Record<string, unknown>).__MEESEEKS_CONFIG__ as
+  Record<string, string> | undefined;
+
+const USE_PROXY = parseBool(_rc?.VITE_API_USE_PROXY ?? import.meta.env.VITE_API_USE_PROXY);
 const API_BASE =
 USE_PROXY ?
 '' :
-import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '';
-const API_KEY = import.meta.env.VITE_API_KEY || '';
-const API_MODE = resolveApiMode(import.meta.env.VITE_API_MODE);
+_rc?.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_BASE ?? '';
+const API_KEY = _rc?.VITE_API_KEY ?? import.meta.env.VITE_API_KEY ?? '';
+const API_MODE = resolveApiMode(_rc?.VITE_API_MODE ?? import.meta.env.VITE_API_MODE);
 
 const realClient = createRealClient({ baseUrl: API_BASE, apiKey: API_KEY });
 const mockClient: ApiClient = {

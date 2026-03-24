@@ -126,7 +126,10 @@ class NotificationService:
 
 
 # Get the API token from app config
-MASTER_API_TOKEN = get_config_value("api", "master_token", default="msk-strong-password")
+MASTER_API_TOKEN = (
+    os.environ.get("MASTER_API_TOKEN")
+    or get_config_value("api", "master_token", default="msk-strong-password")
+)
 
 # Initialize logger
 logging = get_logger(name="meeseeks-api")
@@ -219,10 +222,13 @@ def log_request_info() -> None:
     logging.debug("Body: {}", request.get_data())
 
 
+_CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
+
+
 @app.after_request
 def _add_cors_headers(response: Response) -> Response:
-    """Allow cross-origin requests from frontend dev servers."""
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    """Allow cross-origin requests. Set CORS_ORIGIN env var to restrict."""
+    response.headers["Access-Control-Allow-Origin"] = _CORS_ORIGIN
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
     return response
@@ -548,7 +554,7 @@ class SessionStream(Resource):
             headers={
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
-                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Origin": _CORS_ORIGIN,
             },
         )
 

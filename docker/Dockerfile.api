@@ -14,21 +14,21 @@ LABEL org.opencontainers.image.title="Meeseeks API" \
       org.opencontainers.image.licenses="MIT"
 
 USER root
-WORKDIR /app/apps/meeseeks_api
-RUN uv pip install --system -e . gunicorn \
+
+COPY . /app
+WORKDIR /app
+
+RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
+RUN uv pip install --system \
+        -e packages/meeseeks_core \
+        -e packages/meeseeks_tools \
+        -e apps/meeseeks_api \
+        gunicorn \
     && rm -rf /root/.cache/uv
 
-USER meeseeks
-
-ENV MASTER_API_TOKEN='msk-strong-password'
-EXPOSE 5124
+ENV MASTER_API_TOKEN='msk-strong-password' \
+    API_PORT=5125
 
 # Single worker (RunRegistry is in-memory), 8 HTTP threads, 5-min timeout
-ENTRYPOINT ["gunicorn", \
-    "--bind", "0.0.0.0:5124", \
-    "--workers", "1", \
-    "--threads", "8", \
-    "--timeout", "300", \
-    "--graceful-timeout", "30", \
-    "--access-logfile", "-", \
-    "meeseeks_api.backend:app"]
+ENTRYPOINT ["sh", "-c", \
+    "exec gunicorn --bind 0.0.0.0:${API_PORT} --workers 1 --threads 8 --timeout 300 --graceful-timeout 30 --access-logfile - meeseeks_api.backend:app"]

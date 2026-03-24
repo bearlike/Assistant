@@ -3,24 +3,29 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.api
-    ports:
-      - "${API_PORT:-5124}:5124"
+    network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    env_file: docker.env
     volumes:
       - ./configs:/app/configs:ro
       - api-data:/app/data
-      - ${PROJECT_PATHS:-./}:/projects
+      - /home/kk/Agents:/home/kk/Agents
+      - /home/kk/Projects/Personal-Assistant:/home/kk/Projects/Personal-Assistant
+      - /home/kk/Projects/Simple-Secrets-Manager:/home/kk/Projects/Simple-Secrets-Manager
     environment:
-      - MASTER_API_TOKEN=${MASTER_API_TOKEN:-msk-strong-password}
-      - MEESEEKS_HOME=/app/configs
+      - MEESEEKS_HOME=/app/data
 
   console:
     build:
       context: .
       dockerfile: docker/Dockerfile.console
-    ports:
-      - "${CONSOLE_PORT:-3000}:3000"
-    depends_on:
-      - api
+    network_mode: host
+    env_file: docker.env
+
+networks:
+  default:
+    external: true
+    name: host
 
 volumes:
   api-data:
