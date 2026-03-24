@@ -572,7 +572,7 @@
 - <a href="llm-setup/">LLM setup</a> - minimum LLM config and LiteLLM notes</p>
 <p><strong>Clients</strong>
 - <a href="clients-cli/">CLI</a> - terminal interface
-- <a href="clients-web-api/">Web + API</a> - Streamlit chat UI and REST API
+- <a href="clients-web-api/">Console + API</a> - Web console and REST API
 - <a href="clients-home-assistant/">Home Assistant voice</a> - HA Assist integration</p>
 <p><strong>Developer</strong>
 - <a href="developer-guide/">Developer guide</a> - core abstractions and new client walkthrough</p>
@@ -583,7 +583,7 @@
 <ul>
 <li>Unified async tool-use loop where the LLM drives tool selection via native <code>bind_tools</code>.</li>
 <li>Sub-agent spawning for parallel subtasks, managed by the AgentHypervisor control plane.</li>
-<li>Multiple interfaces (chat UI, REST API, Home Assistant, terminal CLI) backed by one core engine.</li>
+<li>Multiple interfaces (web console, REST API, Home Assistant, terminal CLI) backed by one core engine.</li>
 <li>Tool registry for local tools plus optional MCP tools.</li>
 <li>Built-in local file and shell tools (Aider adapters) for edit blocks, read, list, and shell execution.</li>
 <li>Session transcripts with auto-compact for long runs and token budget awareness.</li>
@@ -591,9 +591,7 @@
 <li>Session listings filter empty sessions and support archiving via the API.</li>
 <li>Permission gate with approval callbacks plus lightweight hooks around tool execution.</li>
 <li>Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.</li>
-<li>Event payloads: <code>action_plan</code> steps are <code>{title, description}</code>, tool events use <code>tool_id</code>, <code>operation</code>, and <code>tool_input</code>.</li>
 <li>External MCP servers can be added via <code>configs/mcp.json</code> with schema-aware tool inputs.</li>
-<li>LiteLLM multi-provider support with per-role model selection (plan, tool, default).</li>
 <li>Optional components (Langfuse, Home Assistant) auto-disable when not configured.</li>
 <li>Langfuse tracing is session-scoped when enabled, grouping multi-turn runs.</li>
 </ul>
@@ -602,7 +600,7 @@
 <li><code>packages/meeseeks_core/</code>: orchestration loop, schemas, session storage, compaction, tool registry.</li>
 <li><code>packages/meeseeks_tools/</code>: tool implementations and integrations.</li>
 <li><code>apps/meeseeks_api/</code>: Flask API that exposes the assistant over HTTP.</li>
-<li><code>apps/meeseeks_chat/</code>: Streamlit UI for interactive chat.</li>
+<li><code>apps/meeseeks_console/</code>: Web console for task orchestration.</li>
 <li><code>apps/meeseeks_cli/</code>: terminal CLI for interactive sessions.</li>
 <li><code>meeseeks_ha_conversation/</code>: Home Assistant integration that routes voice requests to the API.</li>
 </ul>
@@ -616,11 +614,11 @@
 </ul>
 <pre class="mermaid"><code>flowchart LR
   User --&gt; CLI
-  User --&gt; Chat
+  User --&gt; Console
   User --&gt; API
   HA --&gt; API
   CLI --&gt; Runtime
-  Chat --&gt; Runtime
+  Console --&gt; API
   API --&gt; Runtime
   Runtime --&gt; Orchestrator
   Runtime --&gt; SessionStore

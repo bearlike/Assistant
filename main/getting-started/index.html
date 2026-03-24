@@ -597,7 +597,7 @@
 <ul>
 <li>CLI: <code>uv sync --extra cli</code></li>
 <li>API: <code>uv sync --extra api</code></li>
-<li>Chat UI: <code>uv sync --extra chat</code></li>
+<li>Console: <code>cd apps/meeseeks_console &amp;&amp; npm install</code></li>
 <li>Home Assistant integration: <code>uv sync --extra ha</code></li>
 <li>Tools bundle: <code>uv sync --extra tools</code></li>
 <li>Everything optional: <code>uv sync --all-extras</code></li>
@@ -643,7 +643,8 @@
 <h2 id="run-interfaces-local">Run interfaces (local)</h2>
 <ul>
 <li>CLI: <code>uv run meeseeks</code> (details in <a href="../clients-cli/">CLI client</a>)</li>
-<li>API + Web: <code>uv run meeseeks-api</code> and <code>uv run meeseeks-chat</code> (details in <a href="../clients-web-api/">Web + API</a>)</li>
+<li>API: <code>uv run meeseeks-api</code> (details in <a href="../clients-web-api/">Console + API</a>)</li>
+<li>Console: <code>cd apps/meeseeks_console &amp;&amp; npm run dev</code> (details in <a href="../clients-web-api/">Console + API</a>)</li>
 <li>Home Assistant: see <a href="../clients-home-assistant/">Home Assistant voice</a></li>
 </ul>
 <h2 id="aider-edit-blocks-local-tool">Aider edit blocks (local tool)</h2>
@@ -663,7 +664,7 @@
 - Use a line with <code>...</code> in both SEARCH and REPLACE to skip unchanged sections.</p>
 <h2 id="docker-optional">Docker (optional)</h2>
 <ul>
-<li>Build images using <code>docker/Dockerfile.api</code> and <code>docker/Dockerfile.chat</code>.</li>
+<li>Build images using <code>docker/Dockerfile.api</code> and <code>docker/Dockerfile.console</code>.</li>
 <li>Mount <code>configs/app.json</code> (and <code>configs/mcp.json</code> if you use MCP).</li>
 <li>Persist <code>data/sessions</code> if you want transcripts across restarts.</li>
 </ul>

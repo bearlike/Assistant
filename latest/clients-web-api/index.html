@@ -587,9 +587,9 @@
   <img src="../meeseeks-console-02-tasks.jpg" alt="Meeseeks Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-<p>The REST API lives in <code>apps/meeseeks_api/</code> and the Streamlit UI lives in <code>apps/meeseeks_chat/</code>. The web client (Meeseeks Console) is built for asynchronous delegation: work runs through the API and the UI polls events for status and output. The distinction from the CLI is execution context and autonomy: the web client executes through the API service, while the CLI runs tools directly on the local machine. Both clients share the same core runtime and can handle long-running tasks.</p>
+<p>The REST API lives in <code>apps/meeseeks_api/</code> and the web console lives in <code>apps/meeseeks_console/</code>. The console is built for asynchronous delegation: requests flow through the API and the console polls events for status and output. The API runs tools through the core orchestration loop while the console provides session management, event timelines, execution traces, and tool output visualization.</p>
 <h2 id="setup-uv">Setup (uv)</h2>
-<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span>api<span class="w"> </span>--extra<span class="w"> </span>chat
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span>api
 </code></pre></div>
 <p>Before running, complete <a href="../getting-started/">Installation</a> and <a href="../llm-setup/">LLM setup</a>.</p>
 <h2 id="run-the-rest-api">Run the REST API</h2>
@@ -619,12 +619,16 @@
 <li><code>POST /api/sessions/{session_id}/export</code> export session payload</li>
 <li><code>GET /api/share/{token}</code> fetch shared session data</li>
 </ul>
-<h2 id="run-the-web-ui-streamlit">Run the web UI (Streamlit)</h2>
-<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>meeseeks-chat
+<h2 id="run-the-console">Run the Console</h2>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>apps/meeseeks_console
+npm<span class="w"> </span>install
+npm<span class="w"> </span>run<span class="w"> </span>dev
 </code></pre></div>
-<p>UI notes:
-- Streamlit options live under <code>chat.*</code> in <code>configs/app.json</code> (address and port).
-- The chat UI runs the core engine in-process.</p>
+<p>Console notes:
+- Configure <code>VITE_API_BASE_URL</code> to point to the API server (default: <code>http://127.0.0.1:5124</code>).
+- Set <code>VITE_API_KEY</code> to match <code>api.master_token</code> in <code>configs/app.json</code>.
+- Set <code>VITE_API_MODE</code> to <code>live</code> for direct API access or <code>auto</code> (default) for fallback to mock data.
+- During development, the Vite dev server proxies <code>/api/</code> requests to the API backend.</p>
   </div>
 </article>
                                 <div class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
@@ -801,10 +805,10 @@
         
 
         
-        <a href="#run-the-web-ui-streamlit"
+        <a href="#run-the-console"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
-            Run the web UI (Streamlit)
+            Run the Console
         </a>
         
 

@@ -7,9 +7,22 @@ This page summarizes the code layout, core interfaces, and the minimal steps nee
 - `packages/meeseeks_tools/`: tool implementations and integration glue.
 - `packages/meeseeks_tools/src/meeseeks_tools/vendor/aider`: vendored Aider utilities used by local file + shell tools.
 - `apps/meeseeks_api/`: Flask API that exposes the assistant over HTTP.
-- `apps/meeseeks_chat/`: Streamlit UI for interactive chat.
+- `apps/meeseeks_console/`: Web console for task orchestration (React + Vite).
 - `apps/meeseeks_cli/`: terminal CLI for interactive sessions.
 - `meeseeks_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
+
+## Project instructions (`CLAUDE.md` / `AGENTS.md`)
+
+The orchestrator loads project instructions from the working directory and injects them into the system prompt. `discover_project_instructions()` in `meeseeks_core.common` checks for `CLAUDE.md` first, then falls back to `AGENTS.md`.
+
+- Place a `CLAUDE.md` at the repo root or in any sub-package to provide context-specific guidance to the orchestration loop.
+- `AGENTS.md` is a fallback for tools that look for that filename. In this repo the `AGENTS.md` files are shims that redirect to `CLAUDE.md`.
+- To **skip** a file from being loaded (e.g., a shim that would duplicate content), add `<!-- meeseeks:noload -->` as the very first line. The loader checks for this marker and skips the file.
+
+## Model and provider support
+- **Model gateway:** Uses LiteLLM for OpenAI-compatible access across multiple providers.
+- **Reasoning compatibility:** Applies reasoning-effort controls where supported by the model.
+- **Model routing:** Supports provider-qualified model names and a configurable API base URL. Per-role model selection (plan, tool, default) is configured in `configs/app.json`.
 
 ## Core abstractions and interfaces
 - `AbstractTool` (`meeseeks_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
