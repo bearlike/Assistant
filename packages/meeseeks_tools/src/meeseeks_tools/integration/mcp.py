@@ -249,6 +249,10 @@ class MCPToolRunner:
     async def _invoke_async(self, input_payload: str | dict[str, Any]) -> str:
         """Invoke an MCP tool asynchronously and return its output.
 
+        Prefers the connection pool for persistent, cached connections.
+        Falls back to the legacy one-shot client path when the pool is
+        unavailable.
+
         Args:
             input_payload: Input payload to send to the MCP tool.
 
@@ -259,6 +263,44 @@ class MCPToolRunner:
             RuntimeError: If MCP adapters are not installed.
             ValueError: If the server or tool is not configured.
         """
+        try:
+            return await self._invoke_via_pool(input_payload)
+        except Exception as pool_exc:
+            logging.debug(
+                "Pool invocation failed for {}.{}, falling back: {}",
+                self.server_name,
+                self.tool_name,
+                pool_exc,
+            )
+            return await self._invoke_legacy(input_payload)
+
+    async def _invoke_via_pool(self, input_payload: str | dict[str, Any]) -> str:
+        """Invoke via the persistent connection pool."""
+        from meeseeks_tools.integration.mcp_pool import get_mcp_pool
+
+        pool = get_mcp_pool()
+
+        # Ensure the pool has the latest MCP config so it can detect
+        # config changes between invocations.
+        config = _load_mcp_config()
+        config = _normalize_mcp_config(config)
+        await pool.refresh_if_config_changed(config)
+
+        state = await pool.get_or_connect(self.server_name)
+
+        tool_map = {getattr(t, "name", ""): t for t in state.tools} if state.tools else {}
+        tool = tool_map.get(self.tool_name)
+        if tool is None:
+            raise ValueError(
+                f"Tool '{self.tool_name}' not found on MCP server '{self.server_name}'."
+            )
+
+        prepared = _prepare_mcp_input(tool, input_payload)
+        result = await pool.call_tool(self.server_name, self.tool_name, prepared)
+        return str(result)
+
+    async def _invoke_legacy(self, input_payload: str | dict[str, Any]) -> str:
+        """Legacy one-shot client path (fallback)."""
         try:
             from langchain_mcp_adapters.client import MultiServerMCPClient
         except Exception as exc:  # pragma: no cover - runtime dependency
