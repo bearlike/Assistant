@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
@@ -38,6 +38,7 @@ class ContextSnapshot:
     selected_events: list[EventRecord] | None
     events: list[EventRecord]
     budget: TokenBudget
+    attachment_texts: list[str] = field(default_factory=list)
 
 
 def event_payload_text(event: EventRecord) -> str:
@@ -62,6 +63,61 @@ def render_event_lines(events: list[EventRecord]) -> str:
             continue
         lines.append(f"- {event.get('type', 'event')}: {text}")
     return "\n".join(lines).strip()
+
+
+_MAX_ATTACHMENT_BYTES = 50_000  # per file
+_MAX_TOTAL_ATTACHMENT_BYTES = 200_000  # aggregate cap
+_TEXT_CONTENT_TYPES = {"text/", "application/json", "application/xml", "application/yaml"}
+
+
+def _is_text_content_type(ct: str) -> bool:
+    """Return True if the content type looks like a text file."""
+    ct = ct.lower()
+    return any(ct.startswith(prefix) for prefix in _TEXT_CONTENT_TYPES)
+
+
+def _load_attachment_texts(session_dir: str, events: list[EventRecord]) -> list[str]:
+    """Read text attachment content from disk for inclusion in LLM context."""
+    texts: list[str] = []
+    total_bytes = 0
+    for event in events:
+        if event.get("type") != "context":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        attachments = payload.get("attachments")
+        if not isinstance(attachments, list):
+            continue
+        for att in attachments:
+            if not isinstance(att, dict):
+                continue
+            stored_name = att.get("stored_name")
+            filename = att.get("filename", stored_name)
+            content_type = str(att.get("content_type", ""))
+            size = int(att.get("size_bytes", 0) or 0)
+            if not stored_name:
+                continue
+            if size > _MAX_ATTACHMENT_BYTES:
+                texts.append(f"[Attachment {filename}: {size} bytes, too large to include]")
+                continue
+            if content_type and not _is_text_content_type(content_type):
+                texts.append(f"[Attachment {filename}: binary file ({content_type}), skipped]")
+                continue
+            path = os.path.join(session_dir, "attachments", stored_name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    content = fh.read(_MAX_ATTACHMENT_BYTES)
+                if total_bytes + len(content) > _MAX_TOTAL_ATTACHMENT_BYTES:
+                    texts.append(f"[Attachment {filename}: skipped, aggregate size limit reached]")
+                    continue
+                total_bytes += len(content)
+                texts.append(f"--- {filename} ---\n{content}")
+            except OSError:
+                continue
+    return texts
 
 
 class ContextBuilder:
@@ -107,12 +163,15 @@ class ContextBuilder:
                 user_query=user_query,
                 model_name=model_name,
             )
+        session_dir = self._session_store.session_dir(session_id)
+        attachment_texts = _load_attachment_texts(session_dir, events)
         return ContextSnapshot(
             summary=summary,
             recent_events=recent_events,
             selected_events=selected_events,
             events=events,
             budget=budget,
+            attachment_texts=attachment_texts,
         )
 
     def _select_context_events(

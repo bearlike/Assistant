@@ -12,7 +12,6 @@ SOURCE_PATHS = [
     os.path.join(ROOT, "packages", "meeseeks_tools", "src"),
     os.path.join(ROOT, "apps", "meeseeks_cli", "src"),
     os.path.join(ROOT, "apps", "meeseeks_api", "src"),
-    os.path.join(ROOT, "apps", "meeseeks_chat", "src"),
     os.path.join(ROOT, "meeseeks_ha_conversation"),
 ]
 for path in SOURCE_PATHS:

@@ -80,7 +80,7 @@ from meeseeks_core.config import (
     start_preflight,
 )
 from meeseeks_core.hooks import HookManager
-from meeseeks_core.permissions import PermissionDecision, auto_approve
+from meeseeks_core.permissions import auto_approve
 from meeseeks_core.session_runtime import SessionRuntime
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.task_master import generate_action_plan
@@ -102,7 +102,7 @@ from meeseeks_cli.aider_ui import (
 from meeseeks_cli.cli_agent_display import AgentDisplayManager
 from meeseeks_cli.cli_commands import get_registry
 from meeseeks_cli.cli_context import CliState, CommandContext
-from meeseeks_cli.cli_dialogs import DialogFactory, _confirm_aider, _confirm_rich_panel
+from meeseeks_cli.cli_dialogs import _confirm_rich_panel
 
 logging = get_logger(name="meeseeks.cli")
 
@@ -557,23 +557,12 @@ def _run_query(
     auto_approve_enabled = bool(
         state.auto_approve_all or getattr(args, "auto_approve", False) or prompt_func is None
     )
-    logging.debug(
-        "Auto-approve resolved: {} (state={}, args={}, prompt_func_none={})",
-        auto_approve_enabled,
-        state.auto_approve_all,
-        getattr(args, "auto_approve", False),
-        prompt_func is None,
-    )
     approval_callback = _build_approval_callback(
-        prompt_func,
         console,
         state,
         tool_registry,
         auto_approve_enabled=auto_approve_enabled,
     )
-    if approval_callback is None and prompt_func is None:
-        logging.debug("Forcing auto-approve for headless query execution.")
-        approval_callback = auto_approve
     use_live_display = console.is_terminal and not getattr(args, "no_color", False)
 
     if use_live_display:
@@ -937,43 +926,44 @@ def _build_cli_hook_manager(
     )
 
 
+def _persist_mcp_auto_approve(
+    console: Console,
+    server_name: str | None,
+    tool_name: str | None,
+) -> None:
+    """Save an MCP tool as auto-approved in the MCP config file."""
+    if not server_name or not tool_name:
+        return
+    try:
+        config = _load_mcp_config()
+        config = mark_tool_auto_approved(config, server_name, tool_name)
+        save_mcp_config(config)
+    except Exception as exc:
+        console.print(f"Failed to persist auto-approve: {exc}")
+
+
 def _build_approval_callback(
-    prompt_func: Callable[[str], str] | None,
     console: Console,
     state: CliState,
     tool_registry: ToolRegistry,
     *,
     auto_approve_enabled: bool,
-) -> Callable[[ActionStep], bool] | None:
-    logging.debug(
-        "Approval callback build: auto_approve_enabled={}, prompt_func_none={}",
-        auto_approve_enabled,
-        prompt_func is None,
-    )
+) -> Callable[[ActionStep], bool]:
     if auto_approve_enabled:
-        logging.debug("Approval callback: auto-approve enabled.")
         return auto_approve
-    if prompt_func is None:
-        logging.debug("Approval callback: prompt disabled, returning None.")
-        return None
-    dialogs = DialogFactory(console=console, prompt_func=prompt_func, prefer_inline=True)
-    approval_style = str(get_config_value("cli", "approval_style", default="inline")).strip()
-    approval_style = approval_style.lower()
     specs_by_id = _tool_specs_by_id(tool_registry)
 
     def _approve(action_step: ActionStep) -> bool:
         spec = specs_by_id.get(action_step.tool_id)
         is_mcp = spec is not None and getattr(spec, "kind", "") == "mcp"
-        server_name = None
-        tool_name = None
+        server_name = tool_name = None
         if is_mcp:
             metadata = getattr(spec, "metadata", {}) or {}
             server_name = metadata.get("server")
             tool_name = metadata.get("tool")
             if server_name and tool_name:
                 try:
-                    config = _load_mcp_config()
-                    if tool_auto_approved(config, server_name, tool_name):
+                    if tool_auto_approved(_load_mcp_config(), server_name, tool_name):
                         return True
                 except Exception:
                     pass
@@ -982,89 +972,21 @@ def _build_approval_callback(
             f"{action_step.tool_id}:{action_step.operation} "
             f"({format_tool_input(action_step.tool_input)})"
         )
-        if approval_style in {"aider", "inline", "rich"}:
-            rich_decision = _confirm_rich_panel(
-                console,
-                prompt_func,
-                "Approve tool use?",
-                subject=subject,
-                default=False,
-                allow_always=bool(is_mcp),
-                allow_session=True,
-            )
-            if rich_decision == "always":
-                if is_mcp and server_name and tool_name:
-                    try:
-                        config = _load_mcp_config()
-                        config = mark_tool_auto_approved(config, server_name, tool_name)
-                        save_mcp_config(config)
-                    except Exception as exc:
-                        console.print(f"Failed to persist auto-approve: {exc}")
-                return True
-            if rich_decision == "session":
-                state.auto_approve_all = True
-                return True
-            if rich_decision == "yes":
-                if is_mcp and server_name and tool_name:
-                    try:
-                        config = _load_mcp_config()
-                        config = mark_tool_auto_approved(config, server_name, tool_name)
-                        save_mcp_config(config)
-                    except Exception as exc:
-                        console.print(f"Failed to persist auto-approve: {exc}")
-                return True
-            if rich_decision == "no":
-                return False
-
-            if approval_style == "aider":
-                decision = _confirm_aider(
-                    "Approve tool use?",
-                    default=False,
-                    subject=subject,
-                    prompt_func=prompt_func,
-                )
-                if decision is not None:
-                    return decision
-
-        if approval_style == "textual" and dialogs.can_use_textual():
-            choice = dialogs.select_one(
-                "Approve tool use",
-                ["Yes", "No", "Yes, always", "Yes, this session"],
-                subtitle=subject,
-            )
-            if choice is None or choice == "No":
-                return False
-            if choice == "Yes, this session":
-                state.auto_approve_all = True
-                return True
-            if choice == "Yes, always" and is_mcp and server_name and tool_name:
-                try:
-                    config = _load_mcp_config()
-                    config = mark_tool_auto_approved(config, server_name, tool_name)
-                    save_mcp_config(config)
-                except Exception as exc:
-                    console.print(f"Failed to persist auto-approve: {exc}")
+        decision = _confirm_rich_panel(
+            console,
+            "Approve tool use?",
+            subject=subject,
+            default=False,
+            allow_always=bool(is_mcp),
+            allow_session=True,
+        )
+        if decision == "always":
+            _persist_mcp_auto_approve(console, server_name, tool_name)
             return True
-
-        prompt = f"Approve {subject}? [y/N/a/s] "
-        try:
-            response = prompt_func(prompt).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\nApproval denied.")
-            return False
-        if response in {"s", "session"}:
+        if decision == "session":
             state.auto_approve_all = True
             return True
-        if response in {"a", "always"} and is_mcp and server_name and tool_name:
-            try:
-                config = _load_mcp_config()
-                config = mark_tool_auto_approved(config, server_name, tool_name)
-                save_mcp_config(config)
-            except Exception as exc:
-                console.print(f"Failed to persist auto-approve: {exc}")
-            return True
-        decision = PermissionDecision.ALLOW if response in {"y", "yes"} else PermissionDecision.DENY
-        return decision == PermissionDecision.ALLOW
+        return decision == "yes"
 
     return _approve
 

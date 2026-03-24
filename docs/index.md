@@ -19,7 +19,7 @@ bearlike/Assistant (Meeseeks) is an AI task agent assistant that breaks a reques
 
 **Clients**
 - [CLI](clients-cli.md) - terminal interface
-- [Web + API](clients-web-api.md) - Streamlit chat UI and REST API
+- [Console + API](clients-web-api.md) - Web console and REST API
 - [Home Assistant voice](clients-home-assistant.md) - HA Assist integration
 
 **Developer**
@@ -32,7 +32,7 @@ bearlike/Assistant (Meeseeks) is an AI task agent assistant that breaks a reques
 ## Feature highlights (quick view)
 - Unified async tool-use loop where the LLM drives tool selection via native `bind_tools`.
 - Sub-agent spawning for parallel subtasks, managed by the AgentHypervisor control plane.
-- Multiple interfaces (chat UI, REST API, Home Assistant, terminal CLI) backed by one core engine.
+- Multiple interfaces (web console, REST API, Home Assistant, terminal CLI) backed by one core engine.
 - Tool registry for local tools plus optional MCP tools.
 - Built-in local file and shell tools (Aider adapters) for edit blocks, read, list, and shell execution.
 - Session transcripts with auto-compact for long runs and token budget awareness.
@@ -40,9 +40,7 @@ bearlike/Assistant (Meeseeks) is an AI task agent assistant that breaks a reques
 - Session listings filter empty sessions and support archiving via the API.
 - Permission gate with approval callbacks plus lightweight hooks around tool execution.
 - Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.
-- Event payloads: `action_plan` steps are `{title, description}`, tool events use `tool_id`, `operation`, and `tool_input`.
 - External MCP servers can be added via `configs/mcp.json` with schema-aware tool inputs.
-- LiteLLM multi-provider support with per-role model selection (plan, tool, default).
 - Optional components (Langfuse, Home Assistant) auto-disable when not configured.
 - Langfuse tracing is session-scoped when enabled, grouping multi-turn runs.
 
@@ -50,7 +48,7 @@ bearlike/Assistant (Meeseeks) is an AI task agent assistant that breaks a reques
 - `packages/meeseeks_core/`: orchestration loop, schemas, session storage, compaction, tool registry.
 - `packages/meeseeks_tools/`: tool implementations and integrations.
 - `apps/meeseeks_api/`: Flask API that exposes the assistant over HTTP.
-- `apps/meeseeks_chat/`: Streamlit UI for interactive chat.
+- `apps/meeseeks_console/`: Web console for task orchestration.
 - `apps/meeseeks_cli/`: terminal CLI for interactive sessions.
 - `meeseeks_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
 
@@ -65,11 +63,11 @@ Prompts are packaged under `packages/meeseeks_core/src/meeseeks_core/prompts/`.
 ```mermaid
 flowchart LR
   User --> CLI
-  User --> Chat
+  User --> Console
   User --> API
   HA --> API
   CLI --> Runtime
-  Chat --> Runtime
+  Console --> API
   API --> Runtime
   Runtime --> Orchestrator
   Runtime --> SessionStore

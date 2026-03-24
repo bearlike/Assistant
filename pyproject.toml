@@ -19,7 +19,6 @@ meeseeks = "meeseeks_cli.cli_master:main"
 [project.optional-dependencies]
 cli = ["meeseeks-cli>=0.0.7"]
 api = ["meeseeks-api>=0.0.7"]
-chat = ["meeseeks-chat>=0.0.7"]
 ha = ["meeseeks-ha-conversation>=0.0.7"]
 tools = ["meeseeks-tools>=0.0.7"]
 
@@ -55,7 +54,6 @@ meeseeks-core = { workspace = true }
 meeseeks-tools = { workspace = true }
 meeseeks-cli = { path = "apps/meeseeks_cli", editable = true }
 meeseeks-api = { path = "apps/meeseeks_api", editable = true }
-meeseeks-chat = { path = "apps/meeseeks_chat", editable = true }
 meeseeks-ha-conversation = { path = "meeseeks_ha_conversation", editable = true }
 
 [build-system]
@@ -89,7 +87,6 @@ files = [
   "packages/meeseeks_core/src/meeseeks_core/**/*.py",
   "packages/meeseeks_tools/src/meeseeks_tools/**/*.py",
   "apps/meeseeks_api/src/meeseeks_api/**/*.py",
-  "apps/meeseeks_chat/src/meeseeks_chat/**/*.py",
   "apps/meeseeks_cli/src/meeseeks_cli/**/*.py",
   "meeseeks_ha_conversation/**/*.py",
 ]
@@ -105,7 +102,6 @@ warn_unused_configs = true
 testpaths = [
   "tests",
   "apps/meeseeks_api/tests",
-  "apps/meeseeks_chat/tests",
   "apps/meeseeks_cli/tests",
 ]
 

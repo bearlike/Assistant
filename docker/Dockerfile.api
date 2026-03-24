@@ -19,8 +19,8 @@ RUN uv pip install --system -e . \
 # Set API specific environment variable
 ENV MASTER_API_TOKEN='msk-strong-password'
 
-# Expose port 5123 for the API
-EXPOSE 5123
+# Expose port 5124 for the API
+EXPOSE 5124
 
 # Run the API application
 ENTRYPOINT ["meeseeks-api"]

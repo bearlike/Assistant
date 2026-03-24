@@ -1,7 +1,7 @@
 # Agents Guide - Personal Assistant (Meeseeks)
 
 ## What this codebase is
-Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervisor. The core engine uses a single async `ToolUseLoop` that the LLM drives via native `bind_tools` / `tool_use`. Sub-agents are spawned via a `spawn_agent` tool, tracked by an `AgentHypervisor`, and cleaned up via structured concurrency. It ships multiple interfaces (CLI, chat UI, REST API, Home Assistant) that share the same core engine.
+Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervisor. The core engine uses a single async `ToolUseLoop` that the LLM drives via native `bind_tools` / `tool_use`. Sub-agents are spawned via a `spawn_agent` tool, tracked by an `AgentHypervisor`, and cleaned up via structured concurrency. It ships multiple interfaces (CLI, web console, REST API, Home Assistant) that share the same core engine.
 
 ## Core entry points
 - `packages/meeseeks_core/src/meeseeks_core/tool_use_loop.py`: async tool-use conversation loop (`ToolUseLoop`) — the core execution engine
@@ -13,10 +13,12 @@ Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervi
 - `packages/meeseeks_core/src/meeseeks_core/classes.py`: `ActionStep` (tool_id/operation/tool_input), `TaskQueue`, `AbstractTool` contracts
 - `packages/meeseeks_core/src/meeseeks_core/planning.py`: `Planner`, `PromptBuilder`
 - `packages/meeseeks_core/src/meeseeks_core/session_runtime.py`: session lifecycle, listing, user steering (`enqueue_message`, `interrupt_step`)
-- `packages/meeseeks_core/src/meeseeks_core/session_store.py`: transcript storage, tags, and archive state
+- `packages/meeseeks_core/src/meeseeks_core/session_store.py`: transcript storage, tags, archive state, and `session_dir()` for attachment paths
+- `packages/meeseeks_core/src/meeseeks_core/context.py`: `ContextBuilder`, `ContextSnapshot` (includes `attachment_texts` for uploaded file content)
+- `packages/meeseeks_core/src/meeseeks_core/tool_registry.py`: `ToolRegistry`, `ToolSpec`, `filter_specs()` (reusable allowlist/denylist filtering), `load_registry()`
 - `packages/meeseeks_core/src/meeseeks_core/config.py`: `AppConfig` including `AgentConfig` (max_depth, max_concurrent, allowed_models, etc.)
 - `packages/meeseeks_tools/src/meeseeks_tools/`: tool implementations and integration glue
-- `apps/meeseeks_chat/src/meeseeks_chat/chat_master.py`: Streamlit UI
+- `apps/meeseeks_console/`: Web console (React + Vite, connects via REST API)
 - `apps/meeseeks_api/src/meeseeks_api/backend.py`: Flask API
 - `apps/meeseeks_cli/src/meeseeks_cli/cli_master.py`: terminal CLI with Rich Live agent display
 - `meeseeks_ha_conversation/`: Home Assistant integration
@@ -114,12 +116,19 @@ Official library/framework documentation and code examples.
 - Treat language models as black-box APIs with non-deterministic output; avoid anthropomorphic language and describe changes objectively (e.g., “updated prompts/instructions”).
 - Keep type hints precise; avoid loosening to `Any` unless no accurate alternative exists.
 
+## Project instructions loading
+- `discover_project_instructions()` in `common.py` loads `CLAUDE.md` (priority) or `AGENTS.md` from the working directory and injects the content into the orchestration system prompt.
+- Place `<!-- meeseeks:noload -->` on the **first line** of a file to skip it. Used on shim `AGENTS.md` files that only redirect to `CLAUDE.md` to avoid duplicate context loading.
+- The marker is defined as `_NOLOAD_MARKER` in `packages/meeseeks_core/src/meeseeks_core/common.py`.
+
 ## Orchestration architecture
 - **Single async loop**: `ToolUseLoop.run()` is the only execution engine. The LLM decides which tools to call via native `bind_tools`. No separate planner→executor→synthesizer pipeline.
-- **Sub-agent spawning**: The LLM can call `spawn_agent(task, model, allowed_tools, denied_tools)` to create child `ToolUseLoop` instances. Tool scoping follows Claude Code's "filter before binding" pattern.
+- **Tool scoping**: `filter_specs()` in `tool_registry.py` applies allowlist/denylist filtering. The API passes `context.mcp_tools` as `allowed_tools` through `SessionRuntime` → `Orchestrator` → `ToolUseLoop` to scope tool binding per query.
+- **Sub-agent spawning**: The LLM can call `spawn_agent(task, model, allowed_tools, denied_tools)` to create child `ToolUseLoop` instances. Tool scoping uses the same `filter_specs()` function.
 - **Agent hypervisor**: `AgentHypervisor` tracks all agents, enforces admission control (max_concurrent via Semaphore), and guarantees cleanup via structured concurrency (`asyncio.gather` + `finally` blocks).
 - **Depth control**: Max depth 5 (configurable). At max depth, `spawn_agent` is removed from the tool schema entirely. Depth-aware prompts guide spawn behavior.
-- **User steering**: Root agent has a `message_queue` (drained between steps as HumanMessage) and `interrupt_step` event. Sub-agents do not receive user messages.
+- **User steering**: Root agent has a `message_queue` (`queue.Queue`, thread-safe) drained between steps as HumanMessage, and an `interrupt_step` (`threading.Event`). Both are created in `RunRegistry.start()` and shared with the `AgentContext` via the orchestration chain. Sub-agents do not receive user messages. The API exposes `/message` and `/interrupt` endpoints for this.
+- **Attachment handling**: `ContextBuilder` reads uploaded text files from disk (via context events with attachment metadata) and injects their content into `ContextSnapshot.attachment_texts`, which is included in the system prompt.
 - **Planning is root-only**: Sub-agents always execute (act mode). They bypass `Orchestrator` and its plan/mode logic entirely.
 - Make tool inputs schema-aware; prefer structured `tool_input` for MCP tools.
 - Surface tool activity clearly (permissions, tool IDs, arguments) to reduce user confusion.
@@ -135,8 +144,8 @@ Official library/framework documentation and code examples.
 - Local dev uses `uv` with `configs/app.json` (and `configs/mcp.json` when using MCP).
 - Core-only install: `uv sync`.
 - Full dev install: `uv sync --all-extras --all-groups`.
-- Run interfaces from repo root with `uv run meeseeks`, `uv run meeseeks-api`, or `uv run meeseeks-chat`.
-- Dockerfiles live under `docker/` for base, chat, and API; Compose is supported when needed.
+- Run interfaces from repo root with `uv run meeseeks`, `uv run meeseeks-api`, or `cd apps/meeseeks_console && npm run dev`.
+- Dockerfiles live under `docker/` for base, console, and API; Compose is supported when needed.
 
 ## Linting & formatting
 - Primary linting uses `ruff` (root + subpackages). Auto-fix with `.venv/bin/ruff check --fix .`.

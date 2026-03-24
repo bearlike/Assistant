@@ -5,21 +5,20 @@ set -euo pipefail
 # Usage:
 # ./build-install.sh all   # Create venv + install all packages and dev deps
 # ./build-install.sh api   # Install API package
-# ./build-install.sh chat  # Install Chat package
 # ./build-install.sh cli   # Install CLI package
 # ./build-install.sh core  # Install core package
 # ./build-install.sh tools # Install tools package
 # ./build-install.sh ha    # Install Home Assistant integration
 
 function print_usage {
-    echo "Usage: $0 {all|api|chat|cli|core|tools|ha}"
+    echo "Usage: $0 {all|api|console|cli|core|tools|ha}"
 }
 
 install_all() {
     uv venv .venv
     uv pip install -e .[dev]
     uv pip install -e packages/meeseeks_core -e packages/meeseeks_tools \
-        -e apps/meeseeks_api -e apps/meeseeks_chat -e apps/meeseeks_cli \
+        -e apps/meeseeks_api -e apps/meeseeks_cli \
         -e meeseeks_ha_conversation
 }
 
@@ -30,8 +29,8 @@ case ${1:-} in
     api)
         uv pip install -e apps/meeseeks_api
         ;;
-    chat)
-        uv pip install -e apps/meeseeks_chat
+    console)
+        cd apps/meeseeks_console && npm install
         ;;
     cli)
         uv pip install -e apps/meeseeks_cli

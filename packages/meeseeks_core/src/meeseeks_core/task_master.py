@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import queue
+import threading
 import warnings
 from collections.abc import Callable
 from typing import cast
@@ -86,6 +88,9 @@ def orchestrate_session(
     hook_manager: HookManager | None = None,
     mode: str | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    allowed_tools: list[str] | None = None,
+    message_queue: queue.Queue[str] | None = None,
+    interrupt_step: threading.Event | None = None,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
     """Run the orchestration loop."""
     return Orchestrator(
@@ -103,6 +108,9 @@ def orchestrate_session(
         session_id=session_id,
         mode=mode,
         should_cancel=should_cancel,
+        allowed_tools=allowed_tools,
+        message_queue=message_queue,
+        interrupt_step=interrupt_step,
     )
 
 

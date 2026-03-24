@@ -154,6 +154,8 @@ apps/meeseeks_cli/data/
 # Local config files (MCP/tool manifests, secrets)
 **/app.json
 **/*config.json
+!apps/meeseeks_console/tsconfig.json
+!apps/meeseeks_console/tsconfig.node.json
 configs/*.toml
 configs/*.yaml
 configs/*.yml
