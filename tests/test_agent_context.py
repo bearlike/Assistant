@@ -61,11 +61,15 @@ class TestAgentContext:
         assert exc_info.value.attempted == 2
         assert exc_info.value.maximum == 1
 
-    def test_child_does_not_get_message_queue(self):
+    def test_child_gets_own_message_queue(self):
+        """Ref: [DeepMind-Delegation §4.4] Children get their own queue
+        for bidirectional parent→child steering."""
         root = AgentContext.root(model_name="m")
         assert root.message_queue is not None
         child = root.child()
-        assert child.message_queue is None
+        # Child now gets its own queue (not None, not parent's)
+        assert child.message_queue is not None
+        assert child.message_queue is not root.message_queue
 
     def test_child_does_not_get_interrupt_step(self):
         root = AgentContext.root(model_name="m")
@@ -251,4 +255,246 @@ class TestAgentHypervisor:
             await asyncio.sleep(0)
             assert task.cancelled()
 
+        asyncio.run(_test())
+
+
+# ---------------------------------------------------------------------------
+# Hypervisor active governance (Ref: research transfers)
+# ---------------------------------------------------------------------------
+
+
+class TestHypervisorBudget:
+    """Ref: [AgentCgroup §4.2] Session-wide budget tracking with graduated enforcement."""
+
+    def test_total_steps_tracks_across_agents(self):
+        async def _test():
+            reg = AgentHypervisor()
+            for aid in ("a1", "a2"):
+                h = AgentHandle(agent_id=aid, parent_id=None, depth=0,
+                                model_name="m", task_description="t")
+                await reg.register(h)
+            await reg.update_step("a1", "tool1")
+            await reg.update_step("a1", "tool2")
+            await reg.update_step("a2", "tool3")
+            assert reg.total_steps == 3
+        asyncio.run(_test())
+
+    def test_budget_exhausted_unlimited(self):
+        """Budget=0 means unlimited — never exhausted."""
+        reg = AgentHypervisor(session_step_budget=0)
+        assert reg.budget_exhausted() is False
+
+    def test_budget_exhausted_at_limit(self):
+        async def _test():
+            reg = AgentHypervisor(session_step_budget=2)
+            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
+                            model_name="m", task_description="t")
+            await reg.register(h)
+            await reg.update_step("a1", "t1")
+            assert reg.budget_exhausted() is False
+            await reg.update_step("a1", "t2")
+            assert reg.budget_exhausted() is True
+        asyncio.run(_test())
+
+    def test_budget_remaining(self):
+        reg = AgentHypervisor(session_step_budget=10)
+        assert reg.budget_remaining() == 10
+        reg._total_steps = 7
+        assert reg.budget_remaining() == 3
+
+    def test_budget_remaining_unlimited(self):
+        reg = AgentHypervisor(session_step_budget=0)
+        assert reg.budget_remaining() == -1  # Unlimited sentinel
+
+
+class TestHypervisorStallDetection:
+    """Ref: [DeepMind-Delegation §4.4] Internal trigger: unresponsive delegatee."""
+
+    def test_last_step_at_updated(self):
+        async def _test():
+            reg = AgentHypervisor()
+            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
+                            model_name="m", task_description="t")
+            await reg.register(h)
+            assert h.last_step_at is None
+            await reg.update_step("a1", "tool")
+            assert h.last_step_at is not None
+        asyncio.run(_test())
+
+    def test_stalled_agents_returns_stalled(self):
+        async def _test():
+            import time
+            reg = AgentHypervisor()
+            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
+                            model_name="m", task_description="t",
+                            status="running")
+            h.last_step_at = time.monotonic() - 200  # 200s ago
+            await reg.register(h)
+            stalled = await reg.stalled_agents(threshold=120.0)
+            assert len(stalled) == 1
+            assert stalled[0].agent_id == "a1"
+        asyncio.run(_test())
+
+    def test_stalled_agents_ignores_active(self):
+        async def _test():
+            import time
+            reg = AgentHypervisor()
+            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
+                            model_name="m", task_description="t",
+                            status="running")
+            h.last_step_at = time.monotonic()  # Just now
+            await reg.register(h)
+            stalled = await reg.stalled_agents(threshold=120.0)
+            assert len(stalled) == 0
+        asyncio.run(_test())
+
+
+class TestHypervisorMessagePassing:
+    """Ref: [DeepMind-Delegation §4.4] Bidirectional adaptive coordination."""
+
+    def test_send_message_to_running_agent(self):
+        async def _test():
+            import queue
+            reg = AgentHypervisor()
+            q = queue.Queue()
+            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
+                            model_name="m", task_description="t",
+                            status="running", message_queue=q)
+            await reg.register(h)
+            result = await reg.send_message("a1", "wrap up now")
+            assert result is True
+            assert q.get_nowait() == "wrap up now"
+        asyncio.run(_test())
+
+    def test_send_message_to_completed_agent_fails(self):
+        async def _test():
+            import queue
+            reg = AgentHypervisor()
+            q = queue.Queue()
+            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
+                            model_name="m", task_description="t",
+                            status="completed", message_queue=q)
+            await reg.register(h)
+            result = await reg.send_message("a1", "hello")
+            assert result is False
+            assert q.empty()
+        asyncio.run(_test())
+
+    def test_send_message_to_unknown_agent_fails(self):
+        async def _test():
+            reg = AgentHypervisor()
+            result = await reg.send_message("nonexistent", "hello")
+            assert result is False
+        asyncio.run(_test())
+
+
+class TestHypervisorGlobalEye:
+    """Ref: [DeepMind-Delegation §4.5] Root agent's global eye via render_agent_tree."""
+
+    def test_empty_tree(self):
+        async def _test():
+            reg = AgentHypervisor()
+            tree = await reg.render_agent_tree()
+            assert tree == ""
+        asyncio.run(_test())
+
+    def test_tree_shows_agents(self):
+        async def _test():
+            reg = AgentHypervisor()
+            root = AgentHandle(agent_id="root1234", parent_id=None, depth=0,
+                               model_name="m", task_description="Main task",
+                               status="running")
+            child = AgentHandle(agent_id="child567", parent_id="root1234", depth=1,
+                                model_name="m", task_description="Sub task",
+                                status="completed")
+            child.steps_completed = 5
+            await reg.register(root)
+            await reg.register(child)
+            tree = await reg.render_agent_tree()
+            assert "root1234" in tree
+            assert "child567" in tree
+            assert "running" in tree
+            assert "completed" in tree
+            assert "5 steps" in tree
+        asyncio.run(_test())
+
+    def test_tree_shows_budget(self):
+        async def _test():
+            reg = AgentHypervisor(session_step_budget=100)
+            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
+                            model_name="m", task_description="t", status="running")
+            await reg.register(h)
+            await reg.update_step("a1", "tool")
+            tree = await reg.render_agent_tree()
+            assert "Budget:" in tree
+            assert "1/100" in tree
+        asyncio.run(_test())
+
+
+class TestAgentResultStructure:
+    """Ref: [CoA §3.1] Communication Units enable structured inter-agent context."""
+
+    def test_agent_result_fields(self):
+        from meeseeks_core.hypervisor import AgentResult
+        result = AgentResult(
+            content="Task completed",
+            status="completed",
+            steps_used=5,
+            summary="Found the answer",
+        )
+        assert result.content == "Task completed"
+        assert result.status == "completed"
+        assert result.steps_used == 5
+        assert result.summary == "Found the answer"
+        assert result.warnings == []
+        assert result.artifacts == []
+
+    def test_agent_result_serialization(self):
+        """AgentResult must be JSON-serializable for inter-agent passing."""
+        import json
+        from dataclasses import asdict
+
+        from meeseeks_core.hypervisor import AgentResult
+        result = AgentResult(
+            content="output",
+            status="failed",
+            steps_used=3,
+            warnings=["timeout on tool X"],
+            summary="partial work done",
+        )
+        serialized = json.dumps(asdict(result))
+        deserialized = json.loads(serialized)
+        assert deserialized["status"] == "failed"
+        assert deserialized["warnings"] == ["timeout on tool X"]
+        assert deserialized["summary"] == "partial work done"
+
+    def test_cannot_solve_status(self):
+        """Ref: [Aletheia §3] Explicit failure admission as first-class outcome."""
+        from meeseeks_core.hypervisor import AgentResult
+        result = AgentResult(
+            content="Cannot solve: depth exceeded",
+            status="cannot_solve",
+            steps_used=0,
+        )
+        assert result.status == "cannot_solve"
+
+
+class TestAgentStatusExpansion:
+    """Ref: [A2A v1.0] Expanded state machine with submitted/rejected states."""
+
+    def test_submitted_status(self):
+        h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
+                        model_name="m", task_description="t")
+        assert h.status == "submitted"  # Default is now submitted, not running
+
+    def test_rejected_status(self):
+        async def _test():
+            reg = AgentHypervisor()
+            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
+                            model_name="m", task_description="t")
+            await reg.register(h)
+            await reg.mark_done("a1", "rejected")
+            got = await reg.get("a1")
+            assert got is not None
+            assert got.status == "rejected"
         asyncio.run(_test())

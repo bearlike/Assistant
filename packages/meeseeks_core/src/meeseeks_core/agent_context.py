@@ -82,7 +82,10 @@ class AgentContext:
             should_cancel=self.should_cancel,
             event_logger=self.event_logger,
             registry=self.registry,
-            message_queue=None,
+            # Ref: [DeepMind-Delegation §4.4] Bidirectional message passing —
+            # each agent gets its own queue for parent→child steering.
+            # Ref: [AgentCgroup §4.2] System→agent NL feedback channel.
+            message_queue=queue.Queue(),
             interrupt_step=None,
         )
 

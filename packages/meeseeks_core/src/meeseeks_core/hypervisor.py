@@ -1,25 +1,36 @@
 #!/usr/bin/env python3
-"""Agent hypervisor control plane.
+"""Agent hypervisor — active governor for multi-agent delegation.
 
-This module implements the centralized control plane for Meeseeks' multi-agent
-execution model. The hypervisor is responsible for:
+The hypervisor is the centralized control plane that manages the full agent
+tree for a session. It acts as an **active governor** (not just a registry),
+mediating every delegation decision and result handoff.
 
-- **Admission control** — bounding concurrent agents via an asyncio semaphore
-  to prevent resource exhaustion from runaway spawning.
-- **Lifecycle tracking** — maintaining an ``AgentHandle`` for every running
-  agent with status, step counts, timing, and error state.
-- **Structured cancellation** — cancelling individual agents or the entire
-  tree, with guaranteed cleanup via ``asyncio.gather``.
-- **Visibility** — exposing the live agent tree to the CLI display and API
-  via query methods (``list_children``, ``list_all``, etc.).
+Scientific grounding:
+- Ref: [DeepMind-Delegation §4.4] Adaptive coordination cycle — the hypervisor
+  monitors agents and intervenes via NL feedback when triggers fire.
+- Ref: [DeepMind-Delegation §4.5] Structural transparency — configurable
+  monitoring with lifecycle events at each phase transition.
+- Ref: [AgentCgroup §4.2] Graduated enforcement — warn, throttle, feedback
+  (never kill first; killing destroys 31-48% of accumulated context).
+- Ref: [A2A v1.0] Task state machine — agents progress through
+  submitted → running → completed/failed/cancelled/rejected.
+- Ref: [CoA §3.1] Communication Units — structured AgentResult with
+  compressed summary field enables inter-agent context passing.
 
-The hypervisor is instantiated once per session in ``Orchestrator`` and shared
-across all agents in the hierarchy via ``AgentContext.registry``.
+Responsibilities:
+- **Admission control** — bounding concurrent agents via semaphore.
+- **Lifecycle tracking** — AgentHandle with delegation phase awareness.
+- **Active monitoring** — budget tracking, stall detection, NL interventions.
+- **Global eye** — render_agent_tree() gives the root agent a live view.
+- **Bidirectional messaging** — send_message() enables parent→child steering.
+- **Structured results** — AgentResult carries Communication Units between agents.
+- **Graceful shutdown** — 3-phase escalation: cancel → wait → force-mark.
 """
 
 from __future__ import annotations
 
 import asyncio
+import queue
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
@@ -27,7 +38,40 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from meeseeks_core.spawn_agent import AgentError
 
-AgentStatus = Literal["running", "completed", "failed", "cancelled"]
+# Ref: [A2A v1.0] Task state machine with terminal states being absorbing.
+# Expanded from 4 to 6 states: added 'submitted' (pre-execution) and
+# 'rejected' (declined at admission).
+AgentStatus = Literal[
+    "submitted",   # Registered, awaiting execution start
+    "running",     # Actively executing tools
+    "completed",   # Finished successfully (terminal)
+    "failed",      # Finished with error (terminal)
+    "cancelled",   # Cancelled by parent/timeout (terminal)
+    "rejected",    # Declined at admission (terminal)
+]
+
+
+# Ref: [CoA §3.1] Communication Units compress inter-agent context.
+# AgentResult.summary is the CU — a compressed synthesis of what the
+# sub-agent learned, suitable for passing to sibling/parent agents.
+@dataclass
+class AgentResult:
+    """Structured result from a sub-agent — the Communication Unit.
+
+    Ref: [CoA §3.1] Each agent produces a CU that grows with relevant info
+    and drops irrelevant content, preventing context explosion in chains.
+    Ref: [Aletheia §3] ``cannot_solve`` status enables explicit failure
+    admission as a first-class outcome, saving downstream waste.
+    Ref: [DeepMind-Delegation §6.1] ``summary`` serves as a checkpoint
+    snapshot — even on failure, partial work survives for retry.
+    """
+
+    content: str                  # Primary output text
+    status: str                   # completed | failed | partial | cannot_solve
+    steps_used: int               # Tool steps consumed
+    artifacts: list[str] = field(default_factory=list)   # Files touched
+    warnings: list[str] = field(default_factory=list)    # Non-fatal issues
+    summary: str = ""             # Compressed CU for parent context
 
 
 @dataclass(slots=True)
@@ -37,6 +81,13 @@ class AgentHandle:
     Created when an agent registers and updated throughout its lifecycle.
     Fields are read by the CLI agent tree display and the hypervisor's
     query/cancellation methods.
+
+    Ref: [A2A v1.0] Handle starts as ``submitted``, transitions to
+    ``running`` when the loop begins, then to a terminal state.
+    Ref: [AgentCgroup §4.2] ``last_step_at`` enables tool-call-granularity
+    stall detection without destroying accumulated context.
+    Ref: [DeepMind-Delegation §4.4] ``message_queue`` enables bidirectional
+    adaptive coordination — the hypervisor injects NL feedback.
     """
 
     agent_id: str
@@ -44,13 +95,17 @@ class AgentHandle:
     depth: int
     model_name: str
     task_description: str
-    status: AgentStatus = "running"
+    status: AgentStatus = "submitted"  # Ref: [A2A v1.0] Start as submitted
     started_at: float = field(default_factory=time.monotonic)
     stopped_at: float | None = None
     steps_completed: int = 0
     last_tool_id: str | None = None
+    # Ref: [AgentCgroup §4.2] Tool-call-granularity timing for stall detection
+    last_step_at: float | None = None
     error: str | AgentError | None = None
     asyncio_task: asyncio.Task[object] | None = None
+    # Ref: [DeepMind-Delegation §4.4] Bidirectional message passing
+    message_queue: queue.Queue[str] | None = None
 
 
 class AgentHypervisor:
@@ -72,11 +127,27 @@ class AgentHypervisor:
           ``cleanup()`` tears down the entire tree on session exit.
     """
 
-    def __init__(self, *, max_concurrent: int = 20) -> None:
-        """Initialize hypervisor with a concurrency limit."""
+    def __init__(
+        self,
+        *,
+        max_concurrent: int = 20,
+        session_step_budget: int = 0,
+    ) -> None:
+        """Initialize hypervisor with concurrency and budget limits.
+
+        Ref: [AgentCgroup §4.2] Session-wide budget with graduated enforcement.
+
+        Args:
+            max_concurrent: Maximum number of concurrent agents (semaphore slots).
+            session_step_budget: Total tool steps allowed across all agents in the
+                session. 0 means unlimited.
+        """
         self._agents: dict[str, AgentHandle] = {}
         self._lock: asyncio.Lock = asyncio.Lock()
         self._semaphore: asyncio.Semaphore = asyncio.Semaphore(max_concurrent)
+        # Ref: [AgentCgroup §4.2] Session-wide resource tracking
+        self._total_steps: int = 0
+        self._session_step_budget: int = session_step_budget
 
     # ------------------------------------------------------------------
     # Admission control
@@ -117,12 +188,19 @@ class AgentHypervisor:
     # ------------------------------------------------------------------
 
     async def update_step(self, agent_id: str, tool_id: str) -> None:
-        """Record a completed tool execution step."""
+        """Record a completed tool execution step.
+
+        Ref: [AgentCgroup §4.2] Track at tool-call granularity, not agent
+        granularity. Updates last_step_at for stall detection and total_steps
+        for session budget enforcement.
+        """
         async with self._lock:
             handle = self._agents.get(agent_id)
             if handle:
                 handle.steps_completed += 1
                 handle.last_tool_id = tool_id
+                handle.last_step_at = time.monotonic()
+                self._total_steps += 1
 
     async def mark_done(
         self,
@@ -169,6 +247,108 @@ class AgentHypervisor:
         """Full tree view — for CLI/API user visibility."""
         async with self._lock:
             return list(self._agents.values())
+
+    # ------------------------------------------------------------------
+    # Budget & monitoring  (Ref: [AgentCgroup §4.2], [DeepMind-Delegation §4.4])
+    # ------------------------------------------------------------------
+
+    @property
+    def total_steps(self) -> int:
+        """Total tool steps executed across all agents in the session."""
+        return self._total_steps
+
+    def budget_exhausted(self) -> bool:
+        """Check if the session step budget is exhausted (0 = unlimited).
+
+        Ref: [AgentCgroup §4.2] Graduated enforcement — this is the trigger
+        check. The response (NL warning injection) happens in ToolUseLoop.
+        """
+        return (
+            self._session_step_budget > 0
+            and self._total_steps >= self._session_step_budget
+        )
+
+    def budget_remaining(self) -> int:
+        """Steps remaining in the session budget (0 = unlimited)."""
+        if self._session_step_budget <= 0:
+            return -1  # Unlimited
+        return max(0, self._session_step_budget - self._total_steps)
+
+    async def stalled_agents(self, threshold: float = 120.0) -> list[AgentHandle]:
+        """Return agents not making progress within threshold seconds.
+
+        Ref: [DeepMind-Delegation §4.4] Internal trigger: delegatee
+        unresponsive → diagnose → evaluate → intervene.
+        """
+        now = time.monotonic()
+        async with self._lock:
+            return [
+                h for h in self._agents.values()
+                if h.status == "running"
+                and h.last_step_at is not None
+                and (now - h.last_step_at) > threshold
+            ]
+
+    # ------------------------------------------------------------------
+    # Bidirectional messaging  (Ref: [DeepMind-Delegation §4.4], [AgentCgroup §4.2])
+    # ------------------------------------------------------------------
+
+    async def send_message(self, agent_id: str, message: str) -> bool:
+        """Send a steering message to a running agent.
+
+        Ref: [DeepMind-Delegation §4.4] Adaptive coordination — the hypervisor
+        injects NL feedback (budget warnings, stall nudges) into the agent's
+        message queue. The ToolUseLoop drains this queue between steps.
+        Ref: [AgentCgroup §4.2] Bidirectional system↔agent feedback loop.
+        """
+        async with self._lock:
+            handle = self._agents.get(agent_id)
+            if handle and handle.status == "running" and handle.message_queue:
+                handle.message_queue.put_nowait(message)
+                return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Global eye  (Ref: [DeepMind-Delegation §4.5])
+    # ------------------------------------------------------------------
+
+    async def render_agent_tree(self) -> str:
+        """Render a concise text summary of the agent tree for the root's system prompt.
+
+        Ref: [DeepMind-Delegation §4.5] Structural transparency — the root
+        agent (the hypervisor's "brain") gets a live view of all agents so
+        it can reason about the delegation state and intervene if needed.
+        """
+        async with self._lock:
+            if not self._agents:
+                return ""
+            counts: dict[str, int] = {}
+            for h in self._agents.values():
+                counts[h.status] = counts.get(h.status, 0) + 1
+            status_parts = [f"{v} {k}" for k, v in sorted(counts.items())]
+            budget_str = ""
+            if self._session_step_budget > 0:
+                budget_str = f" | Budget: {self._total_steps}/{self._session_step_budget} steps"
+            header = f"Agents: {', '.join(status_parts)}{budget_str}"
+            lines = [header]
+            for h in sorted(self._agents.values(), key=lambda x: (x.depth, x.agent_id)):
+                indent = "  " * h.depth
+                step_info = f"{h.steps_completed} steps"
+                if h.last_tool_id:
+                    step_info += f", last: {h.last_tool_id}"
+                status_marker = ""
+                if h.status == "completed":
+                    status_marker = " -> success"
+                elif h.status == "failed":
+                    status_marker = " -> FAILED"
+                elif h.status == "cancelled":
+                    status_marker = " -> cancelled"
+                task_preview = h.task_description[:80]
+                lines.append(
+                    f"{indent}- [{h.agent_id[:8]}] {h.status}: "
+                    f"\"{task_preview}\" ({step_info}{status_marker})"
+                )
+            return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Cancellation
@@ -247,5 +427,6 @@ __all__ = [
     "AgentHandle",
     "AgentHypervisor",
     "AgentRegistry",
+    "AgentResult",
     "AgentStatus",
 ]
