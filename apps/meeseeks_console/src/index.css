@@ -7,130 +7,132 @@
 @layer base {
   :root {
     /* ── Dark mode (default) ──
-       Anthropic Claude docs palette (data-theme=claude, data-mode=dark) */
-    --background: 60 2.6% 7.6%; /* bg-300 */
-    --foreground: 48 33.3% 97.1%; /* text-100 */
+       Source: Anthropic Claude docs CSS variables (platform.claude.com)
+       Gray scale uses Anthropic's warm→neutral gradient:
+       lighter grays = hue 60 (warm), deeper grays = hue 0 (neutral black) */
+    --background: 0 0% 7%; /* _gray-860 */
+    --foreground: 60 14% 97%; /* _gray-20 */
 
-    --muted: 60 2.7% 14.5%; /* bg-100 */
-    --muted-foreground: 48 4.8% 59.2%; /* text-500 */
+    --muted: 60 2% 12%; /* _gray-800 */
+    --muted-foreground: 48 5% 57%; /* _gray-350 */
 
-    --popover: 60 2.1% 18.4%; /* bg-000 */
-    --popover-foreground: 48 33.3% 97.1%;
+    --popover: 60 2% 17%; /* _gray-750 */
+    --popover-foreground: 60 14% 97%;
 
-    --border: 60 2.5% 23.3%; /* text-200 (used as subtle line) */
-    --input: 30 3.3% 11.8%; /* bg-200 */
+    --border: 53 12% 87% / 0.15; /* _gray-100 at 15% opacity (Anthropic hairline pattern) */
+    --input: 60 2% 9%; /* _gray-840 */
 
-    --card: 60 2.7% 14.5%; /* bg-100 */
-    --card-foreground: 48 33.3% 97.1%;
+    --card: 60 2% 12%; /* _gray-800 */
+    --card-foreground: 60 14% 97%;
 
-    --primary: 15 63.1% 59.6%; /* accent-brand */
+    --primary: 14.8 63.1% 59.6%; /* _brand-clay */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 30 3.3% 11.8%; /* bg-200 */
-    --secondary-foreground: 50 9% 73.7%; /* text-200 */
+    --secondary: 60 2% 9%; /* _gray-840 */
+    --secondary-foreground: 55 9% 74%; /* _gray-200 */
 
-    --accent: 60 2.1% 18.4%; /* bg-000 */
-    --accent-foreground: 48 33.3% 97.1%;
+    --accent: 60 2% 17%; /* _gray-750 */
+    --accent-foreground: 60 14% 97%;
 
-    --destructive: 0 67% 59.6%; /* danger-100 */
+    --destructive: 0 73% 59%; /* _red-400 */
     --destructive-foreground: 0 0% 100%;
 
-    --ring: 15 63.1% 59.6%;
+    --ring: 14.8 63.1% 59.6%;
 
     --radius: 0.5rem;
 
-    --success: 97 75% 32.9%; /* success-100 */
+    --success: 81 100% 30%; /* _green-400 */
     --success-foreground: 0 0% 100%;
 
-    --surface: 30 3.3% 11.8%; /* bg-200 */
-    --surface-deep: 0 0% 0%; /* bg-400 */
+    --surface: 60 2% 9%; /* _gray-840 */
+    --surface-deep: 0 0% 4%; /* _gray-900 */
 
-    /* ── Semantic: agent & orchestration ── */
-    --permission: 233 80% 78%; /* light blue-purple (CC dark: 177,185,249) */
-    --plan-mode: 173 35% 44%; /* muted sage-teal (CC dark: 72,150,140) */
-    --user-message-bg: 0 0% 22%; /* (CC dark: rgb(55,55,55)) */
-    --user-message-bg-hover: 0 0% 27%; /* (CC dark: rgb(70,70,70)) */
-    --bash-bg: 300 4% 25%; /* (CC dark: rgb(65,60,65)) */
-    --memory-bg: 195 12% 25%; /* (CC dark: rgb(55,65,70)) */
+    /* ── Semantic: orchestration (from Anthropic palette + CC theme) ── */
+    --permission: 213 80% 79%; /* _blue-200 — Anthropic accent-000 */
+    --plan-mode: 158 52% 49%; /* _aqua-300 — Anthropic aqua for plan context */
+    --user-message-bg: 60 2% 17%; /* _gray-750 — distinct from bg, matches popover */
+    --user-message-bg-hover: 60 3% 21%; /* _gray-700 */
+    --bash-bg: 60 2% 11%; /* _gray-820 — code/shell areas */
+    --memory-bg: 60 2% 12%; /* _gray-800 — context/memory areas */
 
-    /* ── Agent color cycling (8 slots, CC sub-agent palette) ── */
-    --agent-0: 0 72% 51%; /* red    — rgb(220,38,38) */
-    --agent-1: 217 84% 53%; /* blue   — rgb(37,99,235) */
-    --agent-2: 142 64% 36%; /* green  — rgb(22,163,74) */
-    --agent-3: 43 96% 40%; /* yellow — rgb(202,138,4) */
-    --agent-4: 271 76% 56%; /* purple — rgb(147,51,234) */
-    --agent-5: 21 90% 48%; /* orange — rgb(234,88,12) */
-    --agent-6: 330 81% 51%; /* pink   — rgb(219,39,119) */
-    --agent-7: 189 91% 36%; /* cyan   — rgb(8,145,178) */
+    /* ── Agent color cycling (8 slots, Anthropic spectrum) ── */
+    --agent-0: 0 73% 59%; /* _red-400 */
+    --agent-1: 213 77% 56%; /* _blue-400 */
+    --agent-2: 81 100% 30%; /* _green-400 */
+    --agent-3: 39 100% 36%; /* _yellow-400 */
+    --agent-4: 248 67% 67%; /* _violet-400 */
+    --agent-5: 17 70% 50%; /* _orange-400 */
+    --agent-6: 338 61% 58%; /* _magenta-400 */
+    --agent-7: 159 73% 36%; /* _aqua-400 */
 
-    --diff-add-bg: 97 75% 32.9% / 0.18;
-    --diff-add-text: 97 59.1% 46.1%; /* success-000 */
-    --diff-del-bg: 0 67% 59.6% / 0.18;
-    --diff-del-text: 0 98.4% 75.1%; /* danger-000 */
-    --diff-hunk-text: 210 65.5% 67.1%; /* accent-secondary-000 */
+    --diff-add-bg: 83 54% 61% / 0.18; /* _green-200 */
+    --diff-add-text: 83 55% 81%; /* _green-100 */
+    --diff-del-bg: 0 77% 81% / 0.18; /* _red-200 */
+    --diff-del-text: 0 78% 91%; /* _red-100 */
+    --diff-hunk-text: 213 80% 79%; /* _blue-200 */
   }
 
   .light {
     /* ── Light mode ──
-       Anthropic Claude docs palette (data-theme=claude, data-mode=light) */
-    --background: 48 33.3% 97.1%; /* bg-100 */
-    --foreground: 60 2.6% 7.6%; /* text-100 */
+       Source: Anthropic Claude docs CSS variables (platform.claude.com) */
+    --background: 60 14% 97%; /* _gray-20 — warm off-white */
+    --foreground: 0 0% 4%; /* _gray-900 */
 
-    --muted: 48 25% 92.2%; /* bg-300 */
-    --muted-foreground: 51 3.1% 43.7%; /* text-400 */
+    --muted: 45 12% 93%; /* _gray-50 */
+    --muted-foreground: 45 3% 52%; /* _gray-400 */
 
-    --popover: 0 0% 100%; /* bg-000 */
-    --popover-foreground: 60 2.6% 7.6%;
+    --popover: 0 0% 100%; /* _gray-0 */
+    --popover-foreground: 0 0% 4%;
 
-    --border: 51 16.5% 84.5%; /* pictogram-200 */
-    --input: 50 20.7% 88.6%; /* bg-400 */
+    --border: 53 12% 87% / 0.4; /* _gray-100 at 40% (Anthropic hairline-shade) */
+    --input: 51 11% 88%; /* _gray-90 */
 
-    --card: 0 0% 100%;
-    --card-foreground: 60 2.6% 7.6%;
+    --card: 0 0% 100%; /* _gray-0 */
+    --card-foreground: 0 0% 4%;
 
-    --primary: 15 63.1% 59.6%; /* accent-brand */
+    --primary: 14.8 63.1% 59.6%; /* _brand-clay */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 48 25% 92.2%; /* bg-300 */
-    --secondary-foreground: 60 2.5% 23.3%; /* text-200 */
+    --secondary: 45 12% 93%; /* _gray-50 */
+    --secondary-foreground: 60 3% 21%; /* _gray-700 */
 
-    --accent: 53 28.6% 94.5%; /* bg-200 */
-    --accent-foreground: 60 2.5% 23.3%;
+    --accent: 60 11% 95%; /* _gray-40 */
+    --accent-foreground: 60 3% 21%;
 
-    --destructive: 0 56.2% 45.4%; /* danger-100 */
+    --destructive: 0 55% 47%; /* _red-500 */
     --destructive-foreground: 0 0% 100%;
 
-    --ring: 15 63.1% 59.6%;
+    --ring: 14.8 63.1% 59.6%;
 
-    --success: 103 72.3% 26.9%; /* success-100 */
+    --success: 79 94% 37%; /* _green-300 */
     --success-foreground: 0 0% 100%;
 
-    --surface: 53 28.6% 94.5%; /* bg-200 */
-    --surface-deep: 48 33.3% 97.1%; /* bg-100 */
+    --surface: 60 11% 95%; /* _gray-40 */
+    --surface-deep: 60 14% 97%; /* _gray-20 */
 
-    /* ── Semantic: agent & orchestration ── */
-    --permission: 230 72% 65%; /* medium blue (CC light: 87,105,247) */
-    --plan-mode: 180 33% 20%; /* muted teal (CC light: 0,102,102) */
-    --user-message-bg: 0 0% 94%; /* (CC light: rgb(240,240,240)) */
-    --user-message-bg-hover: 0 0% 99%; /* (CC light: rgb(252,252,252)) */
-    --bash-bg: 300 4% 98%; /* (CC light: rgb(250,245,250)) */
-    --memory-bg: 195 33% 94%; /* (CC light: rgb(230,245,250)) */
+    /* ── Semantic: orchestration (from Anthropic palette) ── */
+    --permission: 213 77% 56%; /* _blue-400 */
+    --plan-mode: 159 73% 40%; /* _aqua-350 */
+    --user-message-bg: 60 10% 96%; /* _gray-30 — subtly distinct from bg */
+    --user-message-bg-hover: 60 14% 99%; /* _gray-10 */
+    --bash-bg: 60 14% 99%; /* _gray-10 */
+    --memory-bg: 45 12% 93%; /* _gray-50 */
 
-    /* ── Agent color cycling (8 slots, CC light sub-agent palette) ── */
-    --agent-0: 0 72% 51%; /* red */
-    --agent-1: 217 84% 53%; /* blue */
-    --agent-2: 142 64% 36%; /* green */
-    --agent-3: 43 96% 40%; /* yellow */
-    --agent-4: 271 76% 56%; /* purple */
-    --agent-5: 21 90% 48%; /* orange */
-    --agent-6: 330 81% 51%; /* pink */
-    --agent-7: 189 91% 36%; /* cyan */
+    /* ── Agent color cycling (8 slots, Anthropic spectrum -500 for light bg) ── */
+    --agent-0: 0 55% 47%; /* _red-500 */
+    --agent-1: 213 68% 45%; /* _blue-500 */
+    --agent-2: 84 100% 24%; /* _green-500 */
+    --agent-3: 38 100% 29%; /* _yellow-500 */
+    --agent-4: 248 62% 58%; /* _violet-500 */
+    --agent-5: 17 72% 40%; /* _orange-500 */
+    --agent-6: 338 48% 46%; /* _magenta-500 */
+    --agent-7: 162 79% 28%; /* _aqua-500 */
 
-    --diff-add-bg: 103 72.3% 26.9% / 0.12;
-    --diff-add-text: 103 72.3% 26.9%;
-    --diff-del-bg: 0 56.2% 45.4% / 0.12;
-    --diff-del-text: 0 56.2% 45.4%;
-    --diff-hunk-text: 210 70.9% 51.6%; /* accent-secondary-100 */
+    --diff-add-bg: 79 94% 37% / 0.12; /* _green-300 */
+    --diff-add-text: 81 100% 30%; /* _green-400 */
+    --diff-del-bg: 0 55% 47% / 0.12; /* _red-500 */
+    --diff-del-text: 0 55% 47%; /* _red-500 */
+    --diff-hunk-text: 213 77% 56%; /* _blue-400 */
   }
 }
 
