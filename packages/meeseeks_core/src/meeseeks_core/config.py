@@ -404,6 +404,24 @@ class HooksConfig(BaseModel):
     on_session_end: list[HookEntry] = Field(default_factory=list)
 
 
+class ProjectConfig(BaseModel):
+    """A configured project accessible via the API."""
+
+    path: str = ""
+    description: str = ""
+
+    @validator("path", pre=True, always=True)
+    def _normalize_path(cls, value: Any) -> str:
+        raw = str(value).strip() if value else ""
+        if raw:
+            return str(Path(raw).expanduser().resolve())
+        return ""
+
+
+def _projects_config_default() -> dict[str, ProjectConfig]:
+    return {}
+
+
 class AgentConfig(BaseModel):
     """Configuration for the sub-agent hypervisor."""
 
@@ -516,6 +534,19 @@ class AppConfig(BaseModel):
     api: APIConfig = Field(default_factory=_api_config_default)
     agent: AgentConfig = Field(default_factory=_agent_config_default)
     hooks: HooksConfig = Field(default_factory=_hooks_config_default)
+    projects: dict[str, ProjectConfig] = Field(default_factory=_projects_config_default)
+
+    @validator("projects", pre=True, always=True)
+    def _normalize_projects(cls, value: Any) -> dict[str, ProjectConfig]:
+        if not isinstance(value, dict):
+            return {}
+        result: dict[str, ProjectConfig] = {}
+        for name, cfg in value.items():
+            if isinstance(cfg, dict):
+                result[str(name)] = ProjectConfig.parse_obj(cfg)
+            elif isinstance(cfg, ProjectConfig):
+                result[str(name)] = cfg
+        return result
 
     class Config:
         """Pydantic configuration settings."""
@@ -872,11 +903,71 @@ def ensure_example_configs(
     return app_target, mcp_target
 
 
+def _discover_cwd_mcp_json(cwd: str | None = None) -> dict[str, Any] | None:
+    """Read ``.mcp.json`` from *cwd* and return parsed config, or ``None``.
+
+    Supports both ``{"mcpServers": {...}}`` (Claude Code style) and
+    ``{"servers": {...}}`` (Meeseeks native) schemas.
+    """
+    work_dir = Path(cwd) if cwd else Path.cwd()
+    mcp_json = work_dir / ".mcp.json"
+    if not mcp_json.is_file():
+        return None
+    try:
+        with mcp_json.open(encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger.warning("Failed to read %s: %s", mcp_json, exc)
+        return None
+    if not isinstance(raw, dict):
+        return None
+    # Normalize Claude Code schema: mcpServers → servers
+    if "mcpServers" in raw and "servers" not in raw:
+        raw["servers"] = raw.pop("mcpServers")
+    return raw
+
+
+def get_merged_mcp_config(cwd: str | None = None) -> dict[str, Any]:
+    """Load and merge MCP configs: global config + CWD ``.mcp.json``.
+
+    CWD servers override global servers with the same name.
+    Returns the merged config dict with a ``servers`` key.
+    When MCP is disabled (via ``set_mcp_config_path(None)``), returns ``{}``.
+    """
+    if _MCP_CONFIG_DISABLED:
+        return {}
+
+    # 1. Load global config
+    global_config: dict[str, Any] = {}
+    global_path = get_mcp_config_path()
+    if global_path and Path(global_path).is_file():
+        try:
+            with open(global_path, encoding="utf-8") as fh:
+                global_config = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            _logger.warning("Failed to read global MCP config %s: %s", global_path, exc)
+
+    if not isinstance(global_config, dict):
+        global_config = {}
+
+    # 2. Discover CWD .mcp.json
+    cwd_config = _discover_cwd_mcp_json(cwd)
+
+    # 3. Merge: CWD overrides global
+    if cwd_config:
+        merged = _deep_merge(dict(global_config), cwd_config)
+    else:
+        merged = global_config
+
+    return merged
+
+
 __all__ = [
     "AppConfig",
     "ConfigCheck",
     "HookEntry",
     "HooksConfig",
+    "ProjectConfig",
     "ensure_app_config",
     "ensure_example_configs",
     "get_app_config_path",
@@ -885,6 +976,7 @@ __all__ = [
     "get_config_value",
     "get_last_preflight",
     "get_mcp_config_path",
+    "get_merged_mcp_config",
     "reset_config",
     "resolve_meeseeks_home",
     "set_app_config_path",

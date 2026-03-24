@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import Any
 
 from meeseeks_core.classes import ActionStep
@@ -44,8 +45,38 @@ def _log_runtime_failure(server_name: str, tool_name: str, exc: Exception) -> No
         logging.opt(exception=exc).debug("MCP runtime traceback")
 
 
+_ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _expand_env_vars(config: dict[str, Any]) -> dict[str, Any]:
+    """Recursively expand ``${VAR}`` and ``$VAR`` patterns in string values."""
+
+    def _expand_str(value: str) -> str:
+        def _replace(match: re.Match[str]) -> str:
+            var_name = match.group(1) or match.group(2)
+            resolved = os.environ.get(var_name)
+            if resolved is None:
+                logging.debug("Env var '{}' referenced in MCP config not found", var_name)
+                return match.group(0)  # Leave unresolved
+            return resolved
+        return _ENV_VAR_PATTERN.sub(_replace, value)
+
+    def _walk(obj: Any) -> Any:
+        if isinstance(obj, str):
+            return _expand_str(obj)
+        if isinstance(obj, dict):
+            return {k: _walk(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_walk(item) for item in obj]
+        return obj
+
+    return _walk(config)
+
+
 def _normalize_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
     """Normalize legacy MCP config keys for adapter compatibility."""
+    # Expand env vars first
+    config = _expand_env_vars(config)
     servers = config.get("servers", {})
     for server_config in servers.values():
         if "http_headers" in server_config and "headers" not in server_config:
@@ -55,8 +86,17 @@ def _normalize_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
-def _load_mcp_config(path: str | None = None) -> dict[str, Any]:
+def _load_mcp_config(
+    path: str | None = None,
+    *,
+    cwd: str | None = None,
+) -> dict[str, Any]:
     """Load MCP server configuration from disk.
+
+    When *cwd* is provided (or *path* is omitted), uses
+    ``get_merged_mcp_config(cwd)`` to merge global config with any
+    CWD-local ``.mcp.json``.  Falls back to single-file loading when
+    an explicit *path* is given.
 
     Returns:
         Parsed MCP configuration dictionary.
@@ -66,10 +106,24 @@ def _load_mcp_config(path: str | None = None) -> dict[str, Any]:
         OSError: If the configuration file cannot be read.
         json.JSONDecodeError: If the configuration is invalid JSON.
     """
-    config_path = path or get_mcp_config_path()
-    if not config_path:
-        raise ValueError("MCP config path is not set.")
-    config_path = os.path.abspath(config_path)
+    if path is None:
+        # Use merged discovery: global + CWD .mcp.json
+        from meeseeks_core.config import get_merged_mcp_config
+
+        merged = get_merged_mcp_config(cwd)
+        if not merged or not merged.get("servers"):
+            # Fall back to single-path for backward compat
+            config_path = get_mcp_config_path()
+            if not config_path:
+                raise ValueError("MCP config path is not set.")
+            config_path = os.path.abspath(config_path)
+            if not os.path.exists(config_path):
+                raise ValueError(f"MCP config not found at {config_path}.")
+            with open(config_path, encoding="utf-8") as handle:
+                merged = json.load(handle)
+        return _normalize_mcp_config(merged)
+
+    config_path = os.path.abspath(path)
     if not os.path.exists(config_path):
         raise ValueError(f"MCP config not found at {config_path}.")
     with open(config_path, encoding="utf-8") as handle:

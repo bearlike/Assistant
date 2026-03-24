@@ -10,6 +10,7 @@ from meeseeks_core.config import set_mcp_config_path
 from meeseeks_tools.integration.homeassistant import HomeAssistant, cache_monitor
 from meeseeks_tools.integration.mcp import (
     MCPToolRunner,
+    _expand_env_vars,
     _load_mcp_config,
     _prepare_mcp_input,
     discover_mcp_tool_details_with_failures,
@@ -591,3 +592,53 @@ def test_cache_monitor_cleans_entities():
     assert all(service["domain"] == "light" for service in holder.cache["services"])
     assert any(entity["entity_id"].startswith("light.") for entity in holder.cache["entities"])
     assert any(sensor["entity_id"].startswith("sensor.") for sensor in holder.cache["sensors"])
+
+
+# -- Env var expansion in MCP config -------------------------------------------
+
+
+class TestExpandEnvVars:
+    """Tests for _expand_env_vars() in mcp.py."""
+
+    def test_expand_env_vars_basic(self, monkeypatch):
+        """${VAR} is expanded to the environment variable value."""
+        monkeypatch.setenv("MY_TOKEN", "secret123")
+        config = {"servers": {"s": {"headers": {"Authorization": "Bearer ${MY_TOKEN}"}}}}
+        result = _expand_env_vars(config)
+        assert result["servers"]["s"]["headers"]["Authorization"] == "Bearer secret123"
+
+    def test_expand_env_vars_dollar_syntax(self, monkeypatch):
+        """$VAR (without braces) is expanded."""
+        monkeypatch.setenv("API_KEY", "abc")
+        config = {"key": "$API_KEY"}
+        result = _expand_env_vars(config)
+        assert result["key"] == "abc"
+
+    def test_expand_env_vars_missing(self, monkeypatch):
+        """Missing env vars are left as-is."""
+        monkeypatch.delenv("NONEXISTENT_VAR_12345", raising=False)
+        config = {"url": "http://${NONEXISTENT_VAR_12345}/api"}
+        result = _expand_env_vars(config)
+        assert result["url"] == "http://${NONEXISTENT_VAR_12345}/api"
+
+    def test_expand_env_vars_nested(self, monkeypatch):
+        """Expansion works in nested dicts and lists."""
+        monkeypatch.setenv("HOST", "localhost")
+        monkeypatch.setenv("PORT", "8080")
+        config = {
+            "servers": {
+                "s1": {
+                    "url": "http://${HOST}:${PORT}",
+                    "args": ["--host", "${HOST}"],
+                },
+            },
+        }
+        result = _expand_env_vars(config)
+        assert result["servers"]["s1"]["url"] == "http://localhost:8080"
+        assert result["servers"]["s1"]["args"] == ["--host", "localhost"]
+
+    def test_expand_env_vars_non_string_passthrough(self):
+        """Non-string values (int, bool, None) pass through unchanged."""
+        config = {"port": 8080, "enabled": True, "extra": None}
+        result = _expand_env_vars(config)
+        assert result == {"port": 8080, "enabled": True, "extra": None}

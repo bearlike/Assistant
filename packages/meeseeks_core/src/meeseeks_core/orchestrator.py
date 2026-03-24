@@ -44,23 +44,25 @@ class Orchestrator:
         permission_policy: PermissionPolicy | None = None,
         approval_callback: Callable[[ActionStep], bool] | None = None,
         hook_manager: HookManager | None = None,
+        cwd: str | None = None,
     ) -> None:
         """Initialize orchestration dependencies."""
+        self._cwd = cwd
         self._model_name = (
             model_name
             or get_config_value("llm", "action_plan_model")
             or get_config_value("llm", "default_model", default="gpt-5.2")
         )
         self._session_store = session_store or SessionStore()
-        self._tool_registry = tool_registry or load_registry()
+        self._tool_registry = tool_registry or load_registry(cwd=cwd)
         self._permission_policy = permission_policy or load_permission_policy()
         self._approval_callback = approval_callback or approval_callback_from_config()
         self._hook_manager = hook_manager or default_hook_manager()
         self._context_builder = ContextBuilder(self._session_store)
         self._planner = Planner(self._tool_registry)
-        self._project_instructions = discover_project_instructions()
+        self._project_instructions = discover_project_instructions(cwd)
         self._skill_registry = SkillRegistry()
-        self._skill_registry.load()
+        self._skill_registry.load(cwd)
 
     def run(
         self,
@@ -208,6 +210,7 @@ class Orchestrator:
                     project_instructions=self._project_instructions,
                     skill_instructions=skill_instructions,
                     skill_registry=self._skill_registry,
+                    cwd=self._cwd,
                 )
                 max_steps = max(1, max_iters) * 3
                 try:

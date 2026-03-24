@@ -34,6 +34,7 @@ export type SessionContext = {
   branch?: string;
   mcp_tools?: string[];
   skill?: string;
+  project?: string;
   attachments?: AttachmentPayload[];
 };
 

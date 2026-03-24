@@ -295,6 +295,32 @@ def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | No
     return None
 
 
+def _resolve_project_cwd(request_data: dict[str, object]) -> str | None:
+    """Resolve a project name from the request to its filesystem path.
+
+    Returns the project path as ``cwd``, or ``None`` if no project is specified.
+    Raises ``ValueError`` when a project name is given but not configured.
+    """
+    project_name = request_data.get("project")
+    if not project_name or not isinstance(project_name, str):
+        # Also check inside context payload
+        ctx = request_data.get("context")
+        if isinstance(ctx, dict):
+            project_name = ctx.get("project")
+    if not project_name or not isinstance(project_name, str):
+        return None
+    project_name = project_name.strip()
+    if not project_name:
+        return None
+    projects = get_config().projects
+    project = projects.get(project_name)
+    if project is None:
+        raise ValueError(f"Project '{project_name}' not configured.")
+    if not project.path:
+        raise ValueError(f"Project '{project_name}' has no path configured.")
+    return project.path
+
+
 def _resolve_skill_instructions(
     request_data: dict[str, object],
     user_query: str,
@@ -328,10 +354,32 @@ def _resolve_skill_instructions(
             return instructions
 
     return None
-    return None
 
 
 notification_service = NotificationService(notification_store, runtime.session_store)
+
+
+@ns.route("/projects")
+class Projects(Resource):
+    """List configured projects."""
+
+    @api.doc(security="apikey")
+    def get(self) -> tuple[dict, int]:
+        """Return configured projects for the UI."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        projects = get_config().projects
+        result = [
+            {
+                "name": name,
+                "path": cfg.path,
+                "description": cfg.description,
+            }
+            for name, cfg in projects.items()
+            if cfg.path
+        ]
+        return {"projects": result}, 200
 
 
 @ns.route("/sessions")
@@ -361,6 +409,18 @@ class Sessions(Resource):
         if session_tag:
             runtime.session_store.tag_session(session_id, session_tag)
         context_payload = _build_context_payload(payload)
+        # Include project in context if provided
+        try:
+            project_cwd = _resolve_project_cwd(payload)
+        except ValueError:
+            project_cwd = None
+        if project_cwd:
+            project_name = (payload.get("project") or "")
+            if not project_name:
+                ctx = payload.get("context")
+                if isinstance(ctx, dict):
+                    project_name = ctx.get("project", "")
+            context_payload["project"] = project_name
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
         return {"session_id": session_id}, 200
@@ -401,6 +461,12 @@ class SessionQuery(Resource):
             request_data, user_query, context_payload
         )
 
+        # Resolve project → cwd
+        try:
+            project_cwd = _resolve_project_cwd(request_data)
+        except ValueError as exc:
+            return {"message": str(exc)}, 400
+
         started = runtime.start_async(
             session_id=session_id,
             user_query=user_query,
@@ -408,6 +474,7 @@ class SessionQuery(Resource):
             mode=mode,
             allowed_tools=allowed_tools,
             skill_instructions=skill_instructions,
+            cwd=project_cwd,
         )
         if not started:
             return {"message": "Session is already running."}, 409
@@ -697,7 +764,14 @@ class Tools(Resource):
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
-        registry = load_registry()
+        project_name = request.args.get("project")
+        project_cwd = None
+        if project_name:
+            projects = get_config().projects
+            proj = projects.get(project_name)
+            if proj and proj.path:
+                project_cwd = proj.path
+        registry = load_registry(cwd=project_cwd)
         specs = registry.list_specs(include_disabled=True)
         tools = [
             {
@@ -726,8 +800,15 @@ class Skills(Resource):
             return auth_error
         from meeseeks_core.skills import SkillRegistry
 
+        project_name = request.args.get("project")
+        project_cwd = None
+        if project_name:
+            projects = get_config().projects
+            proj = projects.get(project_name)
+            if proj and proj.path:
+                project_cwd = proj.path
         registry = SkillRegistry()
-        registry.load()
+        registry.load(project_cwd)
         skills = [
             {
                 "name": s.name,
@@ -790,6 +871,13 @@ class MeeseeksQuery(Resource):
         notification_service.emit_started(session_id)
 
         allowed_tools = _extract_allowed_tools(context_payload)
+
+        # Resolve project → cwd
+        try:
+            project_cwd = _resolve_project_cwd(request_data)
+        except ValueError as exc:
+            return {"message": str(exc)}, 400
+
         logging.info("Received user query: {}", user_query)
         task_queue: TaskQueue = runtime.run_sync(
             user_query=user_query,
@@ -797,6 +885,7 @@ class MeeseeksQuery(Resource):
             approval_callback=auto_approve,
             mode=mode,
             allowed_tools=allowed_tools,
+            cwd=project_cwd,
         )
         notification_service.emit_completion(session_id)
         task_result = deepcopy(task_queue.task_result)

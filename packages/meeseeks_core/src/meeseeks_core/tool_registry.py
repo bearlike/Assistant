@@ -441,7 +441,11 @@ def _build_manifest_payload(
     return {"tools": tools}
 
 
-def _try_pool_discovery(mcp_config_path: str) -> dict[str, list[dict[str, object]]] | None:
+def _try_pool_discovery(
+    mcp_config_path: str,
+    *,
+    cwd: str | None = None,
+) -> dict[str, list[dict[str, object]]] | None:
     """Attempt MCP tool discovery via the connection pool.
 
     Returns the tool details dict on success, or ``None`` if the pool
@@ -456,7 +460,7 @@ def _try_pool_discovery(mcp_config_path: str) -> dict[str, list[dict[str, object
     try:
         import asyncio
 
-        config = _normalize_mcp_config(_load_mcp_config(mcp_config_path))
+        config = _normalize_mcp_config(_load_mcp_config(mcp_config_path, cwd=cwd))
         pool = get_mcp_pool()
         asyncio.run(pool.connect_all(config))
         details = pool.get_all_tool_details()
@@ -472,7 +476,11 @@ def _try_pool_discovery(mcp_config_path: str) -> dict[str, list[dict[str, object
         return None
 
 
-def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
+def _ensure_auto_manifest(
+    mcp_config_path: str,
+    *,
+    cwd: str | None = None,
+) -> str | None:
     manifest_path = _default_manifest_cache_path()
     existing_manifest: dict[str, JsonValue] | None = None
     if os.path.exists(manifest_path):
@@ -483,7 +491,7 @@ def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
             logging.warning("Failed to read existing MCP manifest: {}", exc)
 
     # Try pool-based discovery first (faster, persistent connections)
-    pool_tools = _try_pool_discovery(mcp_config_path)
+    pool_tools = _try_pool_discovery(mcp_config_path, cwd=cwd)
 
     mcp_module = _load_mcp_support()
     mcp_tools: dict[str, list[dict[str, object]]] = {}
@@ -497,7 +505,9 @@ def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
         global_failure = RuntimeError("MCP support is not installed.")
     else:
         try:
-            config = mcp_module._load_mcp_config(mcp_config_path)
+            config = mcp_module._load_mcp_config(
+                mcp_config_path if mcp_config_path else None, cwd=cwd
+            )
             mcp_tools, failures = mcp_module.discover_mcp_tool_details_with_failures(config)
         except Exception as exc:
             logging.warning("Failed to auto-discover MCP tools: {}", exc)
@@ -550,12 +560,24 @@ def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
     return manifest_path
 
 
-def load_registry(manifest_path: str | None = None) -> ToolRegistry:
+def load_registry(
+    manifest_path: str | None = None,
+    *,
+    cwd: str | None = None,
+) -> ToolRegistry:
     """Load tool registry, auto-discovering MCP tools when configured."""
     if manifest_path is None:
         mcp_config_path = get_mcp_config_path()
-        if mcp_config_path and os.path.exists(mcp_config_path):
-            manifest_path = _ensure_auto_manifest(mcp_config_path)
+        # Check for CWD .mcp.json even when no global config exists
+        has_cwd_mcp = False
+        if cwd:
+            from pathlib import Path as _Path
+
+            has_cwd_mcp = (_Path(cwd) / ".mcp.json").is_file()
+        if (mcp_config_path and os.path.exists(mcp_config_path)) or has_cwd_mcp:
+            manifest_path = _ensure_auto_manifest(
+                mcp_config_path or "", cwd=cwd
+            )
 
     if not manifest_path:
         return _default_registry()
