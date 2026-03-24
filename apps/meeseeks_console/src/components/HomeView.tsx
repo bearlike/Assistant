@@ -57,10 +57,10 @@ export function HomeView({
   );
   const filteredSessions = scopedSessions.filter((session) => {
     const title = session.title?.toLowerCase() || '';
-    const repo = session.context?.repo?.toLowerCase() || '';
+    const project = (session.context?.project || session.context?.repo || '').toLowerCase();
     return (
       title.includes(searchQuery.toLowerCase()) ||
-      repo.includes(searchQuery.toLowerCase()));
+      project.includes(searchQuery.toLowerCase()));
 
   });
   return (
@@ -212,8 +212,12 @@ export function HomeView({
                       </h3>
                       <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
                         <span>{formatSessionTime(session.created_at)}</span>
-                        <span>·</span>
-                        <span>{session.context?.repo || 'repo'}</span>
+                        {(session.context?.project || session.context?.repo) && (
+                          <>
+                            <span>·</span>
+                            <span>{session.context?.project || session.context?.repo}</span>
+                          </>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-3">

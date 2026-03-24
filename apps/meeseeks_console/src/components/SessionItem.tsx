@@ -35,12 +35,18 @@ export function SessionItem({
         </h3>
         <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
           <span>{formatSessionTime(session.created_at)}</span>
-          <span>·</span>
-          <span>{session.context?.repo || 'No repo'}</span>
-          <span>·</span>
-          <span className="font-mono">
-            {session.context?.branch || 'No branch'}
-          </span>
+          {(session.context?.project || session.context?.repo) && (
+            <>
+              <span>·</span>
+              <span>{session.context?.project || session.context?.repo}</span>
+            </>
+          )}
+          {session.context?.branch && (
+            <>
+              <span>·</span>
+              <span className="font-mono">{session.context.branch}</span>
+            </>
+          )}
         </div>
       </div>
 
