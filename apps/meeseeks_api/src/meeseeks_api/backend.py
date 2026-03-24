@@ -15,7 +15,7 @@ from flask import Flask, request
 from flask_restx import Api, Resource, fields
 from meeseeks_core.classes import TaskQueue
 from meeseeks_core.common import get_logger
-from meeseeks_core.config import get_config, get_config_value, start_preflight
+from meeseeks_core.config import get_config, get_config_value, get_version, start_preflight
 from meeseeks_core.notifications import NotificationStore
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.session_runtime import SessionRuntime, parse_core_command
@@ -144,7 +144,7 @@ notification_store = NotificationStore(root_dir=session_store.root_dir)
 share_store = ShareStore(root_dir=session_store.root_dir)
 
 authorizations = {"apikey": {"type": "apiKey", "in": "header", "name": "X-API-KEY"}}
-VERSION = get_config_value("runtime", "version", default="(Dev)")
+VERSION = get_version()
 api = Api(
     app,
     version=VERSION,

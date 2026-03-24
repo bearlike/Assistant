@@ -3,37 +3,34 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 
-from meeseeks_core.action_runner import ActionPlanRunner
+from meeseeks_core.agent_context import AgentContext
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, PlanStep, TaskQueue
-from meeseeks_core.common import get_logger, session_log_context
+from meeseeks_core.common import discover_project_instructions, get_logger, session_log_context
 from meeseeks_core.compaction import should_compact, summarize_events
 from meeseeks_core.components import langfuse_session_context
 from meeseeks_core.config import get_config_value
 from meeseeks_core.context import ContextBuilder
 from meeseeks_core.hooks import HookManager, default_hook_manager
+from meeseeks_core.hypervisor import AgentHypervisor
 from meeseeks_core.permissions import (
     PermissionPolicy,
     approval_callback_from_config,
     load_permission_policy,
 )
-from meeseeks_core.planning import (
-    Planner,
-    PlanUpdater,
-    ResponseSynthesizer,
-    StepExecutor,
-)
-from meeseeks_core.reflection import StepReflector
+from meeseeks_core.planning import Planner
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.token_budget import get_token_budget
-from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, load_registry
+from meeseeks_core.tool_registry import ToolRegistry, load_registry
+from meeseeks_core.tool_use_loop import ToolUseLoop
 
 logging = get_logger(name="core.orchestrator")
 
 
 class Orchestrator:
-    """Plan-act-observe orchestration loop."""
+    """Unified tool-use orchestration loop."""
 
     def __init__(
         self,
@@ -58,9 +55,7 @@ class Orchestrator:
         self._hook_manager = hook_manager or default_hook_manager()
         self._context_builder = ContextBuilder(self._session_store)
         self._planner = Planner(self._tool_registry)
-        self._step_executor = StepExecutor(self._tool_registry)
-        self._plan_updater = PlanUpdater(self._tool_registry)
-        self._synthesizer = ResponseSynthesizer(self._tool_registry)
+        self._project_instructions = discover_project_instructions()
 
     def run(
         self,
@@ -73,7 +68,7 @@ class Orchestrator:
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
-        """Run a plan-act-observe loop for a session."""
+        """Run orchestration for a session."""
         if session_id is None:
             session_id = self._session_store.create_session()
 
@@ -137,170 +132,80 @@ class Orchestrator:
                 user_query=user_query,
                 model_name=self._model_name,
             )
-            plan = initial_plan
-            tool_specs = (
-                self._tool_registry.list_specs()
-                if resolved_mode == "plan"
-                else self._tool_registry.list_specs_for_mode("act")
-            )
-            if plan is None:
-                # Tool filtering is handled by Planner._filter_specs_by_intent()
-                # No separate ToolSelector LLM call needed in act mode
-                plan = self._planner.generate(
+            tool_specs = self._tool_registry.list_specs_for_mode(resolved_mode)
+
+            if resolved_mode == "plan":
+                # Plan-only mode: generate plan, return without executing.
+                plan = initial_plan or self._planner.generate(
                     user_query,
                     self._model_name,
                     context=context,
-                    tool_specs=tool_specs,
-                    mode=resolved_mode,
+                    tool_specs=self._tool_registry.list_specs(),
+                    mode="plan",
+                    project_instructions=self._project_instructions,
                 )
-            if resolved_mode != "plan" and plan and self._plan_needs_verification(plan):
-                tool_specs = self._ensure_web_verification_tools(
-                    tool_specs,
-                    self._tool_registry.list_specs_for_mode("act"),
-                )
-            state.plan = plan.steps
-            self._append_action_plan(session_id, plan.steps)
-
-            task_queue = TaskQueue(plan_steps=plan.steps, action_steps=[])
-            tool_outputs: list[str] = []
-            executed_steps: list[ActionStep] = []
-            completed_steps: list[PlanStep] = []
-            remaining_steps: list[PlanStep] = list(plan.steps)
-            last_error: str | None = None
-            direct_response: str | None = None
-
-            if resolved_mode == "plan":
+                state.plan = plan.steps
                 state.done = True
                 state.done_reason = "planned"
+                self._append_action_plan(session_id, plan.steps)
+                task_queue = TaskQueue(plan_steps=plan.steps, action_steps=[])
             else:
-                max_steps = max(0, max_iters) * 3
-                steps_run = 0
-                allowed_tool_ids = {spec.tool_id for spec in tool_specs}
-                while remaining_steps and steps_run < max_steps:
-                    if should_cancel is not None and should_cancel():
-                        state.done = True
-                        state.done_reason = "canceled"
-                        break
-                    current_step = remaining_steps.pop(0)
-                    decision = self._step_executor.decide(
-                        user_query,
-                        current_step,
-                        self._model_name,
-                        allowed_tools=tool_specs,
-                        context=context,
-                    )
-                    decision_type = (decision.decision or "").strip().lower()
-                    if decision_type == "respond":
-                        if decision.response:
-                            direct_response = decision.response
-                            tool_outputs.append(decision.response)
-                        else:
-                            last_error = "Step executor returned an empty response."
-                            tool_outputs.append(f"ERROR: {last_error}")
-                        completed_steps.append(current_step)
-                        steps_run += 1
-                        state.done = True
-                        state.done_reason = "completed" if direct_response else "incomplete"
-                        break
-                    elif decision_type == "tool":
-                        tool_id = str(decision.tool_id or "").strip()
-                        if not tool_id or tool_id not in allowed_tool_ids:
-                            last_error = f"Tool '{tool_id or 'unknown'}' not allowed for this step."
-                            tool_outputs.append(f"ERROR: {last_error}")
-                        else:
-                            args = decision.args
-                            if args is None:
-                                args = ""
-                            elif not isinstance(args, (dict, str)):
-                                args = str(args)
-                            action_step = self._build_action_step(
-                                current_step,
-                                tool_id,
-                                args,
-                            )
-                            run_queue = TaskQueue(plan_steps=plan.steps, action_steps=[action_step])
-                            run_queue = self._run_action_plan(
-                                session_id,
-                                run_queue,
-                                mode=resolved_mode,
-                                should_cancel=should_cancel,
-                            )
-                            executed_steps.extend(run_queue.action_steps)
-                            if run_queue.task_result:
-                                tool_outputs.append(run_queue.task_result)
-                            if run_queue.last_error:
-                                last_error = run_queue.last_error
-                    else:
-                        last_error = f"Invalid step decision: {decision.decision}"
-                        tool_outputs.append(f"ERROR: {last_error}")
-
-                    completed_steps.append(current_step)
-                    steps_run += 1
-                    if should_cancel is not None and should_cancel():
-                        state.done = True
-                        state.done_reason = "canceled"
-                        break
-                    if remaining_steps and len(remaining_steps) > 1:
-                        old_count = len(remaining_steps)
-                        remaining_steps = self._plan_updater.update(
-                            user_query,
-                            self._model_name,
-                            completed_step=current_step,
-                            last_result=tool_outputs[-1] if tool_outputs else None,
-                            remaining_steps=remaining_steps,
-                            context=context,
-                            steps_run=steps_run,
-                            max_steps=max_steps,
-                        )
-                        # Hard guard: never allow plan inflation
-                        if len(remaining_steps) > old_count:
-                            remaining_steps = remaining_steps[:old_count]
-                    state.plan = completed_steps + remaining_steps
-                    self._append_action_plan(session_id, state.plan)
-
-                if not state.done:
-                    if remaining_steps and steps_run >= max_steps:
-                        state.done_reason = "max_steps_reached"
-                    elif last_error:
-                        state.done_reason = (
-                            "blocked" if "permission denied" in last_error.lower() else "incomplete"
-                        )
-                    else:
-                        state.done_reason = "completed"
-                    state.done = True
-
-            task_queue.plan_steps = completed_steps + remaining_steps
-            task_queue.action_steps = executed_steps
-            task_queue.task_result = "\n".join(item for item in tool_outputs if item).strip()
-            task_queue.last_error = last_error
-            state.tool_results.extend(tool_outputs)
-
-            if direct_response is not None and resolved_mode != "plan" and state.done:
-                task_queue.task_result = direct_response
-                self._session_store.append_event(
-                    session_id, {"type": "assistant", "payload": {"text": direct_response}}
+                # Act mode: run the async tool-use loop via the agent hypervisor.
+                max_depth = int(
+                    get_config_value("agent", "max_depth", default=5)
                 )
-            elif (
-                state.done
-                and resolved_mode != "plan"
-                and self._should_synthesize_response(task_queue)
-            ):
-                tool_outputs = tool_outputs or self._collect_tool_outputs(task_queue)
-                response = self._synthesizer.synthesize(
-                    user_query=user_query,
-                    tool_outputs=tool_outputs,
+                max_concurrent = int(
+                    get_config_value("agent", "max_concurrent", default=20)
+                )
+                registry = AgentHypervisor(max_concurrent=max_concurrent)
+                root_ctx = AgentContext.root(
                     model_name=self._model_name,
-                    context=context,
+                    max_depth=max_depth,
+                    should_cancel=should_cancel,
+                    event_logger=lambda event: self._session_store.append_event(
+                        session_id, event
+                    ),
+                    registry=registry,
                 )
-                task_queue.task_result = response
+                loop = ToolUseLoop(
+                    agent_context=root_ctx,
+                    tool_registry=self._tool_registry,
+                    permission_policy=self._permission_policy,
+                    approval_callback=self._approval_callback,
+                    hook_manager=self._hook_manager,
+                    project_instructions=self._project_instructions,
+                )
+                max_steps = max(1, max_iters) * 3
+                try:
+                    task_queue, state = asyncio.run(
+                        loop.run(
+                            user_query,
+                            tool_specs=tool_specs,
+                            context=context,
+                            max_steps=max_steps,
+                            plan=initial_plan,
+                        )
+                    )
+                finally:
+                    # Belt-and-suspenders: ensure all agents cleaned up.
+                    try:
+                        asyncio.run(registry.cleanup(timeout=5.0))
+                    except Exception:
+                        pass
+                state.session_id = session_id
+
+            # Emit assistant response event.
+            if task_queue.task_result and resolved_mode != "plan":
                 self._session_store.append_event(
-                    session_id, {"type": "assistant", "payload": {"text": response}}
+                    session_id,
+                    {"type": "assistant", "payload": {"text": task_queue.task_result}},
                 )
 
             if not state.done:  # pragma: no cover - defensive guard
+                state.done = True
                 state.done_reason = "max_iterations_reached"
 
-            completion_payload = {
+            completion_payload: dict[str, object] = {
                 "done": state.done,
                 "done_reason": state.done_reason,
                 "task_result": task_queue.task_result,
@@ -340,32 +245,9 @@ class Orchestrator:
             )
             return (task_queue, state) if return_state else task_queue
 
-    def _run_action_plan(
-        self,
-        session_id: str,
-        task_queue: TaskQueue,
-        *,
-        mode: str,
-        should_cancel: Callable[[], bool] | None = None,
-    ) -> TaskQueue:
-        reflector = StepReflector(self._model_name)
-        allowed_tools = None
-        if mode == "plan":
-            allowed_tools = {
-                spec.tool_id for spec in self._tool_registry.list_specs_for_mode("plan")
-            }
-        runner = ActionPlanRunner(
-            tool_registry=self._tool_registry,
-            permission_policy=self._permission_policy,
-            approval_callback=self._approval_callback,
-            hook_manager=self._hook_manager,
-            reflector=reflector,
-            event_logger=lambda event: self._session_store.append_event(session_id, event),
-            allowed_tool_ids=allowed_tools,
-            mode=mode,
-            should_cancel=should_cancel,
-        )
-        return runner.run(task_queue)
+    # ------------------------------------------------------------------
+    # Session helpers (kept from original)
+    # ------------------------------------------------------------------
 
     def _maybe_auto_compact(self, session_id: str) -> str | None:
         events = self._session_store.load_transcript(session_id)
@@ -379,127 +261,17 @@ class Orchestrator:
         return None
 
     def _append_action_plan(self, session_id: str, steps: list[PlanStep]) -> None:
-        payload_steps = [self._serialize_plan_step(step) for step in steps]
+        payload_steps = [{"title": step.title, "description": step.description} for step in steps]
         self._session_store.append_event(
             session_id, {"type": "action_plan", "payload": {"steps": payload_steps}}
         )
 
     @staticmethod
-    def _serialize_plan_step(step: PlanStep) -> dict[str, str]:
-        return {"title": step.title, "description": step.description}
-
-    def _build_action_step(
-        self,
-        plan_step: PlanStep,
-        tool_id: str,
-        args: object | None,
-    ) -> ActionStep:
-        operation = self._infer_operation(tool_id)
-        return ActionStep(
-            title=plan_step.title,
-            objective=plan_step.description,
-            tool_id=tool_id,
-            operation=operation,
-            tool_input=args if args is not None else "",
-        )
-
-    @staticmethod
-    def _infer_operation(tool_id: str) -> str:
-        lowered = tool_id.lower()
-        write_keywords = [
-            "set",
-            "edit",
-            "write",
-            "update",
-            "delete",
-            "create",
-            "apply",
-            "add",
-            "remove",
-            "patch",
-            "insert",
-            "append",
-            "replace",
-            "upload",
-            "post",
-            "put",
-        ]
-        if any(keyword in lowered for keyword in write_keywords):
-            return "set"
-        read_keywords = [
-            "read",
-            "list",
-            "search",
-            "get",
-            "fetch",
-            "query",
-            "lookup",
-            "web_search",
-            "web_url_read",
-        ]
-        if any(keyword in lowered for keyword in read_keywords):
-            return "get"
-        return "get"
-
-    @staticmethod
-    def _expand_tool_ids(selected_ids: set[str], tool_specs: list[ToolSpec]) -> set[str]:
-        if not selected_ids:
-            return selected_ids
-        lowered_selected = {tool_id.lower() for tool_id in selected_ids}
-        has_web_search = any(
-            key in tool_id
-            for tool_id in lowered_selected
-            for key in ("internet_search", "web_search", "searxng")
-        )
-        if has_web_search:
-            for spec in tool_specs:
-                tool_id = spec.tool_id.lower()
-                if "web_url_read" in tool_id or "web_url" in tool_id or "web_read" in tool_id:
-                    selected_ids.add(spec.tool_id)
-        return selected_ids
-
-    @staticmethod
-    def _plan_needs_verification(plan: Plan) -> bool:
-        keywords = ("open", "verify", "read", "source", "citation", "citations")
-        for step in plan.steps:
-            combined = f"{step.title} {step.description}".lower()
-            if any(keyword in combined for keyword in keywords):
-                return True
-        return False
-
-    @staticmethod
-    def _ensure_web_verification_tools(
-        selected: list[ToolSpec],
-        all_specs: list[ToolSpec],
-    ) -> list[ToolSpec]:
-        existing = {spec.tool_id for spec in selected}
-        needed = []
-        for spec in all_specs:
-            if spec.tool_id in existing:
-                continue
-            tool_id = spec.tool_id.lower()
-            if (
-                "internet_search" in tool_id
-                or "web_search" in tool_id
-                or "searxng" in tool_id
-                or "web_url_read" in tool_id
-                or "web_url" in tool_id
-                or "web_read" in tool_id
-            ):
-                needed.append(spec)
-        return selected + needed
-
-    @staticmethod
     def _should_update_summary(text: str) -> bool:
         lowered = text.lower()
         keywords = [
-            "remember",
-            "note this",
-            "save this",
-            "pin this",
-            "keep this",
-            "magic number",
-            "magic numbers",
+            "remember", "note this", "save this", "pin this",
+            "keep this", "magic number", "magic numbers",
         ]
         return any(keyword in lowered for keyword in keywords)
 
@@ -520,40 +292,17 @@ class Orchestrator:
         return task_queue
 
     @staticmethod
-    def _collect_tool_outputs(task_queue: TaskQueue) -> list[str]:
-        outputs: list[str] = []
-        for step in task_queue.action_steps:
-            if step.result is None:
-                continue
-            content = getattr(step.result, "content", step.result)
-            outputs.append(str(content))
-        if outputs or not task_queue.last_error:
-            return outputs
-        return [f"ERROR: {task_queue.last_error}"]
-
-    @staticmethod
-    def _should_synthesize_response(task_queue: TaskQueue) -> bool:
-        if not task_queue.action_steps:
-            return True
-        return bool(Orchestrator._collect_tool_outputs(task_queue))
-
-    @staticmethod
     def _resolve_mode(user_query: str, mode: str | None) -> str:
         if mode in {"plan", "act"}:
             return mode
         lowered = user_query.strip().lower()
         plan_triggers = [
-            "make a plan",
-            "create a plan",
-            "draft a plan",
-            "plan the",
-            "plan for",
-            "planning",
+            "make a plan", "create a plan", "draft a plan",
+            "plan the", "plan for", "planning",
         ]
         if any(trigger in lowered for trigger in plan_triggers):
             return "plan"
         return "act"
-
 
 
 __all__ = ["Orchestrator"]

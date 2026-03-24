@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -79,6 +79,17 @@ class CompletionPayload(TypedDict):
     last_error: NotRequired[str]
 
 
+class SubAgentPayload(TypedDict):
+    """Payload describing a sub-agent lifecycle event."""
+
+    action: Literal["start", "stop"]
+    agent_id: str
+    parent_id: str | None
+    depth: int
+    model: str
+    detail: str
+
+
 EventPayload = (
     ActionPlanPayload
     | PermissionPayload
@@ -86,6 +97,7 @@ EventPayload = (
     | UserPayload
     | AssistantPayload
     | CompletionPayload
+    | SubAgentPayload
     | dict[str, JsonValue]
 )
 

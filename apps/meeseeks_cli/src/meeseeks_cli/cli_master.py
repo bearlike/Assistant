@@ -8,7 +8,6 @@ import os
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -16,6 +15,7 @@ from prompt_toolkit.history import FileHistory
 from rich import box
 from rich.columns import Columns
 from rich.console import Console, Group, RenderableType
+from rich.live import Live
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.status import Status
@@ -76,6 +76,7 @@ from meeseeks_core.config import (
     get_config,
     get_config_value,
     get_mcp_config_path,
+    get_version,
     start_preflight,
 )
 from meeseeks_core.hooks import HookManager
@@ -98,6 +99,7 @@ from meeseeks_cli.aider_ui import (
     render_markdown,
     render_shell_payload,
 )
+from meeseeks_cli.cli_agent_display import AgentDisplayManager
 from meeseeks_cli.cli_commands import get_registry
 from meeseeks_cli.cli_context import CliState, CommandContext
 from meeseeks_cli.cli_dialogs import DialogFactory, _confirm_aider, _confirm_rich_panel
@@ -221,13 +223,7 @@ def _format_model(model: str, max_len: int) -> Text:
 
 
 def _resolve_cli_version() -> str:
-    configured = get_config_value("runtime", "version")
-    if configured:
-        return str(configured)
-    try:
-        return version("meeseeks-cli")
-    except PackageNotFoundError:
-        return "0.0.0"
+    return get_version()
 
 
 def _brand_line(ctx: HeaderContext, width: int) -> Text:
@@ -518,7 +514,38 @@ def _run_query(
 ) -> None:
     initial_plan = None
     mode = _resolve_query_mode(query, state)
-    if state.show_plan:
+
+    # In plan mode with interactive prompt, allow plan iteration.
+    if mode == "plan" and prompt_func is not None:
+        plan = generate_action_plan(
+            user_query=query,
+            model_name=state.model_name,
+            session_summary=store.load_summary(state.session_id),
+            mode="plan",
+        )
+        _render_plan_with_registry(console, plan)
+        state.last_plan = plan
+        while True:
+            choice = (prompt_func("[E]xecute  [R]evise  [D]one > ") or "d").strip().lower()
+            if choice.startswith("e"):
+                initial_plan = plan
+                mode = "act"
+                break
+            elif choice.startswith("r"):
+                feedback = prompt_func("Feedback > ")
+                plan = generate_action_plan(
+                    user_query=query,
+                    model_name=state.model_name,
+                    session_summary=store.load_summary(state.session_id),
+                    mode="plan",
+                    feedback=feedback,
+                )
+                _render_plan_with_registry(console, plan)
+                state.last_plan = plan
+            else:
+                console.print("Plan saved.", style="dim")
+                return
+    elif state.show_plan and mode != "plan":
         initial_plan = generate_action_plan(
             user_query=query,
             model_name=state.model_name,
@@ -547,18 +574,45 @@ def _run_query(
     if approval_callback is None and prompt_func is None:
         logging.debug("Forcing auto-approve for headless query execution.")
         approval_callback = auto_approve
-    hook_manager = _build_cli_hook_manager(console, tool_registry)
-    task_queue = runtime.run_sync(
-        user_query=query,
-        model_name=state.model_name,
-        max_iters=args.max_iters,
-        initial_plan=initial_plan,
-        session_id=state.session_id,
-        tool_registry=tool_registry,
-        approval_callback=approval_callback,
-        hook_manager=hook_manager,
-        mode=mode,
-    )
+    use_live_display = console.is_terminal and not getattr(args, "no_color", False)
+
+    if use_live_display:
+        agent_display = AgentDisplayManager()
+        hook_manager = _build_cli_hook_manager(console, tool_registry, agent_display)
+
+        with Live(
+            Text(""),
+            console=console,
+            refresh_per_second=4,
+            transient=True,
+        ) as live:
+            live.get_renderable = lambda: (  # type: ignore[method-assign]
+                agent_display.render() if agent_display.has_agents else Text("")
+            )
+            task_queue = runtime.run_sync(
+                user_query=query,
+                model_name=state.model_name,
+                max_iters=args.max_iters,
+                initial_plan=initial_plan,
+                session_id=state.session_id,
+                tool_registry=tool_registry,
+                approval_callback=approval_callback,
+                hook_manager=hook_manager,
+                mode=mode,
+            )
+    else:
+        hook_manager = _build_cli_hook_manager(console, tool_registry)
+        task_queue = runtime.run_sync(
+            user_query=query,
+            model_name=state.model_name,
+            max_iters=args.max_iters,
+            initial_plan=initial_plan,
+            session_id=state.session_id,
+            tool_registry=tool_registry,
+            approval_callback=approval_callback,
+            hook_manager=hook_manager,
+            mode=mode,
+        )
 
     _render_results_with_registry(
         console,
@@ -848,7 +902,16 @@ def _render_tool_payload(payload: dict[str, object], style: str) -> RenderableTy
 def _build_cli_hook_manager(
     console: Console,
     tool_registry: ToolRegistry,
+    agent_display: AgentDisplayManager | None = None,
 ) -> HookManager:
+    # When agent display is active, the live tree replaces the per-tool spinner.
+    if agent_display is not None:
+        return HookManager(
+            on_agent_start=[agent_display.on_start],
+            on_agent_stop=[agent_display.on_stop],
+        )
+
+    # Fallback: original spinner behavior (no agent tree).
     status_holder: dict[str, Status] = {}
     specs = _tool_specs_by_id(tool_registry)
 

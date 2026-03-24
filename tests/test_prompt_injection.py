@@ -85,8 +85,8 @@ def test_prompt_skips_missing_tool_prompt(monkeypatch):
     assert "Tool guidance" not in prompt
 
 
-def test_prompt_includes_mcp_schema(monkeypatch, tmp_path):
-    """Include MCP tool schema hints in the prompt when available."""
+def test_prompt_includes_mcp_tool_listing(monkeypatch, tmp_path):
+    """Include MCP tools in the prompt tool listing."""
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
         """{
@@ -94,7 +94,7 @@ def test_prompt_includes_mcp_schema(monkeypatch, tmp_path):
     {
       "tool_id": "mcp_srv_tool",
       "name": "Test Tool",
-      "description": "Test",
+      "description": "Test MCP tool",
       "kind": "mcp",
       "server": "srv",
       "tool": "ask",
@@ -109,9 +109,7 @@ def test_prompt_includes_mcp_schema(monkeypatch, tmp_path):
     )
     registry = load_registry(str(manifest_path))
     prompt = _build_prompt(registry)
-    assert "Tool input schemas" in prompt
     assert "mcp_srv_tool" in prompt
-    assert "question" in prompt
 
 
 def test_prompt_avoids_tool_prefix_labels():
@@ -249,7 +247,8 @@ def test_action_planner_prompt_identity():
     assert "Examples in the prompt are illustrative only" in prompt
 
 
-def test_response_synthesizer_prompt_identity():
-    """Ensure the response prompt includes agent identity."""
-    prompt = get_system_prompt("response-synthesizer")
-    assert "Meeseeks, a task-completing agent" in prompt
+def test_system_prompt_identity():
+    """Ensure the unified system prompt includes agent identity."""
+    prompt = get_system_prompt("system")
+    assert "Meeseeks" in prompt
+    assert "tool" in prompt.lower()

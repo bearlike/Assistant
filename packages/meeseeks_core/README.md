@@ -1,10 +1,12 @@
 # meeseeks-core
 
-Core orchestration engine for Meeseeks. This package owns the plan → tool selection → step execution loop, session storage, and event model shared by every interface.
+Core orchestration engine for Meeseeks. This package owns the unified async tool-use loop, agent hypervisor, session storage, and event model shared by every interface.
 
 ## What it provides
-- Orchestrator + planning stages (`Planner`, `ToolSelector`, `StepExecutor`, `PlanUpdater`).
-- Tool execution runner with permissions and hooks.
+- `ToolUseLoop` — single async execution engine driven by native `bind_tools`.
+- `AgentHypervisor` — control plane for sub-agent admission, lifecycle, and cleanup.
+- `Orchestrator` + `Planner` for session lifecycle and plan generation.
+- Permission policies and hooks for tool execution gating.
 - Session runtime, transcripts (JSONL), summaries, and compaction.
 - Event payloads used by the API and UIs (`action_plan`, `tool_result`, `permission`).
 

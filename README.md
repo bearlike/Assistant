@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
 
 # Intro
 
-Meeseeks is an AI task agent assistant built on a plan → tool selection → step execution loop. It breaks a request into steps, chooses tools per step, runs them, and synthesizes a final reply. It keeps a session transcript, compacts long histories, and stores summaries for continuity across longer conversations.
+Meeseeks is an AI task agent assistant built on a single async tool-use loop driven by native `bind_tools`. The LLM decides which tools to call, can spawn sub-agents for parallel work, and synthesizes a final reply. It keeps a session transcript, compacts long histories, and stores summaries for continuity across longer conversations.
 
 <details>
 <summary><i>Legends (Expand to View) </i></summary>
@@ -61,10 +61,10 @@ We are upgrading the API backend to better support a task-orchestration frontend
 </table>
 
 ## Core workflow
-- (✅) **Plan → select tools → execute:** Builds a short plan, chooses the right tools per step, and executes them.
-- (✅) **Step-level reflection:** Validates tool outcomes and adjusts tool inputs when required.
-- (✅) **Plan updates:** Emits updated action plans after each step so UIs can refresh the to‑do list.
-- (✅) **Synthesized replies:** Produces a final answer after tool results are collected and summarized.
+- (✅) **Unified tool-use loop:** A single async `ToolUseLoop` where the LLM drives tool selection and execution via native `bind_tools`.
+- (✅) **Sub-agent spawning:** The LLM can delegate subtasks to parallel sub-agents via `spawn_agent`, managed by the `AgentHypervisor` control plane.
+- (✅) **Tool scoping & permissions:** Sub-agents receive scoped tool access (allowlist/denylist filtered before binding). Permission policies gate all tool execution.
+- (✅) **Synthesized replies:** Produces a final answer after tool results are collected.
 
 ## Memory and context management
 - (✅) **Session transcripts:** Writes tool activity and responses to disk for continuity.
@@ -136,13 +136,11 @@ flowchart LR
   subgraph Core["Core Orchestration\n(packages/meeseeks_core)"]
     TaskMaster["orchestrate_session\n(task_master.py)"]
     Orchestrator["Orchestrator\n(orchestrator.py)"]
+    ToolUseLoop["ToolUseLoop\n(tool_use_loop.py)"]
+    Hypervisor["AgentHypervisor\n(hypervisor.py)"]
+    SpawnAgent["SpawnAgentTool\n(spawn_agent.py)"]
     Planner["Planner\n(planning.py)"]
-    ToolSelector["ToolSelector\n(planning.py)"]
-    StepExecutor["StepExecutor\n(planning.py)"]
-    PlanUpdater["PlanUpdater\n(planning.py)"]
-    ActionPlanRunner["ActionPlanRunner\n(action_runner.py)"]
     ContextBuilder["ContextBuilder\n(context.py)"]
-    ActionStep["ActionStep\n(classes.py)"]
     TaskQueue["TaskQueue\n(classes.py)"]
   end
 
@@ -182,24 +180,24 @@ flowchart LR
   SessionRuntime --> RunRegistry
 
   TaskMaster --> Orchestrator
+  Orchestrator --> ToolUseLoop
   Orchestrator --> Planner
-  Orchestrator --> ToolSelector
-  Orchestrator --> StepExecutor
-  Orchestrator --> PlanUpdater
-  Orchestrator --> ActionPlanRunner
+  Orchestrator --> Hypervisor
   Orchestrator --> ContextBuilder
-  Orchestrator --> ToolRegistry
   Orchestrator --> SessionStore
 
-  ActionPlanRunner --> TaskQueue
-  ActionPlanRunner --> ActionStep
+  ToolUseLoop --> SpawnAgent
+  ToolUseLoop --> ToolRegistry
+  ToolUseLoop --> TaskQueue
+  SpawnAgent -->|"child loop"| ToolUseLoop
+  SpawnAgent --> Hypervisor
 
   ToolRegistry --> AbstractTool
   AbstractTool --> LocalTools
   AbstractTool --> MCPTools
   AbstractTool --> HATools
 
-  Orchestrator --> BuildChatModel
+  ToolUseLoop --> BuildChatModel
   BuildChatModel --> ChatModel
 
   SessionStore --> EventLog
