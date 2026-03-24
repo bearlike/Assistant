@@ -70,30 +70,36 @@ export function ConversationTimeline({
                     </span>
                   </button>
                   {entry.turnId === activeTurnId &&
-              <div className="flex items-center justify-between gap-3 text-xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-full px-3 py-1 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        {isRunning &&
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        }
-                        <span>{isRunning ? 'Running...' : 'Trace available'}</span>
-                        {isRunning && activeAgents.size > 0 &&
-                          <div className="text-xs text-[hsl(var(--muted-foreground))] px-4 py-1.5 border-b border-[hsl(var(--border))] bg-[hsl(var(--accent))]/30">
-                            <span className="font-medium">{activeAgents.size} agent{activeAgents.size !== 1 ? 's' : ''} running</span>
-                            {[...activeAgents.entries()].map(([id, a]) => (
-                              <span key={id} className="ml-2 opacity-70">[{id}] {a.detail}</span>
-                            ))}
-                          </div>
-                        }
-                      </div>
-                      {onShowActiveTrace &&
+              <div className="inline-flex flex-col text-xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-lg overflow-hidden max-w-[320px]">
+                      <div className="flex items-center justify-between gap-3 px-3 py-1.5">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {isRunning &&
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                          }
+                          <span className="whitespace-nowrap">{isRunning ? 'Running...' : 'Trace available'}</span>
+                          {isRunning && activeAgents.size > 0 &&
+                            <span className="whitespace-nowrap opacity-70">{activeAgents.size} agent{activeAgents.size !== 1 ? 's' : ''}</span>
+                          }
+                        </div>
+                        {onShowActiveTrace &&
                   <button
                     onClick={onShowActiveTrace}
-                    className="flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
-
+                    className="flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors shrink-0">
                           <span>Open trace</span>
                           <ChevronRight className="w-3 h-3 opacity-50" />
                         </button>
                   }
+                      </div>
+                      {isRunning && activeAgents.size > 0 &&
+                        <div className="border-t border-[hsl(var(--border))] px-3 py-1.5 space-y-0.5 bg-[hsl(var(--accent))]/30">
+                          {[...activeAgents.entries()].map(([id, a]) => (
+                            <div key={id} className="flex items-center gap-1.5 text-[10px] text-[hsl(var(--muted-foreground))]">
+                              <span className="font-mono shrink-0">{id}</span>
+                              <span className="truncate opacity-70">{a.detail}</span>
+                            </div>
+                          ))}
+                        </div>
+                      }
                     </div>
                   }
                 </div>
