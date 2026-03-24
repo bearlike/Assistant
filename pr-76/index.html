@@ -581,14 +581,14 @@
 - <a href="session-runtime/">Session runtime</a> - shared runtime used by CLI + API</p>
 <h2 id="feature-highlights-quick-view">Feature highlights (quick view)</h2>
 <ul>
-<li>Plan → tool selection → step execution loop to keep work grounded in tool results.</li>
+<li>Unified async tool-use loop where the LLM drives tool selection via native <code>bind_tools</code>.</li>
+<li>Sub-agent spawning for parallel subtasks, managed by the AgentHypervisor control plane.</li>
 <li>Multiple interfaces (chat UI, REST API, Home Assistant, terminal CLI) backed by one core engine.</li>
 <li>Tool registry for local tools plus optional MCP tools.</li>
 <li>Built-in local file and shell tools (Aider adapters) for edit blocks, read, list, and shell execution.</li>
 <li>Session transcripts with auto-compact for long runs and token budget awareness.</li>
 <li>Context snapshots built from recent turns plus summaries of prior activity.</li>
 <li>Session listings filter empty sessions and support archiving via the API.</li>
-<li>Step-level reflection after tool execution to validate outcomes and adjust tool inputs.</li>
 <li>Permission gate with approval callbacks plus lightweight hooks around tool execution.</li>
 <li>Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.</li>
 <li>Event payloads: <code>action_plan</code> steps are <code>{title, description}</code>, tool events use <code>tool_id</code>, <code>operation</code>, and <code>tool_input</code>.</li>
@@ -610,7 +610,8 @@
 <h2 id="architecture-in-a-glance">Architecture in a glance</h2>
 <ul>
 <li>The UI or API sends a user request into the core orchestrator.</li>
-<li>The orchestrator builds a short action plan, runs tools, and replans if needed.</li>
+<li>The orchestrator runs a single async <code>ToolUseLoop</code> — the LLM decides which tools to call.</li>
+<li>The LLM can spawn sub-agents for parallel work, managed by the <code>AgentHypervisor</code>.</li>
 <li>Tool results and summaries are stored in a session transcript for continuity.</li>
 </ul>
 <pre class="mermaid"><code>flowchart LR
@@ -621,18 +622,17 @@
   CLI --&gt; Runtime
   Chat --&gt; Runtime
   API --&gt; Runtime
-  Runtime --&gt; Core
+  Runtime --&gt; Orchestrator
   Runtime --&gt; SessionStore
-  Runtime --&gt; Planner
-  Planner --&gt; ToolSelector
-  ToolSelector --&gt; StepExecutor
-  StepExecutor --&gt; Tools
+  Orchestrator --&gt; ToolUseLoop
+  ToolUseLoop --&gt; Tools
+  ToolUseLoop --&gt;|"spawn_agent"| ToolUseLoop
   Tools --&gt; LocalTools
   Tools --&gt; MCP
   Tools --&gt; HomeAssistant
   Runtime --&gt; Events["Session events (JSONL)"]
   Events --&gt; Polling["Event polling (API only)"]
-  Core --&gt; Langfuse</code></pre>
+  Orchestrator --&gt; Langfuse</code></pre>
 <h2 id="getting-started">Getting started</h2>
 <p>See <a href="getting-started/">Installation</a> for setup, and <a href="clients-cli/">CLI</a> for command reference.</p>
 <h2 id="deployment-docker">Deployment (Docker)</h2>
