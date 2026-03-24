@@ -5,13 +5,19 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from pydantic.v1 import BaseModel, Field
 
-from meeseeks_core.common import format_tool_input, get_logger
+from meeseeks_core.common import (
+    InstructionSource,
+    discover_all_instructions,
+    format_tool_input,
+    get_logger,
+)
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
 from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.llm import build_chat_model
@@ -126,6 +132,21 @@ class ContextBuilder:
     def __init__(self, session_store: SessionStore) -> None:
         """Initialize the context builder."""
         self._session_store = session_store
+        self._instruction_cache: list[InstructionSource] | None = None
+        self._instruction_cache_cwd: str | None = None
+
+    def get_instructions(self, cwd: str | None = None) -> list[InstructionSource]:
+        """Get cached instruction sources, refreshing if CWD changed."""
+        effective_cwd = cwd or str(Path.cwd())
+        if self._instruction_cache is None or self._instruction_cache_cwd != effective_cwd:
+            self._instruction_cache = discover_all_instructions(effective_cwd)
+            self._instruction_cache_cwd = effective_cwd
+        return self._instruction_cache
+
+    def invalidate_cache(self) -> None:
+        """Clear all cached context."""
+        self._instruction_cache = None
+        self._instruction_cache_cwd = None
 
     def build(
         self,

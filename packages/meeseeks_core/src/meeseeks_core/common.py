@@ -6,9 +6,11 @@ from __future__ import annotations
 import json
 import logging as logging_real
 import os
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import NamedTuple
@@ -145,6 +147,18 @@ def num_tokens_from_string(string: str, encoding_name: str = "cl100k_base") -> i
     return num_tokens
 
 
+def count_tokens(text: str, model: str = "gpt-4") -> int:
+    """Estimate token count for text using tiktoken.
+
+    Falls back to a rough character-based estimate if encoding lookup fails.
+    """
+    try:
+        enc = tiktoken.encoding_for_model(model)
+        return len(enc.encode(text))
+    except Exception:
+        return len(text) // 4  # Rough fallback
+
+
 def get_unique_timestamp() -> int:
     """Get a unique timestamp for the task queue."""
     # Get the number of seconds since epoch (Jan 1, 1970) as a float
@@ -170,35 +184,174 @@ def get_system_prompt(name: str = "action-planner") -> str:
 _NOLOAD_MARKER = "<!-- meeseeks:noload -->"
 
 
-def discover_project_instructions(cwd: str | None = None) -> str | None:
-    """Discover and load CLAUDE.md/AGENTS.md instruction files from the working directory.
+@dataclass
+class InstructionSource:
+    """A single source of project/user instructions."""
 
-    CLAUDE.md takes priority. Falls back to AGENTS.md if CLAUDE.md is absent.
+    content: str
+    path: str
+    level: str  # "user", "project", "rules", "local"
+    priority: int  # Higher = takes precedence in composition
+
+
+def _find_git_root(start: Path) -> Path | None:
+    """Walk up from start to find the nearest .git directory."""
+    current = start.resolve()
+    while True:
+        if (current / ".git").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
+def discover_all_instructions(cwd: str | None = None) -> list[InstructionSource]:
+    """Discover instructions from all levels, ordered by priority (lowest first).
+
+    Levels (ascending priority):
+    1. User:    ~/.claude/CLAUDE.md (priority 10)
+    2. Project: CLAUDE.md, .claude/CLAUDE.md walking up to git root (priority 20-29)
+    3. Rules:   .claude/rules/*.md in CWD (priority 30)
+    4. Local:   CLAUDE.local.md in CWD (priority 40)
+    """
+    sources: list[InstructionSource] = []
+    work_dir = Path(cwd) if cwd else Path.cwd()
+
+    # 1. User level
+    user_claude = Path.home() / ".claude" / "CLAUDE.md"
+    if user_claude.is_file():
+        content = user_claude.read_text(encoding="utf-8", errors="replace").strip()
+        if content and not content.startswith(_NOLOAD_MARKER):
+            sources.append(
+                InstructionSource(content=content, path=str(user_claude), level="user", priority=10)
+            )
+
+    # 2. Project level — walk from CWD up to git root (or filesystem root)
+    git_root = _find_git_root(work_dir)
+    stop_at = git_root or Path(work_dir.anchor)
+    current = work_dir
+    depth = 0
+    while current >= stop_at:
+        for filename in ("CLAUDE.md", ".claude/CLAUDE.md"):
+            candidate = current / filename
+            if candidate.is_file():
+                content = candidate.read_text(encoding="utf-8", errors="replace").strip()
+                if content and not content.startswith(_NOLOAD_MARKER):
+                    # Closer to CWD = higher priority within project level
+                    prio = 20 + min(depth, 9)  # 20 (CWD) to 29 (root)
+                    sources.append(
+                        InstructionSource(
+                            content=content, path=str(candidate), level="project", priority=prio
+                        )
+                    )
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+        depth += 1
+
+    # 3. Rules level — .claude/rules/*.md in CWD
+    rules_dir = work_dir / ".claude" / "rules"
+    if rules_dir.is_dir():
+        for md_file in sorted(rules_dir.glob("*.md")):
+            if md_file.is_file():
+                content = md_file.read_text(encoding="utf-8", errors="replace").strip()
+                if content and not content.startswith(_NOLOAD_MARKER):
+                    sources.append(
+                        InstructionSource(
+                            content=content, path=str(md_file), level="rules", priority=30
+                        )
+                    )
+
+    # 4. Local level
+    local_claude = work_dir / "CLAUDE.local.md"
+    if local_claude.is_file():
+        content = local_claude.read_text(encoding="utf-8", errors="replace").strip()
+        if content and not content.startswith(_NOLOAD_MARKER):
+            sources.append(
+                InstructionSource(
+                    content=content, path=str(local_claude), level="local", priority=40
+                )
+            )
+
+    # Sort by priority (lowest first — will be composed in order, higher priority last)
+    sources.sort(key=lambda s: s.priority)
+    return sources
+
+
+def get_git_context(cwd: str | None = None, max_status_chars: int = 2000) -> str | None:
+    """Gather git context (branch, status, recent commits) for system prompt injection.
+
+    Returns formatted git context string, or None if not in a git repo.
+    """
+    work_dir = cwd or str(Path.cwd())
+
+    def _run_git(*args: str) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=work_dir,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.stdout.strip() if result.returncode == 0 else None
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return None
+
+    branch = _run_git("rev-parse", "--abbrev-ref", "HEAD")
+    if branch is None:
+        return None  # Not a git repo
+
+    default_branch = _run_git("rev-parse", "--abbrev-ref", "origin/HEAD")
+    if default_branch:
+        default_branch = default_branch.replace("origin/", "")
+
+    status = _run_git("status", "--short")
+    if status and len(status) > max_status_chars:
+        status = status[:max_status_chars] + "\n[truncated]"
+
+    recent_log = _run_git("log", "--oneline", "-n", "5")
+
+    parts = [f"Current branch: {branch}"]
+    if default_branch:
+        parts.append(f"Main branch: {default_branch}")
+    if status:
+        parts.append(f"\nStatus:\n{status}")
+    else:
+        parts.append("\nStatus: clean")
+    if recent_log:
+        parts.append(f"\nRecent commits:\n{recent_log}")
+
+    return "\n".join(parts)
+
+
+def discover_project_instructions(cwd: str | None = None) -> str | None:
+    """Discover and load project instruction files. Uses hierarchical discovery.
+
+    Falls back to legacy AGENTS.md behavior when no hierarchical sources are found.
     Files containing ``<!-- meeseeks:noload -->`` on the first line are skipped.
 
-    Returns the instruction text, or ``None`` if no files are found.
+    Returns the composed instruction text, or ``None`` if no files are found.
     """
-    logging = get_logger(name="core.common.discover_project_instructions")
-    base = Path(cwd) if cwd else Path.cwd()
+    sources = discover_all_instructions(cwd)
+    if not sources:
+        # Fallback to legacy AGENTS.md behavior
+        work_dir = Path(cwd) if cwd else Path.cwd()
+        agents_md = work_dir / "AGENTS.md"
+        if agents_md.is_file():
+            content = agents_md.read_text(encoding="utf-8", errors="replace").strip()
+            if content and not content.startswith(_NOLOAD_MARKER):
+                return content
+        return None
 
-    for filename in ("CLAUDE.md", "AGENTS.md"):
-        candidate = base / filename
-        if not candidate.is_file():
-            continue
-        try:
-            content = candidate.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            logging.warning("Failed to read {}: {}", candidate, exc)
-            continue
-        if not content:
-            continue
-        if content.startswith(_NOLOAD_MARKER):
-            logging.debug("Skipping {} (noload marker)", candidate)
-            continue
-        logging.info("Loaded project instructions from {}", candidate)
-        return content
-
-    return None
+    # Compose all sources with section headers
+    parts: list[str] = []
+    for src in sources:
+        header = f"# Instructions ({src.level}: {Path(src.path).name})"
+        parts.append(f"{header}\n\n{src.content}")
+    return "\n\n---\n\n".join(parts)
 
 
 def format_tool_input(tool_input: object) -> str:
