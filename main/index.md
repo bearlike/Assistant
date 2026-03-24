@@ -30,14 +30,14 @@ bearlike/Assistant (Meeseeks) is an AI task agent assistant that breaks a reques
 - [Session runtime](session-runtime.md) - shared runtime used by CLI + API
 
 ## Feature highlights (quick view)
-- Plan → tool selection → step execution loop to keep work grounded in tool results.
+- Unified async tool-use loop where the LLM drives tool selection via native `bind_tools`.
+- Sub-agent spawning for parallel subtasks, managed by the AgentHypervisor control plane.
 - Multiple interfaces (chat UI, REST API, Home Assistant, terminal CLI) backed by one core engine.
 - Tool registry for local tools plus optional MCP tools.
 - Built-in local file and shell tools (Aider adapters) for edit blocks, read, list, and shell execution.
 - Session transcripts with auto-compact for long runs and token budget awareness.
 - Context snapshots built from recent turns plus summaries of prior activity.
 - Session listings filter empty sessions and support archiving via the API.
-- Step-level reflection after tool execution to validate outcomes and adjust tool inputs.
 - Permission gate with approval callbacks plus lightweight hooks around tool execution.
 - Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.
 - Event payloads: `action_plan` steps are `{title, description}`, tool events use `tool_id`, `operation`, and `tool_input`.
@@ -58,7 +58,8 @@ Prompts are packaged under `packages/meeseeks_core/src/meeseeks_core/prompts/`.
 
 ## Architecture in a glance
 - The UI or API sends a user request into the core orchestrator.
-- The orchestrator builds a short action plan, runs tools, and replans if needed.
+- The orchestrator runs a single async `ToolUseLoop` — the LLM decides which tools to call.
+- The LLM can spawn sub-agents for parallel work, managed by the `AgentHypervisor`.
 - Tool results and summaries are stored in a session transcript for continuity.
 
 ```mermaid
@@ -70,18 +71,17 @@ flowchart LR
   CLI --> Runtime
   Chat --> Runtime
   API --> Runtime
-  Runtime --> Core
+  Runtime --> Orchestrator
   Runtime --> SessionStore
-  Runtime --> Planner
-  Planner --> ToolSelector
-  ToolSelector --> StepExecutor
-  StepExecutor --> Tools
+  Orchestrator --> ToolUseLoop
+  ToolUseLoop --> Tools
+  ToolUseLoop -->|"spawn_agent"| ToolUseLoop
   Tools --> LocalTools
   Tools --> MCP
   Tools --> HomeAssistant
   Runtime --> Events["Session events (JSONL)"]
   Events --> Polling["Event polling (API only)"]
-  Core --> Langfuse
+  Orchestrator --> Langfuse
 ```
 
 ## Getting started
