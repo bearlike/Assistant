@@ -61,6 +61,18 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
   let idx = 0;
   let planVersion = 0;
   let previousSteps: PlanStep[] = [];
+
+  // Build agent-id → model map from sub_agent start events (first pass)
+  const agentModelMap = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === "sub_agent") {
+      const p = event.payload || {};
+      if (p.action === "start" && typeof p.agent_id === "string" && typeof p.model === "string") {
+        agentModelMap.set(p.agent_id as string, p.model as string);
+      }
+    }
+  }
+
   for (const event of events) {
     if (event.type === "tool_result") {
       const payload = event.payload || {};
@@ -76,6 +88,8 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         payload.error ||
         "";
       const success = payload.success !== false;
+      const eventAgentId = typeof payload.agent_id === "string" ? payload.agent_id : undefined;
+      const eventModel = eventAgentId ? agentModelMap.get(eventAgentId) : undefined;
 
       // Parse AgentResult JSON from spawn_agent tool results
       if (toolId === "spawn_agent" && typeof result === "string") {
@@ -115,6 +129,8 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         shellInput,
         shellOutput,
         error: !success ? String(payload.error || "Error") : undefined,
+        agentId: eventAgentId,
+        model: eventModel,
       });
     }
     if (event.type === "action_plan") {

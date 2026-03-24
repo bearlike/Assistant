@@ -31,6 +31,17 @@ function Badge({ children, color }: { children: React.ReactNode; color: string }
   );
 }
 
+function ModelTag({ model }: { model?: string }) {
+  if (!model) return null;
+  // Strip provider prefix for display (e.g., "openai/claude-sonnet-4-6" → "claude-sonnet-4-6")
+  const short = model.includes('/') ? (model.split('/').pop() ?? model) : model;
+  return (
+    <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded whitespace-nowrap">
+      {short}
+    </span>
+  );
+}
+
 function renderPermission(log: LogEntry) {
   const decision = (log.decision || 'pending').toLowerCase();
   const accent: AccentColor = decision === 'allow' ? 'emerald' : decision === 'deny' ? 'red' : 'amber';
@@ -88,7 +99,7 @@ function renderAgent(log: LogEntry) {
     <LogEventCard
       key={log.id}
       icon={<Bot className="w-4 h-4 text-blue-500" />}
-      title={<span className="font-mono">{displayId}</span>}
+      title={<span className="flex items-center gap-2"><span className="font-mono">{displayId}</span><ModelTag model={log.model} /></span>}
       badge={<Badge color={accent}>{badgeWithSteps}</Badge>}
       timestamp={log.timestamp}
       accent={accent}
@@ -213,7 +224,7 @@ function renderShell(log: LogEntry) {
     <LogEventCard
       key={log.id}
       icon={<Terminal className="w-4 h-4 text-[hsl(var(--muted-foreground))]" />}
-      title={log.title || 'tool'}
+      title={<span className="flex items-center gap-2">{log.title || 'tool'}<ModelTag model={log.model} /></span>}
       badge={hasError ? <Badge color="red">Error</Badge> : undefined}
       timestamp={log.timestamp}
       accent={hasError ? 'red' : 'muted'}
