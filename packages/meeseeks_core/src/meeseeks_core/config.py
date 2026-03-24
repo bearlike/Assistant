@@ -366,6 +366,24 @@ class APIConfig(BaseModel):
     master_token: str = Field("msk-strong-password", example="msk-strong-password")
 
 
+class HookEntry(BaseModel):
+    """A single hook configuration entry."""
+
+    type: str = "command"
+    command: str = ""
+    matcher: str | None = None
+    timeout: int = 30
+
+
+class HooksConfig(BaseModel):
+    """Configuration for external hooks."""
+
+    pre_tool_use: list[HookEntry] = Field(default_factory=list)
+    post_tool_use: list[HookEntry] = Field(default_factory=list)
+    on_session_start: list[HookEntry] = Field(default_factory=list)
+    on_session_end: list[HookEntry] = Field(default_factory=list)
+
+
 class AgentConfig(BaseModel):
     """Configuration for the sub-agent hypervisor."""
 
@@ -458,6 +476,10 @@ def _agent_config_default() -> AgentConfig:
     return AgentConfig.parse_obj({})
 
 
+def _hooks_config_default() -> HooksConfig:
+    return HooksConfig.parse_obj({})
+
+
 class AppConfig(BaseModel):
     """Typed configuration for the Meeseeks runtime."""
 
@@ -473,6 +495,7 @@ class AppConfig(BaseModel):
     chat: ChatConfig = Field(default_factory=_chat_config_default)
     api: APIConfig = Field(default_factory=_api_config_default)
     agent: AgentConfig = Field(default_factory=_agent_config_default)
+    hooks: HooksConfig = Field(default_factory=_hooks_config_default)
 
     class Config:
         """Pydantic configuration settings."""
@@ -816,6 +839,8 @@ def ensure_example_configs(
 __all__ = [
     "AppConfig",
     "ConfigCheck",
+    "HookEntry",
+    "HooksConfig",
     "ensure_app_config",
     "ensure_example_configs",
     "get_app_config_path",
