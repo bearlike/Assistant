@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from meeseeks_core.classes import ActionStep
 from meeseeks_core.common import MockSpeaker
 from meeseeks_core.config import HookEntry, HooksConfig
-from meeseeks_core.hooks import HookManager, _matches
+from meeseeks_core.hooks import (
+    HookManager,
+    _hook_env,
+    _make_command_hook,
+    _make_post_tool_hook,
+    _matches,
+)
 from meeseeks_core.permissions import PermissionDecision
 
 
@@ -193,3 +199,71 @@ class TestHookEntryDefaults:
         c = HooksConfig()
         assert c.pre_tool_use == []
         assert c.on_session_start == []
+
+
+# -- Hook env var passing ------------------------------------------------------
+
+
+class TestHookEnvVars:
+    """Tests for _hook_env() returning correct env vars."""
+
+    def test_hook_env_includes_tool_id(self):
+        step = _step("shell_run")
+        env = _hook_env(step)
+        assert env["MEESEEKS_TOOL_ID"] == "shell_run"
+
+    def test_hook_env_includes_operation(self):
+        step = ActionStep(tool_id="read_file", operation="get", tool_input="")
+        env = _hook_env(step)
+        assert env["MEESEEKS_OPERATION"] == "get"
+
+    def test_hook_env_includes_result_content(self):
+        step = _step("tool_a")
+        env = _hook_env(step, result_content="some output")
+        assert env["MEESEEKS_TOOL_RESULT"] == "some output"
+
+    def test_hook_env_truncates_long_result(self):
+        step = _step("tool_b")
+        long_content = "x" * 5000
+        env = _hook_env(step, result_content=long_content)
+        assert len(env["MEESEEKS_TOOL_RESULT"]) == 2000
+
+    def test_hook_env_no_result_key_when_none(self):
+        step = _step("tool_c")
+        env = _hook_env(step)
+        assert "MEESEEKS_TOOL_RESULT" not in env
+
+    def test_hook_env_inherits_os_environ(self, monkeypatch):
+        monkeypatch.setenv("MY_CUSTOM_VAR", "hello")
+        step = _step("tool_d")
+        env = _hook_env(step)
+        assert env["MY_CUSTOM_VAR"] == "hello"
+
+
+class TestCommandHookPassesEnv:
+    """Verify subprocess.run gets the correct env vars from hooks."""
+
+    def test_pre_tool_hook_passes_env(self):
+        entry = HookEntry(command="echo test", matcher=None, timeout=5)
+        hook = _make_command_hook(entry)
+        step = ActionStep(tool_id="my_tool", operation="set", tool_input="data")
+        with patch("meeseeks_core.hooks.subprocess.run") as mock_run:
+            hook(step)
+            mock_run.assert_called_once()
+            call_kwargs = mock_run.call_args
+            passed_env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
+            assert passed_env["MEESEEKS_TOOL_ID"] == "my_tool"
+            assert passed_env["MEESEEKS_OPERATION"] == "set"
+
+    def test_post_tool_hook_passes_result_env(self):
+        entry = HookEntry(command="echo done", matcher=None, timeout=5)
+        hook = _make_post_tool_hook(entry)
+        step = _step("shell_tool")
+        result = MockSpeaker(content="output data")
+        with patch("meeseeks_core.hooks.subprocess.run") as mock_run:
+            hook(step, result)
+            mock_run.assert_called_once()
+            call_kwargs = mock_run.call_args
+            passed_env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
+            assert passed_env["MEESEEKS_TOOL_ID"] == "shell_tool"
+            assert passed_env["MEESEEKS_TOOL_RESULT"] == "output data"

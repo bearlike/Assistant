@@ -30,6 +30,12 @@ export type SkillSummary = {
   source: string;
 };
 
+export type ProjectSummary = {
+  name: string;
+  path: string;
+  description?: string;
+};
+
 export type ApiClient = {
   listSessions: (includeArchived?: boolean) => Promise<SessionSummary[]>;
   createSession: (context?: SessionContext) => Promise<string>;
@@ -57,6 +63,7 @@ export type ApiClient = {
   interruptStep: (sessionId: string) => Promise<void>;
   listTools: () => Promise<ToolSummary[]>;
   listSkills: () => Promise<SkillSummary[]>;
+  listProjects: () => Promise<ProjectSummary[]>;
   listNotifications: () => Promise<NotificationItem[]>;
   dismissNotification: (ids: string[]) => Promise<void>;
   clearNotifications: (clearAll?: boolean) => Promise<void>;

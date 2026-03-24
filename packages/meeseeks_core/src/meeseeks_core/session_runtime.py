@@ -279,6 +279,7 @@ class SessionRuntime:
         mode: str | None = None,
         allowed_tools: list[str] | None = None,
         skill_instructions: str | None = None,
+        cwd: str | None = None,
     ) -> bool:
         """Start an asynchronous orchestration run for the session."""
         msg_queue: queue.Queue[str] = queue.Queue()
@@ -301,6 +302,7 @@ class SessionRuntime:
                 skill_instructions=skill_instructions,
                 message_queue=msg_queue,
                 interrupt_step=interrupt_event,
+                cwd=cwd,
             )
 
         return self._run_registry.start(
@@ -328,6 +330,7 @@ class SessionRuntime:
         skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
+        cwd: str | None = None,
     ) -> TaskQueue:
         """Run an orchestration request synchronously."""
         return orchestrate_session(
@@ -347,6 +350,7 @@ class SessionRuntime:
             skill_instructions=skill_instructions,
             message_queue=message_queue,
             interrupt_step=interrupt_step,
+            cwd=cwd,
         )
 
     def cancel(self, session_id: str) -> bool:

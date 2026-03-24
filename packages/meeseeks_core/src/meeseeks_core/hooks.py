@@ -172,6 +172,18 @@ def _matches(matcher: str | None, tool_id: str) -> bool:
     return fnmatch.fnmatch(tool_id, matcher)
 
 
+def _hook_env(action_step: ActionStep, result_content: str | None = None) -> dict[str, str]:
+    """Build env vars to pass to command hooks."""
+    import os
+
+    env = dict(os.environ)
+    env["MEESEEKS_TOOL_ID"] = action_step.tool_id or ""
+    env["MEESEEKS_OPERATION"] = action_step.operation or ""
+    if result_content is not None:
+        env["MEESEEKS_TOOL_RESULT"] = result_content[:2000]
+    return env
+
+
 def _make_command_hook(entry: HookEntry) -> Callable[[ActionStep], ActionStep]:
     """Create a pre-tool-use hook from a config entry."""
     def hook(action_step: ActionStep) -> ActionStep:
@@ -181,6 +193,7 @@ def _make_command_hook(entry: HookEntry) -> Callable[[ActionStep], ActionStep]:
             subprocess.run(
                 entry.command, shell=True, timeout=entry.timeout,
                 capture_output=True, text=True,
+                env=_hook_env(action_step),
             )
         except (subprocess.TimeoutExpired, OSError):
             logger.warning("Command hook timed out or failed: %s", entry.command)
@@ -193,10 +206,12 @@ def _make_post_tool_hook(entry: HookEntry) -> Callable[[ActionStep, MockSpeaker]
     def hook(action_step: ActionStep, result: MockSpeaker) -> MockSpeaker:
         if not _matches(entry.matcher, action_step.tool_id):
             return result
+        content = getattr(result, "content", None)
         try:
             subprocess.run(
                 entry.command, shell=True, timeout=entry.timeout,
                 capture_output=True, text=True,
+                env=_hook_env(action_step, str(content) if content else None),
             )
         except (subprocess.TimeoutExpired, OSError):
             logger.warning("Command hook timed out or failed: %s", entry.command)

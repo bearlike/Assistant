@@ -12,8 +12,10 @@ import {
 import { QueryMode, SessionContext } from '../types';
 import { useMcpTools } from '../hooks/useMcpTools';
 import { useSkills } from '../hooks/useSkills';
+import { useProjects } from '../hooks/useProjects';
 import { McpSelector, McpOption } from './McpSelector';
 import { SkillSelector } from './SkillSelector';
+import { ProjectSelector } from './ProjectSelector';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 type McpToolOption = McpOption & {
   server?: string;
@@ -42,7 +44,9 @@ export function InputBar({
   const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSkillOpen, setIsSkillOpen] = useState(false);
+  const [isProjectOpen, setIsProjectOpen] = useState(false);
   const [activeSkill, setActiveSkill] = useState<string | null>(null);
+  const [activeProject, setActiveProject] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>('act');
   const {
@@ -55,11 +59,17 @@ export function InputBar({
     loading: skillsLoading,
     error: skillsError
   } = useSkills();
+  const {
+    projects: availableProjects,
+    loading: projectsLoading,
+    error: projectsError
+  } = useProjects();
   const [mcps, setMcps] = useState<McpToolOption[]>([]);
   const [inputValue, setInputValue] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
   const mcpRef = useRef<HTMLDivElement>(null);
   const skillRef = useRef<HTMLDivElement>(null);
+  const projectRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -72,6 +82,9 @@ export function InputBar({
       }
       if (skillRef.current && !skillRef.current.contains(event.target as Node)) {
         setIsSkillOpen(false);
+      }
+      if (projectRef.current && !projectRef.current.contains(event.target as Node)) {
+        setIsProjectOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -161,7 +174,8 @@ export function InputBar({
     }
     const context: SessionContext = {
       mcp_tools: mcps.filter((m) => m.active).map((m) => m.id),
-      ...(activeSkill ? { skill: activeSkill } : {})
+      ...(activeSkill ? { skill: activeSkill } : {}),
+      ...(activeProject ? { project: activeProject } : {})
     };
     void onSubmit(inputValue.trim(), context, queryMode, attachedFiles);
     setInputValue('');
@@ -299,10 +313,29 @@ export function InputBar({
                     setIsSkillOpen(!isSkillOpen);
                     setIsMcpOpen(false);
                     setIsPlusMenuOpen(false);
+                    setIsProjectOpen(false);
                   }}
                   onSelect={(name) => {
                     setActiveSkill(name);
                     setIsSkillOpen(false);
+                  }} />
+
+                <ProjectSelector
+                  ref={projectRef}
+                  projects={availableProjects}
+                  activeProject={activeProject}
+                  isOpen={isProjectOpen}
+                  loading={projectsLoading}
+                  error={projectsError}
+                  onToggleOpen={() => {
+                    setIsProjectOpen(!isProjectOpen);
+                    setIsMcpOpen(false);
+                    setIsPlusMenuOpen(false);
+                    setIsSkillOpen(false);
+                  }}
+                  onSelect={(name) => {
+                    setActiveProject(name);
+                    setIsProjectOpen(false);
                   }} />
 
               </div>
@@ -432,10 +465,29 @@ export function InputBar({
                   setIsSkillOpen(!isSkillOpen);
                   setIsMcpOpen(false);
                   setIsPlusMenuOpen(false);
+                  setIsProjectOpen(false);
                 }}
                 onSelect={(name) => {
                   setActiveSkill(name);
                   setIsSkillOpen(false);
+                }} />
+
+              <ProjectSelector
+                ref={projectRef}
+                projects={availableProjects}
+                activeProject={activeProject}
+                isOpen={isProjectOpen}
+                loading={projectsLoading}
+                error={projectsError}
+                onToggleOpen={() => {
+                  setIsProjectOpen(!isProjectOpen);
+                  setIsMcpOpen(false);
+                  setIsPlusMenuOpen(false);
+                  setIsSkillOpen(false);
+                }}
+                onSelect={(name) => {
+                  setActiveProject(name);
+                  setIsProjectOpen(false);
                 }} />
 
               <button

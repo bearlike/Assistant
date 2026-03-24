@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import platform as _platform
 import queue as _queue_mod
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date as _date
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import (
@@ -32,6 +36,8 @@ from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 from meeseeks_core.types import Event
 
 logging = get_logger(name="core.tool_use_loop")
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 # Maps tool_id patterns to the AbstractTool operation ("get" or "set").
 _OPERATION_SET_KEYWORDS = frozenset(
@@ -86,6 +92,7 @@ class ToolUseLoop:
         project_instructions: str | None = None,
         skill_instructions: str | None = None,
         skill_registry: Any = None,
+        cwd: str | None = None,
     ) -> None:
         """Initialize the tool-use loop.
 
@@ -98,6 +105,7 @@ class ToolUseLoop:
             project_instructions: CLAUDE.md / AGENTS.md content discovered at session start.
             skill_instructions: Pre-rendered skill body (from user /skill invocation).
             skill_registry: SkillRegistry for auto-invocation catalog + activate_skill handling.
+            cwd: Working directory for this agent (project root).
         """
         self._ctx = agent_context
         self._tool_registry = tool_registry
@@ -107,6 +115,7 @@ class ToolUseLoop:
         self._project_instructions = project_instructions
         self._skill_instructions = skill_instructions
         self._skill_registry = skill_registry
+        self._cwd = cwd
 
         # Create SpawnAgentTool when this agent can spawn children.
         self._spawn_agent_tool: Any = None
@@ -119,6 +128,7 @@ class ToolUseLoop:
                 permission_policy=permission_policy,
                 hook_manager=hook_manager,
                 project_instructions=project_instructions,
+                cwd=cwd,
             )
 
     # ------------------------------------------------------------------
@@ -383,6 +393,17 @@ class ToolUseLoop:
         """Build the initial message list for the conversation."""
         system_parts: list[str] = [get_system_prompt("system")]
 
+        # Environment context.
+        work_dir = self._cwd or str(Path.cwd())
+        env_lines = [
+            "# Environment",
+            f"- Working directory: {work_dir}",
+            f"- Platform: {_platform.system().lower()}",
+            f"- Date: {_date.today().isoformat()}",
+            f"- Meeseeks version: {get_version()}",
+        ]
+        system_parts.append("\n".join(env_lines))
+
         # Project instructions (CLAUDE.md / AGENTS.md).
         if self._project_instructions:
             system_parts.append(
@@ -390,7 +411,7 @@ class ToolUseLoop:
             )
 
         # Git context (injected after project instructions).
-        git_ctx = get_git_context()
+        git_ctx = get_git_context(self._cwd)
         if git_ctx:
             system_parts.append(f"# Git Context\n{git_ctx}")
 
@@ -622,6 +643,13 @@ class ToolUseLoop:
         content_str = str(content) if not isinstance(content, str) else content
         if isinstance(content, dict):
             content_str = json.dumps(content, ensure_ascii=False, default=str)
+
+        # Micro-compaction: strip ANSI escapes and truncate for the LLM.
+        content_str = _ANSI_ESCAPE_RE.sub("", content_str)
+        spec = self._tool_registry.get_spec(tool_id)
+        max_chars = spec.max_result_chars if spec else 2000
+        if max_chars and len(content_str) > max_chars:
+            content_str = content_str[:max_chars] + "\n[truncated]"
 
         self._emit_tool_result_event(action_step, content_str)
         return ToolCallResult(
