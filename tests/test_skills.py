@@ -111,6 +111,72 @@ class TestDiscoverSkills:
         assert result == []
 
 
+class TestSubtreeSkillDiscovery:
+    """Tests for recursive subtree skill discovery."""
+
+    def test_finds_skills_in_subdirs(self, tmp_path):
+        skill_dir = tmp_path / "apps" / "api" / ".claude" / "skills"
+        _write_skill(skill_dir, "api-lint", "Lint the API.")
+        result = discover_skills(str(tmp_path))
+        assert len(result) == 1
+        assert result[0].name == "api-lint"
+
+    def test_project_root_skills_take_precedence(self, tmp_path):
+        root_dir = tmp_path / ".claude" / "skills"
+        _write_skill(root_dir, "deploy", "Root deploy.", description="Root version")
+        sub_dir = tmp_path / "sub" / ".claude" / "skills"
+        _write_skill(sub_dir, "deploy", "Sub deploy.", description="Sub version")
+        result = discover_skills(str(tmp_path))
+        match = [s for s in result if s.name == "deploy"]
+        assert len(match) == 1
+        assert match[0].description == "Root version"
+
+    def test_personal_skills_take_precedence_over_subtree(self, tmp_path, monkeypatch):
+        personal_dir = tmp_path / "home" / ".claude" / "skills"
+        _write_skill(personal_dir, "my-skill", "Personal.", description="Personal version")
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+        sub_dir = tmp_path / "sub" / ".claude" / "skills"
+        _write_skill(sub_dir, "my-skill", "Subtree.", description="Subtree version")
+        result = discover_skills(str(tmp_path))
+        match = [s for s in result if s.name == "my-skill"]
+        assert len(match) == 1
+        assert match[0].description == "Personal version"
+
+    def test_respects_max_depth(self, tmp_path):
+        deep = tmp_path / "a" / "b" / "c" / "d" / "e" / "f" / ".claude" / "skills"
+        _write_skill(deep, "deep-skill", "Too deep.")
+        result = discover_skills(str(tmp_path))
+        assert not any(s.name == "deep-skill" for s in result)
+
+    def test_within_max_depth(self, tmp_path):
+        sub = tmp_path / "a" / "b" / ".claude" / "skills"
+        _write_skill(sub, "shallow-skill", "Shallow.")
+        result = discover_skills(str(tmp_path))
+        assert any(s.name == "shallow-skill" for s in result)
+
+    def test_skips_node_modules(self, tmp_path):
+        nm = tmp_path / "node_modules" / ".claude" / "skills"
+        _write_skill(nm, "nm-skill", "From node_modules.")
+        result = discover_skills(str(tmp_path))
+        assert not any(s.name == "nm-skill" for s in result)
+
+    def test_skips_hidden_dirs(self, tmp_path):
+        hidden = tmp_path / ".hidden" / ".claude" / "skills"
+        _write_skill(hidden, "hidden-skill", "From hidden dir.")
+        result = discover_skills(str(tmp_path))
+        assert not any(s.name == "hidden-skill" for s in result)
+
+    def test_multiple_subtree_skills(self, tmp_path):
+        api_dir = tmp_path / "apps" / "api" / ".claude" / "skills"
+        _write_skill(api_dir, "api-lint", "Lint API.")
+        console_dir = tmp_path / "apps" / "console" / ".claude" / "skills"
+        _write_skill(console_dir, "ui-test", "Test UI.")
+        result = discover_skills(str(tmp_path))
+        names = {s.name for s in result}
+        assert "api-lint" in names
+        assert "ui-test" in names
+
+
 # ------------------------------------------------------------------
 # SkillSpec parsing
 # ------------------------------------------------------------------

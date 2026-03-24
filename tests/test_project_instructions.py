@@ -10,6 +10,7 @@ from meeseeks_core.common import (
     InstructionSource,
     discover_all_instructions,
     discover_project_instructions,
+    discover_subtree_instructions,
     get_git_context,
 )
 
@@ -221,3 +222,104 @@ class TestGetGitContext:
         result = get_git_context(str(tmp_path), max_status_chars=100)
         assert result is not None
         assert "[truncated]" in result
+
+
+class TestDiscoverSubtreeInstructions:
+    """Tests for downward subtree instruction discovery."""
+
+    def test_finds_claude_md_in_subdirs(self, tmp_path):
+        sub = tmp_path / "apps" / "api"
+        sub.mkdir(parents=True)
+        (sub / "CLAUDE.md").write_text("API guidance", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path))
+        assert len(result) == 1
+        assert result[0].level == "subtree"
+        assert result[0].content == ""  # Index only, no content
+        assert "api" in result[0].path and "CLAUDE.md" in result[0].path
+
+    def test_finds_agents_md_in_subdirs(self, tmp_path):
+        sub = tmp_path / "pkg"
+        sub.mkdir()
+        (sub / "AGENTS.md").write_text("Agent guidance", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path))
+        assert len(result) == 1
+        assert "AGENTS.md" in result[0].path
+
+    def test_finds_dot_claude_subdir(self, tmp_path):
+        sub = tmp_path / "pkg" / ".claude"
+        sub.mkdir(parents=True)
+        (sub / "CLAUDE.md").write_text("Dot claude", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path))
+        assert len(result) == 1
+        assert ".claude/CLAUDE.md" in result[0].path
+
+    def test_respects_noload_marker(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "CLAUDE.md").write_text(
+            f"{_NOLOAD_MARKER}\nSkip me", encoding="utf-8"
+        )
+        result = discover_subtree_instructions(str(tmp_path))
+        assert len(result) == 0
+
+    def test_respects_max_depth(self, tmp_path):
+        deep = tmp_path / "a" / "b" / "c" / "d" / "e" / "f"  # depth 6
+        deep.mkdir(parents=True)
+        (deep / "CLAUDE.md").write_text("Too deep", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path), max_depth=5)
+        assert len(result) == 0
+
+    def test_within_max_depth(self, tmp_path):
+        sub = tmp_path / "a" / "b" / "c" / "d" / "e"  # depth 5
+        sub.mkdir(parents=True)
+        (sub / "CLAUDE.md").write_text("Just right", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path), max_depth=5)
+        assert len(result) == 1
+
+    def test_skips_cwd_itself(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("Root", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path))
+        assert len(result) == 0
+
+    def test_skips_hidden_dirs(self, tmp_path):
+        hidden = tmp_path / ".hidden"
+        hidden.mkdir()
+        (hidden / "CLAUDE.md").write_text("Hidden", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path))
+        assert len(result) == 0
+
+    def test_skips_node_modules(self, tmp_path):
+        nm = tmp_path / "node_modules" / "pkg"
+        nm.mkdir(parents=True)
+        (nm / "CLAUDE.md").write_text("Dep", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path))
+        assert len(result) == 0
+
+    def test_skips_pycache(self, tmp_path):
+        pc = tmp_path / "__pycache__"
+        pc.mkdir()
+        (pc / "CLAUDE.md").write_text("Cache", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path))
+        assert len(result) == 0
+
+    def test_multiple_files_sorted_by_path(self, tmp_path):
+        for name in ("beta", "alpha"):
+            sub = tmp_path / name
+            sub.mkdir()
+            (sub / "CLAUDE.md").write_text(f"{name} guide", encoding="utf-8")
+        result = discover_subtree_instructions(str(tmp_path))
+        assert len(result) == 2
+        assert "alpha" in result[0].path
+        assert "beta" in result[1].path
+
+    def test_integrated_in_discover_project_instructions(self, tmp_path):
+        """Subtree files appear as index in composed output."""
+        (tmp_path / "CLAUDE.md").write_text("Root instructions", encoding="utf-8")
+        sub = tmp_path / "apps" / "api"
+        sub.mkdir(parents=True)
+        (sub / "CLAUDE.md").write_text("API guidance", encoding="utf-8")
+        result = discover_project_instructions(str(tmp_path))
+        assert result is not None
+        assert "Root instructions" in result
+        assert "Sub-package instruction files" in result
+        assert "apps/api/CLAUDE.md" in result or "apps\\api\\CLAUDE.md" in result

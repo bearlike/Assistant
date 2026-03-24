@@ -280,6 +280,57 @@ def discover_all_instructions(cwd: str | None = None) -> list[InstructionSource]
     return sources
 
 
+_MAX_SUBTREE_DEPTH = 5
+_INSTRUCTION_FILENAMES = ("CLAUDE.md", "AGENTS.md", ".claude/CLAUDE.md")
+
+
+def discover_subtree_instructions(
+    cwd: str | None = None,
+    *,
+    max_depth: int = _MAX_SUBTREE_DEPTH,
+) -> list[InstructionSource]:
+    """Walk DOWN from CWD to find CLAUDE.md and AGENTS.md in subdirectories.
+
+    Returns lightweight ``InstructionSource`` entries with *empty* content.
+    The model is made aware these files exist and can read them on demand.
+    Respects the ``<!-- meeseeks:noload -->`` marker (checked via first line).
+    """
+    work_dir = Path(cwd) if cwd else Path.cwd()
+    found: list[InstructionSource] = []
+    for dirpath, dirnames, _filenames in os.walk(work_dir):
+        rel = Path(dirpath).relative_to(work_dir)
+        depth = len(rel.parts)
+        # Prune hidden dirs and common non-project dirs (must happen before any continue)
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
+        ]
+        if depth == 0:
+            continue  # Skip CWD itself — already handled by discover_all_instructions
+        if depth > max_depth:
+            dirnames.clear()
+            continue
+        for filename in _INSTRUCTION_FILENAMES:
+            candidate = Path(dirpath) / filename
+            if candidate.is_file():
+                try:
+                    first_line = candidate.open(encoding="utf-8", errors="replace").readline()
+                except OSError:
+                    continue
+                if first_line.strip().startswith(_NOLOAD_MARKER):
+                    continue
+                found.append(
+                    InstructionSource(
+                        content="",
+                        path=str(candidate),
+                        level="subtree",
+                        priority=50,
+                    )
+                )
+    found.sort(key=lambda s: s.path)
+    return found
+
+
 def get_git_context(cwd: str | None = None, max_status_chars: int = 2000) -> str | None:
     """Gather git context (branch, status, recent commits) for system prompt injection.
 
@@ -333,6 +384,9 @@ def discover_project_instructions(cwd: str | None = None) -> str | None:
     Falls back to legacy AGENTS.md behavior when no hierarchical sources are found.
     Files containing ``<!-- meeseeks:noload -->`` on the first line are skipped.
 
+    Additionally walks the subtree to build a lightweight index of nested
+    instruction files so the model knows they exist and can read them on demand.
+
     Returns the composed instruction text, or ``None`` if no files are found.
     """
     sources = discover_all_instructions(cwd)
@@ -344,13 +398,32 @@ def discover_project_instructions(cwd: str | None = None) -> str | None:
             content = agents_md.read_text(encoding="utf-8", errors="replace").strip()
             if content and not content.startswith(_NOLOAD_MARKER):
                 return content
-        return None
+        # Even with no direct sources, subtree files may exist — fall through
 
-    # Compose all sources with section headers
+    # Compose direct sources with section headers
     parts: list[str] = []
     for src in sources:
         header = f"# Instructions ({src.level}: {Path(src.path).name})"
         parts.append(f"{header}\n\n{src.content}")
+
+    # Discover subtree instruction files (index only — no content injection)
+    subtree = discover_subtree_instructions(cwd)
+    if subtree:
+        work_dir = Path(cwd) if cwd else Path.cwd()
+        lines = []
+        for src in subtree:
+            rel = Path(src.path).relative_to(work_dir)
+            lines.append(f"- {rel}")
+        index_section = (
+            "# Sub-package instruction files\n\n"
+            "The following instruction files exist in subdirectories. "
+            "Read them when working on the relevant package.\n\n"
+            + "\n".join(lines)
+        )
+        parts.append(index_section)
+
+    if not parts:
+        return None
     return "\n\n---\n\n".join(parts)
 
 

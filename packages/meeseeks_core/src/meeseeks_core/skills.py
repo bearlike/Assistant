@@ -14,6 +14,7 @@ Discovery locations (later overrides earlier by name):
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import time
@@ -169,10 +170,16 @@ def _parse_skill_file(path: Path, source: str) -> SkillSpec | None:
     )
 
 
-def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
-    """Discover skills from personal and project directories.
+_MAX_SKILL_DEPTH = 5
 
-    Project skills override personal skills with the same name.
+
+def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
+    """Discover skills from personal, project, and subtree directories.
+
+    Priority (later overrides earlier for same name):
+    1. Personal: ``~/.claude/skills/*/SKILL.md``
+    2. Project:  ``<cwd>/.claude/skills/*/SKILL.md``
+    3. Subtree:  ``<cwd>/**/.claude/skills/*/SKILL.md`` (max depth 5, no override)
     """
     skills: dict[str, SkillSpec] = {}
 
@@ -197,7 +204,47 @@ def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
                 if spec is not None:
                     skills[spec.name] = spec  # project overrides personal
 
+    # 3. Subtree: walk down from CWD to find .claude/skills/ directories
+    _discover_subtree_skills(base, skills, max_depth=_MAX_SKILL_DEPTH)
+
     return list(skills.values())
+
+
+def _discover_subtree_skills(
+    root: Path,
+    skills: dict[str, SkillSpec],
+    *,
+    max_depth: int = _MAX_SKILL_DEPTH,
+) -> None:
+    """Walk DOWN from *root* to discover ``.claude/skills/`` in subdirectories.
+
+    Subtree skills do **not** override personal or project-root skills.
+    """
+    for dirpath, dirnames, _filenames in os.walk(root):
+        rel = Path(dirpath).relative_to(root)
+        depth = len(rel.parts)
+        # Prune non-project dirs (must happen before any continue)
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
+        ]
+        if depth > max_depth:
+            dirnames.clear()
+            continue
+        # Check for .claude/skills/ at this level
+        skills_dir = Path(dirpath) / ".claude" / "skills"
+        if not skills_dir.is_dir():
+            continue
+        if depth == 0:
+            continue  # Skip CWD — already handled by phase 2
+        for child in sorted(skills_dir.iterdir()):
+            skill_file = child / "SKILL.md"
+            if child.is_dir() and skill_file.is_file():
+                spec = _parse_skill_file(skill_file, source="project")
+                if spec is not None:
+                    # Subtree skills DON'T override project-root or personal skills
+                    if spec.name not in skills:
+                        skills[spec.name] = spec
 
 
 # ------------------------------------------------------------------
