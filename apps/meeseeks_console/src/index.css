@@ -10,28 +10,28 @@
        Source: Anthropic Claude docs CSS variables (platform.claude.com)
        Gray scale uses Anthropic's warm→neutral gradient:
        lighter grays = hue 60 (warm), deeper grays = hue 0 (neutral black) */
-    --background: 0 0% 7%; /* _gray-860 */
+    --background: 60 2.7% 14.5%; /* #262624 — Anthropic dark app bg */
     --foreground: 60 14% 97%; /* _gray-20 */
 
-    --muted: 60 2% 12%; /* _gray-800 */
+    --muted: 60 3% 21%; /* _gray-700 — elevated surfaces */
     --muted-foreground: 48 5% 57%; /* _gray-350 */
 
-    --popover: 60 2% 17%; /* _gray-750 */
+    --popover: 60 2.7% 14.5%; /* same as bg — popover sits on overlay */
     --popover-foreground: 60 14% 97%;
 
-    --border: 53 12% 87% / 0.15; /* _gray-100 at 15% opacity (Anthropic hairline pattern) */
-    --input: 60 2% 9%; /* _gray-840 */
+    --border: 55 9% 74% / 0.15; /* _gray-200 at 15% — subtle hairline */
+    --input: 60 2% 17%; /* _gray-750 */
 
-    --card: 60 2% 12%; /* _gray-800 */
+    --card: 60 2% 17%; /* _gray-750 — card surfaces above bg */
     --card-foreground: 60 14% 97%;
 
     --primary: 14.8 63.1% 59.6%; /* _brand-clay */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 60 2% 9%; /* _gray-840 */
+    --secondary: 60 3% 11%; /* _gray-820 */
     --secondary-foreground: 55 9% 74%; /* _gray-200 */
 
-    --accent: 60 2% 17%; /* _gray-750 */
+    --accent: 60 3% 21%; /* _gray-700 — hover/active states */
     --accent-foreground: 60 14% 97%;
 
     --destructive: 0 73% 59%; /* _red-400 */
@@ -44,16 +44,16 @@
     --success: 81 100% 30%; /* _green-400 */
     --success-foreground: 0 0% 100%;
 
-    --surface: 60 2% 9%; /* _gray-840 */
-    --surface-deep: 0 0% 4%; /* _gray-900 */
+    --surface: 60 2% 12%; /* _gray-800 — recessed surfaces */
+    --surface-deep: 0 0% 7%; /* _gray-860 — deepest layer */
 
     /* ── Semantic: orchestration (from Anthropic palette + CC theme) ── */
     --permission: 213 80% 79%; /* _blue-200 — Anthropic accent-000 */
     --plan-mode: 158 52% 49%; /* _aqua-300 — Anthropic aqua for plan context */
-    --user-message-bg: 60 2% 17%; /* _gray-750 — distinct from bg, matches popover */
-    --user-message-bg-hover: 60 3% 21%; /* _gray-700 */
-    --bash-bg: 60 2% 11%; /* _gray-820 — code/shell areas */
-    --memory-bg: 60 2% 12%; /* _gray-800 — context/memory areas */
+    --user-message-bg: 60 3% 21%; /* _gray-700 — user bubbles above card */
+    --user-message-bg-hover: 60 2% 26%; /* _gray-650 */
+    --bash-bg: 60 2% 12%; /* _gray-800 — code/shell areas */
+    --memory-bg: 60 2% 17%; /* _gray-750 — context/memory areas */
 
     /* ── Agent color cycling (8 slots, Anthropic spectrum) ── */
     --agent-0: 0 73% 59%; /* _red-400 */
@@ -75,28 +75,28 @@
   .light {
     /* ── Light mode ──
        Source: Anthropic Claude docs CSS variables (platform.claude.com) */
-    --background: 60 14% 97%; /* _gray-20 — warm off-white */
+    --background: 45 28.6% 97.3%; /* #faf9f6 — Anthropic light app bg */
     --foreground: 0 0% 4%; /* _gray-900 */
 
-    --muted: 45 12% 93%; /* _gray-50 */
+    --muted: 48 25% 92.2%; /* #f0eee6 — Anthropic light accent */
     --muted-foreground: 45 3% 52%; /* _gray-400 */
 
-    --popover: 0 0% 100%; /* _gray-0 */
+    --popover: 0 0% 100%; /* pure white */
     --popover-foreground: 0 0% 4%;
 
     --border: 53 12% 87% / 0.4; /* _gray-100 at 40% (Anthropic hairline-shade) */
-    --input: 51 11% 88%; /* _gray-90 */
+    --input: 48 25% 92.2%; /* matches muted */
 
-    --card: 0 0% 100%; /* _gray-0 */
+    --card: 0 0% 100%; /* white */
     --card-foreground: 0 0% 4%;
 
     --primary: 14.8 63.1% 59.6%; /* _brand-clay */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 45 12% 93%; /* _gray-50 */
+    --secondary: 48 25% 92.2%; /* #f0eee6 */
     --secondary-foreground: 60 3% 21%; /* _gray-700 */
 
-    --accent: 60 11% 95%; /* _gray-40 */
+    --accent: 48 25% 92.2%; /* #f0eee6 — Anthropic accent bg */
     --accent-foreground: 60 3% 21%;
 
     --destructive: 0 55% 47%; /* _red-500 */
@@ -107,16 +107,16 @@
     --success: 79 94% 37%; /* _green-300 */
     --success-foreground: 0 0% 100%;
 
-    --surface: 60 11% 95%; /* _gray-40 */
-    --surface-deep: 60 14% 97%; /* _gray-20 */
+    --surface: 48 25% 92.2%; /* #f0eee6 */
+    --surface-deep: 45 28.6% 97.3%; /* #faf9f6 */
 
     /* ── Semantic: orchestration (from Anthropic palette) ── */
     --permission: 213 77% 56%; /* _blue-400 */
     --plan-mode: 159 73% 40%; /* _aqua-350 */
-    --user-message-bg: 60 10% 96%; /* _gray-30 — subtly distinct from bg */
-    --user-message-bg-hover: 60 14% 99%; /* _gray-10 */
-    --bash-bg: 60 14% 99%; /* _gray-10 */
-    --memory-bg: 45 12% 93%; /* _gray-50 */
+    --user-message-bg: 48 25% 92.2%; /* #f0eee6 — matches accent */
+    --user-message-bg-hover: 45 28.6% 97.3%; /* #faf9f6 — lift to bg */
+    --bash-bg: 0 0% 100%; /* white — code on white */
+    --memory-bg: 48 25% 92.2%; /* #f0eee6 */
 
     /* ── Agent color cycling (8 slots, Anthropic spectrum -500 for light bg) ── */
     --agent-0: 0 55% 47%; /* _red-500 */
