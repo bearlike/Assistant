@@ -5,7 +5,8 @@ FROM node:20-slim AS build
 
 WORKDIR /app
 COPY apps/meeseeks_console/package.json apps/meeseeks_console/package-lock.json ./
-RUN npm ci --ignore-scripts
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --ignore-scripts
 
 COPY apps/meeseeks_console/ .
 RUN npm run build

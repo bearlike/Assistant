@@ -17,7 +17,13 @@ from flask import Flask, Response, request, stream_with_context
 from flask_restx import Api, Resource, fields
 from meeseeks_core.classes import TaskQueue
 from meeseeks_core.common import get_logger
-from meeseeks_core.config import get_config, get_config_value, get_version, start_preflight
+from meeseeks_core.config import (
+    get_config,
+    get_config_value,
+    get_mcp_config_path,
+    get_version,
+    start_preflight,
+)
 from meeseeks_core.notifications import NotificationStore
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.session_runtime import SessionRuntime, parse_core_command
@@ -830,6 +836,20 @@ class Tools(Resource):
                 project_cwd = proj.path
         registry = load_registry(cwd=project_cwd)
         specs = registry.list_specs(include_disabled=True)
+
+        # Determine scope: compare against global-only servers
+        global_servers: set[str] = set()
+        try:
+            gpath = get_mcp_config_path()
+            if gpath and os.path.exists(gpath):
+                with open(gpath, encoding="utf-8") as _f:
+                    gc = json.load(_f)
+                    global_servers = set(
+                        gc.get("servers", gc.get("mcpServers", {})).keys()
+                    )
+        except Exception:
+            pass
+
         tools = [
             {
                 "tool_id": spec.tool_id,
@@ -839,6 +859,12 @@ class Tools(Resource):
                 "description": spec.description,
                 "disabled_reason": spec.metadata.get("disabled_reason"),
                 "server": spec.metadata.get("server"),
+                "scope": (
+                    "global"
+                    if spec.kind != "mcp"
+                    or spec.metadata.get("server") in global_servers
+                    else "project"
+                ),
             }
             for spec in specs
         ]

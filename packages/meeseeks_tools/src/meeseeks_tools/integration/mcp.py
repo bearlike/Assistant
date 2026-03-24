@@ -81,6 +81,9 @@ def _normalize_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
     for server_config in servers.values():
         if "http_headers" in server_config and "headers" not in server_config:
             server_config["headers"] = server_config.pop("http_headers")
+        # Rename "type" → "transport" (Claude Code / VS Code .mcp.json schema)
+        if "type" in server_config and "transport" not in server_config:
+            server_config["transport"] = server_config.pop("type")
         if server_config.get("transport") == "http":
             server_config["transport"] = "streamable_http"
     return config
@@ -106,7 +109,7 @@ def _load_mcp_config(
         OSError: If the configuration file cannot be read.
         json.JSONDecodeError: If the configuration is invalid JSON.
     """
-    if path is None:
+    if path is None or cwd is not None:
         # Use merged discovery: global + CWD .mcp.json
         from meeseeks_core.config import get_merged_mcp_config
 

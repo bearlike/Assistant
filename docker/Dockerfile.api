@@ -14,17 +14,27 @@ LABEL org.opencontainers.image.title="Meeseeks API" \
       org.opencontainers.image.licenses="MIT"
 
 USER root
-
-COPY . /app
 WORKDIR /app
 
+# 1. Copy only dependency metadata first (layer caching — survives source changes)
+COPY pyproject.toml uv.lock ./
+COPY packages/meeseeks_core/pyproject.toml packages/meeseeks_core/pyproject.toml
+COPY packages/meeseeks_tools/pyproject.toml packages/meeseeks_tools/pyproject.toml
+COPY apps/meeseeks_api/pyproject.toml apps/meeseeks_api/pyproject.toml
+
+# 2. Copy source
+COPY packages/ packages/
+COPY apps/meeseeks_api/ apps/meeseeks_api/
+COPY configs/ configs/
+
+# 3. Install with BuildKit cache mount (pip wheels survive rebuilds)
 RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
-RUN uv pip install --system \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
         -e packages/meeseeks_core \
         -e packages/meeseeks_tools \
         -e apps/meeseeks_api \
-        gunicorn \
-    && rm -rf /root/.cache/uv
+        gunicorn
 
 ENV MASTER_API_TOKEN='msk-strong-password' \
     API_PORT=5125
