@@ -41,16 +41,18 @@ The web console provides a task orchestration frontend backed by the REST API. I
 - (✅) **Unified tool-use loop:** A single async `ToolUseLoop` where the LLM drives tool selection and execution via native `bind_tools`.
 - (✅) **Sub-agent spawning:** Subtasks can be delegated to parallel sub-agents via `spawn_agent`, managed by the `AgentHypervisor` control plane.
 - (✅) **Tool scoping & permissions:** Sub-agents receive scoped tool access (allowlist/denylist filtered before binding). Permission policies gate all tool execution.
+- (✅) **Concurrency-aware execution:** Tools are partitioned into concurrent-safe (parallel) and exclusive (sequential) batches with per-tool timeouts.
 
 ### Memory and context management
 - (✅) **Session transcripts:** Writes tool activity and responses to disk for continuity.
-- (✅) **Context compaction:** Summarizes long sessions and auto-compacts near the context budget.
+- (✅) **Context compaction:** Two-mode compaction (full/partial) with structured summaries, analysis scratchpad, and post-compact file restoration. Auto-compacts near the context budget using partial mode.
 - (✅) **Token awareness:** Tracks context window usage and exposes budgets in the CLI.
 - (✅) **Selective recall:** Builds context from recent turns plus a summary of prior events.
+- (✅) **Hierarchical instructions:** Discovers CLAUDE.md from user, project, rules, and local levels with priority ordering. Injects git context (branch, status, recent commits) into the system prompt.
 - (✅) **Session listing hygiene:** Filters empty sessions and supports archiving via the API.
 
 ### Tooling and integrations
-- (✅) **Tool registry:** Discovers local tools and optional MCP tools with manual manifest overrides.
+- (✅) **Tool registry:** Discovers local tools and MCP tools via persistent connection pool with automatic reconnection and config change detection.
 - (✅) **Skills:** Supports the [Agent Skills](https://agentskills.io) open standard. Place `SKILL.md` files in `~/.claude/skills/` or `.claude/skills/` to teach the assistant reusable workflows. Skills can be invoked via `/skill-name` slash commands or auto-activated by the LLM.
 - (✅) **Local file + shell tools:** Built-in Aider adapters for edit blocks, read files, list dirs, and shell commands (approval-gated). Edit blocks require strict SEARCH/REPLACE format; the tool returns format guidance on mismatches.
 - (✅) **REST API:** Exposes the assistant over HTTP for third-party integration.
@@ -61,6 +63,7 @@ The web console provides a task orchestration frontend backed by the REST API. I
 ### Safety and observability
 - (✅) **Permission gate:** Uses approval callbacks and hooks to control tool execution.
 - (✅) **Operational visibility:** Optional Langfuse tracing (session-scoped traces) stays off if unconfigured.
+- (✅) **Hook system:** Error-isolated hooks with session lifecycle events, external command hook configuration, and fnmatch-based tool matcher filtering.
 
 ### Interface notes
 - **CLI layout adapts to terminal width.** Headers and tool result cards adjust to small and wide shells.
@@ -109,7 +112,7 @@ See [docs/index.md](docs/index.md) for the full architecture diagram.
 
 ## Monorepo layout
 
-- `packages/meeseeks_core/`: orchestration loop, schemas, session storage, compaction, tool registry.
+- `packages/meeseeks_core/`: orchestration loop, schemas, session storage, two-mode compaction, tool registry, hook system, hierarchical instruction discovery.
 - `packages/meeseeks_tools/`: tool implementations and integrations (including Home Assistant and MCP).
 - `apps/meeseeks_api/`: Flask REST API for programmatic access.
 - `apps/meeseeks_console/`: Web console for task orchestration.

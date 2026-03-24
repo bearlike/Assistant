@@ -4,7 +4,7 @@ Tool implementations and integrations for Meeseeks. This package ships the built
 
 ## What it provides
 - Aider-based local tools for file reads, directory listing, edit blocks, and shell commands.
-- MCP tool integration for remote tool servers.
+- MCP tool integration with persistent connection pooling (`MCPConnectionPool`), automatic reconnection, and per-request timeouts.
 - Home Assistant tool adapter (used by the HA conversation integration).
 
 ## Use in the monorepo

@@ -11,13 +11,16 @@ Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervi
 - `packages/meeseeks_core/src/meeseeks_core/skills.py`: `SkillSpec`, `SkillRegistry`, `discover_skills()`, `activate_skill()`, `ACTIVATE_SKILL_SCHEMA` — Agent Skills standard support
 - `packages/meeseeks_core/src/meeseeks_core/orchestrator.py`: session lifecycle, sync→async bridge via `asyncio.run()`
 - `packages/meeseeks_core/src/meeseeks_core/task_master.py`: `generate_action_plan` + `orchestrate_session` entry points
-- `packages/meeseeks_core/src/meeseeks_core/classes.py`: `ActionStep` (tool_id/operation/tool_input), `TaskQueue`, `AbstractTool` contracts
+- `packages/meeseeks_core/src/meeseeks_core/classes.py`: `ActionStep` (tool_id/operation/tool_input), `TaskQueue`, `AbstractTool` contracts, `ToolResult` (structured tool execution result)
 - `packages/meeseeks_core/src/meeseeks_core/planning.py`: `Planner`, `PromptBuilder`
 - `packages/meeseeks_core/src/meeseeks_core/session_runtime.py`: session lifecycle, listing, user steering (`enqueue_message`, `interrupt_step`)
 - `packages/meeseeks_core/src/meeseeks_core/session_store.py`: transcript storage, tags, archive state, and `session_dir()` for attachment paths
 - `packages/meeseeks_core/src/meeseeks_core/context.py`: `ContextBuilder`, `ContextSnapshot` (includes `attachment_texts` for uploaded file content)
-- `packages/meeseeks_core/src/meeseeks_core/tool_registry.py`: `ToolRegistry`, `ToolSpec`, `filter_specs()` (reusable allowlist/denylist filtering), `load_registry()`
-- `packages/meeseeks_core/src/meeseeks_core/config.py`: `AppConfig` including `AgentConfig` (max_depth, max_concurrent, allowed_models, etc.)
+- `packages/meeseeks_core/src/meeseeks_core/tool_registry.py`: `ToolRegistry`, `ToolSpec` (typed fields: `concurrency_safe`, `read_only`, `max_result_chars`, `timeout`), `filter_specs()` (reusable allowlist/denylist filtering), `load_registry()`
+- `packages/meeseeks_core/src/meeseeks_core/config.py`: `AppConfig` including `AgentConfig` (max_depth, max_concurrent, allowed_models, etc.) and `HooksConfig` (external hook configuration)
+- `packages/meeseeks_core/src/meeseeks_core/compact.py`: `CompactionMode`, `CompactionResult`, `compact_conversation()` — two-mode (full/partial) context compaction with structured summaries and post-compact file restoration
+- `packages/meeseeks_core/src/meeseeks_core/hooks.py`: `HookManager` — error-isolated hook execution with lifecycle hooks (`on_session_start`, `on_session_end`, `on_compact`), external command hooks via `HooksConfig`, and `fnmatch`-based tool matcher filtering
+- `packages/meeseeks_tools/src/meeseeks_tools/integration/mcp_pool.py`: `MCPConnectionPool` — persistent MCP connection manager with memoized connections, error-based reconnection, and config change detection
 - `packages/meeseeks_tools/src/meeseeks_tools/`: tool implementations and integration glue
 - `apps/meeseeks_console/`: Web console (React + Vite, connects via REST API)
 - `apps/meeseeks_api/src/meeseeks_api/backend.py`: Flask API
@@ -118,20 +121,33 @@ Official library/framework documentation and code examples.
 - Keep type hints precise; avoid loosening to `Any` unless no accurate alternative exists.
 
 ## Project instructions loading
-- `discover_project_instructions()` in `common.py` loads `CLAUDE.md` (priority) or `AGENTS.md` from the working directory and injects the content into the orchestration system prompt.
+- `discover_all_instructions()` in `common.py` discovers instruction files from four priority levels:
+  1. **User**: `~/.claude/CLAUDE.md` (lowest priority)
+  2. **Project**: `CLAUDE.md` and `.claude/CLAUDE.md` walking from CWD up to the git root
+  3. **Rules**: `.claude/rules/*.md` files in CWD
+  4. **Local**: `CLAUDE.local.md` in CWD (highest priority)
+- The legacy `discover_project_instructions()` function uses `discover_all_instructions()` as its backend and falls back to `AGENTS.md` if no sources are found.
 - Place `<!-- meeseeks:noload -->` on the **first line** of a file to skip it. Used on shim `AGENTS.md` files that only redirect to `CLAUDE.md` to avoid duplicate context loading.
 - The marker is defined as `_NOLOAD_MARKER` in `packages/meeseeks_core/src/meeseeks_core/common.py`.
+- Git context (branch, status, recent commits) is injected into the system prompt via `get_git_context()` in `common.py`.
 
 ## Orchestration architecture
 - **Single async loop**: `ToolUseLoop.run()` is the only execution engine. The LLM decides which tools to call via native `bind_tools`. No separate planner→executor→synthesizer pipeline.
 - **Tool scoping**: `filter_specs()` in `tool_registry.py` applies allowlist/denylist filtering. The API passes `context.mcp_tools` as `allowed_tools` through `SessionRuntime` → `Orchestrator` → `ToolUseLoop` to scope tool binding per query.
 - **Sub-agent spawning**: The LLM can call `spawn_agent(task, model, allowed_tools, denied_tools)` to create child `ToolUseLoop` instances. Tool scoping uses the same `filter_specs()` function.
-- **Agent hypervisor**: `AgentHypervisor` tracks all agents, enforces admission control (max_concurrent via Semaphore), and guarantees cleanup via structured concurrency (`asyncio.gather` + `finally` blocks).
+- **Agent hypervisor**: `AgentHypervisor` tracks all agents, enforces admission control (max_concurrent via Semaphore), and guarantees cleanup via 3-phase graceful escalation (cancel → wait → force-mark) in `finally` blocks.
 - **Depth control**: Max depth 5 (configurable). At max depth, `spawn_agent` is removed from the tool schema entirely. Depth-aware prompts guide spawn behavior.
 - **User steering**: Root agent has a `message_queue` (`queue.Queue`, thread-safe) drained between steps as HumanMessage, and an `interrupt_step` (`threading.Event`). Both are created in `RunRegistry.start()` and shared with the `AgentContext` via the orchestration chain. Sub-agents do not receive user messages. The API exposes `/message` and `/interrupt` endpoints for this.
 - **Attachment handling**: `ContextBuilder` reads uploaded text files from disk (via context events with attachment metadata) and injects their content into `ContextSnapshot.attachment_texts`, which is included in the system prompt.
 - **Planning is root-only**: Sub-agents always execute (act mode). They bypass `Orchestrator` and its plan/mode logic entirely.
 - **Skills**: `SkillRegistry` discovers `SKILL.md` files from `~/.claude/skills/` and `.claude/skills/` following the [Agent Skills](https://agentskills.io) open standard. The skill catalog is injected into the system prompt for LLM auto-invocation via `activate_skill`. User `/skill-name` invocations are detected in the `Orchestrator` and rendered into `skill_instructions` passed to `ToolUseLoop`. Skills can scope tools via `allowed-tools` (reuses `filter_specs()`) and preprocess shell commands via `` !`cmd` `` syntax.
+- **Tool concurrency partitioning**: `ToolUseLoop._partition_tool_calls()` groups concurrent-safe tools into parallel batches and isolates exclusive tools (`concurrency_safe=False`) for sequential execution. The partitioner replaces the previous flat `asyncio.gather()` over all tools.
+- **Per-tool timeout**: Each tool invocation is wrapped in `asyncio.wait_for()` with a configurable `spec.timeout` (default 120s). Timeouts produce error results without cancelling sibling tools.
+- **MCP connection pool**: `MCPConnectionPool` in `mcp_pool.py` provides persistent, memoized MCP server connections with automatic reconnection after 3 consecutive errors, per-request timeouts (60s), and config change detection. `MCPToolRunner` uses the pool as its primary path with legacy one-shot client as fallback.
+- **Structured compaction**: `compact_conversation()` in `compact.py` supports two modes — `FULL` (summarize everything) and `PARTIAL` (summarize old events, keep recent verbatim). Uses a structured summary prompt with `<analysis>` scratchpad and `<summary>` sections. Post-compact file restoration re-injects recently referenced files within token budgets. Auto-compact defaults to `PARTIAL` mode.
+- **Hook error isolation**: All hook invocations are wrapped in try/except — a failing hook logs a warning but does not block tool execution or session lifecycle. New lifecycle hooks: `on_session_start`, `on_session_end`, `on_compact`. External hooks configurable via `HooksConfig` with `fnmatch`-based tool matcher filtering.
+- **Structured agent errors**: `AgentError` in `spawn_agent.py` captures agent_id, depth, task, error message, last tool, and steps completed. Replaces bare error strings for better diagnostics. Sub-agent cleanup cascades to children before unregistering.
+- **Graceful agent cleanup**: `AgentHypervisor.cleanup()` uses 3-phase escalation: request cancellation → wait with timeout → force-mark as cancelled.
 - Make tool inputs schema-aware; prefer structured `tool_input` for MCP tools.
 - Surface tool activity clearly (permissions, tool IDs, arguments) to reduce user confusion.
 
