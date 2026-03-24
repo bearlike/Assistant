@@ -503,35 +503,36 @@ class ToolUseLoop:
         is_leaf = not self._ctx.can_spawn
 
         if is_root:
-            # Ref: [CoA §3.2] Root = manager agent. Synthesizes, doesn't duplicate.
+            # Ref: [CoA §3.2] Root = manager agent. Direct execution first.
             lines = [
                 f"# Agent role: Root orchestrator (depth {depth}/{max_depth})",
-                f"You have {remaining} delegation levels available.",
                 "",
-                "## Delegation protocol",
-                "- Decompose complex work into bounded, verifiable sub-tasks.",
-                "- Use spawn_agent for tasks that can run independently.",
-                "- Define acceptance_criteria so you can verify each sub-task's result.",
-                "- Specify allowed_tools/denied_tools to scope sub-agent capabilities.",
-                "- Use max_steps to budget tool execution for complex sub-tasks.",
+                "## Default: Direct execution",
+                "- Handle tasks directly using your tools. Most tasks do NOT need sub-agents.",
+                "- Simple operations (write a file, run a command, search, read)"
+                " — do them yourself.",
+                "- Sequential tasks (write then run then read) — do them yourself, in order.",
+                "- Only spawn sub-agents for genuinely parallel, independent work.",
                 "",
-                "## Ref: [Aletheia §3] Verification of sub-agent results",
-                "Sub-agents return structured JSON with these fields:",
-                '  status: "completed" | "failed" | "partial" | "cannot_solve"',
-                "  content: the primary output text",
-                "  summary: compressed context (Communication Unit) for chaining",
-                "  steps_used: tool steps consumed",
-                "  warnings: non-fatal issues encountered",
+                "## When to spawn (rare)",
+                "- Multiple independent tasks that benefit from running concurrently.",
+                "- Each sub-task must be self-contained with clear acceptance_criteria.",
+                "- Scope sub-agents with allowed_tools/denied_tools and max_steps.",
                 "",
-                "ALWAYS check 'status' before using results:",
-                "- 'completed': result is reliable — verify and incorporate",
-                "- 'failed'/'cannot_solve': handle the failure — retry or adapt",
-                "- Pass relevant 'summary' values to subsequent sub-agents as context",
+                "## System awareness",
+                "- You operate within a bounded environment with intentional guardrails.",
+                "- CWD restrictions, permission denials, and tool scope limits are non-negotiable.",
+                "- If a tool or sub-agent reports a restriction, do NOT retry with a different",
+                "  agent or workaround. Adapt your approach or report the limitation.",
                 "",
-                "## Efficiency",
-                "- Prefer direct tool use for simple, sequential steps.",
-                "- Do not spawn sub-agents for trivial operations.",
-                "- You are the synthesizer — combine sub-agent outputs into a cohesive result.",
+                "## When to stop",
+                "- If the same operation fails twice, do not retry it a third time.",
+                "- If a sub-agent fails, do not spawn another sub-agent for the same task.",
+                "- Report what failed, why, and what you tried — then let the user decide.",
+                "",
+                "## Sub-agent results",
+                "- Results are JSON with status/content/summary/steps_used fields.",
+                "- Check 'status' before using: completed=reliable, failed/cannot_solve=handle.",
             ]
         elif is_leaf:
             # Ref: [DeepMind-Delegation §4.7] Liability firebreak at leaf
@@ -544,10 +545,12 @@ class ToolUseLoop:
                 "- Do NOT attempt to delegate — you cannot spawn sub-agents.",
                 "- When done, provide a clear, structured summary of what you accomplished.",
                 "",
-                "## Ref: [Aletheia §3] Explicit failure admission",
+                "## Failure handling",
                 "- If you cannot complete the task, say so explicitly with the reason.",
+                "- If a tool reports a restriction, stop and report it"
+                " — do not attempt workarounds.",
+                "- If an operation fails twice, report failure instead of retrying.",
                 "- Do NOT spin or retry endlessly — admit failure so the parent can adapt.",
-                "- Self-terminate by returning your result — do not continue past your task scope.",
             ]
         else:
             # Sub-orchestrator: can delegate but has bounded scope
@@ -558,13 +561,14 @@ class ToolUseLoop:
                 "",
                 "## Execution protocol",
                 "- Focus on your assigned task scope — do not expand beyond it.",
-                "- You may spawn child agents for independent subtasks within your scope.",
+                "- Prefer direct tool use. Only spawn child agents for independent parallel work.",
                 "- Verify child agent results before incorporating them.",
                 "- Return a structured summary when your task is complete.",
                 "",
-                "## Ref: [Aletheia §3] Failure admission",
+                "## Failure handling",
                 "- If you cannot complete the task, say so explicitly with the reason.",
-                "- Do NOT spin or retry endlessly.",
+                "- If a tool reports a restriction or boundary, stop and report to your parent.",
+                "- Do NOT retry failed operations or attempt workarounds for system limits.",
             ]
             if remaining <= 2:
                 # Ref: [DeepMind-Delegation §4.7] Approaching delegation boundary

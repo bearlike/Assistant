@@ -654,11 +654,16 @@ class TestDepthGuidance:
         )
         guidance = loop._build_depth_guidance()
         assert "Root orchestrator" in guidance
-        assert "Delegation protocol" in guidance
-        assert "acceptance_criteria" in guidance
-        # Ref: [Aletheia §3] Verification instructions
-        assert "status" in guidance
-        assert "cannot_solve" in guidance
+        # Direct execution should come BEFORE spawning guidance
+        direct_pos = guidance.index("Direct execution")
+        spawn_pos = guidance.index("When to spawn")
+        assert direct_pos < spawn_pos
+        assert "rare" in guidance.lower()
+        # System awareness and give-up policy
+        assert "System awareness" in guidance
+        assert "guardrails" in guidance
+        assert "When to stop" in guidance
+        assert "fails twice" in guidance
 
     def test_leaf_agent_is_executor(self):
         ctx = _make_agent_context(max_depth=1)
@@ -672,8 +677,9 @@ class TestDepthGuidance:
         guidance = loop._build_depth_guidance()
         assert "Leaf executor" in guidance
         assert "Do NOT attempt to delegate" in guidance
-        # Ref: [Aletheia §3] Failure admission
-        assert "cannot complete the task" in guidance
+        # Anti-retry and restriction handling
+        assert "restriction" in guidance
+        assert "fails twice" in guidance
 
     def test_sub_orchestrator(self):
         ctx = _make_agent_context(max_depth=5)
@@ -686,7 +692,8 @@ class TestDepthGuidance:
         )
         guidance = loop._build_depth_guidance()
         assert "Sub-orchestrator" in guidance
-        assert "bounded" in guidance.lower() or "scope" in guidance.lower()
+        assert "restriction" in guidance or "boundary" in guidance
+        assert "report" in guidance.lower()
 
     def test_delegation_boundary_warning(self):
         """Ref: [DeepMind-Delegation §4.7] Liability firebreaks at chain boundaries."""

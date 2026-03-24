@@ -67,9 +67,9 @@ SPAWN_AGENT_SCHEMA: dict[str, object] = {
     "function": {
         "name": "spawn_agent",
         "description": (
-            "Spawn a sub-agent to handle a subtask independently. "
-            "Specify allowed_tools to restrict what the sub-agent can do. "
-            "Use for tasks that can be decomposed into independent parallel work."
+            "Spawn a sub-agent for a genuinely independent subtask that "
+            "benefits from parallel execution. Do NOT use for simple "
+            "sequential operations — use your tools directly instead."
         ),
         "parameters": {
             "type": "object",
