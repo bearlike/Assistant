@@ -41,5 +41,6 @@ uv run meeseeks
 - `/quit` exit the CLI
 
 CLI flags:
+- `--config PATH` path to app config file (default: auto-discover via `CWD/configs/` → `$MEESEEKS_HOME/` → `~/.meeseeks/`).
 - `-v/--verbose` increase log verbosity (`-v` = debug, `-vv` = trace).
 - `--auto-approve` start the session with auto-approve enabled (skips the `/automatic` prompt).

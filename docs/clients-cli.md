@@ -36,6 +36,7 @@ uv run meeseeks
 | `--history-file PATH` | Override CLI history file path. |
 | `--no-color` | Disable ANSI color output. |
 | `--auto-approve` | Auto-approve tool permissions for the session. |
+| `--config PATH` | Path to app config file (default: auto-discover). |
 
 ## Slash commands
 | Command | Description | Notes |
