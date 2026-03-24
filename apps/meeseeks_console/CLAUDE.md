@@ -48,12 +48,20 @@ All dropdown popups use `<Popover>` from `components/Popover.tsx`. Do not duplic
 ### API client fallback pattern
 `withFallback(realFn, mockFn)` tries the real API first, falls back to mocks in `auto` mode. Keep this pattern for all new endpoints.
 
+### Agent lifecycle data
+- `listAgents(sessionId)` fetches `/api/sessions/{id}/agents` returning `AgentSummary[]` with status, steps_completed, and total_steps
+- Agent activity is tracked from `sub_agent` SSE events with enriched fields: `status`, `steps_completed`
+- `AgentResult` JSON from `spawn_agent` tool results is parsed in `logs.ts` for structured display
+
 ## Architecture Constraints
 - No state management libraries (no Redux, Zustand, Jotai)
 - No data-fetching libraries (no React Query, SWR, Apollo)
 - No UI component libraries (no Radix, Headless UI, shadcn)
 - Hooks for data fetching, `useState`/`useCallback`/`useMemo` for state
 - The `cn()` utility joins class names — it is NOT tailwind-merge (no class deduplication)
+- Agent activity indicator in `ConversationTimeline` tracks active agents with task descriptions (not just count)
+- Permission events rendered with icons: ⛔ deny, ✓ allow
+- Sub-agent logs show lifecycle status and step count (▶ start, ■ stop with status)
 
 ## Testing
 - Tests use Vitest + React Testing Library

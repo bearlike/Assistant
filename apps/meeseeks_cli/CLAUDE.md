@@ -23,6 +23,8 @@ Scope: this file applies to the `apps/meeseeks_cli/` package only. It covers the
   - **Status footer**: Shows the deepest running agent's task label + elapsed time below the tree.
   - **Elapsed time**: Each agent line shows time since start; token count renders when the core surfaces it.
   - **KeyListener** (`cli_keys.py`): stdlib-only (`tty.setcbreak` + daemon reader thread) keystroke capture during Live rendering. Pauses cbreak mode via `pause()`/`resume()` when approval prompts need `console.input()`.
+  - **Lifecycle states**: Agent display shows 6 states: submitted (⏳), running (●), completed (✓), failed (✗), cancelled (⊘), rejected (⊘ red). Failed agents show inline error details truncated to 80 chars.
+  - **Step budget**: `session_step_budget` is threaded from config through to the orchestrator.
   - Falls back to legacy `console.status()` spinners when output is piped or `--no-color` is set.
 
 ### Section styles (keep consistent)

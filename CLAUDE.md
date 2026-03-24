@@ -126,7 +126,9 @@ Official library/framework documentation and code examples.
   2. **Project**: `CLAUDE.md` and `.claude/CLAUDE.md` walking from CWD up to the git root
   3. **Rules**: `.claude/rules/*.md` files in CWD
   4. **Local**: `CLAUDE.local.md` in CWD (highest priority)
-- The legacy `discover_project_instructions()` function uses `discover_all_instructions()` as its backend and falls back to `AGENTS.md` if no sources are found.
+- **Subtree discovery**: `discover_subtree_instructions()` walks DOWN from CWD into subdirectories (max depth 5) to find nested `CLAUDE.md`, `AGENTS.md`, and `.claude/CLAUDE.md` files. These are **indexed, not injected** — the model sees a list of paths and can read them on demand. Prunes hidden dirs, `node_modules`, `__pycache__`, `.venv`.
+- **Recursive skill discovery**: `discover_skills()` also walks the subtree (max depth 5) to find `.claude/skills/*/SKILL.md` in subdirectories. Subtree skills don't override project-root or personal skills.
+- The legacy `discover_project_instructions()` function uses `discover_all_instructions()` as its backend, appends the subtree index, and falls back to `AGENTS.md` if no sources are found.
 - Place `<!-- meeseeks:noload -->` on the **first line** of a file to skip it. Used on shim `AGENTS.md` files that only redirect to `CLAUDE.md` to avoid duplicate context loading.
 - The marker is defined as `_NOLOAD_MARKER` in `packages/meeseeks_core/src/meeseeks_core/common.py`.
 - Git context (branch, status, recent commits) is injected into the system prompt via `get_git_context()` in `common.py`.
@@ -134,10 +136,23 @@ Official library/framework documentation and code examples.
 ## Orchestration architecture
 - **Single async loop**: `ToolUseLoop.run()` is the only execution engine. The LLM decides which tools to call via native `bind_tools`. No separate planner→executor→synthesizer pipeline.
 - **Tool scoping**: `filter_specs()` in `tool_registry.py` applies allowlist/denylist filtering. The API passes `context.mcp_tools` as `allowed_tools` through `SessionRuntime` → `Orchestrator` → `ToolUseLoop` to scope tool binding per query.
-- **Sub-agent spawning**: The LLM can call `spawn_agent(task, model, allowed_tools, denied_tools)` to create child `ToolUseLoop` instances. Tool scoping uses the same `filter_specs()` function.
-- **Agent hypervisor**: `AgentHypervisor` tracks all agents, enforces admission control (max_concurrent via Semaphore), and guarantees cleanup via 3-phase graceful escalation (cancel → wait → force-mark) in `finally` blocks.
-- **Depth control**: Max depth 5 (configurable). At max depth, `spawn_agent` is removed from the tool schema entirely. Depth-aware prompts guide spawn behavior.
-- **User steering**: Root agent has a `message_queue` (`queue.Queue`, thread-safe) drained between steps as HumanMessage, and an `interrupt_step` (`threading.Event`). Both are created in `RunRegistry.start()` and shared with the `AgentContext` via the orchestration chain. Sub-agents do not receive user messages. The API exposes `/message` and `/interrupt` endpoints for this.
+- **Sub-agent spawning**: The LLM can call `spawn_agent(task, model, allowed_tools, denied_tools, max_steps, acceptance_criteria)` to create child `ToolUseLoop` instances. Tool scoping uses the same `filter_specs()` function. Sub-agents inherit the parent's `approval_callback` so they can execute write/edit/shell tools in API/headless contexts.
+- **Agent hypervisor (active governor)**: `AgentHypervisor` is a dual-layer autonomous system:
+  - *Reflexes* (code): `update_step()` fires on every tool call across the entire tree, tracks budget, detects stalls, and can inject NL interventions via message queues — even while the root agent is blocked.
+  - *Brain* (root LLM): sees the global agent tree via `render_agent_tree()` at each LLM turn, making strategic delegation and verification decisions.
+  - **6-state lifecycle** (Ref: [A2A v1.0]): `submitted → running → {completed, failed, cancelled, rejected}`. Agents start as `submitted`, transition to `running` when the loop begins, then to a terminal state.
+  - **AgentResult (Communication Units)** (Ref: [CoA §3.1]): Structured results with `content`, `status`, `steps_used`, `summary` (compressed CU), `warnings`, `artifacts`. Returned as JSON from sub-agents instead of raw text.
+  - **Budget tracking** (Ref: [AgentCgroup §4.2]): Session-wide `session_step_budget` with graduated enforcement — NL warning injection via `SystemMessage`, never force-kill.
+  - **Stall detection**: `last_step_at` per agent enables identifying unresponsive delegatees.
+  - **Bidirectional messaging**: `send_message(agent_id, text)` injects steering into any running agent's queue.
+  - **Global eye**: `render_agent_tree()` renders the full hierarchy into the root agent's system prompt.
+  - Admission control (max_concurrent via Semaphore), 3-phase graceful cleanup (cancel → wait → force-mark).
+- **Lifecycle-aware depth guidance**: `_build_depth_guidance()` injects role-specific prompting:
+  - Root: "Orchestrator — verify results, synthesize, delegate bounded tasks with acceptance criteria"
+  - Sub-orchestrator: "Delegated agent — bounded scope, may further delegate"
+  - Leaf: "Executor — complete task directly, self-terminate when done, admit failure explicitly"
+- **Depth control**: Max depth 5 (configurable). At max depth, `spawn_agent` is removed from the tool schema entirely.
+- **User steering**: Root agent has a `message_queue` (`queue.Queue`, thread-safe) drained between steps as HumanMessage, and an `interrupt_step` (`threading.Event`). Both are created in `RunRegistry.start()` and shared with the `AgentContext` via the orchestration chain. Child agents also get their own `message_queue` for parent→child steering. The API exposes `/message` and `/interrupt` endpoints.
 - **Attachment handling**: `ContextBuilder` reads uploaded text files from disk (via context events with attachment metadata) and injects their content into `ContextSnapshot.attachment_texts`, which is included in the system prompt.
 - **Planning is root-only**: Sub-agents always execute (act mode). They bypass `Orchestrator` and its plan/mode logic entirely.
 - **Skills**: `SkillRegistry` discovers `SKILL.md` files from `~/.claude/skills/` and `.claude/skills/` following the [Agent Skills](https://agentskills.io) open standard. The skill catalog is injected into the system prompt for LLM auto-invocation via `activate_skill`. User `/skill-name` invocations are detected in the `Orchestrator` and rendered into `skill_instructions` passed to `ToolUseLoop`. Skills can scope tools via `allowed-tools` (reuses `filter_specs()`) and preprocess shell commands via `` !`cmd` `` syntax.
