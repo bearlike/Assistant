@@ -40,11 +40,14 @@ class AgentDisplayState:
     depth: int
     model: str
     task: str
-    status: str  # running / completed / failed / cancelled
+    status: str  # running / completed / failed / cancelled / submitted / rejected
     steps: int = 0
     last_tool: str | None = None
     started_at: float = 0.0  # time.monotonic() captured from AgentHandle
     token_count: int = 0  # placeholder — rendered only when > 0
+    error: str | None = None  # Error message on failure
+    last_step_at: float | None = None  # For staleness detection
+    stopped_at: float | None = None  # For duration after stop
 
 
 class AgentDisplayManager:
@@ -82,7 +85,7 @@ class AgentDisplayManager:
                 depth=handle.depth,
                 model=model_short,
                 task=handle.task_description[:60],
-                status="running",
+                status=handle.status,  # Will be "submitted" initially
                 started_at=handle.started_at,
             )
 
@@ -94,6 +97,8 @@ class AgentDisplayManager:
                 state.status = handle.status
                 state.steps = handle.steps_completed
                 state.last_tool = handle.last_tool_id
+                state.error = str(handle.error)[:100] if handle.error else None
+                state.stopped_at = handle.stopped_at
 
     # ------------------------------------------------------------------
     # Tool execution hooks (pre_tool_use / post_tool_use)
@@ -263,6 +268,8 @@ _STATUS_STYLE: dict[str, tuple[str, str]] = {
     "completed": ("✓ ", "bold green"),
     "failed": ("✗ ", "bold red"),
     "cancelled": ("⊘ ", "yellow"),
+    "submitted": ("⏳ ", "dim"),
+    "rejected": ("⊘ ", "red"),
 }
 
 
@@ -289,8 +296,16 @@ def _format_agent_line(agent: AgentDisplayState, prefix: str) -> Text:
         line.append(f"  done  {agent.steps} steps", style="dim green")
     elif agent.status == "failed":
         line.append("  failed", style="dim red")
+        if agent.error:
+            line.append(f" \u2014 {agent.error[:80]}", style="dim red")
     elif agent.status == "cancelled":
         line.append("  cancelled", style="dim yellow")
+    elif agent.status == "submitted":
+        line.append("  queued", style="dim")
+    elif agent.status == "rejected":
+        line.append("  rejected", style="dim red")
+        if agent.error:
+            line.append(f" \u2014 {agent.error[:80]}", style="dim red")
 
     # Elapsed time.
     if agent.started_at:

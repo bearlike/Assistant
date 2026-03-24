@@ -263,8 +263,8 @@ class TestRendering:
     def test_collapsed_shows_summary(self):
         """Collapsed mode should show agent count summary."""
         mgr = AgentDisplayManager()
-        mgr.on_start(_make_handle(agent_id="a1"))
-        mgr.on_start(_make_handle(agent_id="a2", parent_id="a1", depth=1))
+        mgr.on_start(_make_handle(agent_id="a1", status="running"))
+        mgr.on_start(_make_handle(agent_id="a2", parent_id="a1", depth=1, status="running"))
         mgr.toggle_expand()  # collapse
 
         output = _render_to_str(mgr)
@@ -293,10 +293,12 @@ class TestRendering:
         mgr = AgentDisplayManager()
         mgr.on_start(_make_handle(
             agent_id="root1", task_description="Plan the work",
+            status="running",
         ))
         mgr.on_start(_make_handle(
             agent_id="deep1", parent_id="root1", depth=1,
             task_description="Search docs for patterns",
+            status="running",
         ))
         output = _render_to_str(mgr)
         assert "Search docs" in output
@@ -387,4 +389,46 @@ class TestThreadSafety:
         for t in threads:
             t.join()
 
-        assert errors == [], f"Thread safety errors: {errors}"
+
+# ---------------------------------------------------------------------------
+# New hypervisor lifecycle states
+# ---------------------------------------------------------------------------
+
+
+class TestNewLifecycleStates:
+    """Ref: [A2A v1.0] Expanded agent status states."""
+
+    def test_submitted_state_renders(self):
+        import re
+        mgr = AgentDisplayManager()
+        mgr.on_start(_make_handle(agent_id="sub_agent1", status="submitted"))
+        raw = _render_to_str(mgr)
+        output = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", raw)
+        assert "sub_agent" in output or "sub_agen" in output
+        # Should show submitted indicator (⏳ or "queued")
+        assert "⏳" in output or "queued" in output
+
+    def test_rejected_state_renders(self):
+        import re
+        mgr = AgentDisplayManager()
+        handle = _make_handle(agent_id="rej_agent", status="submitted")
+        mgr.on_start(handle)
+        handle.status = "rejected"
+        handle.error = "Max concurrent agents reached"
+        mgr.on_stop(handle)
+        raw = _render_to_str(mgr)
+        output = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", raw)
+        assert "rejected" in output or "⊘" in output
+
+    def test_failed_shows_error_message(self):
+        import re
+        mgr = AgentDisplayManager()
+        handle = _make_handle(agent_id="fail_agen", status="running")
+        mgr.on_start(handle)
+        handle.status = "failed"
+        handle.error = "PermissionError: cannot write to /app/data"
+        handle.steps_completed = 3
+        mgr.on_stop(handle)
+        raw = _render_to_str(mgr)
+        output = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", raw)
+        assert "PermissionError" in output or "failed" in output

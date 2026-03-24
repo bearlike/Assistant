@@ -603,6 +603,7 @@ def _run_query(
         auto_approve_enabled=auto_approve_enabled,
     )
     use_live_display = console.is_terminal and not getattr(args, "no_color", False)
+    budget = int(get_config_value("agent", "session_step_budget", default=0))
 
     if use_live_display:
         agent_display = AgentDisplayManager()
@@ -641,6 +642,7 @@ def _run_query(
                     hook_manager=hook_manager,
                     mode=mode,
                     skill_instructions=skill_instructions,
+                    session_step_budget=budget,
                 )
     else:
         hook_manager = _build_cli_hook_manager(console, tool_registry)
@@ -655,6 +657,7 @@ def _run_query(
             hook_manager=hook_manager,
             mode=mode,
             skill_instructions=skill_instructions,
+            session_step_budget=budget,
         )
 
     _render_results_with_registry(
