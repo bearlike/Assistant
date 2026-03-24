@@ -593,6 +593,13 @@
 <li><code>apps/meeseeks_cli/</code>: terminal CLI for interactive sessions.</li>
 <li><code>meeseeks_ha_conversation/</code>: Home Assistant integration that routes voice requests to the API.</li>
 </ul>
+<h2 id="project-instructions-claudemd-agentsmd">Project instructions (<code>CLAUDE.md</code> / <code>AGENTS.md</code>)</h2>
+<p>The orchestrator loads project instructions from the working directory and injects them into the system prompt. <code>discover_project_instructions()</code> in <code>meeseeks_core.common</code> checks for <code>CLAUDE.md</code> first, then falls back to <code>AGENTS.md</code>.</p>
+<ul>
+<li>Place a <code>CLAUDE.md</code> at the repo root or in any sub-package to provide context-specific guidance to the orchestration loop.</li>
+<li><code>AGENTS.md</code> is a fallback for tools that look for that filename. In this repo the <code>AGENTS.md</code> files are shims that redirect to <code>CLAUDE.md</code>.</li>
+<li>To <strong>skip</strong> a file from being loaded (e.g., a shim that would duplicate content), add <code>&lt;!-- meeseeks:noload --&gt;</code> as the very first line. The loader checks for this marker and skips the file.</li>
+</ul>
 <h2 id="core-abstractions-and-interfaces">Core abstractions and interfaces</h2>
 <ul>
 <li><code>AbstractTool</code> (<code>meeseeks_core.classes</code>): base class for local tools; implement <code>get_state</code> and <code>set_state</code> and return a <code>MockSpeaker</code>.</li>
@@ -846,6 +853,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
             Monorepo layout
+        </a>
+        
+
+        
+        <a href="#project-instructions-claudemd-agentsmd"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2">
+            Project instructions (CLAUDE.md / AGENTS.md)
         </a>
         
 

@@ -11,6 +11,14 @@ This page summarizes the code layout, core interfaces, and the minimal steps nee
 - `apps/meeseeks_cli/`: terminal CLI for interactive sessions.
 - `meeseeks_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
 
+## Project instructions (`CLAUDE.md` / `AGENTS.md`)
+
+The orchestrator loads project instructions from the working directory and injects them into the system prompt. `discover_project_instructions()` in `meeseeks_core.common` checks for `CLAUDE.md` first, then falls back to `AGENTS.md`.
+
+- Place a `CLAUDE.md` at the repo root or in any sub-package to provide context-specific guidance to the orchestration loop.
+- `AGENTS.md` is a fallback for tools that look for that filename. In this repo the `AGENTS.md` files are shims that redirect to `CLAUDE.md`.
+- To **skip** a file from being loaded (e.g., a shim that would duplicate content), add `<!-- meeseeks:noload -->` as the very first line. The loader checks for this marker and skips the file.
+
 ## Core abstractions and interfaces
 - `AbstractTool` (`meeseeks_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
 - `ToolRunner` protocol (`meeseeks_core.tool_registry`): interface for tool runners with `run(ActionStep)`.
