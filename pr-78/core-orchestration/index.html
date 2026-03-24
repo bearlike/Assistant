@@ -597,7 +597,7 @@
 <li>Orchestrator (<code>meeseeks_core.orchestrator.Orchestrator</code>): session lifecycle, context building, and mode resolution.</li>
 <li>ToolUseLoop (<code>meeseeks_core.tool_use_loop.ToolUseLoop</code>): async tool-use conversation loop — the single execution engine for all agents.</li>
 <li>AgentContext (<code>meeseeks_core.agent_context.AgentContext</code>): immutable per-agent state propagated through the hierarchy.</li>
-<li>AgentRegistry (<code>meeseeks_core.agent_context.AgentRegistry</code>): hypervisor control plane — admission control, lifecycle tracking, cancellation, cleanup.</li>
+<li>AgentHypervisor (<code>meeseeks_core.hypervisor.AgentHypervisor</code>): hypervisor control plane — admission control, lifecycle tracking, cancellation, cleanup.</li>
 <li>SpawnAgentTool (<code>meeseeks_core.spawn_agent.SpawnAgentTool</code>): sub-agent creation with tool scoping (allowlist/denylist filtered before binding).</li>
 <li>Planner (<code>meeseeks_core.planning.Planner</code>): plan generation via LLM.</li>
 <li>SessionRuntime (<code>meeseeks_core.session_runtime.SessionRuntime</code>): shared facade for CLI and API.</li>

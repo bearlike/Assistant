@@ -11,6 +11,8 @@ This page is generated from inline docstrings via mkdocstrings. The sections bel
 
 ::: meeseeks_core.agent_context
 
+::: meeseeks_core.hypervisor
+
 ::: meeseeks_core.spawn_agent
 
 ::: meeseeks_core.planning

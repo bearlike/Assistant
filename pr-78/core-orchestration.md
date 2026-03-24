@@ -14,7 +14,7 @@ This page summarizes the orchestration loop, core components, and operational fe
 - Orchestrator (`meeseeks_core.orchestrator.Orchestrator`): session lifecycle, context building, and mode resolution.
 - ToolUseLoop (`meeseeks_core.tool_use_loop.ToolUseLoop`): async tool-use conversation loop — the single execution engine for all agents.
 - AgentContext (`meeseeks_core.agent_context.AgentContext`): immutable per-agent state propagated through the hierarchy.
-- AgentRegistry (`meeseeks_core.agent_context.AgentRegistry`): hypervisor control plane — admission control, lifecycle tracking, cancellation, cleanup.
+- AgentHypervisor (`meeseeks_core.hypervisor.AgentHypervisor`): hypervisor control plane — admission control, lifecycle tracking, cancellation, cleanup.
 - SpawnAgentTool (`meeseeks_core.spawn_agent.SpawnAgentTool`): sub-agent creation with tool scoping (allowlist/denylist filtered before binding).
 - Planner (`meeseeks_core.planning.Planner`): plan generation via LLM.
 - SessionRuntime (`meeseeks_core.session_runtime.SessionRuntime`): shared facade for CLI and API.
