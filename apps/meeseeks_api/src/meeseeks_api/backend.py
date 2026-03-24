@@ -481,6 +481,7 @@ class SessionQuery(Resource):
         except ValueError as exc:
             return {"message": str(exc)}, 400
 
+        budget = int(get_config_value("agent", "session_step_budget", default=0))
         started = runtime.start_async(
             session_id=session_id,
             user_query=user_query,
@@ -489,6 +490,7 @@ class SessionQuery(Resource):
             allowed_tools=allowed_tools,
             skill_instructions=skill_instructions,
             cwd=project_cwd,
+            session_step_budget=budget,
         )
         if not started:
             return {"message": "Session is already running."}, 409
@@ -612,6 +614,9 @@ class SessionAgents(Resource):
         if auth_error:
             return auth_error
         events = runtime.load_events(session_id)
+        total_steps = sum(
+            1 for e in events if e.get("type") == "tool_result"
+        )
         agents = [
             {
                 "agent_id": e.get("payload", {}).get("agent_id"),
@@ -620,14 +625,18 @@ class SessionAgents(Resource):
                 "model": e.get("payload", {}).get("model"),
                 "action": e.get("payload", {}).get("action"),
                 "detail": e.get("payload", {}).get("detail"),
+                "status": e.get("payload", {}).get("status"),
+                "steps_completed": e.get("payload", {}).get("steps_completed", 0),
                 "ts": e.get("ts"),
             }
             for e in events
             if e.get("type") == "sub_agent"
         ]
+        running = runtime.is_running(session_id)
         return {
             "agents": agents,
-            "running": runtime.is_running(session_id),
+            "running": running,
+            "total_steps": total_steps,
         }, 200
 
 
