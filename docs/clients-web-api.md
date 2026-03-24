@@ -1,15 +1,15 @@
-# Web + API Clients
+# Console + API
 
 <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;">
   <img src="../meeseeks-console-01-front.jpg" alt="Meeseeks Console landing page" style="width: 100%; max-width: 520px; height: auto;" />
   <img src="../meeseeks-console-02-tasks.jpg" alt="Meeseeks Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-The REST API lives in `apps/meeseeks_api/` and the Streamlit UI lives in `apps/meeseeks_chat/`. The web client (Meeseeks Console) is built for asynchronous delegation: work runs through the API and the UI polls events for status and output. The distinction from the CLI is execution context and autonomy: the web client executes through the API service, while the CLI runs tools directly on the local machine. Both clients share the same core runtime and can handle long-running tasks.
+The REST API lives in `apps/meeseeks_api/` and the web console lives in `apps/meeseeks_console/`. The console is built for asynchronous delegation: requests flow through the API and the console polls events for status and output. The API runs tools through the core orchestration loop while the console provides session management, event timelines, execution traces, and tool output visualization.
 
 ## Setup (uv)
 ```bash
-uv sync --extra api --extra chat
+uv sync --extra api
 ```
 
 Before running, complete [Installation](getting-started.md) and [LLM setup](llm-setup.md).
@@ -43,11 +43,15 @@ Core endpoints:
 - `POST /api/sessions/{session_id}/export` export session payload
 - `GET /api/share/{token}` fetch shared session data
 
-## Run the web UI (Streamlit)
+## Run the Console
 ```bash
-uv run meeseeks-chat
+cd apps/meeseeks_console
+npm install
+npm run dev
 ```
 
-UI notes:
-- Streamlit options live under `chat.*` in `configs/app.json` (address and port).
-- The chat UI runs the core engine in-process.
+Console notes:
+- Configure `VITE_API_BASE_URL` to point to the API server (default: `http://127.0.0.1:5124`).
+- Set `VITE_API_KEY` to match `api.master_token` in `configs/app.json`.
+- Set `VITE_API_MODE` to `live` for direct API access or `auto` (default) for fallback to mock data.
+- During development, the Vite dev server proxies `/api/` requests to the API backend.

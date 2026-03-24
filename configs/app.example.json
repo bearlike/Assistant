@@ -53,8 +53,8 @@
     "approval_style": "aider"
   },
   "chat": {
-    "streamlit_port": 8501,
-    "streamlit_address": "127.0.0.1"
+    "port": 8501,
+    "address": "127.0.0.1"
   },
   "api": {
     "master_token": "msk-strong-password"

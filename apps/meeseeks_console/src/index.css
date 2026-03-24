@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@layer base {
+  :root {
+    /* ── Dark mode (default) ──
+       Anthropic Claude docs palette (data-theme=claude, data-mode=dark) */
+    --background: 60 2.6% 7.6%; /* bg-300 */
+    --foreground: 48 33.3% 97.1%; /* text-100 */
+
+    --muted: 60 2.7% 14.5%; /* bg-100 */
+    --muted-foreground: 48 4.8% 59.2%; /* text-500 */
+
+    --popover: 60 2.1% 18.4%; /* bg-000 */
+    --popover-foreground: 48 33.3% 97.1%;
+
+    --border: 60 2.5% 23.3%; /* text-200 (used as subtle line) */
+    --input: 30 3.3% 11.8%; /* bg-200 */
+
+    --card: 60 2.7% 14.5%; /* bg-100 */
+    --card-foreground: 48 33.3% 97.1%;
+
+    --primary: 15 63.1% 59.6%; /* accent-brand */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 30 3.3% 11.8%; /* bg-200 */
+    --secondary-foreground: 50 9% 73.7%; /* text-200 */
+
+    --accent: 60 2.1% 18.4%; /* bg-000 */
+    --accent-foreground: 48 33.3% 97.1%;
+
+    --destructive: 0 67% 59.6%; /* danger-100 */
+    --destructive-foreground: 0 0% 100%;
+
+    --ring: 15 63.1% 59.6%;
+
+    --radius: 0.5rem;
+
+    --success: 97 75% 32.9%; /* success-100 */
+    --success-foreground: 0 0% 100%;
+
+    --surface: 30 3.3% 11.8%; /* bg-200 */
+    --surface-deep: 0 0% 0%; /* bg-400 */
+
+    --diff-add-bg: 97 75% 32.9% / 0.18;
+    --diff-add-text: 97 59.1% 46.1%; /* success-000 */
+    --diff-del-bg: 0 67% 59.6% / 0.18;
+    --diff-del-text: 0 98.4% 75.1%; /* danger-000 */
+    --diff-hunk-text: 210 65.5% 67.1%; /* accent-secondary-000 */
+  }
+
+  .light {
+    /* ── Light mode ──
+       Anthropic Claude docs palette (data-theme=claude, data-mode=light) */
+    --background: 48 33.3% 97.1%; /* bg-100 */
+    --foreground: 60 2.6% 7.6%; /* text-100 */
+
+    --muted: 48 25% 92.2%; /* bg-300 */
+    --muted-foreground: 51 3.1% 43.7%; /* text-400 */
+
+    --popover: 0 0% 100%; /* bg-000 */
+    --popover-foreground: 60 2.6% 7.6%;
+
+    --border: 51 16.5% 84.5%; /* pictogram-200 */
+    --input: 50 20.7% 88.6%; /* bg-400 */
+
+    --card: 0 0% 100%;
+    --card-foreground: 60 2.6% 7.6%;
+
+    --primary: 15 63.1% 59.6%; /* accent-brand */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 48 25% 92.2%; /* bg-300 */
+    --secondary-foreground: 60 2.5% 23.3%; /* text-200 */
+
+    --accent: 53 28.6% 94.5%; /* bg-200 */
+    --accent-foreground: 60 2.5% 23.3%;
+
+    --destructive: 0 56.2% 45.4%; /* danger-100 */
+    --destructive-foreground: 0 0% 100%;
+
+    --ring: 15 63.1% 59.6%;
+
+    --success: 103 72.3% 26.9%; /* success-100 */
+    --success-foreground: 0 0% 100%;
+
+    --surface: 53 28.6% 94.5%; /* bg-200 */
+    --surface-deep: 48 33.3% 97.1%; /* bg-100 */
+
+    --diff-add-bg: 103 72.3% 26.9% / 0.12;
+    --diff-add-text: 103 72.3% 26.9%;
+    --diff-del-bg: 0 56.2% 45.4% / 0.12;
+    --diff-del-text: 0 56.2% 45.4%;
+    --diff-hunk-text: 210 70.9% 51.6%; /* accent-secondary-100 */
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  html {
+    color-scheme: dark;
+  }
+  html.light {
+    color-scheme: light;
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+}

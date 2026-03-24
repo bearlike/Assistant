@@ -182,7 +182,7 @@ class TestSpawnAgentToolScoping:
         )
 
         with patch(
-            "meeseeks_core.spawn_agent.get_config_value",
+            "meeseeks_core.tool_registry.get_config_value",
             side_effect=lambda *a, **kw: (
                 ["blocked_tool"] if a == ("agent", "default_denied_tools") else kw.get("default")
             ),

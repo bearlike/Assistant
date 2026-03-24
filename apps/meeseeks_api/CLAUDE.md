@@ -9,17 +9,22 @@ Scope: this file applies to the `apps/meeseeks_api/` package. It captures runtim
   - `GET /api/sessions` list sessions
   - `POST /api/sessions/{session_id}/query` enqueue run or core command
   - `GET /api/sessions/{session_id}/events?after=...` poll events
+  - `POST /api/sessions/{session_id}/message` enqueue a user steering message into a running session
+  - `POST /api/sessions/{session_id}/interrupt` interrupt the current tool execution step
+  - `GET /api/sessions/{session_id}/agents` return sub-agent tree from transcript events
+  - `POST /api/sessions/{session_id}/archive` / `DELETE ...` archive/unarchive
+  - `POST /api/sessions/{session_id}/attachments` upload attachments
+  - `POST /api/sessions/{session_id}/share` create share link
+  - `GET /api/sessions/{session_id}/export` export session payload
+  - `GET /api/share/{token}` fetch shared session data
   - `POST /api/query` synchronous endpoint (simple/CLI-compatible)
   - `GET /api/tools` list tool registry entries
   - `GET /api/notifications` list notifications
   - `POST /api/notifications/dismiss` dismiss notifications
   - `POST /api/notifications/clear` clear notifications
-  - `POST /api/sessions/{session_id}/attachments` upload attachments
-  - `POST /api/sessions/{session_id}/share` create share link
-  - `POST /api/sessions/{session_id}/export` export session payload
-  - `GET /api/share/{token}` fetch shared session data
 - Auth: requires `X-API-KEY` header. Token defaults to `api.master_token` from `configs/app.json` (default: `msk-strong-password`).
-- Orchestration: uses `meeseeks_core.session_runtime.SessionRuntime` to run sync/async sessions.
+- CORS: `after_request` hook sets `Access-Control-Allow-Origin: *` for cross-origin console access.
+- Orchestration: uses `meeseeks_core.session_runtime.SessionRuntime` to run sync/async sessions. Passes `allowed_tools` from `context.mcp_tools` to scope tool binding per query.
 - Core commands: `/compact`, `/status`, `/terminate` (shared runtime).
 - Sessions: supports `session_id`, `session_tag`, and `fork_from` (tag or id). Tags are resolved via `SessionStore`.
 - Event payloads: `action_plan` steps are `{title, description}`; tool events use `tool_id`, `operation`, `tool_input`.

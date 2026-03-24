@@ -348,10 +348,12 @@ class CLIConfig(BaseModel):
 
 
 class ChatConfig(BaseModel):
-    streamlit_port: int = Field(8501, example=8501)
-    streamlit_address: str = Field("127.0.0.1", example="127.0.0.1")
+    """Legacy config section kept for backward compatibility with app.json files."""
 
-    @validator("streamlit_port", pre=True, always=True)
+    port: int = Field(8501, example=8501)
+    address: str = Field("127.0.0.1", example="127.0.0.1")
+
+    @validator("port", pre=True, always=True)
     def _normalize_port(cls, value: Any) -> int:
         try:
             parsed = int(value)

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import queue
+import threading
 from collections.abc import Callable
 
 from meeseeks_core.agent_context import AgentContext
@@ -23,7 +25,7 @@ from meeseeks_core.permissions import (
 from meeseeks_core.planning import Planner
 from meeseeks_core.session_store import SessionStore
 from meeseeks_core.token_budget import get_token_budget
-from meeseeks_core.tool_registry import ToolRegistry, load_registry
+from meeseeks_core.tool_registry import ToolRegistry, filter_specs, load_registry
 from meeseeks_core.tool_use_loop import ToolUseLoop
 
 logging = get_logger(name="core.orchestrator")
@@ -67,6 +69,9 @@ class Orchestrator:
         session_id: str | None = None,
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
+        allowed_tools: list[str] | None = None,
+        message_queue: queue.Queue[str] | None = None,
+        interrupt_step: threading.Event | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration for a session."""
         if session_id is None:
@@ -82,6 +87,9 @@ class Orchestrator:
                     session_id=session_id,
                     mode=mode,
                     should_cancel=should_cancel,
+                    allowed_tools=allowed_tools,
+                    message_queue=message_queue,
+                    interrupt_step=interrupt_step,
                 )
 
     def _run_with_session_context(
@@ -94,6 +102,9 @@ class Orchestrator:
         session_id: str,
         mode: str | None,
         should_cancel: Callable[[], bool] | None,
+        allowed_tools: list[str] | None = None,
+        message_queue: queue.Queue[str] | None = None,
+        interrupt_step: threading.Event | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration with Langfuse session context set."""
         state = OrchestrationState(goal=user_query, session_id=session_id)
@@ -133,6 +144,8 @@ class Orchestrator:
                 model_name=self._model_name,
             )
             tool_specs = self._tool_registry.list_specs_for_mode(resolved_mode)
+            if allowed_tools:
+                tool_specs = filter_specs(tool_specs, allowed=allowed_tools)
 
             if resolved_mode == "plan":
                 # Plan-only mode: generate plan, return without executing.
@@ -166,6 +179,8 @@ class Orchestrator:
                         session_id, event
                     ),
                     registry=registry,
+                    message_queue=message_queue,
+                    interrupt_step=interrupt_step,
                 )
                 loop = ToolUseLoop(
                     agent_context=root_ctx,

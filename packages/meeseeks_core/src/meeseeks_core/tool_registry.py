@@ -601,8 +601,38 @@ def load_registry(manifest_path: str | None = None) -> ToolRegistry:
     return registry
 
 
+def filter_specs(
+    specs: list[ToolSpec],
+    *,
+    allowed: list[str] | None = None,
+    denied: list[str] | None = None,
+) -> list[ToolSpec]:
+    """Filter tool specs by allowlist and/or denylist.
+
+    If *allowed* is non-empty only specs whose ``tool_id`` is in the list
+    are kept.  Then any spec whose ``tool_id`` appears in *denied* (merged
+    with the config ``agent.default_denied_tools``) is removed.  Deny
+    always takes precedence over allow.
+    """
+    if allowed:
+        allowed_set = set(allowed)
+        specs = [s for s in specs if s.tool_id in allowed_set]
+
+    denied_set: set[str] = set(denied or [])
+    config_denied_raw = get_config_value("agent", "default_denied_tools", default=[])
+    if isinstance(config_denied_raw, str):
+        config_denied_raw = [s.strip() for s in config_denied_raw.split(",") if s.strip()]
+    denied_set |= set(config_denied_raw or [])
+
+    if denied_set:
+        specs = [s for s in specs if s.tool_id not in denied_set]
+
+    return specs
+
+
 __all__ = [
     "ToolRegistry",
     "ToolSpec",
+    "filter_specs",
     "load_registry",
 ]

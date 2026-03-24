@@ -82,6 +82,10 @@ class SessionStore:
         """Build filesystem paths for a session."""
         return SessionPaths(root=self.root_dir, session_id=session_id)
 
+    def session_dir(self, session_id: str) -> str:
+        """Return the directory path for a session."""
+        return self._paths(session_id).session_dir
+
     def append_event(self, session_id: str, event: Event) -> None:
         """Append a single event record to the session transcript."""
         paths = self._paths(session_id)

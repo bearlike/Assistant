@@ -1,6 +1,6 @@
 # Meeseeks API Server
 <p align="center">
-    <a href="https://github.com/bearlike/Assistant/pkgs/container/meeseeks-chat"><img src="https://img.shields.io/badge/ghcr.io-bearlike/meeseeks&#x2212;api:latest-blue?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Image"></a>
+    <a href="https://github.com/bearlike/Assistant/pkgs/container/meeseeks-api"><img src="https://img.shields.io/badge/ghcr.io-bearlike/meeseeks&#x2212;api:latest-blue?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Image"></a>
     <a href="https://github.com/bearlike/Assistant/releases"><img src="https://img.shields.io/github/v/release/bearlike/Assistant?style=for-the-badge&" alt="GitHub Release"></a>
 </p>
 
@@ -32,3 +32,17 @@ uv run meeseeks-api
 - `GET /api/share/{token}` fetch shared session data
 
 [Link to GitHub Repository](https://github.com/bearlike/Assistant)
+
+## Docker Compose
+
+Deploy the API and console together:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+- **API** on port 5124
+- **Console** on port 3000 (proxies `/api/` to the API container)
+
+Set `MASTER_API_TOKEN` in the environment or `.env` file to override the default API key.

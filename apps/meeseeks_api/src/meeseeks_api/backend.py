@@ -11,7 +11,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from flask import Flask, request
+from flask import Flask, Response, request
 from flask_restx import Api, Resource, fields
 from meeseeks_core.classes import TaskQueue
 from meeseeks_core.common import get_logger
@@ -217,6 +217,15 @@ def log_request_info() -> None:
     logging.debug("Body: {}", request.get_data())
 
 
+@app.after_request
+def _add_cors_headers(response: Response) -> Response:
+    """Allow cross-origin requests from frontend dev servers."""
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    return response
+
+
 def _require_api_key() -> tuple[dict, int] | None:
     """Validate the API key header for protected routes."""
     api_token = request.headers.get("X-API-Key", None)
@@ -274,6 +283,16 @@ def _build_context_payload(request_data: dict[str, object]) -> dict[str, object]
     if isinstance(attachments, list):
         payload["attachments"] = attachments
     return payload
+
+
+def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | None:
+    """Extract MCP tool allowlist from context payload, if present."""
+    if not context_payload:
+        return None
+    mcp_tools = context_payload.get("mcp_tools")
+    if isinstance(mcp_tools, list) and mcp_tools:
+        return [str(t) for t in mcp_tools if t]
+    return None
 
 
 notification_service = NotificationService(notification_store, runtime.session_store)
@@ -339,11 +358,14 @@ class SessionQuery(Resource):
 
         mode = _parse_mode(request_data.get("mode"))
 
+        allowed_tools = _extract_allowed_tools(context_payload)
+
         started = runtime.start_async(
             session_id=session_id,
             user_query=user_query,
             approval_callback=auto_approve,
             mode=mode,
+            allowed_tools=allowed_tools,
         )
         if not started:
             return {"message": "Session is already running."}, 409
@@ -367,6 +389,72 @@ class SessionEvents(Resource):
         return {
             "session_id": session_id,
             "events": events,
+            "running": runtime.is_running(session_id),
+        }, 200
+
+
+@ns.route("/sessions/<string:session_id>/message")
+class SessionMessage(Resource):
+    """Enqueue a user steering message into a running session."""
+
+    @api.doc(security="apikey")
+    def post(self, session_id: str) -> tuple[dict, int]:
+        """Send a message to a running session."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        payload = request.get_json(silent=True) or {}
+        text = payload.get("text")
+        if not text or not isinstance(text, str):
+            return {"message": "'text' is required"}, 400
+        ok = runtime.enqueue_message(session_id, text)
+        if not ok:
+            return {"message": "No active run for this session."}, 404
+        return {"session_id": session_id, "enqueued": True}, 202
+
+
+@ns.route("/sessions/<string:session_id>/interrupt")
+class SessionInterrupt(Resource):
+    """Interrupt the current step of a running session."""
+
+    @api.doc(security="apikey")
+    def post(self, session_id: str) -> tuple[dict, int]:
+        """Interrupt the current step of a running session."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        ok = runtime.interrupt_step(session_id)
+        if not ok:
+            return {"message": "No active run for this session."}, 404
+        return {"session_id": session_id, "interrupted": True}, 202
+
+
+@ns.route("/sessions/<string:session_id>/agents")
+class SessionAgents(Resource):
+    """Return agent tree information for a session."""
+
+    @api.doc(security="apikey")
+    def get(self, session_id: str) -> tuple[dict, int]:
+        """Return sub-agent events for the session."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        events = runtime.load_events(session_id)
+        agents = [
+            {
+                "agent_id": e.get("payload", {}).get("agent_id"),
+                "parent_id": e.get("payload", {}).get("parent_id"),
+                "depth": e.get("payload", {}).get("depth"),
+                "model": e.get("payload", {}).get("model"),
+                "action": e.get("payload", {}).get("action"),
+                "detail": e.get("payload", {}).get("detail"),
+                "ts": e.get("ts"),
+            }
+            for e in events
+            if e.get("type") == "sub_agent"
+        ]
+        return {
+            "agents": agents,
             "running": runtime.is_running(session_id),
         }, 200
 
@@ -630,12 +718,14 @@ class MeeseeksQuery(Resource):
             runtime.append_context_event(session_id, context_payload)
         notification_service.emit_started(session_id)
 
+        allowed_tools = _extract_allowed_tools(context_payload)
         logging.info("Received user query: {}", user_query)
         task_queue: TaskQueue = runtime.run_sync(
             user_query=user_query,
             session_id=session_id,
             approval_callback=auto_approve,
             mode=mode,
+            allowed_tools=allowed_tools,
         )
         notification_service.emit_completion(session_id)
         task_result = deepcopy(task_queue.task_result)

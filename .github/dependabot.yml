@@ -96,8 +96,8 @@ updates:
       prefix-development: "⬆️"
       include: "scope"
 
-  - package-ecosystem: "pip"
-    directory: "/apps/meeseeks_chat"
+  - package-ecosystem: "npm"
+    directory: "/apps/meeseeks_console"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -105,7 +105,7 @@ updates:
       timezone: "America/Los_Angeles"
     open-pull-requests-limit: 3
     groups:
-      chat-python:
+      console-npm:
         patterns:
           - "*"
         update-types:

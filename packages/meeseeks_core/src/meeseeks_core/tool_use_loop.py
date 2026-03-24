@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import queue as _queue_mod
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -173,7 +174,7 @@ class ToolUseLoop:
                         try:
                             msg = self._ctx.message_queue.get_nowait()
                             messages.append(HumanMessage(content=msg))
-                        except asyncio.QueueEmpty:
+                        except _queue_mod.Empty:
                             break
 
                 with langfuse_trace_span("tool-use-step") as span:
@@ -322,6 +323,12 @@ class ToolUseLoop:
             rendered = render_event_lines(context.recent_events)
             if rendered:
                 system_parts.append(f"Recent conversation:\n{rendered}")
+
+        # Attached file contents.
+        if context and context.attachment_texts:
+            system_parts.append(
+                "Attached files:\n" + "\n---\n".join(context.attachment_texts)
+            )
 
         # Tool-specific guidance from prompt files.
         tool_guidance = self._render_tool_guidance()

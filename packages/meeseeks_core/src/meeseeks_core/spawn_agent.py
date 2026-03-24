@@ -20,7 +20,7 @@ from meeseeks_core.config import get_config_value
 from meeseeks_core.hooks import HookManager
 from meeseeks_core.hypervisor import AgentHandle
 from meeseeks_core.permissions import PermissionPolicy
-from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
+from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, filter_specs
 from meeseeks_core.types import Event
 
 logging = get_logger(name="core.spawn_agent")
@@ -241,23 +241,11 @@ class SpawnAgentTool:
         Denied tools are removed from the child's ``bind_tools()`` list —
         the child LLM never sees them.
         """
-        specs = self._tool_registry.list_specs()
-
-        # 1. Allowlist: if specified, ONLY these tools are available.
-        allowed: list[str] = args.get("allowed_tools") or []
-        if allowed:
-            allowed_set = set(allowed)
-            specs = [s for s in specs if s.tool_id in allowed_set]
-
-        # 2. Denylist: per-spawn denied + config default_denied (hard floor).
-        denied: set[str] = set(args.get("denied_tools") or [])
-        config_denied = set(
-            _coerce_list(get_config_value("agent", "default_denied_tools", default=[]))
+        return filter_specs(
+            self._tool_registry.list_specs(),
+            allowed=args.get("allowed_tools") or None,
+            denied=_coerce_list(args.get("denied_tools") or []),
         )
-        denied |= config_denied
-
-        # 3. Deny takes precedence over allow.
-        return [s for s in specs if s.tool_id not in denied]
 
     # ------------------------------------------------------------------
     # Event emission
