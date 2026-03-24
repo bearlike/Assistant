@@ -7,6 +7,7 @@ import abc
 import json
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import cast
 
 from langchain_community.document_loaders import JSONLoader
@@ -21,6 +22,17 @@ from meeseeks_core.types import ActionStepPayload, ToolInput
 
 logging = get_logger(name="core.classes")
 AVAILABLE_TOOLS: list[str] = ["home_assistant_tool"]
+
+
+@dataclass
+class ToolResult:
+    """Structured tool execution result."""
+
+    content: str
+    success: bool = True
+    error: str | None = None
+    truncated: bool = False
+    original_length: int | None = None
 
 
 def set_available_tools(tool_ids: list[str]) -> None:
