@@ -55,8 +55,22 @@ const AGENT_COLOR_CLASSES = [
   'text-agent-4', 'text-agent-5', 'text-agent-6', 'text-agent-7',
 ] as const;
 
-// Agent accent border classes available for future use:
-// 'border-l-agent-0' through 'border-l-agent-7'
+/** Deterministic accent color for tool calls by tool category. */
+function toolAccent(toolId: string): AccentColor {
+  const id = toolId.toLowerCase();
+  // File/edit tools → violet (agent-4)
+  if (id.includes('edit') || id.includes('write') || id.includes('file')) return 'agent-4';
+  // Shell/exec tools → orange (agent-5)
+  if (id.includes('shell') || id.includes('bash') || id.includes('exec') || id.includes('run')) return 'agent-5';
+  // Search/read tools → blue (agent-1)
+  if (id.includes('search') || id.includes('read') || id.includes('grep') || id.includes('find')) return 'agent-1';
+  // Agent/spawn tools → aqua (agent-7)
+  if (id.includes('spawn') || id.includes('agent')) return 'agent-7';
+  // MCP tools (prefixed with mcp_) → green (agent-2)
+  if (id.startsWith('mcp_') || id.startsWith('mcp-')) return 'agent-2';
+  // Fallback: hash the tool name to a color
+  return `agent-${agentColorIndex(toolId)}` as AccentColor;
+}
 
 function renderPermission(log: LogEntry) {
   const decision = (log.decision || 'pending').toLowerCase();
@@ -238,6 +252,7 @@ function renderCompletion(log: LogEntry) {
 
 function renderShell(log: LogEntry) {
   const hasError = !!log.error;
+  const toolName = (log.title || 'tool').replace(/\s*\(.*\)$/, ''); // strip "(set)" suffix for matching
   return (
     <LogEventCard
       key={log.id}
@@ -245,7 +260,7 @@ function renderShell(log: LogEntry) {
       title={<span className="flex items-center gap-2">{log.title || 'tool'}<ModelTag model={log.model} /></span>}
       badge={hasError ? <Badge color="red">Error</Badge> : undefined}
       timestamp={log.timestamp}
-      accent={hasError ? 'red' : 'muted'}
+      accent={hasError ? 'red' : toolAccent(toolName)}
     >
       {(log.shellInput || log.shellOutput) ? (
         <div className="space-y-0 -mx-3 -mb-2">

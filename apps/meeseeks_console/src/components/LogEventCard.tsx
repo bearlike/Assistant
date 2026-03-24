@@ -2,15 +2,23 @@ import { ReactNode, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { formatSessionTime } from '../utils/time';
 
-const accentColors = {
+const accentColors: Record<string, string> = {
   emerald: 'border-l-emerald-500',
   red: 'border-l-red-500',
   amber: 'border-l-amber-500',
   blue: 'border-l-blue-500',
   muted: 'border-l-[hsl(var(--muted-foreground))]',
-} as const;
+  'agent-0': 'border-l-agent-0',
+  'agent-1': 'border-l-agent-1',
+  'agent-2': 'border-l-agent-2',
+  'agent-3': 'border-l-agent-3',
+  'agent-4': 'border-l-agent-4',
+  'agent-5': 'border-l-agent-5',
+  'agent-6': 'border-l-agent-6',
+  'agent-7': 'border-l-agent-7',
+};
 
-export type AccentColor = keyof typeof accentColors;
+export type AccentColor = string;
 
 interface LogEventCardProps {
   icon: ReactNode;
@@ -40,7 +48,7 @@ export function LogEventCard({
   return (
     <div
       style={depthMargin ? { marginLeft: depthMargin } : undefined}
-      className={`rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] border-l-[3px] ${accentColors[accent]} ${hasBody ? 'cursor-pointer' : ''} transition-colors hover:bg-[hsl(var(--accent))]/30`}
+      className={`rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] border-l-[3px] ${accentColors[accent] || accentColors.muted} ${hasBody ? 'cursor-pointer' : ''} transition-colors hover:bg-[hsl(var(--accent))]/30`}
       onClick={hasBody ? () => setExpanded((p) => !p) : undefined}
     >
       <div className="flex items-center gap-2 px-3 py-2.5">
