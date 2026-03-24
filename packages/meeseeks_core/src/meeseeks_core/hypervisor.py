@@ -22,7 +22,10 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from meeseeks_core.spawn_agent import AgentError
 
 AgentStatus = Literal["running", "completed", "failed", "cancelled"]
 
@@ -46,7 +49,7 @@ class AgentHandle:
     stopped_at: float | None = None
     steps_completed: int = 0
     last_tool_id: str | None = None
-    error: str | None = None
+    error: str | AgentError | None = None
     asyncio_task: asyncio.Task[object] | None = None
 
 
@@ -125,7 +128,7 @@ class AgentHypervisor:
         self,
         agent_id: str,
         status: AgentStatus,
-        error: str | None = None,
+        error: str | AgentError | None = None,
     ) -> None:
         """Mark an agent as done with a terminal status."""
         async with self._lock:
@@ -187,22 +190,48 @@ class AgentHypervisor:
     # ------------------------------------------------------------------
 
     async def cleanup(self, timeout: float = 5.0) -> None:
-        """Cancel all running agents and await completion."""
+        """Cancel all agents with graceful escalation.
+
+        Phase 1: Request cancellation on all running asyncio tasks.
+        Phase 2: Wait up to *timeout* seconds for tasks to finish.
+        Phase 3: Force-mark any still-pending agents as cancelled.
+        """
         async with self._lock:
             running = [
-                h
-                for h in self._agents.values()
-                if h.asyncio_task and not h.asyncio_task.done()
+                h for h in self._agents.values() if h.status == "running"
             ]
-            for h in running:
-                if h.asyncio_task:
-                    h.asyncio_task.cancel()
 
-        if running:
-            tasks = [h.asyncio_task for h in running if h.asyncio_task]
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+        if not running:
+            async with self._lock:
+                self._agents.clear()
+            return
 
+        # Phase 1: Request cancellation.
+        for handle in running:
+            if handle.asyncio_task and not handle.asyncio_task.done():
+                handle.asyncio_task.cancel()
+
+        # Phase 2: Wait with timeout.
+        tasks = [
+            h.asyncio_task for h in running
+            if h.asyncio_task and not h.asyncio_task.done()
+        ]
+        if tasks:
+            done, pending = await asyncio.wait(
+                tasks, timeout=timeout, return_when=asyncio.ALL_COMPLETED,
+            )
+
+            # Phase 3: Force-mark any still-pending as cancelled.
+            for task in pending:
+                for handle in running:
+                    if handle.asyncio_task is task:
+                        async with self._lock:
+                            if handle.status == "running":
+                                handle.status = "cancelled"
+                                handle.error = "Force-cancelled after timeout"
+                                handle.stopped_at = time.monotonic()
+
+        # Final sweep: mark any remaining running agents and clear.
         async with self._lock:
             for h in list(self._agents.values()):
                 if h.status == "running":
