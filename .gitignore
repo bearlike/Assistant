@@ -4,6 +4,10 @@ repo-to-prompt.codemod.js
 # MCP config (contains auth tokens)
 .mcp.json
 
+# macOS resource forks / metadata
+._*
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
