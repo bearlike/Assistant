@@ -9,7 +9,7 @@ import {
   SessionSummary,
   ShareRecord
 } from '../types';
-import { ToolSummary } from '../api/contracts';
+import { SkillSummary, ToolSummary } from '../api/contracts';
 
 // ---------------------------------------------------------------------------
 // In-memory state (persists for the browser session)
@@ -479,6 +479,32 @@ export async function mockUnarchiveSession(sessionId: string): Promise<void> {
 export async function mockListTools(): Promise<ToolSummary[]> {
   await delay(100);
   return mcpTools;
+}
+
+const mockSkills: SkillSummary[] = [
+  {
+    name: "review-pr",
+    description: "Review a GitHub pull request for code quality and correctness",
+    allowed_tools: null,
+    user_invocable: true,
+    disable_model_invocation: false,
+    context: null,
+    source: "project",
+  },
+  {
+    name: "commit",
+    description: "Create a conventional commit with Gitmoji prefix",
+    allowed_tools: null,
+    user_invocable: true,
+    disable_model_invocation: true,
+    context: null,
+    source: "personal",
+  },
+];
+
+export async function mockListSkills(): Promise<SkillSummary[]> {
+  await delay(100);
+  return mockSkills;
 }
 
 export async function mockListNotifications(): Promise<NotificationItem[]> {

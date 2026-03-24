@@ -9,7 +9,7 @@ import {
   SessionSummary,
   ShareRecord
 } from "../types";
-import { ApiClient, ApiConfig, ToolSummary } from "./contracts";
+import { ApiClient, ApiConfig, SkillSummary, ToolSummary } from "./contracts";
 
 function withBase(baseUrl: string, path: string) {
   if (!baseUrl) {
@@ -218,6 +218,14 @@ export function createRealClient(config: ApiConfig): ApiClient {
       });
       const payload = await handleJson<{ tools: ToolSummary[] }>(response);
       return payload.tools;
+    },
+
+    async listSkills(): Promise<SkillSummary[]> {
+      const response = await fetch(withBase(baseUrl, "/api/skills"), {
+        headers: headers(apiKey)
+      });
+      const payload = await handleJson<{ skills: SkillSummary[] }>(response);
+      return payload.skills;
     },
 
     async listNotifications(): Promise<NotificationItem[]> {

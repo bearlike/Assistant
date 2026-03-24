@@ -89,6 +89,7 @@ def orchestrate_session(
     mode: str | None = None,
     should_cancel: Callable[[], bool] | None = None,
     allowed_tools: list[str] | None = None,
+    skill_instructions: str | None = None,
     message_queue: queue.Queue[str] | None = None,
     interrupt_step: threading.Event | None = None,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
@@ -109,6 +110,7 @@ def orchestrate_session(
         mode=mode,
         should_cancel=should_cancel,
         allowed_tools=allowed_tools,
+        skill_instructions=skill_instructions,
         message_queue=message_queue,
         interrupt_step=interrupt_step,
     )

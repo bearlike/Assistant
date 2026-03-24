@@ -33,6 +33,7 @@ export type SessionContext = {
   repo?: string;
   branch?: string;
   mcp_tools?: string[];
+  skill?: string;
   attachments?: AttachmentPayload[];
 };
 

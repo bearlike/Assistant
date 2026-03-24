@@ -238,6 +238,63 @@ def _cmd_mode(context: CommandContext, args: list[str]) -> bool:
     return True
 
 
+@REGISTRY.command("/skills", "List available skills (/skills [name])")
+def _cmd_skills(context: CommandContext, args: list[str]) -> bool:
+    from meeseeks_core.skills import SkillRegistry
+
+    skill_registry = SkillRegistry()
+    skill_registry.load()
+    skills = skill_registry.list_all()
+
+    if not skills:
+        context.console.print("No skills discovered.")
+        context.console.print(
+            "Place SKILL.md files in ~/.claude/skills/<name>/ "
+            "or .claude/skills/<name>/",
+            style="dim",
+        )
+        return True
+
+    # Detail view for a specific skill.
+    if args:
+        name = args[0].lstrip("/")
+        skill = skill_registry.get(name)
+        if skill is None:
+            context.console.print(f"Unknown skill: {name}")
+            return True
+        detail = Text()
+        detail.append(f"Name: {skill.name}\n", style="cyan bold")
+        detail.append(f"Description: {skill.description}\n")
+        detail.append(f"Source: {skill.source}\n", style="dim")
+        if skill.allowed_tools:
+            detail.append(f"Allowed tools: {', '.join(skill.allowed_tools)}\n", style="dim")
+        if skill.context:
+            detail.append(f"Context: {skill.context}\n", style="dim")
+        if skill.disable_model_invocation:
+            detail.append("Auto-invocation: disabled\n", style="dim")
+        if not skill.user_invocable:
+            detail.append("User-invocable: no (LLM only)\n", style="dim")
+        context.console.print(Panel(detail, title=f"Skill: {skill.name}", border_style="cyan"))
+        return True
+
+    # List view.
+    rows = Text()
+    for skill in skills:
+        rows.append(f"  /{skill.name}", style="cyan")
+        rows.append(f"  {skill.description}", style="dim")
+        badges: list[str] = [skill.source]
+        if skill.context == "fork":
+            badges.append("fork")
+        if not skill.user_invocable:
+            badges.append("LLM only")
+        if skill.disable_model_invocation:
+            badges.append("manual only")
+        rows.append(f"  [{', '.join(badges)}]", style="dim italic")
+        rows.append("\n")
+    context.console.print(Panel(rows, title="Skills", border_style="cyan"))
+    return True
+
+
 @REGISTRY.command("/mcp", "List MCP tools and servers (/mcp select|init)")
 def _cmd_mcp(context: CommandContext, args: list[str]) -> bool:
     if args and args[0].lower() == "init":

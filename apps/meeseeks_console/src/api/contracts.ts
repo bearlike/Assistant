@@ -20,6 +20,16 @@ export type ToolSummary = {
   server?: string;
 };
 
+export type SkillSummary = {
+  name: string;
+  description: string;
+  allowed_tools: string[] | null;
+  user_invocable: boolean;
+  disable_model_invocation: boolean;
+  context: string | null;
+  source: string;
+};
+
 export type ApiClient = {
   listSessions: (includeArchived?: boolean) => Promise<SessionSummary[]>;
   createSession: (context?: SessionContext) => Promise<string>;
@@ -46,6 +56,7 @@ export type ApiClient = {
   sendMessage: (sessionId: string, text: string) => Promise<void>;
   interruptStep: (sessionId: string) => Promise<void>;
   listTools: () => Promise<ToolSummary[]>;
+  listSkills: () => Promise<SkillSummary[]>;
   listNotifications: () => Promise<NotificationItem[]>;
   dismissNotification: (ids: string[]) => Promise<void>;
   clearNotifications: (clearAll?: boolean) => Promise<void>;

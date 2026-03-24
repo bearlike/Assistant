@@ -24,6 +24,7 @@ from meeseeks_core.permissions import (
 )
 from meeseeks_core.planning import Planner
 from meeseeks_core.session_store import SessionStore
+from meeseeks_core.skills import SkillRegistry, activate_skill
 from meeseeks_core.token_budget import get_token_budget
 from meeseeks_core.tool_registry import ToolRegistry, filter_specs, load_registry
 from meeseeks_core.tool_use_loop import ToolUseLoop
@@ -58,6 +59,8 @@ class Orchestrator:
         self._context_builder = ContextBuilder(self._session_store)
         self._planner = Planner(self._tool_registry)
         self._project_instructions = discover_project_instructions()
+        self._skill_registry = SkillRegistry()
+        self._skill_registry.load()
 
     def run(
         self,
@@ -70,6 +73,7 @@ class Orchestrator:
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
         allowed_tools: list[str] | None = None,
+        skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
@@ -88,6 +92,7 @@ class Orchestrator:
                     mode=mode,
                     should_cancel=should_cancel,
                     allowed_tools=allowed_tools,
+                    skill_instructions=skill_instructions,
                     message_queue=message_queue,
                     interrupt_step=interrupt_step,
                 )
@@ -103,6 +108,7 @@ class Orchestrator:
         mode: str | None,
         should_cancel: Callable[[], bool] | None,
         allowed_tools: list[str] | None = None,
+        skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
@@ -147,6 +153,15 @@ class Orchestrator:
             if allowed_tools:
                 tool_specs = filter_specs(tool_specs, allowed=allowed_tools)
 
+            # Skill invocation detection and hot-reload.
+            self._skill_registry.maybe_reload()
+            if skill_instructions is None:
+                _si, _ts = self._try_skill_invocation(user_query, tool_specs)
+                if _si is not None:
+                    skill_instructions = _si
+                if _ts is not None:
+                    tool_specs = _ts
+
             if resolved_mode == "plan":
                 # Plan-only mode: generate plan, return without executing.
                 plan = initial_plan or self._planner.generate(
@@ -189,6 +204,8 @@ class Orchestrator:
                     approval_callback=self._approval_callback,
                     hook_manager=self._hook_manager,
                     project_instructions=self._project_instructions,
+                    skill_instructions=skill_instructions,
+                    skill_registry=self._skill_registry,
                 )
                 max_steps = max(1, max_iters) * 3
                 try:
@@ -305,6 +322,32 @@ class Orchestrator:
         task_queue = TaskQueue(action_steps=[])
         task_queue.task_result = message
         return task_queue
+
+    def _try_skill_invocation(
+        self,
+        user_query: str,
+        tool_specs: list,
+    ) -> tuple[str | None, list | None]:
+        """Detect ``/skill-name args`` in the query and activate the skill.
+
+        Returns ``(skill_instructions, scoped_tool_specs)`` on match,
+        or ``(None, None)`` if the query is not a skill invocation.
+        """
+        query = user_query.strip()
+        if not query.startswith("/"):
+            return None, None
+
+        parts = query.split(None, 1)
+        name = parts[0].lstrip("/")
+        args = parts[1] if len(parts) > 1 else ""
+
+        skill = self._skill_registry.get(name)
+        if skill is None:
+            return None, None
+
+        logging.info("Activating skill '{}' with args '{}'", name, args)
+        instructions, scoped_specs = activate_skill(skill, args, tool_specs)
+        return instructions, scoped_specs
 
     @staticmethod
     def _resolve_mode(user_query: str, mode: str | None) -> str:

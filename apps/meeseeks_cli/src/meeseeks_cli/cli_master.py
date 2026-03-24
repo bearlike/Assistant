@@ -187,6 +187,7 @@ class HeaderContext:
     builtin_disabled: int
     external_enabled: int
     external_disabled: int
+    skill_count: int = 0
 
 
 def _truncate_middle(text: str, max_len: int) -> str:
@@ -287,12 +288,16 @@ def _render_header_wide(console: Console, ctx: HeaderContext) -> None:
     console.print(Rule(style="dim"), style=HEADER_STYLE)
     console.print(_brand_line(ctx, console.width), style=HEADER_STYLE)
 
+    skills_text = Text()
+    style = "dim" if ctx.skill_count else "red dim"
+    skills_text.append(f"{ctx.skill_count} available", style=style)
     fields: list[tuple[str, Text | str]] = [
         ("model", _format_model(ctx.model, 40)),
         ("session", ctx.session_id or "(not set)"),
         ("base", _short_url(ctx.base_url, 60) if ctx.base_url else "(not set)"),
         ("langfuse", _langfuse_value(ctx)),
         ("tools", _tools_value(ctx)),
+        ("skills", skills_text),
     ]
     label_width = max(len(label) for label, _ in fields)
     for label, value in fields:
@@ -402,6 +407,11 @@ def run_cli(args: argparse.Namespace) -> int:
     tool_registry = load_registry()
     registry = get_registry()
 
+    from meeseeks_core.skills import SkillRegistry
+
+    skill_registry = SkillRegistry()
+    skill_registry.load()
+
     base_url = get_config_value("llm", "api_base") or ""
     model_name = _resolve_display_model(state.model_name)
     langfuse_status = resolve_langfuse_status()
@@ -438,6 +448,7 @@ def run_cli(args: argparse.Namespace) -> int:
         builtin_disabled=builtin_disabled,
         external_enabled=external_enabled,
         external_disabled=external_disabled,
+        skill_count=len(skill_registry.list_all()),
     )
     render_header(console, header_ctx)
     _maybe_warn_missing_configs(console, tool_registry, config)
@@ -464,17 +475,39 @@ def run_cli(args: argparse.Namespace) -> int:
             continue
         if user_input.startswith("/"):
             command, cmd_args = _parse_command(user_input)
-            context = CommandContext(
-                console=console,
-                store=store,
-                state=state,
-                tool_registry=tool_registry,
-                runtime=runtime,
-                prompt_func=session.prompt,
+            # 1. Try registered CLI commands first.
+            if command in registry.list_commands():
+                context = CommandContext(
+                    console=console,
+                    store=store,
+                    state=state,
+                    tool_registry=tool_registry,
+                    runtime=runtime,
+                    prompt_func=session.prompt,
+                )
+                if not registry.execute(command, context, cmd_args):
+                    _render_resume_hint(console, state.session_id, args.session_dir)
+                    return 0
+                continue
+            # 2. Try skill invocation: /skill-name [args]
+            _skill_name = command.lstrip("/")
+            _skill = skill_registry.get(_skill_name)
+            if _skill is not None and _skill.user_invocable:
+                from meeseeks_core.skills import activate_skill
+
+                _skill_args = " ".join(cmd_args)
+                _instructions, _ = activate_skill(_skill, _skill_args)
+                console.print(f"Activating skill: {_skill_name}", style="dim cyan")
+                _run_query(
+                    console, store, runtime, state, tool_registry,
+                    user_input, args, session.prompt,
+                    skill_instructions=_instructions,
+                )
+                continue
+            # 3. Fall through to unknown command.
+            console.print(
+                "Unknown command. Use /help for commands or /skills for skills.",
             )
-            if not registry.execute(command, context, cmd_args):
-                _render_resume_hint(console, state.session_id, args.session_dir)
-                return 0
             continue
 
         _run_query(
@@ -511,6 +544,7 @@ def _run_query(
     query: str,
     args: argparse.Namespace,
     prompt_func: Callable[[str], str] | None,
+    skill_instructions: str | None = None,
 ) -> None:
     initial_plan = None
     mode = _resolve_query_mode(query, state)
@@ -588,6 +622,7 @@ def _run_query(
                 approval_callback=approval_callback,
                 hook_manager=hook_manager,
                 mode=mode,
+                skill_instructions=skill_instructions,
             )
     else:
         hook_manager = _build_cli_hook_manager(console, tool_registry)
@@ -601,6 +636,7 @@ def _run_query(
             approval_callback=approval_callback,
             hook_manager=hook_manager,
             mode=mode,
+            skill_instructions=skill_instructions,
         )
 
     _render_results_with_registry(

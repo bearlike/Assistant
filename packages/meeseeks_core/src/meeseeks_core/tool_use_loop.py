@@ -76,6 +76,8 @@ class ToolUseLoop:
         approval_callback: Callable[[ActionStep], bool] | None = None,
         hook_manager: HookManager,
         project_instructions: str | None = None,
+        skill_instructions: str | None = None,
+        skill_registry: Any = None,
     ) -> None:
         """Initialize the tool-use loop.
 
@@ -86,6 +88,8 @@ class ToolUseLoop:
             approval_callback: Optional callback for ASK decisions (None for sub-agents).
             hook_manager: Lifecycle hooks.
             project_instructions: CLAUDE.md / AGENTS.md content discovered at session start.
+            skill_instructions: Pre-rendered skill body (from user /skill invocation).
+            skill_registry: SkillRegistry for auto-invocation catalog + activate_skill handling.
         """
         self._ctx = agent_context
         self._tool_registry = tool_registry
@@ -93,6 +97,8 @@ class ToolUseLoop:
         self._approval_callback = approval_callback
         self._hook_manager = hook_manager
         self._project_instructions = project_instructions
+        self._skill_instructions = skill_instructions
+        self._skill_registry = skill_registry
 
         # Create SpawnAgentTool when this agent can spawn children.
         self._spawn_agent_tool: Any = None
@@ -316,6 +322,18 @@ class ToolUseLoop:
                 f"Project instructions:\n{self._project_instructions}"
             )
 
+        # Active skill instructions (from user /skill invocation).
+        if self._skill_instructions:
+            system_parts.append(
+                f"Active skill instructions:\n{self._skill_instructions}"
+            )
+
+        # Auto-invocable skills catalog (for LLM-driven activation).
+        if self._skill_registry is not None:
+            catalog = self._skill_registry.render_catalog()
+            if catalog:
+                system_parts.append(catalog)
+
         # Session context.
         if context and context.summary:
             system_parts.append(f"Session summary:\n{context.summary}")
@@ -392,6 +410,39 @@ class ToolUseLoop:
         return "\n\n".join(prompts)
 
     # ------------------------------------------------------------------
+    # Skill activation (internal tool handler)
+    # ------------------------------------------------------------------
+
+    def _handle_activate_skill(self, action_step: ActionStep) -> Any:
+        """Handle an ``activate_skill`` tool call from the LLM.
+
+        Returns the skill body as a mock result so it arrives as a
+        ``ToolMessage`` — the LLM reads the instructions and follows them.
+        """
+        from meeseeks_core.skills import activate_skill
+
+        args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
+        skill_name = str(args.get("skill_name", ""))
+        skill_args = str(args.get("args", ""))
+
+        registry = self._skill_registry
+        skill = registry.get(skill_name) if registry else None
+        if skill is None:
+            msg = f"ERROR: Unknown skill '{skill_name}'"
+            return type("R", (), {"content": msg})()
+        if skill.disable_model_invocation:
+            msg = f"ERROR: Skill '{skill_name}' is user-invocable only"
+            return type("R", (), {"content": msg})()
+
+        instructions, _ = activate_skill(skill, skill_args)
+        logging.info("LLM auto-activated skill '{}'", skill_name)
+        body = (
+            f"## Skill: {skill_name}\n\n{instructions}\n\n"
+            "Follow these instructions now."
+        )
+        return type("R", (), {"content": body})()
+
+    # ------------------------------------------------------------------
     # Model binding
     # ------------------------------------------------------------------
 
@@ -408,6 +459,11 @@ class ToolUseLoop:
             from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
 
             tool_schemas = [*tool_schemas, SPAWN_AGENT_SCHEMA]
+        # Inject activate_skill schema when auto-invocable skills exist.
+        if self._skill_registry is not None and self._skill_registry.list_auto_invocable():
+            from meeseeks_core.skills import ACTIVATE_SKILL_SCHEMA
+
+            tool_schemas = [*tool_schemas, ACTIVATE_SKILL_SCHEMA]
         if tool_schemas:
             return model.bind_tools(tool_schemas)
         return model
@@ -449,7 +505,7 @@ class ToolUseLoop:
         # Pre-tool hook.
         action_step = self._hook_manager.run_pre_tool_use(action_step)
 
-        # Execute — spawn_agent is async-native, all others via to_thread.
+        # Execute — internal tools (spawn_agent, activate_skill) first, then registry.
         if tool_id == "spawn_agent" and self._spawn_agent_tool is not None:
             try:
                 result = await self._spawn_agent_tool.run_async(action_step)
@@ -460,6 +516,8 @@ class ToolUseLoop:
                     tool_call_id=tool_call_id, tool_id=tool_id,
                     content=f"ERROR: {exc}", success=False,
                 )
+        elif tool_id == "activate_skill" and self._skill_registry is not None:
+            result = self._handle_activate_skill(action_step)
         else:
             tool = self._tool_registry.get(tool_id)
             if tool is None:

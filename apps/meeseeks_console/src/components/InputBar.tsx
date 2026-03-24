@@ -11,7 +11,9 @@ import {
 'lucide-react';
 import { QueryMode, SessionContext } from '../types';
 import { useMcpTools } from '../hooks/useMcpTools';
+import { useSkills } from '../hooks/useSkills';
 import { McpSelector, McpOption } from './McpSelector';
+import { SkillSelector } from './SkillSelector';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 type McpToolOption = McpOption & {
   server?: string;
@@ -39,6 +41,8 @@ export function InputBar({
 }: InputBarProps) {
   const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
+  const [isSkillOpen, setIsSkillOpen] = useState(false);
+  const [activeSkill, setActiveSkill] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>('act');
   const {
@@ -46,10 +50,16 @@ export function InputBar({
     loading: mcpLoading,
     error: mcpError
   } = useMcpTools();
+  const {
+    skills: availableSkills,
+    loading: skillsLoading,
+    error: skillsError
+  } = useSkills();
   const [mcps, setMcps] = useState<McpToolOption[]>([]);
   const [inputValue, setInputValue] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
   const mcpRef = useRef<HTMLDivElement>(null);
+  const skillRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -59,6 +69,9 @@ export function InputBar({
       }
       if (mcpRef.current && !mcpRef.current.contains(event.target as Node)) {
         setIsMcpOpen(false);
+      }
+      if (skillRef.current && !skillRef.current.contains(event.target as Node)) {
+        setIsSkillOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -147,7 +160,8 @@ export function InputBar({
       return;
     }
     const context: SessionContext = {
-      mcp_tools: mcps.filter((m) => m.active).map((m) => m.id)
+      mcp_tools: mcps.filter((m) => m.active).map((m) => m.id),
+      ...(activeSkill ? { skill: activeSkill } : {})
     };
     void onSubmit(inputValue.trim(), context, queryMode, attachedFiles);
     setInputValue('');
@@ -270,8 +284,26 @@ export function InputBar({
                   onToggleOpen={() => {
                     setIsMcpOpen(!isMcpOpen);
                     setIsPlusMenuOpen(false);
+                    setIsSkillOpen(false);
                   }}
                   onToggle={toggleMcp} />
+
+                <SkillSelector
+                  ref={skillRef}
+                  skills={availableSkills}
+                  activeSkill={activeSkill}
+                  isOpen={isSkillOpen}
+                  loading={skillsLoading}
+                  error={skillsError}
+                  onToggleOpen={() => {
+                    setIsSkillOpen(!isSkillOpen);
+                    setIsMcpOpen(false);
+                    setIsPlusMenuOpen(false);
+                  }}
+                  onSelect={(name) => {
+                    setActiveSkill(name);
+                    setIsSkillOpen(false);
+                  }} />
 
               </div>
 
@@ -385,8 +417,26 @@ export function InputBar({
                 onToggleOpen={() => {
                   setIsMcpOpen(!isMcpOpen);
                   setIsPlusMenuOpen(false);
+                  setIsSkillOpen(false);
                 }}
                 onToggle={toggleMcp} />
+
+              <SkillSelector
+                ref={skillRef}
+                skills={availableSkills}
+                activeSkill={activeSkill}
+                isOpen={isSkillOpen}
+                loading={skillsLoading}
+                error={skillsError}
+                onToggleOpen={() => {
+                  setIsSkillOpen(!isSkillOpen);
+                  setIsMcpOpen(false);
+                  setIsPlusMenuOpen(false);
+                }}
+                onSelect={(name) => {
+                  setActiveSkill(name);
+                  setIsSkillOpen(false);
+                }} />
 
               <button
                 aria-label="Voice input"

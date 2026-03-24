@@ -295,6 +295,42 @@ def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | No
     return None
 
 
+def _resolve_skill_instructions(
+    request_data: dict[str, object],
+    user_query: str,
+    context_payload: dict[str, object] | None = None,
+) -> str | None:
+    """Resolve skill instructions from request payload or context.
+
+    Checks (in order):
+    1. Top-level ``"skill"`` field in request body.
+    2. ``"skill"`` field inside the ``context`` object.
+    3. Falls back to None (orchestrator can still detect ``/skill-name`` queries).
+    """
+    from meeseeks_core.skills import SkillRegistry, activate_skill
+
+    # Check top-level "skill" field.
+    skill_name = request_data.get("skill")
+
+    # Check context.skill (from web console SessionContext).
+    if not skill_name and context_payload:
+        ctx = request_data.get("context")
+        if isinstance(ctx, dict):
+            skill_name = ctx.get("skill")
+
+    if isinstance(skill_name, str) and skill_name.strip():
+        registry = SkillRegistry()
+        registry.load()
+        skill = registry.get(skill_name.strip())
+        if skill is not None:
+            args = str(request_data.get("skill_args", ""))
+            instructions, _ = activate_skill(skill, args)
+            return instructions
+
+    return None
+    return None
+
+
 notification_service = NotificationService(notification_store, runtime.session_store)
 
 
@@ -360,12 +396,18 @@ class SessionQuery(Resource):
 
         allowed_tools = _extract_allowed_tools(context_payload)
 
+        # Skill activation: resolve from top-level "skill" field or context.skill.
+        skill_instructions = _resolve_skill_instructions(
+            request_data, user_query, context_payload
+        )
+
         started = runtime.start_async(
             session_id=session_id,
             user_query=user_query,
             approval_callback=auto_approve,
             mode=mode,
             allowed_tools=allowed_tools,
+            skill_instructions=skill_instructions,
         )
         if not started:
             return {"message": "Session is already running."}, 409
@@ -670,6 +712,35 @@ class Tools(Resource):
             for spec in specs
         ]
         return {"tools": tools}, 200
+
+
+@ns.route("/skills")
+class Skills(Resource):
+    """List available skills."""
+
+    @api.doc(security="apikey")
+    def get(self) -> tuple[dict, int]:
+        """Return skill specs for the UI."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        from meeseeks_core.skills import SkillRegistry
+
+        registry = SkillRegistry()
+        registry.load()
+        skills = [
+            {
+                "name": s.name,
+                "description": s.description,
+                "allowed_tools": s.allowed_tools,
+                "user_invocable": s.user_invocable,
+                "disable_model_invocation": s.disable_model_invocation,
+                "context": s.context,
+                "source": s.source,
+            }
+            for s in registry.list_all()
+        ]
+        return {"skills": skills}, 200
 
 
 @ns.route("/query")

@@ -9,7 +9,7 @@ import {
   SessionSummary,
   ShareRecord
 } from '../types';
-import { ApiClient, ApiMode, ToolSummary } from './contracts';
+import { ApiClient, ApiMode, SkillSummary, ToolSummary } from './contracts';
 import { createRealClient } from './realClient';
 import {
   mockListSessions,
@@ -23,6 +23,7 @@ import {
   mockExportSession,
   mockResolveShare,
   mockListTools,
+  mockListSkills,
   mockListNotifications,
   mockDismissNotification,
   mockClearNotifications
@@ -51,6 +52,7 @@ const mockClient: ApiClient = {
   sendMessage: async () => { /* no-op mock */ },
   interruptStep: async () => { /* no-op mock */ },
   listTools: mockListTools,
+  listSkills: mockListSkills,
   listNotifications: mockListNotifications,
   dismissNotification: mockDismissNotification,
   clearNotifications: mockClearNotifications
@@ -203,6 +205,13 @@ export async function listTools(): Promise<ToolSummary[]> {
   );
 }
 
+export async function listSkills(): Promise<SkillSummary[]> {
+  return withFallback(
+    () => realClient.listSkills(),
+    () => mockClient.listSkills()
+  );
+}
+
 export async function listNotifications(): Promise<NotificationItem[]> {
   return withFallback(
     () => realClient.listNotifications(),
@@ -238,4 +247,4 @@ export async function interruptStep(sessionId: string): Promise<void> {
   );
 }
 
-export type { ToolSummary };
+export type { SkillSummary, ToolSummary };
