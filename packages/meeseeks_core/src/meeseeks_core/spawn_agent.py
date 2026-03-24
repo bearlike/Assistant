@@ -11,6 +11,7 @@ never sees them.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Any
 
 from meeseeks_core.agent_context import AgentContext, AgentDepthExceeded
@@ -24,6 +25,26 @@ from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, filter_specs
 from meeseeks_core.types import Event
 
 logging = get_logger(name="core.spawn_agent")
+
+
+@dataclass
+class AgentError:
+    """Structured error context from a failed sub-agent."""
+
+    agent_id: str
+    depth: int
+    task: str  # First 200 chars of task description
+    error: str  # Exception message
+    last_tool: str | None = None
+    steps_completed: int = 0
+
+    def __str__(self) -> str:  # noqa: D105
+        parts = [f"Agent {self.agent_id} (depth={self.depth})"]
+        parts.append(f"failed after {self.steps_completed} steps")
+        if self.last_tool:
+            parts.append(f"at tool '{self.last_tool}'")
+        parts.append(f": {self.error}")
+        return " ".join(parts)
 
 
 def _coerce_list(value: object) -> list[str]:
@@ -174,10 +195,18 @@ class SpawnAgentTool:
             )
 
         except AgentDepthExceeded as exc:
+            agent_error = AgentError(
+                agent_id=handle.agent_id if handle else "unknown",
+                depth=child_ctx.depth if child_ctx else 0,
+                task=task_desc[:200],
+                error=str(exc),
+            )
             if handle:
-                await registry.mark_done(handle.agent_id, "failed", error=str(exc))
+                await registry.mark_done(
+                    handle.agent_id, "failed", error=agent_error,
+                )
                 self._hook_manager.run_on_agent_stop(handle)
-            return MockSpeaker(content=f"ERROR: {exc}")
+            return MockSpeaker(content=f"ERROR: {agent_error}")
 
         except asyncio.CancelledError:
             if child_ctx:
@@ -188,16 +217,31 @@ class SpawnAgentTool:
 
         except Exception as exc:
             logging.error("Sub-agent failed: {}", exc)
+            # Build structured error with context from the handle.
+            agent_error = AgentError(
+                agent_id=child_ctx.agent_id if child_ctx else "unknown",
+                depth=child_ctx.depth if child_ctx else 0,
+                task=task_desc[:200],
+                error=str(exc),
+                last_tool=handle.last_tool_id if handle else None,
+                steps_completed=handle.steps_completed if handle else 0,
+            )
             if child_ctx:
                 await registry.mark_done(
-                    child_ctx.agent_id, "failed", error=str(exc)
+                    child_ctx.agent_id, "failed", error=agent_error,
                 )
             if handle:
                 self._hook_manager.run_on_agent_stop(handle)
-            return MockSpeaker(content=f"ERROR: Sub-agent failed: {exc}")
+            return MockSpeaker(content=f"ERROR: Sub-agent failed: {agent_error}")
 
         finally:
             if child_ctx:
+                # Cancel any children spawned by this sub-agent.
+                children = await registry.list_children(child_ctx.agent_id)
+                for child in children:
+                    if child.status == "running":
+                        await registry.cancel_agent(child.agent_id)
+
                 await registry.unregister(child_ctx.agent_id)
             registry.release()
 
@@ -268,4 +312,4 @@ class SpawnAgentTool:
             ctx.event_logger(event)
 
 
-__all__ = ["SPAWN_AGENT_SCHEMA", "SpawnAgentTool"]
+__all__ = ["AgentError", "SPAWN_AGENT_SCHEMA", "SpawnAgentTool"]
