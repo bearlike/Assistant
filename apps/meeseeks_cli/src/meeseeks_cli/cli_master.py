@@ -22,6 +22,8 @@ from rich.status import Status
 from rich.syntax import Syntax
 from rich.text import Text
 
+from meeseeks_cli.cli_keys import KeyListener
+
 
 def _verbosity_to_level(verbosity: int) -> str:
     if verbosity <= 0:
@@ -603,27 +605,40 @@ def _run_query(
         agent_display = AgentDisplayManager()
         hook_manager = _build_cli_hook_manager(console, tool_registry, agent_display)
 
+        key_listener = KeyListener()
+        key_listener.bind("\x0f", agent_display.toggle_expand)  # Ctrl+O
+
+        # Wrap approval callback so KeyListener pauses cbreak mode
+        # while console.input() reads a line during permission prompts.
+        _original_approval = approval_callback
+
+        def _approval_with_keys(step: ActionStep) -> bool:
+            key_listener.pause()
+            try:
+                return _original_approval(step)
+            finally:
+                key_listener.resume()
+
         with Live(
             Text(""),
             console=console,
             refresh_per_second=4,
             transient=True,
         ) as live:
-            live.get_renderable = lambda: (  # type: ignore[method-assign]
-                agent_display.render() if agent_display.has_agents else Text("")
-            )
-            task_queue = runtime.run_sync(
-                user_query=query,
-                model_name=state.model_name,
-                max_iters=args.max_iters,
-                initial_plan=initial_plan,
-                session_id=state.session_id,
-                tool_registry=tool_registry,
-                approval_callback=approval_callback,
-                hook_manager=hook_manager,
-                mode=mode,
-                skill_instructions=skill_instructions,
-            )
+            live.get_renderable = lambda: agent_display.render()  # type: ignore[method-assign]
+            with key_listener:
+                task_queue = runtime.run_sync(
+                    user_query=query,
+                    model_name=state.model_name,
+                    max_iters=args.max_iters,
+                    initial_plan=initial_plan,
+                    session_id=state.session_id,
+                    tool_registry=tool_registry,
+                    approval_callback=_approval_with_keys,
+                    hook_manager=hook_manager,
+                    mode=mode,
+                    skill_instructions=skill_instructions,
+                )
     else:
         hook_manager = _build_cli_hook_manager(console, tool_registry)
         task_queue = runtime.run_sync(
@@ -929,11 +944,14 @@ def _build_cli_hook_manager(
     tool_registry: ToolRegistry,
     agent_display: AgentDisplayManager | None = None,
 ) -> HookManager:
-    # When agent display is active, the live tree replaces the per-tool spinner.
+    # When agent display is active, the live tree + integrated spinner
+    # replace the per-tool console.status() spinner.
     if agent_display is not None:
         return HookManager(
             on_agent_start=[agent_display.on_start],
             on_agent_stop=[agent_display.on_stop],
+            pre_tool_use=[agent_display.on_tool_start],
+            post_tool_use=[agent_display.on_tool_end],
         )
 
     # Fallback: original spinner behavior (no agent tree).
