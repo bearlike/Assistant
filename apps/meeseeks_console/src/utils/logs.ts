@@ -198,13 +198,16 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
     }
     if (event.type === "permission") {
       const payload = event.payload || {};
+      const decision =
+        typeof payload.decision === "string" ? payload.decision : "pending";
+      // Skip "allow" decisions — the tool_result card already confirms execution.
+      // Only show deny/pending where human authority was actually exercised.
+      if (decision.toLowerCase() === "allow") continue;
       const toolId =
         typeof payload.tool_id === "string" ? payload.tool_id : "tool";
       const operation =
         typeof payload.operation === "string" ? payload.operation : "run";
       const rawInput = formatToolInput(payload.tool_input);
-      const decision =
-        typeof payload.decision === "string" ? payload.decision : "pending";
       logs.push({
         id: `permission-${idx++}`,
         type: "permission",
