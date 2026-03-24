@@ -33,7 +33,6 @@ function Badge({ children, color }: { children: React.ReactNode; color: string }
 
 function ModelTag({ model }: { model?: string }) {
   if (!model) return null;
-  // Strip provider prefix for display (e.g., "openai/claude-sonnet-4-6" → "claude-sonnet-4-6")
   const short = model.includes('/') ? (model.split('/').pop() ?? model) : model;
   return (
     <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded whitespace-nowrap">
@@ -41,6 +40,23 @@ function ModelTag({ model }: { model?: string }) {
     </span>
   );
 }
+
+/** Hash agent ID to one of 8 cycling colors (Claude Code sub-agent palette). */
+function agentColorIndex(agentId: string): number {
+  let hash = 0;
+  for (let i = 0; i < agentId.length; i++) {
+    hash = ((hash << 5) - hash + agentId.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % 8;
+}
+
+const AGENT_COLOR_CLASSES = [
+  'text-agent-0', 'text-agent-1', 'text-agent-2', 'text-agent-3',
+  'text-agent-4', 'text-agent-5', 'text-agent-6', 'text-agent-7',
+] as const;
+
+// Agent accent border classes available for future use:
+// 'border-l-agent-0' through 'border-l-agent-7'
 
 function renderPermission(log: LogEntry) {
   const decision = (log.decision || 'pending').toLowerCase();
@@ -52,7 +68,7 @@ function renderPermission(log: LogEntry) {
   return (
     <LogEventCard
       key={log.id}
-      icon={<Icon className={`w-4 h-4 text-${accent === 'emerald' ? 'emerald' : accent === 'red' ? 'red' : 'amber'}-500`} />}
+      icon={<Icon className={`w-4 h-4 ${decision === 'deny' ? 'text-red-500' : 'text-permission'}`} />}
       title={log.toolId || 'tool'}
       badge={<Badge color={badgeColor}>{badgeText}</Badge>}
       timestamp={log.timestamp}
@@ -85,6 +101,8 @@ function renderAgent(log: LogEntry) {
     'muted';
 
   const displayId = (log.agentId || '').slice(0, 8);
+  const colorIdx = agentColorIndex(log.agentId || '');
+  const agentTextColor = AGENT_COLOR_CLASSES[colorIdx];
   const stepsLabel = log.stepsCompleted ? `${log.stepsCompleted} steps` : '';
   const badgeText = isStart ? 'Started' :
     status === 'completed' ? 'Completed' :
@@ -98,7 +116,7 @@ function renderAgent(log: LogEntry) {
   return (
     <LogEventCard
       key={log.id}
-      icon={<Bot className="w-4 h-4 text-blue-500" />}
+      icon={<Bot className={`w-4 h-4 ${agentTextColor}`} />}
       title={<span className="flex items-center gap-2"><span className="font-mono">{displayId}</span><ModelTag model={log.model} /></span>}
       badge={<Badge color={accent}>{badgeWithSteps}</Badge>}
       timestamp={log.timestamp}

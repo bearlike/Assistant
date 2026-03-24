@@ -38,7 +38,7 @@ export function MessageBubble({ role, content, children }: MessageBubbleProps) {
     return (
       <div className="flex justify-end">
         <div className="flex flex-col items-end">
-          <div className="bg-[hsl(var(--card))] text-[hsl(var(--card-foreground))] px-4 py-3 rounded-lg max-w-[70%] text-sm border border-[hsl(var(--border))]">
+          <div className="bg-user-msg hover:bg-user-msg-hover text-[hsl(var(--card-foreground))] px-4 py-3 rounded-lg max-w-[70%] text-sm border border-[hsl(var(--border))] transition-colors">
             {displayContent ? <MarkdownContent content={displayContent} /> : null}
             {isLong &&
             <button

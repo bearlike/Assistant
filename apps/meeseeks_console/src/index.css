@@ -45,6 +45,24 @@
     --surface: 30 3.3% 11.8%; /* bg-200 */
     --surface-deep: 0 0% 0%; /* bg-400 */
 
+    /* ── Semantic: agent & orchestration ── */
+    --permission: 233 80% 78%; /* light blue-purple (CC dark: 177,185,249) */
+    --plan-mode: 173 35% 44%; /* muted sage-teal (CC dark: 72,150,140) */
+    --user-message-bg: 0 0% 22%; /* (CC dark: rgb(55,55,55)) */
+    --user-message-bg-hover: 0 0% 27%; /* (CC dark: rgb(70,70,70)) */
+    --bash-bg: 300 4% 25%; /* (CC dark: rgb(65,60,65)) */
+    --memory-bg: 195 12% 25%; /* (CC dark: rgb(55,65,70)) */
+
+    /* ── Agent color cycling (8 slots, CC sub-agent palette) ── */
+    --agent-0: 0 72% 51%; /* red    — rgb(220,38,38) */
+    --agent-1: 217 84% 53%; /* blue   — rgb(37,99,235) */
+    --agent-2: 142 64% 36%; /* green  — rgb(22,163,74) */
+    --agent-3: 43 96% 40%; /* yellow — rgb(202,138,4) */
+    --agent-4: 271 76% 56%; /* purple — rgb(147,51,234) */
+    --agent-5: 21 90% 48%; /* orange — rgb(234,88,12) */
+    --agent-6: 330 81% 51%; /* pink   — rgb(219,39,119) */
+    --agent-7: 189 91% 36%; /* cyan   — rgb(8,145,178) */
+
     --diff-add-bg: 97 75% 32.9% / 0.18;
     --diff-add-text: 97 59.1% 46.1%; /* success-000 */
     --diff-del-bg: 0 67% 59.6% / 0.18;
@@ -89,6 +107,24 @@
 
     --surface: 53 28.6% 94.5%; /* bg-200 */
     --surface-deep: 48 33.3% 97.1%; /* bg-100 */
+
+    /* ── Semantic: agent & orchestration ── */
+    --permission: 230 72% 65%; /* medium blue (CC light: 87,105,247) */
+    --plan-mode: 180 33% 20%; /* muted teal (CC light: 0,102,102) */
+    --user-message-bg: 0 0% 94%; /* (CC light: rgb(240,240,240)) */
+    --user-message-bg-hover: 0 0% 99%; /* (CC light: rgb(252,252,252)) */
+    --bash-bg: 300 4% 98%; /* (CC light: rgb(250,245,250)) */
+    --memory-bg: 195 33% 94%; /* (CC light: rgb(230,245,250)) */
+
+    /* ── Agent color cycling (8 slots, CC light sub-agent palette) ── */
+    --agent-0: 0 72% 51%; /* red */
+    --agent-1: 217 84% 53%; /* blue */
+    --agent-2: 142 64% 36%; /* green */
+    --agent-3: 43 96% 40%; /* yellow */
+    --agent-4: 271 76% 56%; /* purple */
+    --agent-5: 21 90% 48%; /* orange */
+    --agent-6: 330 81% 51%; /* pink */
+    --agent-7: 189 91% 36%; /* cyan */
 
     --diff-add-bg: 103 72.3% 26.9% / 0.12;
     --diff-add-text: 103 72.3% 26.9%;
