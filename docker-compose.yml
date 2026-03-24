@@ -1,0 +1,26 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "${API_PORT:-5124}:5124"
+    volumes:
+      - ./configs:/app/configs:ro
+      - api-data:/app/data
+      - ${PROJECT_PATHS:-./}:/projects
+    environment:
+      - MASTER_API_TOKEN=${MASTER_API_TOKEN:-msk-strong-password}
+      - MEESEEKS_HOME=/app/configs
+
+  console:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.console
+    ports:
+      - "${CONSOLE_PORT:-3000}:3000"
+    depends_on:
+      - api
+
+volumes:
+  api-data:

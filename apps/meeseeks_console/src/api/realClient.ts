@@ -220,6 +220,35 @@ export function createRealClient(config: ApiConfig): ApiClient {
       return payload.tools;
     },
 
+    streamEvents(
+      sessionId: string,
+      onEvent: (event: EventRecord) => void,
+      onEnd: () => void
+    ): () => void {
+      const params = new URLSearchParams();
+      if (apiKey) params.set("api_key", apiKey);
+      const url = withBase(baseUrl, `/api/sessions/${sessionId}/stream?${params}`);
+      const source = new EventSource(url);
+      source.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data);
+          if (event.type === "stream_end") {
+            source.close();
+            onEnd();
+            return;
+          }
+          onEvent(event);
+        } catch {
+          // Ignore malformed frames
+        }
+      };
+      source.onerror = () => {
+        source.close();
+        onEnd();
+      };
+      return () => source.close();
+    },
+
     async listProjects(): Promise<ProjectSummary[]> {
       const response = await fetch(withBase(baseUrl, "/api/projects"), {
         headers: headers(apiKey)
