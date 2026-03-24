@@ -591,9 +591,7 @@
 <li>Session listings filter empty sessions and support archiving via the API.</li>
 <li>Permission gate with approval callbacks plus lightweight hooks around tool execution.</li>
 <li>Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.</li>
-<li>Event payloads: <code>action_plan</code> steps are <code>{title, description}</code>, tool events use <code>tool_id</code>, <code>operation</code>, and <code>tool_input</code>.</li>
 <li>External MCP servers can be added via <code>configs/mcp.json</code> with schema-aware tool inputs.</li>
-<li>LiteLLM multi-provider support with per-role model selection (plan, tool, default).</li>
 <li>Optional components (Langfuse, Home Assistant) auto-disable when not configured.</li>
 <li>Langfuse tracing is session-scoped when enabled, grouping multi-turn runs.</li>
 </ul>

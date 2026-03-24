@@ -19,6 +19,11 @@ The orchestrator loads project instructions from the working directory and injec
 - `AGENTS.md` is a fallback for tools that look for that filename. In this repo the `AGENTS.md` files are shims that redirect to `CLAUDE.md`.
 - To **skip** a file from being loaded (e.g., a shim that would duplicate content), add `<!-- meeseeks:noload -->` as the very first line. The loader checks for this marker and skips the file.
 
+## Model and provider support
+- **Model gateway:** Uses LiteLLM for OpenAI-compatible access across multiple providers.
+- **Reasoning compatibility:** Applies reasoning-effort controls where supported by the model.
+- **Model routing:** Supports provider-qualified model names and a configurable API base URL. Per-role model selection (plan, tool, default) is configured in `configs/app.json`.
+
 ## Core abstractions and interfaces
 - `AbstractTool` (`meeseeks_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
 - `ToolRunner` protocol (`meeseeks_core.tool_registry`): interface for tool runners with `run(ActionStep)`.

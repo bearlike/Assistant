@@ -40,9 +40,7 @@ bearlike/Assistant (Meeseeks) is an AI task agent assistant that breaks a reques
 - Session listings filter empty sessions and support archiving via the API.
 - Permission gate with approval callbacks plus lightweight hooks around tool execution.
 - Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.
-- Event payloads: `action_plan` steps are `{title, description}`, tool events use `tool_id`, `operation`, and `tool_input`.
 - External MCP servers can be added via `configs/mcp.json` with schema-aware tool inputs.
-- LiteLLM multi-provider support with per-role model selection (plan, tool, default).
 - Optional components (Langfuse, Home Assistant) auto-disable when not configured.
 - Langfuse tracing is session-scoped when enabled, grouping multi-turn runs.
 

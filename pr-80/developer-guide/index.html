@@ -600,6 +600,12 @@
 <li><code>AGENTS.md</code> is a fallback for tools that look for that filename. In this repo the <code>AGENTS.md</code> files are shims that redirect to <code>CLAUDE.md</code>.</li>
 <li>To <strong>skip</strong> a file from being loaded (e.g., a shim that would duplicate content), add <code>&lt;!-- meeseeks:noload --&gt;</code> as the very first line. The loader checks for this marker and skips the file.</li>
 </ul>
+<h2 id="model-and-provider-support">Model and provider support</h2>
+<ul>
+<li><strong>Model gateway:</strong> Uses LiteLLM for OpenAI-compatible access across multiple providers.</li>
+<li><strong>Reasoning compatibility:</strong> Applies reasoning-effort controls where supported by the model.</li>
+<li><strong>Model routing:</strong> Supports provider-qualified model names and a configurable API base URL. Per-role model selection (plan, tool, default) is configured in <code>configs/app.json</code>.</li>
+</ul>
 <h2 id="core-abstractions-and-interfaces">Core abstractions and interfaces</h2>
 <ul>
 <li><code>AbstractTool</code> (<code>meeseeks_core.classes</code>): base class for local tools; implement <code>get_state</code> and <code>set_state</code> and return a <code>MockSpeaker</code>.</li>
@@ -861,6 +867,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
             Project instructions (CLAUDE.md / AGENTS.md)
+        </a>
+        
+
+        
+        <a href="#model-and-provider-support"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2">
+            Model and provider support
         </a>
         
 
