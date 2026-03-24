@@ -53,6 +53,11 @@ class ToolSpec:
     kind: str = "local"
     prompt_path: str | None = None
     metadata: dict[str, JsonValue] = field(default_factory=dict)
+    concurrency_safe: bool = True  # Can run in parallel (True for backward compat)
+    read_only: bool = False  # No side effects
+    interrupt_behavior: str = "block"  # "cancel" or "block" on user interrupt
+    max_result_chars: int = 2000  # Per-tool result size cap (0 = unlimited)
+    timeout: float = 120.0  # Per-tool execution timeout in seconds
 
     def is_plan_safe(self) -> bool:
         """Return True if the tool is safe to use in plan mode."""
@@ -83,6 +88,11 @@ class ToolRegistry:
             kind=spec.kind,
             prompt_path=spec.prompt_path,
             metadata=metadata,
+            concurrency_safe=spec.concurrency_safe,
+            read_only=spec.read_only,
+            interrupt_behavior=spec.interrupt_behavior,
+            max_result_chars=spec.max_result_chars,
+            timeout=spec.timeout,
         )
         if tool_id in self._instances:
             self._instances.pop(tool_id, None)
@@ -192,6 +202,7 @@ def _default_registry() -> ToolRegistry:
                 "AiderEditBlockTool",
             ),
             prompt_path="tools/aider-edit-blocks",
+            concurrency_safe=False,
             metadata={
                 "reflect": True,
                 "schema": {
@@ -270,6 +281,7 @@ def _default_registry() -> ToolRegistry:
                 "AiderShellTool",
             ),
             prompt_path="tools/aider-shell",
+            concurrency_safe=False,
             metadata={
                 "reflect": True,
                 "schema": {
@@ -429,6 +441,37 @@ def _build_manifest_payload(
     return {"tools": tools}
 
 
+def _try_pool_discovery(mcp_config_path: str) -> dict[str, list[dict[str, object]]] | None:
+    """Attempt MCP tool discovery via the connection pool.
+
+    Returns the tool details dict on success, or ``None`` if the pool
+    path is unavailable or fails.
+    """
+    try:
+        from meeseeks_tools.integration.mcp import _load_mcp_config, _normalize_mcp_config
+        from meeseeks_tools.integration.mcp_pool import get_mcp_pool
+    except Exception:
+        return None
+
+    try:
+        import asyncio
+
+        config = _normalize_mcp_config(_load_mcp_config(mcp_config_path))
+        pool = get_mcp_pool()
+        asyncio.run(pool.connect_all(config))
+        details = pool.get_all_tool_details()
+        # If pool connected but discovered zero tools across all servers,
+        # treat that as a failure and fall through to the legacy path.
+        total_tools = sum(len(tools) for tools in details.values())
+        if total_tools == 0:
+            logging.debug("Pool connected but found no tools, falling back to legacy")
+            return None
+        return details
+    except Exception as exc:
+        logging.debug("Pool-based MCP discovery failed, will use legacy path: {}", exc)
+        return None
+
+
 def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
     manifest_path = _default_manifest_cache_path()
     existing_manifest: dict[str, JsonValue] | None = None
@@ -439,11 +482,18 @@ def _ensure_auto_manifest(mcp_config_path: str) -> str | None:
         except Exception as exc:
             logging.warning("Failed to read existing MCP manifest: {}", exc)
 
+    # Try pool-based discovery first (faster, persistent connections)
+    pool_tools = _try_pool_discovery(mcp_config_path)
+
     mcp_module = _load_mcp_support()
     mcp_tools: dict[str, list[dict[str, object]]] = {}
     failures: dict[str, Exception] = {}
     global_failure: Exception | None = None
-    if mcp_module is None:
+
+    if pool_tools is not None:
+        mcp_tools = pool_tools
+        logging.debug("MCP tools discovered via connection pool")
+    elif mcp_module is None:
         global_failure = RuntimeError("MCP support is not installed.")
     else:
         try:

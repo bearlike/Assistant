@@ -20,7 +20,7 @@ from langchain_core.messages import (
 
 from meeseeks_core.agent_context import AgentContext
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
-from meeseeks_core.common import get_logger, get_mock_speaker, get_system_prompt
+from meeseeks_core.common import get_git_context, get_logger, get_mock_speaker, get_system_prompt
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
 from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.context import ContextSnapshot, render_event_lines
@@ -57,6 +57,14 @@ class ToolCallResult:
     tool_id: str
     content: str
     success: bool
+
+
+@dataclass
+class ToolBatch:
+    """A batch of tool calls with shared concurrency mode."""
+
+    calls: list[Any]
+    concurrent: bool
 
 
 class ToolUseLoop:
@@ -206,14 +214,27 @@ class ToolUseLoop:
                         state.done_reason = "completed"
                         break
 
-                    # Execute all tool calls concurrently with error isolation.
-                    # Using gather (not TaskGroup) for Python 3.10 compatibility.
-                    results: list[ToolCallResult] = await asyncio.gather(
-                        *(
-                            self._safe_execute(tc, tool_specs)
-                            for tc in response.tool_calls
-                        )
+                    # Execute tool calls with concurrency-aware partitioning.
+                    # Exclusive tools run alone; concurrent-safe tools are gathered.
+                    specs_map = {s.tool_id: s for s in tool_specs}
+                    batches = self._partition_tool_calls(
+                        response.tool_calls, specs_map
                     )
+                    results: list[ToolCallResult] = []
+                    for batch in batches:
+                        if batch.concurrent:
+                            batch_results = await asyncio.gather(
+                                *[
+                                    self._safe_execute(tc, tool_specs)
+                                    for tc in batch.calls
+                                ],
+                            )
+                            results.extend(batch_results)
+                        else:
+                            result = await self._safe_execute(
+                                batch.calls[0], tool_specs
+                            )
+                            results.append(result)
 
                     for tool_call, result in zip(response.tool_calls, results):
                         messages.append(
@@ -285,20 +306,66 @@ class ToolUseLoop:
     # Error-isolated task wrapper
     # ------------------------------------------------------------------
 
+    def _get_tool_timeout(self, tool_name: str) -> float:
+        """Get timeout for a tool. Uses spec.timeout, falls back to 120s."""
+        spec = self._tool_registry.get_spec(tool_name) if self._tool_registry else None
+        if spec:
+            return spec.timeout
+        return 120.0
+
+    def _partition_tool_calls(
+        self, tool_calls: list[Any], specs_map: dict[str, ToolSpec]
+    ) -> list[ToolBatch]:
+        """Group consecutive concurrent-safe tools; isolate exclusive tools."""
+        batches: list[ToolBatch] = []
+        current_concurrent: list[Any] = []
+        for tc in tool_calls:
+            spec = specs_map.get(tc.get("name", ""))
+            is_safe = spec.concurrency_safe if spec else True
+            if is_safe:
+                current_concurrent.append(tc)
+            else:
+                if current_concurrent:
+                    batches.append(
+                        ToolBatch(calls=list(current_concurrent), concurrent=True)
+                    )
+                    current_concurrent = []
+                batches.append(ToolBatch(calls=[tc], concurrent=False))
+        if current_concurrent:
+            batches.append(ToolBatch(calls=list(current_concurrent), concurrent=True))
+        return batches
+
     async def _safe_execute(
         self,
         tool_call: Any,
         tool_specs: list[ToolSpec],
     ) -> ToolCallResult:
-        """Execute a tool call, catching exceptions so TaskGroup doesn't cancel siblings."""
+        """Execute a tool call with timeout.
+
+        Catches exceptions so gather does not cancel siblings.
+        """
+        tool_name = tool_call.get("name", "")
+        timeout = self._get_tool_timeout(tool_name)
         try:
-            return await self._execute_tool_call(tool_call, tool_specs)
+            return await asyncio.wait_for(
+                self._execute_tool_call(tool_call, tool_specs),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            error_msg = f"Tool '{tool_name}' timed out after {timeout}s"
+            logging.error(error_msg)
+            return ToolCallResult(
+                tool_call_id=tool_call.get("id", ""),
+                tool_id=tool_name,
+                content=f"ERROR: {error_msg}",
+                success=False,
+            )
         except asyncio.CancelledError:
             raise  # Must propagate for TaskGroup cancellation.
         except Exception as exc:
             return ToolCallResult(
                 tool_call_id=tool_call.get("id", ""),
-                tool_id=tool_call.get("name", ""),
+                tool_id=tool_name,
                 content=f"ERROR: {exc}",
                 success=False,
             )
@@ -321,6 +388,11 @@ class ToolUseLoop:
             system_parts.append(
                 f"Project instructions:\n{self._project_instructions}"
             )
+
+        # Git context (injected after project instructions).
+        git_ctx = get_git_context()
+        if git_ctx:
+            system_parts.append(f"# Git Context\n{git_ctx}")
 
         # Active skill instructions (from user /skill invocation).
         if self._skill_instructions:
@@ -614,7 +686,12 @@ class ToolUseLoop:
         *,
         error: str | None = None,
     ) -> None:
-        summary = error or (result[:500] if result and len(result) > 500 else result) or ""
+        spec = self._tool_registry.get_spec(action_step.tool_id)
+        max_chars = spec.max_result_chars if spec else 2000
+        if max_chars and result and len(result) > max_chars:
+            summary = error or result[:max_chars]
+        else:
+            summary = error or result or ""
         payload: dict[str, Any] = {
             "tool_id": action_step.tool_id,
             "operation": action_step.operation,
