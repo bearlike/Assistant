@@ -1,5 +1,5 @@
 import React from 'react';
-import { Archive, Layers, RotateCcw } from 'lucide-react';
+import { Archive, RotateCcw } from 'lucide-react';
 import { SessionSummary } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { formatSessionTime } from '../utils/time';
@@ -55,12 +55,6 @@ export function SessionItem({
           status={session.status || 'idle'}
           doneReason={session.done_reason} />
 
-        {session.status !== 'failed' && session.context?.mcp_tools?.length ?
-        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] text-xs font-medium border border-[hsl(var(--border))]">
-            <Layers className="w-3 h-3" />
-            <span>{session.context?.mcp_tools?.length}</span>
-          </div> :
-        null}
         {(onArchive || onUnarchive) &&
         <button
           onClick={handleArchive}
