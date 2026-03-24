@@ -589,7 +589,7 @@
 <li>The orchestrator builds a context snapshot (summary, recent events, and selected history).</li>
 <li>In act mode, a single async <code>ToolUseLoop</code> executes — the LLM decides which tools to call via native <code>bind_tools</code>.</li>
 <li>In plan mode, the <code>Planner</code> generates a plan without execution.</li>
-<li>The LLM can spawn sub-agents via <code>spawn_agent</code> for parallel subtasks, managed by the <code>AgentRegistry</code> hypervisor.</li>
+<li>The LLM can spawn sub-agents via <code>spawn_agent</code> for parallel subtasks, managed by the <code>AgentHypervisor</code>.</li>
 <li>Results are written to the session transcript.</li>
 </ul>
 <h2 id="core-components">Core components</h2>

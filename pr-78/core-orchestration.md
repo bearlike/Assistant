@@ -7,7 +7,7 @@ This page summarizes the orchestration loop, core components, and operational fe
 - The orchestrator builds a context snapshot (summary, recent events, and selected history).
 - In act mode, a single async `ToolUseLoop` executes — the LLM decides which tools to call via native `bind_tools`.
 - In plan mode, the `Planner` generates a plan without execution.
-- The LLM can spawn sub-agents via `spawn_agent` for parallel subtasks, managed by the `AgentRegistry` hypervisor.
+- The LLM can spawn sub-agents via `spawn_agent` for parallel subtasks, managed by the `AgentHypervisor`.
 - Results are written to the session transcript.
 
 ## Core components
