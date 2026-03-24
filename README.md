@@ -51,6 +51,7 @@ The web console provides a task orchestration frontend backed by the REST API. I
 
 ### Tooling and integrations
 - (✅) **Tool registry:** Discovers local tools and optional MCP tools with manual manifest overrides.
+- (✅) **Skills:** Supports the [Agent Skills](https://agentskills.io) open standard. Place `SKILL.md` files in `~/.claude/skills/` or `.claude/skills/` to teach the assistant reusable workflows. Skills can be invoked via `/skill-name` slash commands or auto-activated by the LLM.
 - (✅) **Local file + shell tools:** Built-in Aider adapters for edit blocks, read files, list dirs, and shell commands (approval-gated). Edit blocks require strict SEARCH/REPLACE format; the tool returns format guidance on mismatches.
 - (✅) **REST API:** Exposes the assistant over HTTP for third-party integration.
 - (✅) **Web console:** Task orchestration frontend backed by the REST API.

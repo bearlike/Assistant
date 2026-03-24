@@ -19,6 +19,7 @@ Scope: this file applies to the `apps/meeseeks_api/` package. It captures runtim
   - `GET /api/share/{token}` fetch shared session data
   - `POST /api/query` synchronous endpoint (simple/CLI-compatible)
   - `GET /api/tools` list tool registry entries
+  - `GET /api/skills` list available skills
   - `GET /api/notifications` list notifications
   - `POST /api/notifications/dismiss` dismiss notifications
   - `POST /api/notifications/clear` clear notifications

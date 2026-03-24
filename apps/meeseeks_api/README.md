@@ -23,6 +23,7 @@ uv run meeseeks-api
 - `DELETE /api/sessions/{session_id}/archive` unarchive a session
 - `POST /api/query` synchronous endpoint (simple/CLI-compatible)
 - `GET /api/tools` list tool registry entries
+- `GET /api/skills` list available skills
 - `GET /api/notifications` list notifications
 - `POST /api/notifications/dismiss` dismiss notifications
 - `POST /api/notifications/clear` clear notifications
