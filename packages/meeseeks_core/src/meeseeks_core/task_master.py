@@ -93,6 +93,7 @@ def orchestrate_session(
     message_queue: queue.Queue[str] | None = None,
     interrupt_step: threading.Event | None = None,
     cwd: str | None = None,
+    session_step_budget: int = 0,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
     """Run the orchestration loop."""
     return Orchestrator(
@@ -103,6 +104,7 @@ def orchestrate_session(
         approval_callback=approval_callback,
         hook_manager=hook_manager,
         cwd=cwd,
+        session_step_budget=session_step_budget,
     ).run(
         user_query,
         max_iters=max_iters,

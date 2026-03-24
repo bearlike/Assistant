@@ -45,9 +45,11 @@ class Orchestrator:
         approval_callback: Callable[[ActionStep], bool] | None = None,
         hook_manager: HookManager | None = None,
         cwd: str | None = None,
+        session_step_budget: int = 0,
     ) -> None:
         """Initialize orchestration dependencies."""
         self._cwd = cwd
+        self._session_step_budget = session_step_budget
         self._model_name = (
             model_name
             or get_config_value("llm", "action_plan_model")
@@ -189,7 +191,10 @@ class Orchestrator:
                 max_concurrent = int(
                     get_config_value("agent", "max_concurrent", default=20)
                 )
-                registry = AgentHypervisor(max_concurrent=max_concurrent)
+                registry = AgentHypervisor(
+                    max_concurrent=max_concurrent,
+                    session_step_budget=self._session_step_budget,
+                )
                 root_ctx = AgentContext.root(
                     model_name=self._model_name,
                     max_depth=max_depth,

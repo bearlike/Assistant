@@ -189,7 +189,7 @@ class SpawnAgentTool:
             )
             await registry.register(handle)
             self._hook_manager.run_on_agent_start(handle)
-            self._emit_event(child_ctx, "start", task_desc)
+            self._emit_event(child_ctx, "start", task_desc, handle=handle)
 
             # 5. Filter tool specs (Claude Code "filter before binding" pattern).
             child_specs = self._filter_tool_specs(args)
@@ -227,7 +227,7 @@ class SpawnAgentTool:
             # 7. Mark done.
             await registry.mark_done(child_ctx.agent_id, "completed")
             self._hook_manager.run_on_agent_stop(handle)
-            self._emit_event(child_ctx, "stop", state.done_reason or "completed")
+            self._emit_event(child_ctx, "stop", state.done_reason or "completed", handle=handle)
 
             # Ref: [CoA §3.1] Build Communication Unit — compressed context for parent
             from meeseeks_core.hypervisor import AgentResult
@@ -357,7 +357,13 @@ class SpawnAgentTool:
     # Event emission
     # ------------------------------------------------------------------
 
-    def _emit_event(self, ctx: AgentContext, action: str, detail: str) -> None:
+    def _emit_event(
+        self,
+        ctx: AgentContext,
+        action: str,
+        detail: str,
+        handle: AgentHandle | None = None,
+    ) -> None:
         """Emit a sub_agent lifecycle event."""
         if ctx.event_logger is not None:
             event: Event = {
@@ -369,6 +375,8 @@ class SpawnAgentTool:
                     "depth": ctx.depth,
                     "model": ctx.model_name,
                     "detail": detail,
+                    "status": handle.status if handle else action,
+                    "steps_completed": handle.steps_completed if handle else 0,
                 },
             }
             ctx.event_logger(event)
