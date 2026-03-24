@@ -7,6 +7,7 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 - **Agent hypervisor** (`test_agent_context.py`): AgentContext depth/child/root, AgentHypervisor CRUD, admission control, cancellation, cleanup.
 - **Sub-agent spawning** (`test_spawn_agent.py`): SpawnAgentTool execution, tool scoping (allowed/denied), model validation, depth gate. Note: tool filtering now uses `filter_specs()` from `tool_registry` — mock `meeseeks_core.tool_registry.get_config_value` (not `spawn_agent.get_config_value`) when testing config-denied tools.
 - **CLI agent display** (`test_cli_agent_display.py`): AgentDisplayManager state, hook callbacks, Rich rendering, tree structure, thread safety.
+- **Hierarchical instruction discovery** (`test_project_instructions.py`): four-level hierarchy discovery (user/project/rules/local), priority ordering, git context formatting, noload marker, empty/missing files.
 - **Orchestration** (`test_task_master.py`): `orchestrate_session` completion, max-iter, error paths.
 - **Tool registry** behavior and tool disabling when init fails.
 - **MCP discovery**: schema normalization, per-server failures, and CLI visibility even when tools are missing.
