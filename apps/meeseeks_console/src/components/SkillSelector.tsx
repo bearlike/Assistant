@@ -10,6 +10,7 @@ type SkillSelectorProps = {
   loading?: boolean;
   error?: string | null;
   direction?: 'up' | 'down';
+  compact?: boolean;
   onToggleOpen: () => void;
   onSelect: (name: string | null) => void;
   onRefresh?: () => void;
@@ -17,7 +18,7 @@ type SkillSelectorProps = {
 
 export const SkillSelector = forwardRef<HTMLDivElement, SkillSelectorProps>(
   (
-    { skills, activeSkill, isOpen, loading = false, error, direction = 'up', onToggleOpen, onSelect, onRefresh },
+    { skills, activeSkill, isOpen, loading = false, error, direction = 'up', compact = false, onToggleOpen, onSelect, onRefresh },
     ref
   ) => {
     const label = activeSkill ? activeSkill : 'Skills';
@@ -26,14 +27,18 @@ export const SkillSelector = forwardRef<HTMLDivElement, SkillSelectorProps>(
         <button
           onClick={onToggleOpen}
           aria-label="Select skill"
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-[hsl(var(--accent))] text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${isOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''} ${activeSkill ? 'text-[hsl(var(--foreground))]' : ''}`}
+          className={`flex items-center gap-1.5 ${compact ? 'p-1.5' : 'px-2.5 py-1.5'} rounded-lg hover:bg-[hsl(var(--accent))] text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${isOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''} ${activeSkill ? 'text-[hsl(var(--foreground))]' : ''}`}
         >
           <Zap className={`w-3 h-3 ${activeSkill ? 'text-amber-500' : 'opacity-50'}`} />
-          <span>{loading ? 'Loading...' : label}</span>
-          {isOpen ? (
-            <ChevronUp className="w-3 h-3 opacity-50" />
-          ) : (
-            <ChevronDown className="w-3 h-3 opacity-50" />
+          {!compact && (
+            <>
+              <span>{loading ? 'Loading...' : label}</span>
+              {isOpen ? (
+                <ChevronUp className="w-3 h-3 opacity-50" />
+              ) : (
+                <ChevronDown className="w-3 h-3 opacity-50" />
+              )}
+            </>
           )}
         </button>
 

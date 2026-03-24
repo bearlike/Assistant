@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import { ChevronDown, ChevronUp, Circle, RefreshCw } from 'lucide-react';
+import { Blocks, ChevronDown, ChevronUp, Circle, RefreshCw } from 'lucide-react';
 import { Popover } from './Popover';
 
 export type McpStatus = 'active' | 'disabled' | 'error';
@@ -20,6 +20,7 @@ type McpSelectorProps = {
   loading?: boolean;
   error?: string | null;
   direction?: 'up' | 'down';
+  compact?: boolean;
   onRefresh?: () => void;
   onToggleOpen: () => void;
   onToggle: (id: string) => void;
@@ -50,7 +51,7 @@ function ScopeHeader({ label }: { label: string }) {
 
 export const McpSelector = forwardRef<HTMLDivElement, McpSelectorProps>(
   (
-    { options, isOpen, loading = false, error, direction = 'up', onRefresh, onToggleOpen, onToggle },
+    { options, isOpen, loading = false, error, direction = 'up', compact = false, onRefresh, onToggleOpen, onToggle },
     ref
   ) => {
     const activeCount = options.filter((mcp) => mcp.active).length;
@@ -63,13 +64,24 @@ export const McpSelector = forwardRef<HTMLDivElement, McpSelectorProps>(
         <button
           onClick={onToggleOpen}
           aria-label="Select MCP tools"
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-[hsl(var(--accent))] text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${isOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}
+          className={`flex items-center gap-1.5 ${compact ? 'p-1.5' : 'px-2.5 py-1.5'} rounded-lg hover:bg-[hsl(var(--accent))] text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${isOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}
         >
-          <span>{loading ? 'Loading...' : `${activeCount} MCPs`}</span>
-          {isOpen ? (
-            <ChevronUp className="w-3 h-3 opacity-50" />
+          {compact ? (
+            <>
+              <Blocks className="w-3.5 h-3.5" />
+              {activeCount > 0 && (
+                <span className="text-[10px] font-medium">{activeCount}</span>
+              )}
+            </>
           ) : (
-            <ChevronDown className="w-3 h-3 opacity-50" />
+            <>
+              <span>{loading ? 'Loading...' : `${activeCount} MCPs`}</span>
+              {isOpen ? (
+                <ChevronUp className="w-3 h-3 opacity-50" />
+              ) : (
+                <ChevronDown className="w-3 h-3 opacity-50" />
+              )}
+            </>
           )}
         </button>
 

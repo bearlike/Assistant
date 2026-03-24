@@ -300,6 +300,74 @@ function makeEvents(sessionId: string): EventRecord[] {
     }
   },
 
+  // ── Permission + Sub-agent lifecycle ──
+  {
+    ts: t(41000),
+    type: 'permission',
+    payload: {
+      tool_id: 'write_file',
+      operation: 'set',
+      tool_input: { path: 'src/middleware/auth.ts', content: '/* JWT auth middleware */' },
+      decision: 'allow',
+    }
+  },
+  {
+    ts: t(41500),
+    type: 'permission',
+    payload: {
+      tool_id: 'shell',
+      operation: 'set',
+      tool_input: { command: 'rm -rf /tmp/cache' },
+      decision: 'deny',
+    }
+  },
+  {
+    ts: t(42000),
+    type: 'sub_agent',
+    payload: {
+      action: 'start',
+      agent_id: 'a3f2bc91e17f',
+      parent_id: null,
+      depth: 1,
+      model: 'openai/claude-sonnet-4-6',
+      detail: 'Run integration tests and verify JWT authentication flow works end-to-end',
+      status: 'running',
+      steps_completed: 0,
+    }
+  },
+  {
+    ts: t(43500),
+    type: 'sub_agent',
+    payload: {
+      action: 'stop',
+      agent_id: 'a3f2bc91e17f',
+      parent_id: null,
+      depth: 1,
+      model: 'openai/claude-sonnet-4-6',
+      detail: 'completed',
+      status: 'completed',
+      steps_completed: 5,
+    }
+  },
+  {
+    ts: t(44000),
+    type: 'tool_result',
+    payload: {
+      tool_id: 'spawn_agent',
+      operation: 'set',
+      tool_input: { task: 'Run integration tests for JWT auth' },
+      result: JSON.stringify({
+        content: 'All tests passed. JWT auth middleware is working correctly.',
+        status: 'completed',
+        steps_used: 5,
+        summary: 'Ran 3 integration tests for JWT auth. All passed.',
+        artifacts: ['src/__tests__/auth.test.ts'],
+        warnings: [],
+      }),
+      success: true,
+    }
+  },
+
   // ── AI responds with a complete summary ──
   {
     ts: t(45000),
@@ -314,6 +382,16 @@ function makeEvents(sessionId: string): EventRecord[] {
       '- **Tests:** All 3 existing tests pass (`npm test`)\n' +
       '- **Lint:** No style regressions (`npm run lint`)\n\n' +
       "You can merge this as-is or let me know if you'd like any adjustments."
+    }
+  },
+
+  // ── Completion ──
+  {
+    ts: t(46000),
+    type: 'completion',
+    payload: {
+      done: true,
+      done_reason: 'completed',
     }
   }];
 

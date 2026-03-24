@@ -13,6 +13,7 @@ import { QueryMode, SessionContext } from '../types';
 import { useMcpTools } from '../hooks/useMcpTools';
 import { useSkills } from '../hooks/useSkills';
 import { useProjects } from '../hooks/useProjects';
+import { useContainerCompact } from '../hooks/useContainerCompact';
 import { McpSelector, McpOption, McpStatus } from './McpSelector';
 import { SkillSelector } from './SkillSelector';
 import { ProjectSelector } from './ProjectSelector';
@@ -78,6 +79,8 @@ export function InputBar({
   const projectRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const compact = useContainerCompact(containerRef);
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -393,6 +396,10 @@ export function InputBar({
       </div>);
 
   }
+  const detailPlaceholder = isRunning
+    ? (compact ? "Send a message..." : "Send a message to the running session...")
+    : (compact ? "Ask anything..." : "Request changes or ask a question");
+
   return (
     <div
       className="border-t border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4"
@@ -406,7 +413,7 @@ export function InputBar({
         className="hidden"
         aria-hidden="true" />
 
-      <div className="max-w-4xl mx-auto relative">
+      <div className="max-w-4xl mx-auto relative" ref={containerRef}>
         {error &&
         <div className="mb-3">
             <Alert variant="destructive">
@@ -429,45 +436,44 @@ export function InputBar({
                 <button
                 onClick={() => setAttachedFiles([])}
                 className="hover:opacity-70">
-
                   ×
                 </button>
               </div>
             </div>
           }
 
-          <div className="flex items-end gap-1">
-            <div className="relative" ref={menuRef}>
-              <button
-                onClick={() => {
-                  setIsPlusMenuOpen(!isPlusMenuOpen);
-                  setIsMcpOpen(false);
-                }}
-                className={`p-2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
-
-                <Plus className="w-4 h-4" />
-              </button>
-              {isPlusMenuOpen && <PlusMenu />}
-            </div>
-            {queryMode === 'plan' &&
-            <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
-                Plan
-              </span>
-            }
-
+          <div className="px-3 py-2">
             <textarea
               ref={textareaRef}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isRunning ? "Send a message to the running session..." : "Request changes or ask a question"}
+              placeholder={detailPlaceholder}
               aria-label="Session query"
               disabled={isSubmitting}
               rows={1}
-              className="flex-1 bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-sm px-2 py-2 resize-none min-h-[36px] max-h-[200px]" />
+              className="w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-sm resize-none min-h-[24px] max-h-[200px]" />
+          </div>
 
+          <div className="flex items-center justify-between px-1 pb-1">
+            <div className="flex items-center gap-1">
+              <div className="relative" ref={menuRef}>
+                <button
+                  onClick={() => {
+                    setIsPlusMenuOpen(!isPlusMenuOpen);
+                    setIsMcpOpen(false);
+                  }}
+                  className={`p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
+                  <Plus className="w-4 h-4" />
+                </button>
+                {isPlusMenuOpen && <PlusMenu />}
+              </div>
+              {queryMode === 'plan' &&
+              <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
+                  Plan
+                </span>
+              }
 
-            <div className="flex items-center gap-1 pb-0.5">
               <McpSelector
                 ref={mcpRef}
                 options={groupedOptions}
@@ -475,6 +481,7 @@ export function InputBar({
                 loading={mcpLoading}
                 error={mcpError}
                 direction={popupDirection}
+                compact={compact}
                 onToggleOpen={() => {
                   setIsMcpOpen(!isMcpOpen);
                   setIsPlusMenuOpen(false);
@@ -491,6 +498,7 @@ export function InputBar({
                 loading={skillsLoading}
                 error={skillsError}
                 direction={popupDirection}
+                compact={compact}
                 onToggleOpen={() => {
                   setIsSkillOpen(!isSkillOpen);
                   setIsMcpOpen(false);
@@ -511,6 +519,7 @@ export function InputBar({
                 loading={projectsLoading}
                 error={projectsError}
                 direction={popupDirection}
+                compact={compact}
                 onToggleOpen={() => {
                   setIsProjectOpen(!isProjectOpen);
                   setIsMcpOpen(false);
@@ -522,19 +531,19 @@ export function InputBar({
                   setIsProjectOpen(false);
                 }}
                 onRefresh={refreshProjects} />
+            </div>
 
+            <div className="flex items-center gap-1">
               <button
                 aria-label="Voice input"
-                className="p-2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-full transition-colors">
-
+                className="p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-full transition-colors">
                 <Mic className="w-4 h-4" />
               </button>
               {isRunning &&
               <button
                 onClick={onStop}
                 aria-label="Stop run"
-                className="p-2 bg-red-600/30 text-red-300 rounded-full hover:bg-red-600/50 transition-colors">
-
+                className="p-1.5 bg-red-600/30 text-red-300 rounded-full hover:bg-red-600/50 transition-colors">
                   <Square className="w-4 h-4" />
                 </button>
               }
@@ -542,11 +551,9 @@ export function InputBar({
                 onClick={handleSubmit}
                 aria-label="Send query"
                 disabled={isSubmitting || !inputValue.trim()}
-                className={`p-2 rounded-full transition-colors ${isSubmitting || !inputValue.trim() ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90'}`}>
-
+                className={`p-1.5 rounded-full transition-colors ${isSubmitting || !inputValue.trim() ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90'}`}>
                   {isSubmitting ?
                 <Loader2 className="w-4 h-4 animate-spin" /> :
-
                 <ArrowUp className="w-4 h-4" />
                 }
               </button>

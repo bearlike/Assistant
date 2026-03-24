@@ -10,6 +10,7 @@ type ProjectSelectorProps = {
   loading?: boolean;
   error?: string | null;
   direction?: 'up' | 'down';
+  compact?: boolean;
   onRefresh?: () => void;
   onToggleOpen: () => void;
   onSelect: (name: string | null) => void;
@@ -17,7 +18,7 @@ type ProjectSelectorProps = {
 
 export const ProjectSelector = forwardRef<HTMLDivElement, ProjectSelectorProps>(
   (
-    { projects, activeProject, isOpen, loading = false, error, direction = 'up', onRefresh, onToggleOpen, onSelect },
+    { projects, activeProject, isOpen, loading = false, error, direction = 'up', compact = false, onRefresh, onToggleOpen, onSelect },
     ref
   ) => {
     if (projects.length === 0 && !loading) {
@@ -29,14 +30,18 @@ export const ProjectSelector = forwardRef<HTMLDivElement, ProjectSelectorProps>(
         <button
           onClick={onToggleOpen}
           aria-label="Select project"
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-[hsl(var(--accent))] text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${isOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''} ${activeProject ? 'text-[hsl(var(--foreground))]' : ''}`}
+          className={`flex items-center gap-1.5 ${compact ? 'p-1.5' : 'px-2.5 py-1.5'} rounded-lg hover:bg-[hsl(var(--accent))] text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${isOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''} ${activeProject ? 'text-[hsl(var(--foreground))]' : ''}`}
         >
           <FolderOpen className={`w-3 h-3 ${activeProject ? 'text-blue-500' : 'opacity-50'}`} />
-          <span>{loading ? 'Loading...' : label}</span>
-          {isOpen ? (
-            <ChevronUp className="w-3 h-3 opacity-50" />
-          ) : (
-            <ChevronDown className="w-3 h-3 opacity-50" />
+          {!compact && (
+            <>
+              <span>{loading ? 'Loading...' : label}</span>
+              {isOpen ? (
+                <ChevronUp className="w-3 h-3 opacity-50" />
+              ) : (
+                <ChevronDown className="w-3 h-3 opacity-50" />
+              )}
+            </>
           )}
         </button>
 

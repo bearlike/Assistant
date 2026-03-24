@@ -21,6 +21,10 @@ function formatToolInput(input: unknown): string {
   }
 }
 
+function truncate(text: string, maxLen: number): string {
+  return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
+}
+
 function parsePlanSteps(steps: unknown[]): PlanStep[] {
   return steps.map((step) => {
     if (typeof step === "string") {
@@ -64,44 +68,54 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         typeof payload.tool_id === "string" ? payload.tool_id : "tool";
       const operation =
         typeof payload.operation === "string" ? payload.operation : "run";
-      const toolInput = formatToolInput(payload.tool_input);
+      const rawInput = formatToolInput(payload.tool_input);
       const result = payload.result;
       const summary =
         payload.summary ||
         result ||
         payload.error ||
         "";
-      const detailLines = [];
-      if (toolInput) {
-        detailLines.push(`input: ${toolInput}`);
+      const success = payload.success !== false;
+
+      // Parse AgentResult JSON from spawn_agent tool results
+      if (toolId === "spawn_agent" && typeof result === "string") {
+        try {
+          const ar = JSON.parse(result);
+          if (ar.status && ar.steps_used !== undefined) {
+            logs.push({
+              id: `agent-result-${idx++}`,
+              type: "agent_result",
+              content: "",
+              timestamp: event.ts,
+              agentResultStatus: String(ar.status),
+              stepsUsed: Number(ar.steps_used) || 0,
+              summary: typeof ar.summary === "string" ? truncate(ar.summary, 300) : undefined,
+              artifacts: Array.isArray(ar.artifacts) ? ar.artifacts.map(String) : undefined,
+              warnings: Array.isArray(ar.warnings) ? ar.warnings.map(String) : undefined,
+            });
+            continue;
+          }
+        } catch { /* not JSON, fall through to shell */ }
       }
-      if (summary) {
-        detailLines.push(String(summary));
-      }
-      const content = detailLines.join("\n\n");
+
+      // Regular tool result → shell card with separated input/output
+      const shellInput = rawInput || undefined;
+      const shellOutput = summary ? String(summary) : undefined;
+      const content = [
+        shellInput ? `input: ${shellInput}` : "",
+        shellOutput || "",
+      ].filter(Boolean).join("\n\n");
+
       logs.push({
         id: `tool-${idx++}`,
         type: "shell",
         title: `${toolId} (${operation})`,
         content,
-        timestamp: event.ts
+        timestamp: event.ts,
+        shellInput,
+        shellOutput,
+        error: !success ? String(payload.error || "Error") : undefined,
       });
-      if (toolId === "spawn_agent" && typeof result === "string") {
-        try {
-          const ar = JSON.parse(result);
-          if (ar.status && ar.steps_used !== undefined) {
-            const statusIcon = ar.status === "completed" ? "✅" :
-                               ar.status === "failed" ? "❌" :
-                               ar.status === "cannot_solve" ? "⚠" : "•";
-            logs.push({
-              id: `agent-result-${idx++}`,
-              type: "system" as const,
-              content: `${statusIcon} Sub-agent: ${ar.status} (${ar.steps_used} steps)${ar.summary ? "\n" + (ar.summary as string).slice(0, 200) : ""}`,
-              timestamp: event.ts,
-            });
-          }
-        } catch { /* not JSON, ignore */ }
-      }
     }
     if (event.type === "action_plan") {
       const steps = Array.isArray(event.payload?.steps)
@@ -156,12 +170,14 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
     if (event.type === "completion") {
       const payload = event.payload || {};
       const done = payload.done ? "completed" : "incomplete";
-      const reason = payload.done_reason ? ` (${payload.done_reason})` : "";
+      const reason = typeof payload.done_reason === "string" ? payload.done_reason : "";
       logs.push({
         id: `completion-${idx++}`,
-        type: "system",
-        content: `Run ${done}${reason}.`,
-        timestamp: event.ts
+        type: "completion",
+        content: `Run ${done}${reason ? ` (${reason})` : ""}.`,
+        timestamp: event.ts,
+        doneReason: reason || done,
+        error: typeof payload.error === "string" ? payload.error : undefined,
       });
     }
     if (event.type === "permission") {
@@ -170,16 +186,18 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         typeof payload.tool_id === "string" ? payload.tool_id : "tool";
       const operation =
         typeof payload.operation === "string" ? payload.operation : "run";
-      const toolInput = formatToolInput(payload.tool_input);
+      const rawInput = formatToolInput(payload.tool_input);
       const decision =
         typeof payload.decision === "string" ? payload.decision : "pending";
-      const inputSegment = toolInput ? `, tool_input: ${toolInput}` : "";
-      const icon = decision === "deny" ? "⛔" : decision === "allow" ? "✓" : "?";
       logs.push({
         id: `permission-${idx++}`,
-        type: "system",
-        content: `${icon} Permission ${decision}: ${toolId}:${operation}${inputSegment}`,
-        timestamp: event.ts
+        type: "permission",
+        content: `Permission ${decision}: ${toolId}`,
+        timestamp: event.ts,
+        decision,
+        toolId,
+        operation,
+        toolInput: rawInput ? truncate(rawInput, 500) : undefined,
       });
     }
     if (event.type === "sub_agent") {
@@ -189,17 +207,22 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
       const depth = typeof payload.depth === "number" ? payload.depth : 0;
       const model = typeof payload.model === "string" ? payload.model : "";
       const detail = typeof payload.detail === "string" ? payload.detail : "";
-      const indent = "\u00A0\u00A0".repeat(depth);
       const status = typeof payload.status === "string" ? payload.status : action;
       const steps = typeof payload.steps_completed === "number" ? payload.steps_completed : 0;
-      const label = action === "start"
-        ? `${indent}▶ Agent ${agentId} started (${model}): ${detail}`
-        : `${indent}■ Agent ${agentId} ${status} (${steps} steps): ${detail}`;
+      const parentId = typeof payload.parent_id === "string" ? payload.parent_id : undefined;
       logs.push({
         id: `agent-${idx++}`,
-        type: "system",
-        content: label,
+        type: "agent",
+        content: "",
         timestamp: event.ts,
+        agentId,
+        parentId,
+        model,
+        depth,
+        agentAction: action,
+        agentStatus: status,
+        stepsCompleted: steps,
+        detail: detail ? truncate(detail, 200) : undefined,
       });
     }
   }

@@ -88,7 +88,7 @@ export type TimelineEntry = {
 };
 export type LogEntry = {
   id: string;
-  type: "shell" | "system" | "plan";
+  type: "shell" | "system" | "plan" | "permission" | "agent" | "agent_result" | "completion";
   content: string;
   title?: string;
   timestamp?: string;
@@ -96,6 +96,32 @@ export type LogEntry = {
   version?: number;
   label?: string;
   planMode?: "full" | "diff";
+  // Permission fields
+  decision?: string;
+  toolId?: string;
+  operation?: string;
+  toolInput?: string;
+  // Agent lifecycle fields
+  agentId?: string;
+  parentId?: string;
+  model?: string;
+  depth?: number;
+  agentAction?: string;
+  agentStatus?: string;
+  stepsCompleted?: number;
+  detail?: string;
+  // Agent result fields
+  agentResultStatus?: string;
+  stepsUsed?: number;
+  summary?: string;
+  artifacts?: string[];
+  warnings?: string[];
+  // Completion fields
+  doneReason?: string;
+  error?: string;
+  // Shell separated fields
+  shellInput?: string;
+  shellOutput?: string;
 };
 
 export type PlanStep = {
