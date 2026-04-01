@@ -105,6 +105,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta_base.outputs.tags }}
           labels: ${{ steps.meta_base.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.extract_version.outputs.version }}
 
       - name: Build and push meeseeks-console
         uses: docker/build-push-action@v5
@@ -116,7 +118,7 @@ jobs:
           tags: ${{ steps.meta_console.outputs.tags }}
           labels: ${{ steps.meta_console.outputs.labels }}
           build-args: |
-            BASE_IMAGE=ghcr.io/bearlike/meeseeks-base:${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
+            VERSION=${{ steps.extract_version.outputs.version }}
 
       - name: Build and push meeseeks-api
         uses: docker/build-push-action@v5
@@ -128,4 +130,5 @@ jobs:
           tags: ${{ steps.meta_api.outputs.tags }}
           labels: ${{ steps.meta_api.outputs.labels }}
           build-args: |
+            VERSION=${{ steps.extract_version.outputs.version }}
             BASE_IMAGE=ghcr.io/bearlike/meeseeks-base:${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}

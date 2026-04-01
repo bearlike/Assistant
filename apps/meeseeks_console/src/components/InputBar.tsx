@@ -35,6 +35,7 @@ interface InputBarProps {
   isRunning?: boolean;
   isSubmitting?: boolean;
   error?: string | null;
+  onFocusChange?: (focused: boolean, isEmpty: boolean) => void;
 }
 export function InputBar({
   mode,
@@ -42,7 +43,8 @@ export function InputBar({
   onStop,
   isRunning = false,
   isSubmitting = false,
-  error
+  error,
+  onFocusChange
 }: InputBarProps) {
   const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
@@ -285,6 +287,8 @@ export function InputBar({
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onFocus={() => onFocusChange?.(true, !inputValue.trim())}
+                onBlur={() => onFocusChange?.(false, !inputValue.trim())}
                 placeholder="Describe a task..."
                 aria-label="Task description"
                 disabled={isSubmitting}
