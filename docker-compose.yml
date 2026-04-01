@@ -1,6 +1,7 @@
 services:
   api:
     image: ghcr.io/bearlike/meeseeks-api:latest
+    pull_policy: always
     build:
       context: .
       dockerfile: docker/Dockerfile.api
@@ -20,6 +21,7 @@ services:
 
   console:
     image: ghcr.io/bearlike/meeseeks-console:latest
+    pull_policy: always
     build:
       context: .
       dockerfile: docker/Dockerfile.console
