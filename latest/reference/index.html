@@ -2731,7 +2731,32 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 <span class="normal">828</span>
 <span class="normal">829</span>
 <span class="normal">830</span>
-<span class="normal">831</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ToolUseLoop</span><span class="p">:</span>
+<span class="normal">831</span>
+<span class="normal">832</span>
+<span class="normal">833</span>
+<span class="normal">834</span>
+<span class="normal">835</span>
+<span class="normal">836</span>
+<span class="normal">837</span>
+<span class="normal">838</span>
+<span class="normal">839</span>
+<span class="normal">840</span>
+<span class="normal">841</span>
+<span class="normal">842</span>
+<span class="normal">843</span>
+<span class="normal">844</span>
+<span class="normal">845</span>
+<span class="normal">846</span>
+<span class="normal">847</span>
+<span class="normal">848</span>
+<span class="normal">849</span>
+<span class="normal">850</span>
+<span class="normal">851</span>
+<span class="normal">852</span>
+<span class="normal">853</span>
+<span class="normal">854</span>
+<span class="normal">855</span>
+<span class="normal">856</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ToolUseLoop</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Async tool-use conversation loop.</span>
 
 <span class="sd">    Each instance owns one conversation with one LLM. Sub-agents are</span>
@@ -2888,11 +2913,36 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                     <span class="n">response</span><span class="p">:</span> <span class="n">AIMessage</span> <span class="o">=</span> <span class="k">await</span> <span class="n">model</span><span class="o">.</span><span class="n">ainvoke</span><span class="p">(</span>
                         <span class="n">messages</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">invoke_config</span> <span class="ow">or</span> <span class="kc">None</span>
                     <span class="p">)</span>
+                    <span class="c1"># Strip thinking blocks from the response before appending</span>
+                    <span class="c1"># to the conversation history.  Anthropic requires a</span>
+                    <span class="c1"># ``signature`` field on thinking blocks when replayed,</span>
+                    <span class="c1"># but proxies (LiteLLM) may not preserve it.</span>
+                    <span class="n">raw</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+                        <span class="n">sanitized</span> <span class="o">=</span> <span class="p">[</span>
+                            <span class="n">block</span> <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">raw</span>
+                            <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="n">block</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;thinking&quot;</span><span class="p">)</span>
+                        <span class="p">]</span>
+                        <span class="n">response</span> <span class="o">=</span> <span class="n">AIMessage</span><span class="p">(</span>
+                            <span class="n">content</span><span class="o">=</span><span class="n">sanitized</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+                            <span class="n">tool_calls</span><span class="o">=</span><span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">,</span>
+                            <span class="n">additional_kwargs</span><span class="o">=</span><span class="n">response</span><span class="o">.</span><span class="n">additional_kwargs</span><span class="p">,</span>
+                            <span class="nb">id</span><span class="o">=</span><span class="n">response</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+                        <span class="p">)</span>
                     <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
 
                     <span class="k">if</span> <span class="ow">not</span> <span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">:</span>
                         <span class="c1"># Text response — task is done.</span>
-                        <span class="n">content</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+                        <span class="n">raw_content</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span>
+                        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw_content</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+                            <span class="c1"># Claude extended thinking: extract text blocks only.</span>
+                            <span class="n">content</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+                                <span class="n">block</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;text&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+                                <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">raw_content</span>
+                                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="n">block</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;text&quot;</span>
+                            <span class="p">)</span>
+                        <span class="k">else</span><span class="p">:</span>
+                            <span class="n">content</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">raw_content</span><span class="p">)</span>
                         <span class="n">final_response</span> <span class="o">=</span> <span class="n">content</span>
                         <span class="n">tool_outputs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
                         <span class="n">state</span><span class="o">.</span><span class="n">done</span> <span class="o">=</span> <span class="kc">True</span>
@@ -4006,7 +4056,32 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 <span class="normal">327</span>
 <span class="normal">328</span>
 <span class="normal">329</span>
-<span class="normal">330</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
+<span class="normal">330</span>
+<span class="normal">331</span>
+<span class="normal">332</span>
+<span class="normal">333</span>
+<span class="normal">334</span>
+<span class="normal">335</span>
+<span class="normal">336</span>
+<span class="normal">337</span>
+<span class="normal">338</span>
+<span class="normal">339</span>
+<span class="normal">340</span>
+<span class="normal">341</span>
+<span class="normal">342</span>
+<span class="normal">343</span>
+<span class="normal">344</span>
+<span class="normal">345</span>
+<span class="normal">346</span>
+<span class="normal">347</span>
+<span class="normal">348</span>
+<span class="normal">349</span>
+<span class="normal">350</span>
+<span class="normal">351</span>
+<span class="normal">352</span>
+<span class="normal">353</span>
+<span class="normal">354</span>
+<span class="normal">355</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
@@ -4098,11 +4173,36 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                 <span class="n">response</span><span class="p">:</span> <span class="n">AIMessage</span> <span class="o">=</span> <span class="k">await</span> <span class="n">model</span><span class="o">.</span><span class="n">ainvoke</span><span class="p">(</span>
                     <span class="n">messages</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">invoke_config</span> <span class="ow">or</span> <span class="kc">None</span>
                 <span class="p">)</span>
+                <span class="c1"># Strip thinking blocks from the response before appending</span>
+                <span class="c1"># to the conversation history.  Anthropic requires a</span>
+                <span class="c1"># ``signature`` field on thinking blocks when replayed,</span>
+                <span class="c1"># but proxies (LiteLLM) may not preserve it.</span>
+                <span class="n">raw</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+                    <span class="n">sanitized</span> <span class="o">=</span> <span class="p">[</span>
+                        <span class="n">block</span> <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">raw</span>
+                        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="n">block</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;thinking&quot;</span><span class="p">)</span>
+                    <span class="p">]</span>
+                    <span class="n">response</span> <span class="o">=</span> <span class="n">AIMessage</span><span class="p">(</span>
+                        <span class="n">content</span><span class="o">=</span><span class="n">sanitized</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+                        <span class="n">tool_calls</span><span class="o">=</span><span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">,</span>
+                        <span class="n">additional_kwargs</span><span class="o">=</span><span class="n">response</span><span class="o">.</span><span class="n">additional_kwargs</span><span class="p">,</span>
+                        <span class="nb">id</span><span class="o">=</span><span class="n">response</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+                    <span class="p">)</span>
                 <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
 
                 <span class="k">if</span> <span class="ow">not</span> <span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">:</span>
                     <span class="c1"># Text response — task is done.</span>
-                    <span class="n">content</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+                    <span class="n">raw_content</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span>
+                    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw_content</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+                        <span class="c1"># Claude extended thinking: extract text blocks only.</span>
+                        <span class="n">content</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+                            <span class="n">block</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;text&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+                            <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">raw_content</span>
+                            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="n">block</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;text&quot;</span>
+                        <span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">content</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">raw_content</span><span class="p">)</span>
                     <span class="n">final_response</span> <span class="o">=</span> <span class="n">content</span>
                     <span class="n">tool_outputs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
                     <span class="n">state</span><span class="o">.</span><span class="n">done</span> <span class="o">=</span> <span class="kc">True</span>
@@ -23206,7 +23306,19 @@ When MCP is disabled (via <code>set_mcp_config_path(None)</code>), returns <code
 <span class="normal">170</span>
 <span class="normal">171</span>
 <span class="normal">172</span>
-<span class="normal">173</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@contextmanager</span>
+<span class="normal">173</span>
+<span class="normal">174</span>
+<span class="normal">175</span>
+<span class="normal">176</span>
+<span class="normal">177</span>
+<span class="normal">178</span>
+<span class="normal">179</span>
+<span class="normal">180</span>
+<span class="normal">181</span>
+<span class="normal">182</span>
+<span class="normal">183</span>
+<span class="normal">184</span>
+<span class="normal">185</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@contextmanager</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">langfuse_trace_span</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="nb">object</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Open a Langfuse span bound to the current session trace context.&quot;&quot;&quot;</span>
     <span class="n">status</span> <span class="o">=</span> <span class="n">resolve_langfuse_status</span><span class="p">()</span>
@@ -23222,16 +23334,28 @@ When MCP is disabled (via <code>set_mcp_config_path(None)</code>), returns <code
     <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>  <span class="c1"># pragma: no cover - defensive</span>
         <span class="k">yield</span> <span class="kc">None</span>
         <span class="k">return</span>
+    <span class="c1"># Setup phase: if Langfuse fails, yield None (graceful degradation).</span>
+    <span class="c1"># Body exceptions MUST propagate — never suppress them.</span>
+    <span class="n">span</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">cm</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="n">langfuse</span> <span class="o">=</span> <span class="n">get_client</span><span class="p">()</span>
-        <span class="k">with</span> <span class="n">langfuse</span><span class="o">.</span><span class="n">start_as_current_observation</span><span class="p">(</span>
+        <span class="n">cm</span> <span class="o">=</span> <span class="n">langfuse</span><span class="o">.</span><span class="n">start_as_current_observation</span><span class="p">(</span>
             <span class="n">as_type</span><span class="o">=</span><span class="s2">&quot;span&quot;</span><span class="p">,</span>
             <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
             <span class="n">trace_context</span><span class="o">=</span><span class="n">trace_context</span><span class="p">,</span>
-        <span class="p">)</span> <span class="k">as</span> <span class="n">span</span><span class="p">:</span>
-            <span class="k">yield</span> <span class="n">span</span>
+        <span class="p">)</span>
+        <span class="n">span</span> <span class="o">=</span> <span class="n">cm</span><span class="o">.</span><span class="fm">__enter__</span><span class="p">()</span>
     <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>  <span class="c1"># pragma: no cover - defensive</span>
-        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Langfuse trace span failed, suppressing.&quot;</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Langfuse trace span setup failed.&quot;</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">yield</span> <span class="n">span</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">cm</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">cm</span><span class="o">.</span><span class="fm">__exit__</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>  <span class="c1"># pragma: no cover - defensive</span>
+                <span class="k">pass</span>
 </code></pre></div></td></tr></table></div></div>
             </details>
     </div>
