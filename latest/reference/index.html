@@ -23231,7 +23231,7 @@ When MCP is disabled (via <code>set_mcp_config_path(None)</code>), returns <code
         <span class="p">)</span> <span class="k">as</span> <span class="n">span</span><span class="p">:</span>
             <span class="k">yield</span> <span class="n">span</span>
     <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>  <span class="c1"># pragma: no cover - defensive</span>
-        <span class="k">yield</span> <span class="kc">None</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Langfuse trace span failed, suppressing.&quot;</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </code></pre></div></td></tr></table></div></div>
             </details>
     </div>
@@ -27195,8 +27195,7 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/llm.py</code></summary>
-                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">14</span>
-<span class="normal">15</span>
+                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">15</span>
 <span class="normal">16</span>
 <span class="normal">17</span>
 <span class="normal">18</span>
@@ -27206,7 +27205,8 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 <span class="normal">22</span>
 <span class="normal">23</span>
 <span class="normal">24</span>
-<span class="normal">25</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ChatModel</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
+<span class="normal">25</span>
+<span class="normal">26</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ChatModel</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Protocol for LangChain-compatible chat models.&quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">invoke</span><span class="p">(</span>
@@ -27254,10 +27254,10 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/llm.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">22</span>
-<span class="normal">23</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">23</span>
 <span class="normal">24</span>
-<span class="normal">25</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">ainvoke</span><span class="p">(</span>
+<span class="normal">25</span>
+<span class="normal">26</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">ainvoke</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span> <span class="n">input_data</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="nb">object</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="nb">object</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BaseMessage</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Invoke the model asynchronously.&quot;&quot;&quot;</span>
@@ -27283,10 +27283,10 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/llm.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">17</span>
-<span class="normal">18</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">18</span>
 <span class="normal">19</span>
-<span class="normal">20</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">invoke</span><span class="p">(</span>
+<span class="normal">20</span>
+<span class="normal">21</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">invoke</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span> <span class="n">input_data</span><span class="p">:</span> <span class="nb">object</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="nb">object</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">:</span> <span class="nb">object</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BaseMessage</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Invoke the model synchronously.&quot;&quot;&quot;</span>
@@ -27321,14 +27321,7 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/llm.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">105</span>
-<span class="normal">106</span>
-<span class="normal">107</span>
-<span class="normal">108</span>
-<span class="normal">109</span>
-<span class="normal">110</span>
-<span class="normal">111</span>
-<span class="normal">112</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">112</span>
 <span class="normal">113</span>
 <span class="normal">114</span>
 <span class="normal">115</span>
@@ -27350,7 +27343,14 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 <span class="normal">131</span>
 <span class="normal">132</span>
 <span class="normal">133</span>
-<span class="normal">134</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">build_chat_model</span><span class="p">(</span>
+<span class="normal">134</span>
+<span class="normal">135</span>
+<span class="normal">136</span>
+<span class="normal">137</span>
+<span class="normal">138</span>
+<span class="normal">139</span>
+<span class="normal">140</span>
+<span class="normal">141</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">build_chat_model</span><span class="p">(</span>
     <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">openai_api_base</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -27406,8 +27406,7 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/llm.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">56</span>
-<span class="normal">57</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">57</span>
 <span class="normal">58</span>
 <span class="normal">59</span>
 <span class="normal">60</span>
@@ -27428,7 +27427,8 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 <span class="normal">75</span>
 <span class="normal">76</span>
 <span class="normal">77</span>
-<span class="normal">78</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">model_supports_reasoning_effort</span><span class="p">(</span><span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="normal">78</span>
+<span class="normal">79</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">model_supports_reasoning_effort</span><span class="p">(</span><span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Return True if the model is known to support reasoning_effort.</span>
 
 <span class="sd">    LiteLLM translates reasoning_effort per-provider:</span>
@@ -27469,7 +27469,9 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
     <div class="doc doc-contents ">
 
         <p>Resolve the reasoning effort for a model.</p>
-<p>Returns the configured value if set, otherwise defaults to 'high'.
+<p>Returns the configured value if set, otherwise <code>None</code> (let the
+provider decide).  Only returns a value when the model supports
+the parameter <em>and</em> a value is explicitly configured.
 LiteLLM translates this per-provider:
 - Claude: output_config.effort
 - Gemini: thinking budget_tokens or thinking_level
@@ -27478,33 +27480,45 @@ LiteLLM translates this per-provider:
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/llm.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">81</span>
-<span class="normal">82</span>
-<span class="normal">83</span>
-<span class="normal">84</span>
-<span class="normal">85</span>
-<span class="normal">86</span>
-<span class="normal">87</span>
-<span class="normal">88</span>
-<span class="normal">89</span>
-<span class="normal">90</span>
-<span class="normal">91</span>
-<span class="normal">92</span>
-<span class="normal">93</span>
-<span class="normal">94</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">resolve_reasoning_effort</span><span class="p">(</span><span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 82</span>
+<span class="normal"> 83</span>
+<span class="normal"> 84</span>
+<span class="normal"> 85</span>
+<span class="normal"> 86</span>
+<span class="normal"> 87</span>
+<span class="normal"> 88</span>
+<span class="normal"> 89</span>
+<span class="normal"> 90</span>
+<span class="normal"> 91</span>
+<span class="normal"> 92</span>
+<span class="normal"> 93</span>
+<span class="normal"> 94</span>
+<span class="normal"> 95</span>
+<span class="normal"> 96</span>
+<span class="normal"> 97</span>
+<span class="normal"> 98</span>
+<span class="normal"> 99</span>
+<span class="normal">100</span>
+<span class="normal">101</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">resolve_reasoning_effort</span><span class="p">(</span><span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve the reasoning effort for a model.</span>
 
-<span class="sd">    Returns the configured value if set, otherwise defaults to &#39;high&#39;.</span>
+<span class="sd">    Returns the configured value if set, otherwise ``None`` (let the</span>
+<span class="sd">    provider decide).  Only returns a value when the model supports</span>
+<span class="sd">    the parameter *and* a value is explicitly configured.</span>
 <span class="sd">    LiteLLM translates this per-provider:</span>
 <span class="sd">    - Claude: output_config.effort</span>
 <span class="sd">    - Gemini: thinking budget_tokens or thinking_level</span>
 <span class="sd">    - OpenAI: native reasoning_effort</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">model_supports_reasoning_effort</span><span class="p">(</span><span class="n">model_name</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">None</span>
     <span class="n">configured</span> <span class="o">=</span> <span class="n">get_config_value</span><span class="p">(</span><span class="s2">&quot;llm&quot;</span><span class="p">,</span> <span class="s2">&quot;reasoning_effort&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">configured</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">and</span> <span class="n">configured</span><span class="o">.</span><span class="n">strip</span><span class="p">():</span>
         <span class="k">return</span> <span class="n">configured</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
-    <span class="c1"># Default to high for all models</span>
-    <span class="k">return</span> <span class="s2">&quot;high&quot;</span>
+    <span class="n">env</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;MEESEEKS_REASONING_EFFORT&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">env</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">env</span>
+    <span class="k">return</span> <span class="kc">None</span>
 </code></pre></div></td></tr></table></div></div>
             </details>
     </div>
@@ -27529,14 +27543,7 @@ Specs without a schema are silently skipped.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/llm.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">137</span>
-<span class="normal">138</span>
-<span class="normal">139</span>
-<span class="normal">140</span>
-<span class="normal">141</span>
-<span class="normal">142</span>
-<span class="normal">143</span>
-<span class="normal">144</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">144</span>
 <span class="normal">145</span>
 <span class="normal">146</span>
 <span class="normal">147</span>
@@ -27553,7 +27560,14 @@ Specs without a schema are silently skipped.</p>
 <span class="normal">158</span>
 <span class="normal">159</span>
 <span class="normal">160</span>
-<span class="normal">161</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">specs_to_langchain_tools</span><span class="p">(</span><span class="n">specs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">object</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]:</span>
+<span class="normal">161</span>
+<span class="normal">162</span>
+<span class="normal">163</span>
+<span class="normal">164</span>
+<span class="normal">165</span>
+<span class="normal">166</span>
+<span class="normal">167</span>
+<span class="normal">168</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">specs_to_langchain_tools</span><span class="p">(</span><span class="n">specs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">object</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert ToolSpecs to LangChain bind_tools() format.</span>
 
 <span class="sd">    Each spec must have ``tool_id``, ``description``, and ``metadata[&quot;schema&quot;]``.</span>
