@@ -88,6 +88,10 @@ The web console provides a task orchestration frontend backed by the REST API. I
 
 ## Installation
 
+<p align="center">
+    <img src="docs/meeseeks-console-banner.gif" alt="Meeseeks console banner" width="100%">
+</p>
+
 User install (core only):
 ```bash
 uv sync
@@ -120,6 +124,24 @@ Config discovery priority: `CWD/configs/` → `$MEESEEKS_HOME/` → `~/.meeseeks
 ```bash
 export MEESEEKS_HOME="/path/to/your/config"
 ```
+
+### Docker Compose
+
+For containerized deployment, the API and console run via Docker Compose:
+
+```bash
+# Copy and edit the environment file
+cp docker.example.env docker.env
+# Edit docker.env — set MASTER_API_TOKEN, VITE_API_KEY, HOST_UID/GID
+
+# Pull pre-built images from GHCR
+docker compose pull
+
+# Or build locally
+docker compose up --build -d
+```
+
+The stack uses host networking. The API serves on port `5125` and the console on `3001`. Nginx in the console container proxies `/api/` requests to the API. See [docs/getting-started.md](docs/getting-started.md) for full configuration details.
 
 ## Architecture
 
