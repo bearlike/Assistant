@@ -1,0 +1,152 @@
+# Installation
+
+This guide covers local installation and environment setup for bearlike/Assistant.
+
+## Prerequisites
+- Python 3.10+
+- uv
+- Docker (optional, for container runs)
+
+## Install dependencies
+
+### User installation (core only)
+```bash
+uv sync
+```
+
+### Optional components (from project root)
+- CLI: `uv sync --extra cli`
+- API: `uv sync --extra api`
+- Console: `cd apps/meeseeks_console && npm install`
+- Home Assistant integration: `uv sync --extra ha`
+- Tools bundle: `uv sync --extra tools`
+- Everything optional: `uv sync --all-extras`
+
+### Developer installation (all components + dev/test/docs)
+```bash
+uv sync --all-extras --all-groups
+```
+
+## Git hooks (recommended)
+Use the repo hook set to enforce commit message format and block pushes that fail linting/tests.
+
+Install the repo-managed hooks:
+```bash
+git config core.hooksPath scripts/githooks
+```
+
+Optional: enable pre-commit hooks if you use `pre-commit` locally:
+```bash
+make precommit-install
+```
+
+Commit message format:
+```text
+<emoji> <verb>(<scope>): <message>
+```
+
+Pre-push runs:
+- `scripts/ci/check.sh` (ruff format/check, mypy, pytest)
+
+## Configuration setup
+1. If configs are missing, run `/config init`, `/mcp init`, or `/init` from the CLI to scaffold examples.
+2. Use only JSON configs under `configs/`:
+   - `configs/app.json` (runtime + LLM + integrations)
+   - `configs/mcp.json` (MCP servers)
+   - `configs/*.example.json` are templates for new installs
+3. Update `configs/app.json` with your runtime settings.
+4. For required LLM keys and a walkthrough, see [LLM setup](llm-setup.md).
+
+## MCP setup
+See [LLM setup](llm-setup.md) for MCP configuration and auto-discovery details.
+
+## Optional components
+- Langfuse: set `langfuse.enabled` + keys in `configs/app.json`.
+- Home Assistant: set `home_assistant.enabled` + credentials in `configs/app.json`.
+
+## CLI approval UI
+- Default approval prompts render as a Rich panel with padded, dotted borders.
+- Use `/automatic` or `--auto-approve` to bypass prompts when appropriate.
+
+## Run interfaces (local)
+- CLI: `uv run meeseeks` (details in [CLI client](clients-cli.md))
+- CLI (global): `uv tool install .` then `meeseeks` from anywhere (see [CLI client](clients-cli.md))
+- API: `uv run meeseeks-api` (details in [Console + API](clients-web-api.md))
+- Console: `cd apps/meeseeks_console && npm run dev` (details in [Console + API](clients-web-api.md))
+- Home Assistant: see [Home Assistant voice](clients-home-assistant.md)
+
+## Aider edit blocks (local tool)
+The edit-block tool expects strict SEARCH/REPLACE blocks and returns format guidance on mismatches.
+
+````text
+<path>
+```text
+<<<<<<< SEARCH
+<exact text to match>
+=======
+<replacement text>
+>>>>>>> REPLACE
+```
+````
+
+Rules:
+- Filename line immediately before the opening fence.
+- SEARCH must match exactly (including whitespace/newlines).
+- Use a line with `...` in both SEARCH and REPLACE to skip unchanged sections.
+
+## Docker Compose deployment
+
+The API and web console ship as container images published to GHCR. A `docker-compose.yml` in the repo root orchestrates both services with host networking.
+
+### Quick start
+
+```bash
+# 1. Create your environment file
+cp docker.example.env docker.env
+```
+
+Edit `docker.env` with your values:
+
+| Variable | Purpose | Required |
+|----------|---------|----------|
+| `MASTER_API_TOKEN` | API authentication token | Yes |
+| `VITE_API_KEY` | Frontend API key (should match `MASTER_API_TOKEN`) | Yes |
+| `HOST_UID` / `HOST_GID` | Host user/group IDs (run `id` to find yours) | Yes |
+| `API_PORT` | API server port (default: `5125`) | No |
+| `CONSOLE_PORT` | Console port (default: `3001`) | No |
+| `CORS_ORIGIN` | Allowed CORS origin (default: `*`) | No |
+| `VITE_API_BASE_URL` | Override frontend API URL (leave empty when using nginx proxy) | No |
+
+```bash
+# 2. Pull pre-built images from GHCR and start (recommended)
+docker compose pull && docker compose up -d
+```
+
+To build from source instead (e.g., for local development):
+```bash
+docker compose up --build -d
+```
+
+### How it works
+
+- **API** (`ghcr.io/bearlike/meeseeks-api`) — Gunicorn serving the Flask REST API on port `5125`. Single worker with 8 threads.
+- **Console** (`ghcr.io/bearlike/meeseeks-console`) — Nginx serving the React SPA on port `3001`. Proxies `/api/` requests to the API at `127.0.0.1:5125`.
+- Both services use **host networking** so they share `127.0.0.1`.
+- The API image is built on top of `ghcr.io/bearlike/meeseeks-base` which includes Python, Node.js, and the core/tools packages.
+
+### Runtime configuration
+
+- Mount `configs/app.json` and `configs/mcp.json` (read-only) for runtime + MCP settings.
+- The `api-data` volume persists session transcripts at `/app/data`.
+- The console generates `runtime-config.js` at startup from environment variables — no rebuild needed to change API URLs or keys.
+
+### Production reverse proxy
+
+For TLS termination, a sample nginx config is provided at `docker/nginx-reverse-proxy.conf`. It proxies both the console and API behind a single domain with SSE-aware buffering settings for the streaming endpoints.
+
+## Docs (optional)
+If you want to build the docs locally:
+```bash
+uv sync --all-extras --group docs
+uv run mkdocs serve
+```
