@@ -55,3 +55,19 @@ Console notes:
 - Set `VITE_API_KEY` to match `api.master_token` in `configs/app.json`.
 - Set `VITE_API_MODE` to `live` for direct API access or `auto` (default) for fallback to mock data.
 - During development, the Vite dev server proxies `/api/` requests to the API backend.
+
+## Docker Compose deployment
+
+Both the API and console are available as pre-built container images:
+
+```bash
+# From the repo root
+cp docker.example.env docker.env
+# Edit docker.env — set MASTER_API_TOKEN, VITE_API_KEY, HOST_UID/GID
+
+docker compose pull && docker compose up -d
+```
+
+The console's nginx proxies `/api/` to the API at `127.0.0.1:5125` (host networking), so no separate CORS or URL config is needed in the default setup. Runtime environment variables (`VITE_API_BASE_URL`, `VITE_API_KEY`, etc.) are injected at container startup via `runtime-config.js` — no image rebuild required.
+
+See [Installation](getting-started.md#docker-compose-deployment) for the full environment variable reference and production reverse proxy setup.

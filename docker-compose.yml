@@ -1,8 +1,12 @@
 services:
   api:
+    image: ghcr.io/bearlike/meeseeks-api:latest
+    pull_policy: always
     build:
       context: .
       dockerfile: docker/Dockerfile.api
+      args:
+        BASE_IMAGE: ghcr.io/bearlike/meeseeks-base:latest
     network_mode: host
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file: docker.env
@@ -16,6 +20,8 @@ services:
       - MEESEEKS_HOME=/app/data
 
   console:
+    image: ghcr.io/bearlike/meeseeks-console:latest
+    pull_policy: always
     build:
       context: .
       dockerfile: docker/Dockerfile.console
