@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import platform as _platform
 import queue as _queue_mod
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date as _date
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import (
@@ -20,7 +24,7 @@ from langchain_core.messages import (
 
 from meeseeks_core.agent_context import AgentContext
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
-from meeseeks_core.common import get_logger, get_mock_speaker, get_system_prompt
+from meeseeks_core.common import get_git_context, get_logger, get_mock_speaker, get_system_prompt
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
 from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.context import ContextSnapshot, render_event_lines
@@ -32,6 +36,8 @@ from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 from meeseeks_core.types import Event
 
 logging = get_logger(name="core.tool_use_loop")
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 # Maps tool_id patterns to the AbstractTool operation ("get" or "set").
 _OPERATION_SET_KEYWORDS = frozenset(
@@ -59,6 +65,14 @@ class ToolCallResult:
     success: bool
 
 
+@dataclass
+class ToolBatch:
+    """A batch of tool calls with shared concurrency mode."""
+
+    calls: list[Any]
+    concurrent: bool
+
+
 class ToolUseLoop:
     """Async tool-use conversation loop.
 
@@ -76,6 +90,9 @@ class ToolUseLoop:
         approval_callback: Callable[[ActionStep], bool] | None = None,
         hook_manager: HookManager,
         project_instructions: str | None = None,
+        skill_instructions: str | None = None,
+        skill_registry: Any = None,
+        cwd: str | None = None,
     ) -> None:
         """Initialize the tool-use loop.
 
@@ -86,6 +103,9 @@ class ToolUseLoop:
             approval_callback: Optional callback for ASK decisions (None for sub-agents).
             hook_manager: Lifecycle hooks.
             project_instructions: CLAUDE.md / AGENTS.md content discovered at session start.
+            skill_instructions: Pre-rendered skill body (from user /skill invocation).
+            skill_registry: SkillRegistry for auto-invocation catalog + activate_skill handling.
+            cwd: Working directory for this agent (project root).
         """
         self._ctx = agent_context
         self._tool_registry = tool_registry
@@ -93,18 +113,25 @@ class ToolUseLoop:
         self._approval_callback = approval_callback
         self._hook_manager = hook_manager
         self._project_instructions = project_instructions
+        self._skill_instructions = skill_instructions
+        self._skill_registry = skill_registry
+        self._cwd = cwd
 
         # Create SpawnAgentTool when this agent can spawn children.
         self._spawn_agent_tool: Any = None
         if agent_context.can_spawn:
             from meeseeks_core.spawn_agent import SpawnAgentTool
 
+            # Ref: [DeepMind-Delegation §4.7] Sub-agents inherit parent's approval
+            # policy so they can execute write/edit/shell tools.
             self._spawn_agent_tool = SpawnAgentTool(
                 agent_context=agent_context,
                 tool_registry=tool_registry,
                 permission_policy=permission_policy,
+                approval_callback=approval_callback,
                 hook_manager=hook_manager,
                 project_instructions=project_instructions,
+                cwd=cwd,
             )
 
     # ------------------------------------------------------------------
@@ -138,7 +165,13 @@ class ToolUseLoop:
         await self._ctx.registry.register(handle)
 
         try:
-            messages = self._build_messages(user_query, context, plan)
+            # Ref: [DeepMind-Delegation §4.5] Global eye for root agent
+            agent_tree = ""
+            if self._ctx.depth == 0:
+                agent_tree = await self._ctx.registry.render_agent_tree()
+            messages = self._build_messages(
+                user_query, context, plan, agent_tree=agent_tree,
+            )
             tool_schemas = specs_to_langchain_tools(tool_specs)
             model = self._bind_model(tool_schemas)
 
@@ -186,6 +219,14 @@ class ToolUseLoop:
                         except Exception:
                             pass
 
+                    # Ref: [AgentCgroup §4.2] Graduated enforcement — NL feedback, not kill.
+                    # Inject budget warning so the agent can adapt its strategy.
+                    if self._ctx.registry.budget_exhausted():
+                        messages.append(SystemMessage(
+                            content="BUDGET WARNING: Session step budget exhausted. "
+                            "Summarize your current findings and return results immediately."
+                        ))
+
                     response: AIMessage = await model.ainvoke(
                         messages, config=invoke_config or None
                     )
@@ -200,14 +241,27 @@ class ToolUseLoop:
                         state.done_reason = "completed"
                         break
 
-                    # Execute all tool calls concurrently with error isolation.
-                    # Using gather (not TaskGroup) for Python 3.10 compatibility.
-                    results: list[ToolCallResult] = await asyncio.gather(
-                        *(
-                            self._safe_execute(tc, tool_specs)
-                            for tc in response.tool_calls
-                        )
+                    # Execute tool calls with concurrency-aware partitioning.
+                    # Exclusive tools run alone; concurrent-safe tools are gathered.
+                    specs_map = {s.tool_id: s for s in tool_specs}
+                    batches = self._partition_tool_calls(
+                        response.tool_calls, specs_map
                     )
+                    results: list[ToolCallResult] = []
+                    for batch in batches:
+                        if batch.concurrent:
+                            batch_results = await asyncio.gather(
+                                *[
+                                    self._safe_execute(tc, tool_specs)
+                                    for tc in batch.calls
+                                ],
+                            )
+                            results.extend(batch_results)
+                        else:
+                            result = await self._safe_execute(
+                                batch.calls[0], tool_specs
+                            )
+                            results.append(result)
 
                     for tool_call, result in zip(response.tool_calls, results):
                         messages.append(
@@ -279,20 +333,66 @@ class ToolUseLoop:
     # Error-isolated task wrapper
     # ------------------------------------------------------------------
 
+    def _get_tool_timeout(self, tool_name: str) -> float:
+        """Get timeout for a tool. Uses spec.timeout, falls back to 120s."""
+        spec = self._tool_registry.get_spec(tool_name) if self._tool_registry else None
+        if spec:
+            return spec.timeout
+        return 120.0
+
+    def _partition_tool_calls(
+        self, tool_calls: list[Any], specs_map: dict[str, ToolSpec]
+    ) -> list[ToolBatch]:
+        """Group consecutive concurrent-safe tools; isolate exclusive tools."""
+        batches: list[ToolBatch] = []
+        current_concurrent: list[Any] = []
+        for tc in tool_calls:
+            spec = specs_map.get(tc.get("name", ""))
+            is_safe = spec.concurrency_safe if spec else True
+            if is_safe:
+                current_concurrent.append(tc)
+            else:
+                if current_concurrent:
+                    batches.append(
+                        ToolBatch(calls=list(current_concurrent), concurrent=True)
+                    )
+                    current_concurrent = []
+                batches.append(ToolBatch(calls=[tc], concurrent=False))
+        if current_concurrent:
+            batches.append(ToolBatch(calls=list(current_concurrent), concurrent=True))
+        return batches
+
     async def _safe_execute(
         self,
         tool_call: Any,
         tool_specs: list[ToolSpec],
     ) -> ToolCallResult:
-        """Execute a tool call, catching exceptions so TaskGroup doesn't cancel siblings."""
+        """Execute a tool call with timeout.
+
+        Catches exceptions so gather does not cancel siblings.
+        """
+        tool_name = tool_call.get("name", "")
+        timeout = self._get_tool_timeout(tool_name)
         try:
-            return await self._execute_tool_call(tool_call, tool_specs)
+            return await asyncio.wait_for(
+                self._execute_tool_call(tool_call, tool_specs),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            error_msg = f"Tool '{tool_name}' timed out after {timeout}s"
+            logging.error(error_msg)
+            return ToolCallResult(
+                tool_call_id=tool_call.get("id", ""),
+                tool_id=tool_name,
+                content=f"ERROR: {error_msg}",
+                success=False,
+            )
         except asyncio.CancelledError:
             raise  # Must propagate for TaskGroup cancellation.
         except Exception as exc:
             return ToolCallResult(
                 tool_call_id=tool_call.get("id", ""),
-                tool_id=tool_call.get("name", ""),
+                tool_id=tool_name,
                 content=f"ERROR: {exc}",
                 success=False,
             )
@@ -306,15 +406,48 @@ class ToolUseLoop:
         user_query: str,
         context: ContextSnapshot | None,
         plan: Plan | None,
+        agent_tree: str = "",
     ) -> list[BaseMessage]:
         """Build the initial message list for the conversation."""
         system_parts: list[str] = [get_system_prompt("system")]
+
+        # Environment context.
+        work_dir = self._cwd or str(Path.cwd())
+        env_lines = [
+            "# Environment",
+            f"- Working directory: {work_dir}",
+            f"- Platform: {_platform.system().lower()}",
+            f"- Date: {_date.today().isoformat()}",
+            f"- Meeseeks version: {get_version()}",
+        ]
+        system_parts.append("\n".join(env_lines))
 
         # Project instructions (CLAUDE.md / AGENTS.md).
         if self._project_instructions:
             system_parts.append(
                 f"Project instructions:\n{self._project_instructions}"
             )
+
+        # Ref: [DeepMind-Delegation §4.5] Root agent's global eye — live agent tree
+        if agent_tree:
+            system_parts.append(f"# Active agent tree\n{agent_tree}")
+
+        # Git context (injected after project instructions).
+        git_ctx = get_git_context(self._cwd)
+        if git_ctx:
+            system_parts.append(f"# Git Context\n{git_ctx}")
+
+        # Active skill instructions (from user /skill invocation).
+        if self._skill_instructions:
+            system_parts.append(
+                f"Active skill instructions:\n{self._skill_instructions}"
+            )
+
+        # Auto-invocable skills catalog (for LLM-driven activation).
+        if self._skill_registry is not None:
+            catalog = self._skill_registry.render_catalog()
+            if catalog:
+                system_parts.append(catalog)
 
         # Session context.
         if context and context.summary:
@@ -353,29 +486,98 @@ class ToolUseLoop:
         return [SystemMessage(content=system_prompt), HumanMessage(content=user_query)]
 
     def _build_depth_guidance(self) -> str:
-        """Build depth-aware prompt guidance for sub-agent spawning."""
-        if self._ctx.can_spawn:
-            remaining = self._ctx.remaining_depth
+        """Build delegation-lifecycle-aware prompt guidance.
+
+        Ref: [DeepMind-Delegation §4.1] Contract-first decomposition — root
+        agents define verifiable acceptance criteria for sub-tasks.
+        Ref: [CoA §3.2] Manager/worker role separation — root synthesizes,
+        sub-agents execute.
+        Ref: [Aletheia §3] Verification by same model in different role
+        prevents confirmation bias.
+        Ref: [DeepMind-Delegation §4.7] Liability firebreaks at chain boundaries.
+        """
+        depth = self._ctx.depth
+        max_depth = self._ctx.max_depth
+        remaining = self._ctx.remaining_depth
+        is_root = depth == 0
+        is_leaf = not self._ctx.can_spawn
+
+        if is_root:
+            # Ref: [CoA §3.2] Root = manager agent. Direct execution first.
             lines = [
-                f"Agent depth: {self._ctx.depth}/{self._ctx.max_depth} "
-                f"({remaining} spawn level{'s' if remaining != 1 else ''} remaining).",
-                "- Use spawn_agent to delegate independent subtasks to parallel sub-agents.",
-                "- Each sub-agent runs its own conversation with tool access scoped by you.",
-                "- Prefer spawn_agent for tasks that can run in parallel.",
-                "- Do not spawn sub-agents for simple, sequential steps — use tools directly.",
-                "- Sub-agents return their final result as text.",
-                "- You can specify allowed_tools/denied_tools to restrict sub-agent capabilities.",
-                "- You can specify a model for sub-agents via the model parameter.",
+                f"# Agent role: Root orchestrator (depth {depth}/{max_depth})",
+                "",
+                "## Default: Direct execution",
+                "- Handle tasks directly using your tools. Most tasks do NOT need sub-agents.",
+                "- Simple operations (write a file, run a command, search, read)"
+                " — do them yourself.",
+                "- Sequential tasks (write then run then read) — do them yourself, in order.",
+                "- Only spawn sub-agents for genuinely parallel, independent work.",
+                "",
+                "## When to spawn (rare)",
+                "- Multiple independent tasks that benefit from running concurrently.",
+                "- Each sub-task must be self-contained with clear acceptance_criteria.",
+                "- Scope sub-agents with allowed_tools/denied_tools and max_steps.",
+                "",
+                "## System awareness",
+                "- You operate within a bounded environment with intentional guardrails.",
+                "- CWD restrictions, permission denials, and tool scope limits are non-negotiable.",
+                "- If a tool or sub-agent reports a restriction, do NOT retry with a different",
+                "  agent or workaround. Adapt your approach or report the limitation.",
+                "",
+                "## When to stop",
+                "- If the same operation fails twice, do not retry it a third time.",
+                "- If a sub-agent fails, do not spawn another sub-agent for the same task.",
+                "- Report what failed, why, and what you tried — then let the user decide.",
+                "",
+                "## Sub-agent results",
+                "- Results are JSON with status/content/summary/steps_used fields.",
+                "- Check 'status' before using: completed=reliable, failed/cannot_solve=handle.",
+            ]
+        elif is_leaf:
+            # Ref: [DeepMind-Delegation §4.7] Liability firebreak at leaf
+            lines = [
+                f"# Agent role: Leaf executor (depth {depth}/{max_depth})",
+                "You are a delegated sub-agent with a bounded task.",
+                "",
+                "## Execution protocol",
+                "- Complete your assigned task directly using available tools.",
+                "- Do NOT attempt to delegate — you cannot spawn sub-agents.",
+                "- When done, provide a clear, structured summary of what you accomplished.",
+                "",
+                "## Failure handling",
+                "- If you cannot complete the task, say so explicitly with the reason.",
+                "- If a tool reports a restriction, stop and report it"
+                " — do not attempt workarounds.",
+                "- If an operation fails twice, report failure instead of retrying.",
+                "- Do NOT spin or retry endlessly — admit failure so the parent can adapt.",
+            ]
+        else:
+            # Sub-orchestrator: can delegate but has bounded scope
+            lines = [
+                f"# Agent role: Sub-orchestrator (depth {depth}/{max_depth}, "
+                f"{remaining} levels remaining)",
+                "You are a delegated sub-agent that can further delegate.",
+                "",
+                "## Execution protocol",
+                "- Focus on your assigned task scope — do not expand beyond it.",
+                "- Prefer direct tool use. Only spawn child agents for independent parallel work.",
+                "- Verify child agent results before incorporating them.",
+                "- Return a structured summary when your task is complete.",
+                "",
+                "## Failure handling",
+                "- If you cannot complete the task, say so explicitly with the reason.",
+                "- If a tool reports a restriction or boundary, stop and report to your parent.",
+                "- Do NOT retry failed operations or attempt workarounds for system limits.",
             ]
             if remaining <= 2:
+                # Ref: [DeepMind-Delegation §4.7] Approaching delegation boundary
                 lines.append(
-                    "- You are deep in the agent tree. Prefer direct tool use over spawning."
+                    "\nDELEGATION BOUNDARY: You are deep in the agent tree. "
+                    "Prefer direct tool use over spawning."
                 )
-            return "\n".join(lines)
-        return (
-            "You are a leaf agent. Complete your task directly using available tools. "
-            "Do not attempt to delegate."
-        )
+
+        return "\n".join(lines)
 
     def _render_tool_guidance(self) -> str:
         """Render tool-specific prompt guidance for local tools."""
@@ -390,6 +592,39 @@ class ToolUseLoop:
             if prompt:
                 prompts.append(prompt)
         return "\n\n".join(prompts)
+
+    # ------------------------------------------------------------------
+    # Skill activation (internal tool handler)
+    # ------------------------------------------------------------------
+
+    def _handle_activate_skill(self, action_step: ActionStep) -> Any:
+        """Handle an ``activate_skill`` tool call from the LLM.
+
+        Returns the skill body as a mock result so it arrives as a
+        ``ToolMessage`` — the LLM reads the instructions and follows them.
+        """
+        from meeseeks_core.skills import activate_skill
+
+        args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
+        skill_name = str(args.get("skill_name", ""))
+        skill_args = str(args.get("args", ""))
+
+        registry = self._skill_registry
+        skill = registry.get(skill_name) if registry else None
+        if skill is None:
+            msg = f"ERROR: Unknown skill '{skill_name}'"
+            return type("R", (), {"content": msg})()
+        if skill.disable_model_invocation:
+            msg = f"ERROR: Skill '{skill_name}' is user-invocable only"
+            return type("R", (), {"content": msg})()
+
+        instructions, _ = activate_skill(skill, skill_args)
+        logging.info("LLM auto-activated skill '{}'", skill_name)
+        body = (
+            f"## Skill: {skill_name}\n\n{instructions}\n\n"
+            "Follow these instructions now."
+        )
+        return type("R", (), {"content": body})()
 
     # ------------------------------------------------------------------
     # Model binding
@@ -408,6 +643,11 @@ class ToolUseLoop:
             from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
 
             tool_schemas = [*tool_schemas, SPAWN_AGENT_SCHEMA]
+        # Inject activate_skill schema when auto-invocable skills exist.
+        if self._skill_registry is not None and self._skill_registry.list_auto_invocable():
+            from meeseeks_core.skills import ACTIVATE_SKILL_SCHEMA
+
+            tool_schemas = [*tool_schemas, ACTIVATE_SKILL_SCHEMA]
         if tool_schemas:
             return model.bind_tools(tool_schemas)
         return model
@@ -449,7 +689,7 @@ class ToolUseLoop:
         # Pre-tool hook.
         action_step = self._hook_manager.run_pre_tool_use(action_step)
 
-        # Execute — spawn_agent is async-native, all others via to_thread.
+        # Execute — internal tools (spawn_agent, activate_skill) first, then registry.
         if tool_id == "spawn_agent" and self._spawn_agent_tool is not None:
             try:
                 result = await self._spawn_agent_tool.run_async(action_step)
@@ -460,6 +700,8 @@ class ToolUseLoop:
                     tool_call_id=tool_call_id, tool_id=tool_id,
                     content=f"ERROR: {exc}", success=False,
                 )
+        elif tool_id == "activate_skill" and self._skill_registry is not None:
+            result = self._handle_activate_skill(action_step)
         else:
             tool = self._tool_registry.get(tool_id)
             if tool is None:
@@ -492,6 +734,13 @@ class ToolUseLoop:
         content_str = str(content) if not isinstance(content, str) else content
         if isinstance(content, dict):
             content_str = json.dumps(content, ensure_ascii=False, default=str)
+
+        # Micro-compaction: strip ANSI escapes and truncate for the LLM.
+        content_str = _ANSI_ESCAPE_RE.sub("", content_str)
+        spec = self._tool_registry.get_spec(tool_id)
+        max_chars = spec.max_result_chars if spec else 2000
+        if max_chars and len(content_str) > max_chars:
+            content_str = content_str[:max_chars] + "\n[truncated]"
 
         self._emit_tool_result_event(action_step, content_str)
         return ToolCallResult(
@@ -556,7 +805,12 @@ class ToolUseLoop:
         *,
         error: str | None = None,
     ) -> None:
-        summary = error or (result[:500] if result and len(result) > 500 else result) or ""
+        spec = self._tool_registry.get_spec(action_step.tool_id)
+        max_chars = spec.max_result_chars if spec else 2000
+        if max_chars and result and len(result) > max_chars:
+            summary = error or result[:max_chars]
+        else:
+            summary = error or result or ""
         payload: dict[str, Any] = {
             "tool_id": action_step.tool_id,
             "operation": action_step.operation,

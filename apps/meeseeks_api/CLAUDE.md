@@ -11,7 +11,11 @@ Scope: this file applies to the `apps/meeseeks_api/` package. It captures runtim
   - `GET /api/sessions/{session_id}/events?after=...` poll events
   - `POST /api/sessions/{session_id}/message` enqueue a user steering message into a running session
   - `POST /api/sessions/{session_id}/interrupt` interrupt the current tool execution step
-  - `GET /api/sessions/{session_id}/agents` return sub-agent tree from transcript events
+  - `GET /api/sessions/{session_id}/agents` return sub-agent tree with lifecycle state (status, steps_completed) and total_steps
+  - `GET /api/sessions/{session_id}/stream` SSE stream for real-time session events (sub_agent, permission, tool_result, etc.)
+  - `GET /api/projects` list configured projects for multi-project support
+  - `GET /api/tools?project=name` list tools scoped to a project's CWD
+  - `GET /api/skills?project=name` list skills scoped to a project's CWD
   - `POST /api/sessions/{session_id}/archive` / `DELETE ...` archive/unarchive
   - `POST /api/sessions/{session_id}/attachments` upload attachments
   - `POST /api/sessions/{session_id}/share` create share link
@@ -19,10 +23,11 @@ Scope: this file applies to the `apps/meeseeks_api/` package. It captures runtim
   - `GET /api/share/{token}` fetch shared session data
   - `POST /api/query` synchronous endpoint (simple/CLI-compatible)
   - `GET /api/tools` list tool registry entries
+  - `GET /api/skills` list available skills
   - `GET /api/notifications` list notifications
   - `POST /api/notifications/dismiss` dismiss notifications
   - `POST /api/notifications/clear` clear notifications
-- Auth: requires `X-API-KEY` header. Token defaults to `api.master_token` from `configs/app.json` (default: `msk-strong-password`).
+- Auth: requires `X-API-KEY` header. Token defaults to `api.master_token` from `configs/app.json` (default: `msk-strong-password`). Also accepts `api_key` query parameter for SSE endpoints (EventSource does not support custom headers).
 - CORS: `after_request` hook sets `Access-Control-Allow-Origin: *` for cross-origin console access.
 - Orchestration: uses `meeseeks_core.session_runtime.SessionRuntime` to run sync/async sessions. Passes `allowed_tools` from `context.mcp_tools` to scope tool binding per query.
 - Core commands: `/compact`, `/status`, `/terminate` (shared runtime).

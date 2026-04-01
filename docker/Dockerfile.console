@@ -1,9 +1,12 @@
+# syntax=docker/dockerfile:1
+
 # ---------- build stage ----------
 FROM node:20-slim AS build
 
 WORKDIR /app
 COPY apps/meeseeks_console/package.json apps/meeseeks_console/package-lock.json ./
-RUN npm ci --ignore-scripts
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --ignore-scripts
 
 COPY apps/meeseeks_console/ .
 RUN npm run build
@@ -11,12 +14,17 @@ RUN npm run build
 # ---------- runtime stage ----------
 FROM nginx:alpine
 
-LABEL org.opencontainers.image.title="Meeseeks Console"
-LABEL org.opencontainers.image.description="Web console for the Meeseeks task-agent assistant"
-LABEL org.opencontainers.image.source="https://github.com/bearlike/Assistant"
-LABEL org.opencontainers.image.version="0.0.7"
+ARG VERSION="0.0.8"
+
+LABEL org.opencontainers.image.title="Meeseeks Console" \
+      org.opencontainers.image.description="Web console for the Meeseeks task-agent assistant" \
+      org.opencontainers.image.source="https://github.com/bearlike/Assistant" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.vendor="Krishnakanth Alagiri" \
+      org.opencontainers.image.licenses="MIT"
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY docker/nginx-console.conf /etc/nginx/conf.d/default.conf
+COPY docker/console-entrypoint.sh /docker-entrypoint.d/90-runtime-config.sh
 
-EXPOSE 3000
+EXPOSE 3001

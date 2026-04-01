@@ -6,16 +6,24 @@ Single-user REST API with session-based orchestration and event polling.
 
 from __future__ import annotations
 
+import json
 import os
+import time
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from flask import Flask, Response, request
+from flask import Flask, Response, request, stream_with_context
 from flask_restx import Api, Resource, fields
 from meeseeks_core.classes import TaskQueue
 from meeseeks_core.common import get_logger
-from meeseeks_core.config import get_config, get_config_value, get_version, start_preflight
+from meeseeks_core.config import (
+    get_config,
+    get_config_value,
+    get_mcp_config_path,
+    get_version,
+    start_preflight,
+)
 from meeseeks_core.notifications import NotificationStore
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.session_runtime import SessionRuntime, parse_core_command
@@ -124,7 +132,10 @@ class NotificationService:
 
 
 # Get the API token from app config
-MASTER_API_TOKEN = get_config_value("api", "master_token", default="msk-strong-password")
+MASTER_API_TOKEN = (
+    os.environ.get("MASTER_API_TOKEN")
+    or get_config_value("api", "master_token", default="msk-strong-password")
+)
 
 # Initialize logger
 logging = get_logger(name="meeseeks-api")
@@ -217,18 +228,21 @@ def log_request_info() -> None:
     logging.debug("Body: {}", request.get_data())
 
 
+_CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
+
+
 @app.after_request
 def _add_cors_headers(response: Response) -> Response:
-    """Allow cross-origin requests from frontend dev servers."""
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    """Allow cross-origin requests. Set CORS_ORIGIN env var to restrict."""
+    response.headers["Access-Control-Allow-Origin"] = _CORS_ORIGIN
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
     return response
 
 
 def _require_api_key() -> tuple[dict, int] | None:
-    """Validate the API key header for protected routes."""
-    api_token = request.headers.get("X-API-Key", None)
+    """Validate the API key header (or query param for SSE) for protected routes."""
+    api_token = request.headers.get("X-API-Key") or request.args.get("api_key")
     if api_token is None:
         return {"message": "API token is not provided."}, 401
     if api_token != MASTER_API_TOKEN:
@@ -295,7 +309,91 @@ def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | No
     return None
 
 
+def _resolve_project_cwd(request_data: dict[str, object]) -> str | None:
+    """Resolve a project name from the request to its filesystem path.
+
+    Returns the project path as ``cwd``, or ``None`` if no project is specified.
+    Raises ``ValueError`` when a project name is given but not configured.
+    """
+    project_name = request_data.get("project")
+    if not project_name or not isinstance(project_name, str):
+        # Also check inside context payload
+        ctx = request_data.get("context")
+        if isinstance(ctx, dict):
+            project_name = ctx.get("project")
+    if not project_name or not isinstance(project_name, str):
+        return None
+    project_name = project_name.strip()
+    if not project_name:
+        return None
+    projects = get_config().projects
+    project = projects.get(project_name)
+    if project is None:
+        raise ValueError(f"Project '{project_name}' not configured.")
+    if not project.path:
+        raise ValueError(f"Project '{project_name}' has no path configured.")
+    return project.path
+
+
+def _resolve_skill_instructions(
+    request_data: dict[str, object],
+    user_query: str,
+    context_payload: dict[str, object] | None = None,
+) -> str | None:
+    """Resolve skill instructions from request payload or context.
+
+    Checks (in order):
+    1. Top-level ``"skill"`` field in request body.
+    2. ``"skill"`` field inside the ``context`` object.
+    3. Falls back to None (orchestrator can still detect ``/skill-name`` queries).
+    """
+    from meeseeks_core.skills import SkillRegistry, activate_skill
+
+    # Check top-level "skill" field.
+    skill_name = request_data.get("skill")
+
+    # Check context.skill (from web console SessionContext).
+    if not skill_name and context_payload:
+        ctx = request_data.get("context")
+        if isinstance(ctx, dict):
+            skill_name = ctx.get("skill")
+
+    if isinstance(skill_name, str) and skill_name.strip():
+        registry = SkillRegistry()
+        registry.load()
+        skill = registry.get(skill_name.strip())
+        if skill is not None:
+            args = str(request_data.get("skill_args", ""))
+            instructions, _ = activate_skill(skill, args)
+            return instructions
+
+    return None
+
+
 notification_service = NotificationService(notification_store, runtime.session_store)
+
+
+@ns.route("/projects")
+class Projects(Resource):
+    """List configured projects."""
+
+    @api.doc(security="apikey")
+    def get(self) -> tuple[dict, int]:
+        """Return configured projects for the UI."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        projects = get_config().projects
+        result = [
+            {
+                "name": name,
+                "path": cfg.path,
+                "description": cfg.description,
+            }
+            for name, cfg in projects.items()
+            if cfg.path
+        ]
+        return {"projects": result}, 200
 
 
 @ns.route("/sessions")
@@ -325,6 +423,18 @@ class Sessions(Resource):
         if session_tag:
             runtime.session_store.tag_session(session_id, session_tag)
         context_payload = _build_context_payload(payload)
+        # Include project in context if provided
+        try:
+            project_cwd = _resolve_project_cwd(payload)
+        except ValueError:
+            project_cwd = None
+        if project_cwd:
+            project_name = (payload.get("project") or "")
+            if not project_name:
+                ctx = payload.get("context")
+                if isinstance(ctx, dict):
+                    project_name = ctx.get("project", "")
+            context_payload["project"] = project_name
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
         return {"session_id": session_id}, 200
@@ -360,12 +470,27 @@ class SessionQuery(Resource):
 
         allowed_tools = _extract_allowed_tools(context_payload)
 
+        # Skill activation: resolve from top-level "skill" field or context.skill.
+        skill_instructions = _resolve_skill_instructions(
+            request_data, user_query, context_payload
+        )
+
+        # Resolve project → cwd
+        try:
+            project_cwd = _resolve_project_cwd(request_data)
+        except ValueError as exc:
+            return {"message": str(exc)}, 400
+
+        budget = int(get_config_value("agent", "session_step_budget", default=0))
         started = runtime.start_async(
             session_id=session_id,
             user_query=user_query,
             approval_callback=auto_approve,
             mode=mode,
             allowed_tools=allowed_tools,
+            skill_instructions=skill_instructions,
+            cwd=project_cwd,
+            session_step_budget=budget,
         )
         if not started:
             return {"message": "Session is already running."}, 409
@@ -391,6 +516,55 @@ class SessionEvents(Resource):
             "events": events,
             "running": runtime.is_running(session_id),
         }, 200
+
+
+@ns.route("/sessions/<string:session_id>/stream")
+class SessionStream(Resource):
+    """Stream session events via Server-Sent Events."""
+
+    @api.doc(security="apikey")
+    def get(self, session_id: str) -> Response:
+        """Open an SSE stream for real-time session events."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return Response(
+                json.dumps(auth_error[0]),
+                status=auth_error[1],
+                mimetype="application/json",
+            )
+
+        def generate():
+            last_count = 0
+            idle_cycles = 0
+            while True:
+                events = runtime.session_store.load_transcript(session_id)
+                new_events = events[last_count:]
+                if new_events:
+                    for event in new_events:
+                        yield f"data: {json.dumps(event)}\n\n"
+                    last_count = len(events)
+                    idle_cycles = 0
+                else:
+                    idle_cycles += 1
+
+                running = runtime.is_running(session_id)
+                if not running and not new_events:
+                    yield 'data: {"type": "stream_end"}\n\n'
+                    break
+                # Auto-close after 5 min of inactivity
+                if idle_cycles > 600:
+                    break
+                time.sleep(0.5)
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Access-Control-Allow-Origin": _CORS_ORIGIN,
+            },
+        )
 
 
 @ns.route("/sessions/<string:session_id>/message")
@@ -440,6 +614,9 @@ class SessionAgents(Resource):
         if auth_error:
             return auth_error
         events = runtime.load_events(session_id)
+        total_steps = sum(
+            1 for e in events if e.get("type") == "tool_result"
+        )
         agents = [
             {
                 "agent_id": e.get("payload", {}).get("agent_id"),
@@ -448,14 +625,18 @@ class SessionAgents(Resource):
                 "model": e.get("payload", {}).get("model"),
                 "action": e.get("payload", {}).get("action"),
                 "detail": e.get("payload", {}).get("detail"),
+                "status": e.get("payload", {}).get("status"),
+                "steps_completed": e.get("payload", {}).get("steps_completed", 0),
                 "ts": e.get("ts"),
             }
             for e in events
             if e.get("type") == "sub_agent"
         ]
+        running = runtime.is_running(session_id)
         return {
             "agents": agents,
-            "running": runtime.is_running(session_id),
+            "running": running,
+            "total_steps": total_steps,
         }, 200
 
 
@@ -655,8 +836,29 @@ class Tools(Resource):
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
-        registry = load_registry()
+        project_name = request.args.get("project")
+        project_cwd = None
+        if project_name:
+            projects = get_config().projects
+            proj = projects.get(project_name)
+            if proj and proj.path:
+                project_cwd = proj.path
+        registry = load_registry(cwd=project_cwd)
         specs = registry.list_specs(include_disabled=True)
+
+        # Determine scope: compare against global-only servers
+        global_servers: set[str] = set()
+        try:
+            gpath = get_mcp_config_path()
+            if gpath and os.path.exists(gpath):
+                with open(gpath, encoding="utf-8") as _f:
+                    gc = json.load(_f)
+                    global_servers = set(
+                        gc.get("servers", gc.get("mcpServers", {})).keys()
+                    )
+        except Exception:
+            pass
+
         tools = [
             {
                 "tool_id": spec.tool_id,
@@ -666,10 +868,52 @@ class Tools(Resource):
                 "description": spec.description,
                 "disabled_reason": spec.metadata.get("disabled_reason"),
                 "server": spec.metadata.get("server"),
+                "scope": (
+                    "global"
+                    if spec.kind != "mcp"
+                    or spec.metadata.get("server") in global_servers
+                    else "project"
+                ),
             }
             for spec in specs
         ]
         return {"tools": tools}, 200
+
+
+@ns.route("/skills")
+class Skills(Resource):
+    """List available skills."""
+
+    @api.doc(security="apikey")
+    def get(self) -> tuple[dict, int]:
+        """Return skill specs for the UI."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        from meeseeks_core.skills import SkillRegistry
+
+        project_name = request.args.get("project")
+        project_cwd = None
+        if project_name:
+            projects = get_config().projects
+            proj = projects.get(project_name)
+            if proj and proj.path:
+                project_cwd = proj.path
+        registry = SkillRegistry()
+        registry.load(project_cwd)
+        skills = [
+            {
+                "name": s.name,
+                "description": s.description,
+                "allowed_tools": s.allowed_tools,
+                "user_invocable": s.user_invocable,
+                "disable_model_invocation": s.disable_model_invocation,
+                "context": s.context,
+                "source": s.source,
+            }
+            for s in registry.list_all()
+        ]
+        return {"skills": skills}, 200
 
 
 @ns.route("/query")
@@ -719,6 +963,13 @@ class MeeseeksQuery(Resource):
         notification_service.emit_started(session_id)
 
         allowed_tools = _extract_allowed_tools(context_payload)
+
+        # Resolve project → cwd
+        try:
+            project_cwd = _resolve_project_cwd(request_data)
+        except ValueError as exc:
+            return {"message": str(exc)}, 400
+
         logging.info("Received user query: {}", user_query)
         task_queue: TaskQueue = runtime.run_sync(
             user_query=user_query,
@@ -726,6 +977,7 @@ class MeeseeksQuery(Resource):
             approval_callback=auto_approve,
             mode=mode,
             allowed_tools=allowed_tools,
+            cwd=project_cwd,
         )
         notification_service.emit_completion(session_id)
         task_result = deepcopy(task_queue.task_result)

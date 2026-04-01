@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import Any
 
 from meeseeks_core.classes import ActionStep
@@ -44,19 +45,61 @@ def _log_runtime_failure(server_name: str, tool_name: str, exc: Exception) -> No
         logging.opt(exception=exc).debug("MCP runtime traceback")
 
 
+_ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _expand_env_vars(config: dict[str, Any]) -> dict[str, Any]:
+    """Recursively expand ``${VAR}`` and ``$VAR`` patterns in string values."""
+
+    def _expand_str(value: str) -> str:
+        def _replace(match: re.Match[str]) -> str:
+            var_name = match.group(1) or match.group(2)
+            resolved = os.environ.get(var_name)
+            if resolved is None:
+                logging.debug("Env var '{}' referenced in MCP config not found", var_name)
+                return match.group(0)  # Leave unresolved
+            return resolved
+        return _ENV_VAR_PATTERN.sub(_replace, value)
+
+    def _walk(obj: Any) -> Any:
+        if isinstance(obj, str):
+            return _expand_str(obj)
+        if isinstance(obj, dict):
+            return {k: _walk(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_walk(item) for item in obj]
+        return obj
+
+    return _walk(config)
+
+
 def _normalize_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
     """Normalize legacy MCP config keys for adapter compatibility."""
+    # Expand env vars first
+    config = _expand_env_vars(config)
     servers = config.get("servers", {})
     for server_config in servers.values():
         if "http_headers" in server_config and "headers" not in server_config:
             server_config["headers"] = server_config.pop("http_headers")
+        # Rename "type" → "transport" (Claude Code / VS Code .mcp.json schema)
+        if "type" in server_config and "transport" not in server_config:
+            server_config["transport"] = server_config.pop("type")
         if server_config.get("transport") == "http":
             server_config["transport"] = "streamable_http"
     return config
 
 
-def _load_mcp_config(path: str | None = None) -> dict[str, Any]:
+def _load_mcp_config(
+    path: str | None = None,
+    *,
+    cwd: str | None = None,
+) -> dict[str, Any]:
     """Load MCP server configuration from disk.
+
+    When *cwd* is provided (or *path* is omitted), uses
+    ``get_merged_mcp_config(cwd)`` to merge global config with any
+    CWD-local ``.mcp.json``.  Falls back to single-file loading when
+    an explicit *path* is given.
 
     Returns:
         Parsed MCP configuration dictionary.
@@ -66,10 +109,24 @@ def _load_mcp_config(path: str | None = None) -> dict[str, Any]:
         OSError: If the configuration file cannot be read.
         json.JSONDecodeError: If the configuration is invalid JSON.
     """
-    config_path = path or get_mcp_config_path()
-    if not config_path:
-        raise ValueError("MCP config path is not set.")
-    config_path = os.path.abspath(config_path)
+    if path is None or cwd is not None:
+        # Use merged discovery: global + CWD .mcp.json
+        from meeseeks_core.config import get_merged_mcp_config
+
+        merged = get_merged_mcp_config(cwd)
+        if not merged or not merged.get("servers"):
+            # Fall back to single-path for backward compat
+            config_path = get_mcp_config_path()
+            if not config_path:
+                raise ValueError("MCP config path is not set.")
+            config_path = os.path.abspath(config_path)
+            if not os.path.exists(config_path):
+                raise ValueError(f"MCP config not found at {config_path}.")
+            with open(config_path, encoding="utf-8") as handle:
+                merged = json.load(handle)
+        return _normalize_mcp_config(merged)
+
+    config_path = os.path.abspath(path)
     if not os.path.exists(config_path):
         raise ValueError(f"MCP config not found at {config_path}.")
     with open(config_path, encoding="utf-8") as handle:
@@ -249,6 +306,10 @@ class MCPToolRunner:
     async def _invoke_async(self, input_payload: str | dict[str, Any]) -> str:
         """Invoke an MCP tool asynchronously and return its output.
 
+        Prefers the connection pool for persistent, cached connections.
+        Falls back to the legacy one-shot client path when the pool is
+        unavailable.
+
         Args:
             input_payload: Input payload to send to the MCP tool.
 
@@ -259,6 +320,44 @@ class MCPToolRunner:
             RuntimeError: If MCP adapters are not installed.
             ValueError: If the server or tool is not configured.
         """
+        try:
+            return await self._invoke_via_pool(input_payload)
+        except Exception as pool_exc:
+            logging.debug(
+                "Pool invocation failed for {}.{}, falling back: {}",
+                self.server_name,
+                self.tool_name,
+                pool_exc,
+            )
+            return await self._invoke_legacy(input_payload)
+
+    async def _invoke_via_pool(self, input_payload: str | dict[str, Any]) -> str:
+        """Invoke via the persistent connection pool."""
+        from meeseeks_tools.integration.mcp_pool import get_mcp_pool
+
+        pool = get_mcp_pool()
+
+        # Ensure the pool has the latest MCP config so it can detect
+        # config changes between invocations.
+        config = _load_mcp_config()
+        config = _normalize_mcp_config(config)
+        await pool.refresh_if_config_changed(config)
+
+        state = await pool.get_or_connect(self.server_name)
+
+        tool_map = {getattr(t, "name", ""): t for t in state.tools} if state.tools else {}
+        tool = tool_map.get(self.tool_name)
+        if tool is None:
+            raise ValueError(
+                f"Tool '{self.tool_name}' not found on MCP server '{self.server_name}'."
+            )
+
+        prepared = _prepare_mcp_input(tool, input_payload)
+        result = await pool.call_tool(self.server_name, self.tool_name, prepared)
+        return str(result)
+
+    async def _invoke_legacy(self, input_payload: str | dict[str, Any]) -> str:
+        """Legacy one-shot client path (fallback)."""
         try:
             from langchain_mcp_adapters.client import MultiServerMCPClient
         except Exception as exc:  # pragma: no cover - runtime dependency

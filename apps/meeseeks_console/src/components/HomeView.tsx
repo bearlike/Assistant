@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Search, X, Archive, RotateCcw, Loader2 } from 'lucide-react';
 import { SessionItem } from './SessionItem';
 import { InputBar } from './InputBar';
+import { TypewriterGreeting } from './TypewriterGreeting';
 import { QueryMode, SessionContext, SessionSummary } from '../types';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { formatSessionTime } from '../utils/time';
@@ -43,6 +44,26 @@ export function HomeView({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'sessions' | 'archive'>('sessions');
+  const [animPaused, setAnimPaused] = useState(false);
+  const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleInputFocusChange = useCallback((focused: boolean, isEmpty: boolean) => {
+    if (resumeTimer.current) {
+      clearTimeout(resumeTimer.current);
+      resumeTimer.current = null;
+    }
+    if (focused) {
+      setAnimPaused(true);
+    } else if (isEmpty) {
+      resumeTimer.current = setTimeout(() => setAnimPaused(false), 1000);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (resumeTimer.current) clearTimeout(resumeTimer.current);
+    };
+  }, []);
   const listError = activeTab === 'archive' ? archivedError : error;
   const listLoading = activeTab === 'archive' ? archivedLoading : loading;
   const scopedSessions = activeTab === 'archive' ? archivedSessions : sessions;
@@ -57,19 +78,17 @@ export function HomeView({
   );
   const filteredSessions = scopedSessions.filter((session) => {
     const title = session.title?.toLowerCase() || '';
-    const repo = session.context?.repo?.toLowerCase() || '';
+    const project = (session.context?.project || session.context?.repo || '').toLowerCase();
     return (
       title.includes(searchQuery.toLowerCase()) ||
-      repo.includes(searchQuery.toLowerCase()));
+      project.includes(searchQuery.toLowerCase()));
 
   });
   return (
     <div className="flex flex-col h-full w-full relative overflow-hidden">
       {/* Fixed Top Section */}
-      <div className="flex-none flex flex-col items-center pt-16 pb-6 px-4 w-full z-10 bg-[hsl(var(--background))]">
-        <h1 className="text-3xl font-medium text-[hsl(var(--foreground))] mb-8">
-          What should we do next?
-        </h1>
+      <div className="flex-none flex flex-col items-center pt-16 pb-6 px-4 w-full z-20 bg-[hsl(var(--background))]">
+        <TypewriterGreeting paused={animPaused} />
 
         <div className="w-full max-w-3xl">
           {(listError || actionError) &&
@@ -83,7 +102,8 @@ export function HomeView({
           <InputBar
             mode="home"
             onSubmit={onCreateAndRun}
-            isSubmitting={isCreating} />
+            isSubmitting={isCreating}
+            onFocusChange={handleInputFocusChange} />
           {isCreating &&
           <div className="mt-2 flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -97,7 +117,7 @@ export function HomeView({
       {/* Scrollable Bottom Section */}
       <div className="flex-1 overflow-y-auto w-full">
         <div className="max-w-3xl mx-auto px-4 pb-20">
-          <div className="sticky top-0 z-10 pt-2 pb-4 mb-2 flex items-center justify-between border-b border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-[0_4px_12px_hsl(var(--background))]">
+          <div className="sticky top-0 z-10 pt-2 pb-4 mb-2 flex items-center justify-between border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] shadow-[0_4px_12px_hsl(var(--background))]">
             <div className="flex gap-8">
               <button
                 onClick={() => setActiveTab('sessions')}
@@ -204,22 +224,23 @@ export function HomeView({
                   onSessionSelect(session.session_id);
                   setIsSearchOpen(false);
                 }}
-                className="flex items-center justify-between p-3 hover:bg-[hsl(var(--accent))] rounded-lg cursor-pointer group">
+                className="flex items-start gap-4 p-3 hover:bg-[hsl(var(--accent))] rounded-lg cursor-pointer group">
 
-                    <div className="flex flex-col gap-1">
-                      <h3 className="text-sm font-medium text-[hsl(var(--foreground))]">
+                    <div className="flex flex-col gap-1 min-w-0 flex-1">
+                      <h3 className="text-sm font-medium text-[hsl(var(--foreground))] line-clamp-2">
                         {session.title}
                       </h3>
                       <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
-                        <span>{formatSessionTime(session.created_at)}</span>
-                        <span>·</span>
-                        <span>{session.context?.repo || 'repo'}</span>
+                        <span className="whitespace-nowrap">{formatSessionTime(session.created_at)}</span>
+                        {(session.context?.project || session.context?.repo) && (
+                          <>
+                            <span>·</span>
+                            <span className="truncate">{session.context?.project || session.context?.repo}</span>
+                          </>
+                        )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <div className="text-xs text-[hsl(var(--muted-foreground))]">
-                        {session.status}
-                      </div>
+                    <div className="flex items-center gap-3 shrink-0">
                       {(onArchive != null || onUnarchive != null) &&
                       <button
                         onClick={(event) => {

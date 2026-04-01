@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    env_file: docker.env
+    volumes:
+      - ./configs:/app/configs:ro
+      - api-data:/app/data
+      - /home/kk/Agents:/home/kk/Agents
+      - /home/kk/Projects/Personal-Assistant:/home/kk/Projects/Personal-Assistant
+      - /home/kk/Projects/Simple-Secrets-Manager:/home/kk/Projects/Simple-Secrets-Manager
+    environment:
+      - MEESEEKS_HOME=/app/data
+
+  console:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.console
+    network_mode: host
+    env_file: docker.env
+
+networks:
+  default:
+    external: true
+    name: host
+
+volumes:
+  api-data:

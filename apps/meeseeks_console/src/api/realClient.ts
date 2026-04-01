@@ -9,7 +9,7 @@ import {
   SessionSummary,
   ShareRecord
 } from "../types";
-import { ApiClient, ApiConfig, ToolSummary } from "./contracts";
+import { AgentSummary, ApiClient, ApiConfig, ProjectSummary, SkillSummary, ToolSummary } from "./contracts";
 
 function withBase(baseUrl: string, path: string) {
   if (!baseUrl) {
@@ -212,12 +212,59 @@ export function createRealClient(config: ApiConfig): ApiClient {
       await handleJson(response);
     },
 
-    async listTools(): Promise<ToolSummary[]> {
-      const response = await fetch(withBase(baseUrl, "/api/tools"), {
+    async listTools(project?: string): Promise<ToolSummary[]> {
+      const params = project ? `?project=${encodeURIComponent(project)}` : "";
+      const response = await fetch(withBase(baseUrl, `/api/tools${params}`), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ tools: ToolSummary[] }>(response);
       return payload.tools;
+    },
+
+    streamEvents(
+      sessionId: string,
+      onEvent: (event: EventRecord) => void,
+      onEnd: () => void
+    ): () => void {
+      const params = new URLSearchParams();
+      if (apiKey) params.set("api_key", apiKey);
+      const url = withBase(baseUrl, `/api/sessions/${sessionId}/stream?${params}`);
+      const source = new EventSource(url);
+      source.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data);
+          if (event.type === "stream_end") {
+            source.close();
+            onEnd();
+            return;
+          }
+          onEvent(event);
+        } catch {
+          // Ignore malformed frames
+        }
+      };
+      source.onerror = () => {
+        source.close();
+        onEnd();
+      };
+      return () => source.close();
+    },
+
+    async listProjects(): Promise<ProjectSummary[]> {
+      const response = await fetch(withBase(baseUrl, "/api/projects"), {
+        headers: headers(apiKey)
+      });
+      const payload = await handleJson<{ projects: ProjectSummary[] }>(response);
+      return payload.projects;
+    },
+
+    async listSkills(project?: string): Promise<SkillSummary[]> {
+      const params = project ? `?project=${encodeURIComponent(project)}` : "";
+      const response = await fetch(withBase(baseUrl, `/api/skills${params}`), {
+        headers: headers(apiKey)
+      });
+      const payload = await handleJson<{ skills: SkillSummary[] }>(response);
+      return payload.skills;
     },
 
     async listNotifications(): Promise<NotificationItem[]> {
@@ -256,6 +303,22 @@ export function createRealClient(config: ApiConfig): ApiClient {
         }
       );
       await handleJson(response);
-    }
+    },
+
+    async listAgents(sessionId: string): Promise<{
+      agents: AgentSummary[];
+      running: boolean;
+      total_steps: number;
+    }> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/agents`),
+        { headers: headers(apiKey) }
+      );
+      return handleJson<{
+        agents: AgentSummary[];
+        running: boolean;
+        total_steps: number;
+      }>(response);
+    },
   };
 }

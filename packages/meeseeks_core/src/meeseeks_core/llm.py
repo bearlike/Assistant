@@ -54,7 +54,13 @@ def _matches_model_list(model_name: str, entries: Iterable[str]) -> bool:
 
 
 def model_supports_reasoning_effort(model_name: str | None) -> bool:
-    """Return True if the model is known to support reasoning_effort."""
+    """Return True if the model is known to support reasoning_effort.
+
+    LiteLLM translates reasoning_effort per-provider:
+    - Claude → output_config.effort
+    - Gemini → thinking budget_tokens or thinking_level
+    - OpenAI (o3/gpt-5) → native reasoning_effort
+    """
     if not model_name:
         return False
     raw = model_name.lower()
@@ -64,20 +70,28 @@ def model_supports_reasoning_effort(model_name: str | None) -> bool:
     )
     if _matches_model_list(raw, allowlist) or _matches_model_list(normalized, allowlist):
         return True
-    return normalized.startswith("gpt-5")
+    return (
+        normalized.startswith("gpt-5")
+        or normalized.startswith("o3")
+        or "claude" in normalized
+        or "gemini" in normalized
+    )
 
 
 def resolve_reasoning_effort(model_name: str | None) -> str | None:
-    """Resolve the reasoning effort to use for a model."""
+    """Resolve the reasoning effort for a model.
+
+    Returns the configured value if set, otherwise defaults to 'high'.
+    LiteLLM translates this per-provider:
+    - Claude: output_config.effort
+    - Gemini: thinking budget_tokens or thinking_level
+    - OpenAI: native reasoning_effort
+    """
     configured = get_config_value("llm", "reasoning_effort", default="")
     if isinstance(configured, str) and configured.strip():
         return configured.strip().lower()
-    if not model_supports_reasoning_effort(model_name):
-        return None
-    normalized = _strip_provider(model_name)
-    if "gpt-5-pro" in normalized:
-        return "high"
-    return "medium"
+    # Default to high for all models
+    return "high"
 
 
 def _resolve_litellm_model(model_name: str, openai_api_base: str | None) -> str:
@@ -108,6 +122,7 @@ def build_chat_model(
 
     kwargs: dict[str, Any] = {
         "model": _resolve_litellm_model(model_name, openai_api_base),
+        "drop_params": True,  # Silently drop unsupported params per-provider
     }
     if openai_api_base:
         kwargs["api_base"] = openai_api_base

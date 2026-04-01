@@ -22,6 +22,8 @@ from rich.status import Status
 from rich.syntax import Syntax
 from rich.text import Text
 
+from meeseeks_cli.cli_keys import KeyListener
+
 
 def _verbosity_to_level(verbosity: int) -> str:
     if verbosity <= 0:
@@ -77,6 +79,7 @@ from meeseeks_core.config import (
     get_config_value,
     get_mcp_config_path,
     get_version,
+    set_app_config_path,
     start_preflight,
 )
 from meeseeks_core.hooks import HookManager
@@ -187,6 +190,7 @@ class HeaderContext:
     builtin_disabled: int
     external_enabled: int
     external_disabled: int
+    skill_count: int = 0
 
 
 def _truncate_middle(text: str, max_len: int) -> str:
@@ -287,12 +291,16 @@ def _render_header_wide(console: Console, ctx: HeaderContext) -> None:
     console.print(Rule(style="dim"), style=HEADER_STYLE)
     console.print(_brand_line(ctx, console.width), style=HEADER_STYLE)
 
+    skills_text = Text()
+    style = "dim" if ctx.skill_count else "red dim"
+    skills_text.append(f"{ctx.skill_count} available", style=style)
     fields: list[tuple[str, Text | str]] = [
         ("model", _format_model(ctx.model, 40)),
         ("session", ctx.session_id or "(not set)"),
         ("base", _short_url(ctx.base_url, 60) if ctx.base_url else "(not set)"),
         ("langfuse", _langfuse_value(ctx)),
         ("tools", _tools_value(ctx)),
+        ("skills", skills_text),
     ]
     label_width = max(len(label) for label, _ in fields)
     for label, value in fields:
@@ -363,6 +371,8 @@ def run_cli(args: argparse.Namespace) -> int:
         Exit code for the CLI process.
     """
     console = Console(color_system=None if args.no_color else "auto")
+    if args.config:
+        set_app_config_path(args.config)
     config = get_config()
     logging.info(
         "Config paths: app={} mcp={}",
@@ -402,6 +412,11 @@ def run_cli(args: argparse.Namespace) -> int:
     tool_registry = load_registry()
     registry = get_registry()
 
+    from meeseeks_core.skills import SkillRegistry
+
+    skill_registry = SkillRegistry()
+    skill_registry.load()
+
     base_url = get_config_value("llm", "api_base") or ""
     model_name = _resolve_display_model(state.model_name)
     langfuse_status = resolve_langfuse_status()
@@ -438,6 +453,7 @@ def run_cli(args: argparse.Namespace) -> int:
         builtin_disabled=builtin_disabled,
         external_enabled=external_enabled,
         external_disabled=external_disabled,
+        skill_count=len(skill_registry.list_all()),
     )
     render_header(console, header_ctx)
     _maybe_warn_missing_configs(console, tool_registry, config)
@@ -464,17 +480,39 @@ def run_cli(args: argparse.Namespace) -> int:
             continue
         if user_input.startswith("/"):
             command, cmd_args = _parse_command(user_input)
-            context = CommandContext(
-                console=console,
-                store=store,
-                state=state,
-                tool_registry=tool_registry,
-                runtime=runtime,
-                prompt_func=session.prompt,
+            # 1. Try registered CLI commands first.
+            if command in registry.list_commands():
+                context = CommandContext(
+                    console=console,
+                    store=store,
+                    state=state,
+                    tool_registry=tool_registry,
+                    runtime=runtime,
+                    prompt_func=session.prompt,
+                )
+                if not registry.execute(command, context, cmd_args):
+                    _render_resume_hint(console, state.session_id, args.session_dir)
+                    return 0
+                continue
+            # 2. Try skill invocation: /skill-name [args]
+            _skill_name = command.lstrip("/")
+            _skill = skill_registry.get(_skill_name)
+            if _skill is not None and _skill.user_invocable:
+                from meeseeks_core.skills import activate_skill
+
+                _skill_args = " ".join(cmd_args)
+                _instructions, _ = activate_skill(_skill, _skill_args)
+                console.print(f"Activating skill: {_skill_name}", style="dim cyan")
+                _run_query(
+                    console, store, runtime, state, tool_registry,
+                    user_input, args, session.prompt,
+                    skill_instructions=_instructions,
+                )
+                continue
+            # 3. Fall through to unknown command.
+            console.print(
+                "Unknown command. Use /help for commands or /skills for skills.",
             )
-            if not registry.execute(command, context, cmd_args):
-                _render_resume_hint(console, state.session_id, args.session_dir)
-                return 0
             continue
 
         _run_query(
@@ -511,6 +549,7 @@ def _run_query(
     query: str,
     args: argparse.Namespace,
     prompt_func: Callable[[str], str] | None,
+    skill_instructions: str | None = None,
 ) -> None:
     initial_plan = None
     mode = _resolve_query_mode(query, state)
@@ -564,10 +603,25 @@ def _run_query(
         auto_approve_enabled=auto_approve_enabled,
     )
     use_live_display = console.is_terminal and not getattr(args, "no_color", False)
+    budget = int(get_config_value("agent", "session_step_budget", default=0))
 
     if use_live_display:
         agent_display = AgentDisplayManager()
         hook_manager = _build_cli_hook_manager(console, tool_registry, agent_display)
+
+        key_listener = KeyListener()
+        key_listener.bind("\x0f", agent_display.toggle_expand)  # Ctrl+O
+
+        # Wrap approval callback so KeyListener pauses cbreak mode
+        # while console.input() reads a line during permission prompts.
+        _original_approval = approval_callback
+
+        def _approval_with_keys(step: ActionStep) -> bool:
+            key_listener.pause()
+            try:
+                return _original_approval(step)
+            finally:
+                key_listener.resume()
 
         with Live(
             Text(""),
@@ -575,20 +629,21 @@ def _run_query(
             refresh_per_second=4,
             transient=True,
         ) as live:
-            live.get_renderable = lambda: (  # type: ignore[method-assign]
-                agent_display.render() if agent_display.has_agents else Text("")
-            )
-            task_queue = runtime.run_sync(
-                user_query=query,
-                model_name=state.model_name,
-                max_iters=args.max_iters,
-                initial_plan=initial_plan,
-                session_id=state.session_id,
-                tool_registry=tool_registry,
-                approval_callback=approval_callback,
-                hook_manager=hook_manager,
-                mode=mode,
-            )
+            live.get_renderable = lambda: agent_display.render()  # type: ignore[method-assign]
+            with key_listener:
+                task_queue = runtime.run_sync(
+                    user_query=query,
+                    model_name=state.model_name,
+                    max_iters=args.max_iters,
+                    initial_plan=initial_plan,
+                    session_id=state.session_id,
+                    tool_registry=tool_registry,
+                    approval_callback=_approval_with_keys,
+                    hook_manager=hook_manager,
+                    mode=mode,
+                    skill_instructions=skill_instructions,
+                    session_step_budget=budget,
+                )
     else:
         hook_manager = _build_cli_hook_manager(console, tool_registry)
         task_queue = runtime.run_sync(
@@ -601,6 +656,8 @@ def _run_query(
             approval_callback=approval_callback,
             hook_manager=hook_manager,
             mode=mode,
+            skill_instructions=skill_instructions,
+            session_step_budget=budget,
         )
 
     _render_results_with_registry(
@@ -625,13 +682,14 @@ def _maybe_warn_missing_configs(
     tool_registry: ToolRegistry,
     config: AppConfig,
 ) -> None:
-    config_path = Path("configs/app.json")
-    mcp_path = Path(get_mcp_config_path())
+    config_path = Path(get_app_config_path())
+    mcp_path_str = get_mcp_config_path()
+    mcp_path = Path(mcp_path_str) if mcp_path_str else None
     missing: list[str] = []
     if not config_path.exists():
-        missing.append("configs/app.json")
-    if not mcp_path.exists():
-        missing.append("configs/mcp.json")
+        missing.append(str(config_path))
+    if mcp_path and not mcp_path.exists():
+        missing.append(str(mcp_path))
     if not missing:
         pass
     else:
@@ -717,6 +775,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto-approve",
         action="store_true",
         help="Automatically approve all permission prompts",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to app config file (default: auto-discover)",
     )
     return parser
 
@@ -893,11 +956,14 @@ def _build_cli_hook_manager(
     tool_registry: ToolRegistry,
     agent_display: AgentDisplayManager | None = None,
 ) -> HookManager:
-    # When agent display is active, the live tree replaces the per-tool spinner.
+    # When agent display is active, the live tree + integrated spinner
+    # replace the per-tool console.status() spinner.
     if agent_display is not None:
         return HookManager(
             on_agent_start=[agent_display.on_start],
             on_agent_stop=[agent_display.on_stop],
+            pre_tool_use=[agent_display.on_tool_start],
+            post_tool_use=[agent_display.on_tool_end],
         )
 
     # Fallback: original spinner behavior (no agent tree).

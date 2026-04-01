@@ -1,5 +1,5 @@
 import React from 'react';
-import { Archive, Layers, RotateCcw } from 'lucide-react';
+import { Archive, RotateCcw } from 'lucide-react';
 import { SessionSummary } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { formatSessionTime } from '../utils/time';
@@ -27,34 +27,34 @@ export function SessionItem({
   return (
     <div
       onClick={() => onClick(session.session_id)}
-      className="group flex items-center justify-between py-3 px-2 -mx-2 rounded-lg hover:bg-[hsl(var(--accent))] cursor-pointer transition-colors">
+      className="group flex items-start gap-4 py-3 px-2 -mx-2 rounded-lg hover:bg-[hsl(var(--accent))] cursor-pointer transition-colors">
 
-      <div className="flex flex-col gap-1">
-        <h3 className="text-sm font-medium text-[hsl(var(--foreground))] group-hover:opacity-90 transition-colors">
+      <div className="flex flex-col gap-1 min-w-0 flex-1">
+        <h3 className="text-sm font-medium text-[hsl(var(--foreground))] group-hover:opacity-90 transition-colors line-clamp-2">
           {session.title}
         </h3>
         <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
-          <span>{formatSessionTime(session.created_at)}</span>
-          <span>·</span>
-          <span>{session.context?.repo || 'No repo'}</span>
-          <span>·</span>
-          <span className="font-mono">
-            {session.context?.branch || 'No branch'}
-          </span>
+          <span className="whitespace-nowrap">{formatSessionTime(session.created_at)}</span>
+          {(session.context?.project || session.context?.repo) && (
+            <>
+              <span>·</span>
+              <span className="truncate">{session.context?.project || session.context?.repo}</span>
+            </>
+          )}
+          {session.context?.branch && (
+            <>
+              <span>·</span>
+              <span className="font-mono truncate">{session.context.branch}</span>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3 shrink-0 pt-0.5">
         <StatusBadge
           status={session.status || 'idle'}
           doneReason={session.done_reason} />
 
-        {session.status !== 'failed' && session.context?.mcp_tools?.length ?
-        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] text-xs font-medium border border-[hsl(var(--border))]">
-            <Layers className="w-3 h-3" />
-            <span>{session.context?.mcp_tools?.length}</span>
-          </div> :
-        null}
         {(onArchive || onUnarchive) &&
         <button
           onClick={handleArchive}

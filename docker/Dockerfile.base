@@ -1,47 +1,58 @@
 # syntax=docker/dockerfile:1
 
-# Dockerfile.base
-FROM python:3.11-slim-bookworm
+# Dockerfile.base — Dev-equipped agent runtime for Meeseeks
+FROM python:3.11-bookworm
 
-# Set the title, GitHub repo URL, version, and author
-ARG TITLE="Meeseeks Base" \
-    VERSION="0.0.7" \
-    AUTHOR="Krishnakanth Alagiri" \
-    GITHUB_REPO_URL="https://github.com/bearlike/Assistant"
+ARG VERSION="0.0.8"
+ARG USERNAME=meeseeks
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
 
-LABEL org.opencontainers.image.source="https://github.com/bearlike/Assistant" \
-    org.opencontainers.image.version=$VERSION \
-    org.opencontainers.image.vendor=$AUTHOR \
-    org.opencontainers.image.licenses="mail@kanth.tech" \
-    org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Meeseeks Base" \
+      org.opencontainers.image.description="Dev-equipped agent runtime for the Meeseeks assistant" \
+      org.opencontainers.image.source="https://github.com/bearlike/Assistant" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.vendor="Krishnakanth Alagiri" \
+      org.opencontainers.image.licenses="MIT"
 
-LABEL maintainer=$AUTHOR \
-    title=$TITLE \
-    url=$GITHUB_REPO_URL \
-    version=$VERSION
-
-# Update and install necessary software
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    software-properties-common \
-    git \
+# ---------- System packages ----------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential curl wget git zsh sudo \
+        jq ripgrep fd-find less vim \
+        openssh-client ca-certificates gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory to /app (assuming project root)
-WORKDIR /app
+# ---------- Non-root user with sudo ----------
+RUN groupadd --gid $USER_GID $USERNAME \
+    && useradd --uid $USER_UID --gid $USER_GID -m -s /usr/bin/zsh $USERNAME \
+    && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/$USERNAME \
+    && chmod 0440 /etc/sudoers.d/$USERNAME
 
-# Copy the repo contents to the Docker image
-COPY . /app
+# ---------- Oh My Zsh ----------
+USER $USERNAME
+RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+USER root
 
-# Install uv (no pip cache)
+# ---------- nvm + Node.js LTS ----------
+ENV NVM_DIR=/home/$USERNAME/.nvm
+RUN mkdir -p $NVM_DIR && chown $USERNAME:$USERNAME $NVM_DIR
+USER $USERNAME
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash \
+    && . "$NVM_DIR/nvm.sh" && nvm install --lts
+USER root
+
+# ---------- Python: uv + Meeseeks core packages ----------
 RUN pip install --no-cache-dir uv
 
-# Install the core dependencies (drop uv cache afterwards)
-RUN uv pip install --system -e packages/meeseeks_core -e packages/meeseeks_tools \
+WORKDIR /app
+COPY . /app
+
+RUN uv pip install --system \
+        -e packages/meeseeks_core \
+        -e packages/meeseeks_tools \
     && rm -rf /root/.cache/uv
 
-# Set default environment variables for Meeseeks (common ones)
+# ---------- Runtime defaults ----------
 ENV CACHE_DIR='/tmp/meeseeks_cache' \
     DEFAULT_MODEL='gpt-5.2' \
     LOG_LEVEL=DEBUG \
@@ -50,3 +61,5 @@ ENV CACHE_DIR='/tmp/meeseeks_cache' \
     COLOREDLOGS_FIELD_STYLES='asctime=color=240;name=45,inverse' \
     COLOREDLOGS_LEVEL_STYLES='info=220;spam=22;debug=34;verbose=34;notice=220;warning=202;success=118,bold;error=124;critical=background=red' \
     COLOREDLOGS_LOG_FORMAT='%(asctime)s [%(name)s] %(levelname)s %(message)s'
+
+USER $USERNAME

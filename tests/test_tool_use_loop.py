@@ -16,6 +16,7 @@ from meeseeks_core.permissions import PermissionDecision, PermissionPolicy
 from meeseeks_core.token_budget import TokenBudget
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 from meeseeks_core.tool_use_loop import (
+    _ANSI_ESCAPE_RE,
     ToolUseLoop,
     _coerce_mcp_tool_input,
     _infer_operation,
@@ -542,3 +543,168 @@ class TestProjectInstructionsInjection:
         system_msg = messages[0]
         assert isinstance(system_msg, SystemMessage)
         assert "Project instructions:" not in system_msg.content
+
+
+# ---------------------------------------------------------------------------
+# ANSI escape stripping
+# ---------------------------------------------------------------------------
+
+
+class TestAnsiStripping:
+    """Verify that ANSI escape codes are stripped from tool output."""
+
+    def test_ansi_color_codes_stripped(self):
+        text = "\x1b[31mERROR\x1b[0m: something failed"
+        result = _ANSI_ESCAPE_RE.sub("", text)
+        assert result == "ERROR: something failed"
+
+    def test_ansi_bold_codes_stripped(self):
+        text = "\x1b[1mBold text\x1b[0m"
+        result = _ANSI_ESCAPE_RE.sub("", text)
+        assert result == "Bold text"
+
+    def test_ansi_cursor_codes_stripped(self):
+        text = "\x1b[2J\x1b[Hscreen cleared"
+        result = _ANSI_ESCAPE_RE.sub("", text)
+        assert result == "screen cleared"
+
+    def test_ansi_256_color_stripped(self):
+        text = "\x1b[38;5;196mred text\x1b[0m"
+        result = _ANSI_ESCAPE_RE.sub("", text)
+        assert result == "red text"
+
+    def test_no_ansi_passes_through(self):
+        text = "plain text with no escapes"
+        result = _ANSI_ESCAPE_RE.sub("", text)
+        assert result == text
+
+    def test_multiline_ansi_stripped(self):
+        text = "\x1b[32mline1\x1b[0m\n\x1b[33mline2\x1b[0m"
+        result = _ANSI_ESCAPE_RE.sub("", text)
+        assert result == "line1\nline2"
+
+
+# ---------------------------------------------------------------------------
+# Environment section in system prompt
+# ---------------------------------------------------------------------------
+
+
+class TestEnvironmentSectionInSystemPrompt:
+    """Verify _build_messages includes an Environment section."""
+
+    def test_environment_section_present(self):
+        loop = ToolUseLoop(
+            agent_context=_make_agent_context(),
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        messages = loop._build_messages("hello", None, None)
+        system_msg = messages[0]
+        assert isinstance(system_msg, SystemMessage)
+        content = system_msg.content
+        assert "# Environment" in content
+        assert "Working directory:" in content
+        assert "Platform:" in content
+        assert "Date:" in content
+        assert "Meeseeks version:" in content
+
+    def test_environment_uses_cwd_param(self):
+        loop = ToolUseLoop(
+            agent_context=_make_agent_context(),
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+            cwd="/custom/project/dir",
+        )
+        messages = loop._build_messages("hello", None, None)
+        system_msg = messages[0]
+        assert "/custom/project/dir" in system_msg.content
+
+    def test_environment_defaults_to_cwd_when_no_param(self):
+        loop = ToolUseLoop(
+            agent_context=_make_agent_context(),
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+            cwd=None,
+        )
+        messages = loop._build_messages("hello", None, None)
+        system_msg = messages[0]
+        # Should contain some working directory path (the actual CWD)
+        assert "Working directory:" in system_msg.content
+
+
+# ---------------------------------------------------------------------------
+# Delegation lifecycle guidance (research-grounded)
+# ---------------------------------------------------------------------------
+
+
+class TestDepthGuidance:
+    """Ref: [CoA §3.2], [DeepMind-Delegation §4.1], [Aletheia §3]
+    Lifecycle-aware prompting for root/sub/leaf agents."""
+
+    def test_root_agent_is_orchestrator(self):
+        ctx = _make_agent_context(max_depth=5)  # depth=0 root
+        loop = ToolUseLoop(
+            agent_context=ctx,
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        guidance = loop._build_depth_guidance()
+        assert "Root orchestrator" in guidance
+        # Direct execution should come BEFORE spawning guidance
+        direct_pos = guidance.index("Direct execution")
+        spawn_pos = guidance.index("When to spawn")
+        assert direct_pos < spawn_pos
+        assert "rare" in guidance.lower()
+        # System awareness and give-up policy
+        assert "System awareness" in guidance
+        assert "guardrails" in guidance
+        assert "When to stop" in guidance
+        assert "fails twice" in guidance
+
+    def test_leaf_agent_is_executor(self):
+        ctx = _make_agent_context(max_depth=1)
+        child_ctx = ctx.child()  # depth=1, max_depth=1 = leaf
+        loop = ToolUseLoop(
+            agent_context=child_ctx,
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        guidance = loop._build_depth_guidance()
+        assert "Leaf executor" in guidance
+        assert "Do NOT attempt to delegate" in guidance
+        # Anti-retry and restriction handling
+        assert "restriction" in guidance
+        assert "fails twice" in guidance
+
+    def test_sub_orchestrator(self):
+        ctx = _make_agent_context(max_depth=5)
+        child_ctx = ctx.child()  # depth=1, can still spawn
+        loop = ToolUseLoop(
+            agent_context=child_ctx,
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        guidance = loop._build_depth_guidance()
+        assert "Sub-orchestrator" in guidance
+        assert "restriction" in guidance or "boundary" in guidance
+        assert "report" in guidance.lower()
+
+    def test_delegation_boundary_warning(self):
+        """Ref: [DeepMind-Delegation §4.7] Liability firebreaks at chain boundaries."""
+        ctx = _make_agent_context(max_depth=3)
+        c1 = ctx.child()  # depth=1
+        c2 = c1.child()   # depth=2, remaining=1
+        loop = ToolUseLoop(
+            agent_context=c2,
+            tool_registry=_make_registry(_make_spec()),
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        guidance = loop._build_depth_guidance()
+        assert "DELEGATION BOUNDARY" in guidance or "deep in the agent tree" in guidance

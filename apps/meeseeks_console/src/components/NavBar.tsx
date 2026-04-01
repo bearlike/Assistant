@@ -137,11 +137,11 @@ export function NavBar({
 
   const VersionBadge = () =>
   <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold leading-none bg-[hsl(var(--primary))]/15 text-[hsl(var(--primary))] border border-[hsl(var(--primary))]/20">
-      v0.0.7
+      v0.0.8
     </span>;
 
   return (
-    <header className="sticky top-0 z-50 w-full h-12 border-b border-[hsl(var(--border))] bg-[hsl(var(--background))]/95 backdrop-blur flex items-center justify-between px-4">
+    <header className="sticky top-0 z-50 w-full h-12 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]/95 backdrop-blur flex items-center justify-between px-4">
       {mode === 'home' ?
       <>
           <div className="flex items-center gap-2">

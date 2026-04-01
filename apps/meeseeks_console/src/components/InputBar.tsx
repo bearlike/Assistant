@@ -11,10 +11,17 @@ import {
 'lucide-react';
 import { QueryMode, SessionContext } from '../types';
 import { useMcpTools } from '../hooks/useMcpTools';
-import { McpSelector, McpOption } from './McpSelector';
+import { useSkills } from '../hooks/useSkills';
+import { useProjects } from '../hooks/useProjects';
+import { useContainerCompact } from '../hooks/useContainerCompact';
+import { McpSelector, McpOption, McpStatus } from './McpSelector';
+import { SkillSelector } from './SkillSelector';
+import { ProjectSelector } from './ProjectSelector';
+import { Popover } from './Popover';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 type McpToolOption = McpOption & {
   server?: string;
+  disabled_reason?: string;
 };
 interface InputBarProps {
   mode: 'home' | 'detail';
@@ -28,6 +35,7 @@ interface InputBarProps {
   isRunning?: boolean;
   isSubmitting?: boolean;
   error?: string | null;
+  onFocusChange?: (focused: boolean, isEmpty: boolean) => void;
 }
 export function InputBar({
   mode,
@@ -35,23 +43,46 @@ export function InputBar({
   onStop,
   isRunning = false,
   isSubmitting = false,
-  error
+  error,
+  onFocusChange
 }: InputBarProps) {
   const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
+  const [isSkillOpen, setIsSkillOpen] = useState(false);
+  const [isProjectOpen, setIsProjectOpen] = useState(false);
+  const [activeSkill, setActiveSkill] = useState<string | null>(null);
+  const [activeProject, setActiveProject] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>('act');
+  const popupDirection = mode === 'home' ? 'down' : 'up';
   const {
     tools: mcpTools,
     loading: mcpLoading,
-    error: mcpError
-  } = useMcpTools();
+    error: mcpError,
+    refresh: refreshMcp
+  } = useMcpTools(activeProject);
+  const {
+    skills: availableSkills,
+    loading: skillsLoading,
+    error: skillsError,
+    refresh: refreshSkills
+  } = useSkills(activeProject);
+  const {
+    projects: availableProjects,
+    loading: projectsLoading,
+    error: projectsError,
+    refresh: refreshProjects
+  } = useProjects();
   const [mcps, setMcps] = useState<McpToolOption[]>([]);
   const [inputValue, setInputValue] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
   const mcpRef = useRef<HTMLDivElement>(null);
+  const skillRef = useRef<HTMLDivElement>(null);
+  const projectRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const compact = useContainerCompact(containerRef);
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -59,6 +90,12 @@ export function InputBar({
       }
       if (mcpRef.current && !mcpRef.current.contains(event.target as Node)) {
         setIsMcpOpen(false);
+      }
+      if (skillRef.current && !skillRef.current.contains(event.target as Node)) {
+        setIsSkillOpen(false);
+      }
+      if (projectRef.current && !projectRef.current.contains(event.target as Node)) {
+        setIsProjectOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -70,13 +107,22 @@ export function InputBar({
         return prev.length ? prev : [];
       }
       const prevMap = new Map(prev.map((mcp) => [mcp.id, mcp.active]));
-      return mcpTools.map((tool) => ({
-        id: tool.tool_id,
-        name: tool.name,
-        active: prevMap.get(tool.tool_id) ?? tool.enabled,
-        enabled: tool.enabled,
-        server: tool.server
-      }));
+      return mcpTools.map((tool) => {
+        const reason = tool.disabled_reason ?? '';
+        const isFailed = reason.toLowerCase().includes('fail') || reason.toLowerCase().includes('error');
+        const status: McpStatus = tool.enabled ? 'active' : isFailed ? 'error' : 'disabled';
+        return {
+          id: tool.tool_id,
+          name: tool.name,
+          active: prevMap.get(tool.tool_id) ?? tool.enabled,
+          enabled: tool.enabled,
+          server: tool.server,
+          disabled_reason: tool.disabled_reason,
+          scope: tool.scope,
+          status,
+          count: undefined,
+        };
+      });
     });
   }, [mcpTools]);
   useEffect(() => {
@@ -97,12 +143,18 @@ export function InputBar({
       const selectable = tools.filter((tool) => tool.enabled);
       const active =
       selectable.length > 0 ? selectable.every((tool) => tool.active) : false;
+      // Worst status wins: error > disabled > active
+      const hasError = tools.some((t) => t.status === 'error');
+      const hasDisabled = tools.some((t) => t.status === 'disabled');
+      const status: McpStatus = hasError ? 'error' : hasDisabled ? 'disabled' : 'active';
       return {
         id: groupId,
         name: groupId,
         count: tools.length,
         active,
-        enabled: selectable.length > 0
+        enabled: selectable.length > 0,
+        status,
+        scope: tools[0]?.scope,
       } satisfies McpOption;
     });
   }, [mcps]);
@@ -147,7 +199,9 @@ export function InputBar({
       return;
     }
     const context: SessionContext = {
-      mcp_tools: mcps.filter((m) => m.active).map((m) => m.id)
+      mcp_tools: mcps.filter((m) => m.active).map((m) => m.id),
+      ...(activeSkill ? { skill: activeSkill } : {}),
+      ...(activeProject ? { project: activeProject } : {})
     };
     void onSubmit(inputValue.trim(), context, queryMode, attachedFiles);
     setInputValue('');
@@ -163,7 +217,7 @@ export function InputBar({
     }
   };
   const PlusMenu = () =>
-  <div className="absolute bottom-full left-0 mb-2 w-48 bg-[hsl(var(--popover))] border border-[hsl(var(--border))] rounded-lg shadow-2xl shadow-black/40 ring-1 ring-white/[0.03] overflow-hidden z-50">
+  <Popover direction={popupDirection} width="w-48" maxHeight="">
       <div className="px-3 pt-2 pb-1">
         <span className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
           Built-in
@@ -192,7 +246,7 @@ export function InputBar({
         <Paperclip className="w-3.5 h-3.5" />
         Upload attachment
       </button>
-    </div>;
+    </Popover>;
 
   if (mode === 'home') {
     return (
@@ -233,6 +287,8 @@ export function InputBar({
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onFocus={() => onFocusChange?.(true, !inputValue.trim())}
+                onBlur={() => onFocusChange?.(false, !inputValue.trim())}
                 placeholder="Describe a task..."
                 aria-label="Task description"
                 disabled={isSubmitting}
@@ -267,11 +323,54 @@ export function InputBar({
                   isOpen={isMcpOpen}
                   loading={mcpLoading}
                   error={mcpError}
+                  direction={popupDirection}
                   onToggleOpen={() => {
                     setIsMcpOpen(!isMcpOpen);
                     setIsPlusMenuOpen(false);
+                    setIsSkillOpen(false);
                   }}
-                  onToggle={toggleMcp} />
+                  onToggle={toggleMcp}
+                  onRefresh={refreshMcp} />
+
+                <SkillSelector
+                  ref={skillRef}
+                  skills={availableSkills}
+                  activeSkill={activeSkill}
+                  isOpen={isSkillOpen}
+                  loading={skillsLoading}
+                  error={skillsError}
+                  direction={popupDirection}
+                  onToggleOpen={() => {
+                    setIsSkillOpen(!isSkillOpen);
+                    setIsMcpOpen(false);
+                    setIsPlusMenuOpen(false);
+                    setIsProjectOpen(false);
+                  }}
+                  onSelect={(name) => {
+                    setActiveSkill(name);
+                    setIsSkillOpen(false);
+                  }}
+                  onRefresh={refreshSkills} />
+
+                <ProjectSelector
+                  ref={projectRef}
+                  projects={availableProjects}
+                  activeProject={activeProject}
+                  isOpen={isProjectOpen}
+                  loading={projectsLoading}
+                  error={projectsError}
+                  direction={popupDirection}
+                  onToggleOpen={() => {
+                    setIsProjectOpen(!isProjectOpen);
+                    setIsMcpOpen(false);
+                    setIsPlusMenuOpen(false);
+                    setIsSkillOpen(false);
+                  }}
+                  onSelect={(name) => {
+                    setActiveProject(name);
+                    setIsProjectOpen(false);
+                  }}
+                  onRefresh={refreshProjects} />
 
               </div>
 
@@ -301,9 +400,13 @@ export function InputBar({
       </div>);
 
   }
+  const detailPlaceholder = isRunning
+    ? (compact ? "Send a message..." : "Send a message to the running session...")
+    : (compact ? "Ask anything..." : "Request changes or ask a question");
+
   return (
     <div
-      className="border-t border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4"
+      className="border-t border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] p-4"
       data-testid="inputbar-detail">
 
       <input
@@ -314,7 +417,7 @@ export function InputBar({
         className="hidden"
         aria-hidden="true" />
 
-      <div className="max-w-4xl mx-auto relative">
+      <div className="max-w-4xl mx-auto relative" ref={containerRef}>
         {error &&
         <div className="mb-3">
             <Alert variant="destructive">
@@ -337,69 +440,114 @@ export function InputBar({
                 <button
                 onClick={() => setAttachedFiles([])}
                 className="hover:opacity-70">
-
                   ×
                 </button>
               </div>
             </div>
           }
 
-          <div className="flex items-end gap-1">
-            <div className="relative" ref={menuRef}>
-              <button
-                onClick={() => {
-                  setIsPlusMenuOpen(!isPlusMenuOpen);
-                  setIsMcpOpen(false);
-                }}
-                className={`p-2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
-
-                <Plus className="w-4 h-4" />
-              </button>
-              {isPlusMenuOpen && <PlusMenu />}
-            </div>
-            {queryMode === 'plan' &&
-            <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
-                Plan
-              </span>
-            }
-
+          <div className="px-3 py-2">
             <textarea
               ref={textareaRef}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isRunning ? "Send a message to the running session..." : "Request changes or ask a question"}
+              placeholder={detailPlaceholder}
               aria-label="Session query"
               disabled={isSubmitting}
               rows={1}
-              className="flex-1 bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-sm px-2 py-2 resize-none min-h-[36px] max-h-[200px]" />
+              className="w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-sm resize-none min-h-[24px] max-h-[200px]" />
+          </div>
 
+          <div className="flex items-center justify-between px-1 pb-1">
+            <div className="flex items-center gap-1">
+              <div className="relative" ref={menuRef}>
+                <button
+                  onClick={() => {
+                    setIsPlusMenuOpen(!isPlusMenuOpen);
+                    setIsMcpOpen(false);
+                  }}
+                  className={`p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
+                  <Plus className="w-4 h-4" />
+                </button>
+                {isPlusMenuOpen && <PlusMenu />}
+              </div>
+              {queryMode === 'plan' &&
+              <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
+                  Plan
+                </span>
+              }
 
-            <div className="flex items-center gap-1 pb-0.5">
               <McpSelector
                 ref={mcpRef}
                 options={groupedOptions}
                 isOpen={isMcpOpen}
                 loading={mcpLoading}
                 error={mcpError}
+                direction={popupDirection}
+                compact={compact}
                 onToggleOpen={() => {
                   setIsMcpOpen(!isMcpOpen);
                   setIsPlusMenuOpen(false);
+                  setIsSkillOpen(false);
                 }}
-                onToggle={toggleMcp} />
+                onToggle={toggleMcp}
+                onRefresh={refreshMcp} />
 
+              <SkillSelector
+                ref={skillRef}
+                skills={availableSkills}
+                activeSkill={activeSkill}
+                isOpen={isSkillOpen}
+                loading={skillsLoading}
+                error={skillsError}
+                direction={popupDirection}
+                compact={compact}
+                onToggleOpen={() => {
+                  setIsSkillOpen(!isSkillOpen);
+                  setIsMcpOpen(false);
+                  setIsPlusMenuOpen(false);
+                  setIsProjectOpen(false);
+                }}
+                onSelect={(name) => {
+                  setActiveSkill(name);
+                  setIsSkillOpen(false);
+                }}
+                onRefresh={refreshSkills} />
+
+              <ProjectSelector
+                ref={projectRef}
+                projects={availableProjects}
+                activeProject={activeProject}
+                isOpen={isProjectOpen}
+                loading={projectsLoading}
+                error={projectsError}
+                direction={popupDirection}
+                compact={compact}
+                onToggleOpen={() => {
+                  setIsProjectOpen(!isProjectOpen);
+                  setIsMcpOpen(false);
+                  setIsPlusMenuOpen(false);
+                  setIsSkillOpen(false);
+                }}
+                onSelect={(name) => {
+                  setActiveProject(name);
+                  setIsProjectOpen(false);
+                }}
+                onRefresh={refreshProjects} />
+            </div>
+
+            <div className="flex items-center gap-1">
               <button
                 aria-label="Voice input"
-                className="p-2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-full transition-colors">
-
+                className="p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-full transition-colors">
                 <Mic className="w-4 h-4" />
               </button>
               {isRunning &&
               <button
                 onClick={onStop}
                 aria-label="Stop run"
-                className="p-2 bg-red-600/30 text-red-300 rounded-full hover:bg-red-600/50 transition-colors">
-
+                className="p-1.5 bg-red-600/30 text-red-300 rounded-full hover:bg-red-600/50 transition-colors">
                   <Square className="w-4 h-4" />
                 </button>
               }
@@ -407,11 +555,9 @@ export function InputBar({
                 onClick={handleSubmit}
                 aria-label="Send query"
                 disabled={isSubmitting || !inputValue.trim()}
-                className={`p-2 rounded-full transition-colors ${isSubmitting || !inputValue.trim() ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90'}`}>
-
+                className={`p-1.5 rounded-full transition-colors ${isSubmitting || !inputValue.trim() ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90'}`}>
                   {isSubmitting ?
                 <Loader2 className="w-4 h-4 animate-spin" /> :
-
                 <ArrowUp className="w-4 h-4" />
                 }
               </button>

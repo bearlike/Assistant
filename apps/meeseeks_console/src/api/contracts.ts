@@ -18,6 +18,35 @@ export type ToolSummary = {
   description?: string;
   disabled_reason?: string;
   server?: string;
+  scope?: string;
+};
+
+export type SkillSummary = {
+  name: string;
+  description: string;
+  allowed_tools: string[] | null;
+  user_invocable: boolean;
+  disable_model_invocation: boolean;
+  context: string | null;
+  source: string;
+};
+
+export type ProjectSummary = {
+  name: string;
+  path: string;
+  description?: string;
+};
+
+export type AgentSummary = {
+  agent_id: string;
+  parent_id: string | null;
+  depth: number;
+  model: string;
+  action: "start" | "stop";
+  status: string;
+  steps_completed: number;
+  detail: string;
+  ts: string;
 };
 
 export type ApiClient = {
@@ -45,10 +74,22 @@ export type ApiClient = {
   resolveShare: (token: string) => Promise<SessionExport>;
   sendMessage: (sessionId: string, text: string) => Promise<void>;
   interruptStep: (sessionId: string) => Promise<void>;
-  listTools: () => Promise<ToolSummary[]>;
+  listTools: (project?: string) => Promise<ToolSummary[]>;
+  listSkills: (project?: string) => Promise<SkillSummary[]>;
+  streamEvents: (
+    sessionId: string,
+    onEvent: (event: EventRecord) => void,
+    onEnd: () => void
+  ) => () => void;
+  listProjects: () => Promise<ProjectSummary[]>;
   listNotifications: () => Promise<NotificationItem[]>;
   dismissNotification: (ids: string[]) => Promise<void>;
   clearNotifications: (clearAll?: boolean) => Promise<void>;
+  listAgents: (sessionId: string) => Promise<{
+    agents: AgentSummary[];
+    running: boolean;
+    total_steps: number;
+  }>;
 };
 
 export type ApiConfig = {

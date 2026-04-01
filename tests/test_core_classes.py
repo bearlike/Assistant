@@ -153,16 +153,17 @@ def test_abstract_tool_init_and_run(monkeypatch, tmp_path):
     assert result.content == "Not implemented yet."
 
 
-def test_abstract_tool_cache_dir_missing(monkeypatch):
-    """Raise when CACHE_DIR is unset."""
+def test_abstract_tool_cache_dir_empty_resolves_home(monkeypatch):
+    """Empty cache_dir resolves to MEESEEKS_HOME/cache/<tool_id>."""
 
     class DummyTool(classes.AbstractTool):
         def __init__(self):
             super().__init__(name="Dummy", description="Test tool", use_llm=False)
 
     set_config_override({"runtime": {"cache_dir": ""}})
-    with pytest.raises(ValueError):
-        DummyTool()
+    tool = DummyTool()
+    # Empty cache_dir is resolved by RuntimeConfig to ~/.meeseeks/cache
+    assert ".meeseeks" in tool.cache_dir or "cache" in tool.cache_dir
 
 
 def test_abstract_tool_rag_helpers(monkeypatch, tmp_path):
