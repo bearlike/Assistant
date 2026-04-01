@@ -381,6 +381,31 @@
       "title": "LangfuseConfig",
       "type": "object"
     },
+    "MongoDBConfig": {
+      "description": "MongoDB connection settings.",
+      "properties": {
+        "uri": {
+          "default": "mongodb://localhost:27017",
+          "description": "MongoDB connection URI (includes host, port, credentials).",
+          "examples": [
+            "mongodb://user:pass@localhost:27017/meeseeks?authSource=admin"
+          ],
+          "title": "Uri",
+          "type": "string"
+        },
+        "database": {
+          "default": "meeseeks",
+          "description": "MongoDB database name for session storage.",
+          "examples": [
+            "meeseeks"
+          ],
+          "title": "Database",
+          "type": "string"
+        }
+      },
+      "title": "MongoDBConfig",
+      "type": "object"
+    },
     "PermissionsConfig": {
       "description": "Tool execution permission policy.",
       "properties": {
@@ -523,6 +548,27 @@
       "title": "RuntimeConfig",
       "type": "object"
     },
+    "StorageConfig": {
+      "description": "Session storage backend configuration.",
+      "properties": {
+        "driver": {
+          "default": "json",
+          "description": "Storage driver: 'json' (filesystem) or 'mongodb'.",
+          "examples": [
+            "json",
+            "mongodb"
+          ],
+          "title": "Driver",
+          "type": "string"
+        },
+        "mongodb": {
+          "$ref": "#/$defs/MongoDBConfig",
+          "description": "MongoDB connection settings (used when driver is 'mongodb')."
+        }
+      },
+      "title": "StorageConfig",
+      "type": "object"
+    },
     "TokenBudgetConfig": {
       "description": "Token budget and auto-compaction thresholds.",
       "properties": {
@@ -561,6 +607,10 @@
   "properties": {
     "runtime": {
       "$ref": "#/$defs/RuntimeConfig"
+    },
+    "storage": {
+      "$ref": "#/$defs/StorageConfig",
+      "description": "Session storage backend (json or mongodb)."
     },
     "llm": {
       "$ref": "#/$defs/LLMConfig"
