@@ -663,12 +663,80 @@
 - Filename line immediately before the opening fence.
 - SEARCH must match exactly (including whitespace/newlines).
 - Use a line with <code>...</code> in both SEARCH and REPLACE to skip unchanged sections.</p>
-<h2 id="docker-optional">Docker (optional)</h2>
+<h2 id="docker-compose-deployment">Docker Compose deployment</h2>
+<p>The API and web console ship as container images published to GHCR. A <code>docker-compose.yml</code> in the repo root orchestrates both services with host networking.</p>
+<h3 id="quick-start">Quick start</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. Create your environment file</span>
+cp<span class="w"> </span>docker.example.env<span class="w"> </span>docker.env
+</code></pre></div>
+<p>Edit <code>docker.env</code> with your values:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MASTER_API_TOKEN</code></td>
+<td>API authentication token</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>VITE_API_KEY</code></td>
+<td>Frontend API key (should match <code>MASTER_API_TOKEN</code>)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>HOST_UID</code> / <code>HOST_GID</code></td>
+<td>Host user/group IDs (run <code>id</code> to find yours)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>API_PORT</code></td>
+<td>API server port (default: <code>5125</code>)</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>CONSOLE_PORT</code></td>
+<td>Console port (default: <code>3001</code>)</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>CORS_ORIGIN</code></td>
+<td>Allowed CORS origin (default: <code>*</code>)</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>VITE_API_BASE_URL</code></td>
+<td>Override frontend API URL (leave empty when using nginx proxy)</td>
+<td>No</td>
+</tr>
+</tbody>
+</table></div>
+<div class="highlight"><pre><span></span><code><span class="c1"># 2. Pull pre-built images from GHCR and start (recommended)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>pull<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<p>To build from source instead (e.g., for local development):
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>--build<span class="w"> </span>-d
+</code></pre></div></p>
+<h3 id="how-it-works">How it works</h3>
 <ul>
-<li>Build images using <code>docker/Dockerfile.api</code> and <code>docker/Dockerfile.console</code>.</li>
-<li>Mount <code>configs/app.json</code> (and <code>configs/mcp.json</code> if you use MCP).</li>
-<li>Persist <code>data/sessions</code> if you want transcripts across restarts.</li>
+<li><strong>API</strong> (<code>ghcr.io/bearlike/meeseeks-api</code>) — Gunicorn serving the Flask REST API on port <code>5125</code>. Single worker with 8 threads.</li>
+<li><strong>Console</strong> (<code>ghcr.io/bearlike/meeseeks-console</code>) — Nginx serving the React SPA on port <code>3001</code>. Proxies <code>/api/</code> requests to the API at <code>127.0.0.1:5125</code>.</li>
+<li>Both services use <strong>host networking</strong> so they share <code>127.0.0.1</code>.</li>
+<li>The API image is built on top of <code>ghcr.io/bearlike/meeseeks-base</code> which includes Python, Node.js, and the core/tools packages.</li>
 </ul>
+<h3 id="runtime-configuration">Runtime configuration</h3>
+<ul>
+<li>Mount <code>configs/app.json</code> and <code>configs/mcp.json</code> (read-only) for runtime + MCP settings.</li>
+<li>The <code>api-data</code> volume persists session transcripts at <code>/app/data</code>.</li>
+<li>The console generates <code>runtime-config.js</code> at startup from environment variables — no rebuild needed to change API URLs or keys.</li>
+</ul>
+<h3 id="production-reverse-proxy">Production reverse proxy</h3>
+<p>For TLS termination, a sample nginx config is provided at <code>docker/nginx-reverse-proxy.conf</code>. It proxies both the console and API behind a single domain with SSE-aware buffering settings for the streaming endpoints.</p>
 <h2 id="docs-optional">Docs (optional)</h2>
 <p>If you want to build the docs locally:
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--all-extras<span class="w"> </span>--group<span class="w"> </span>docs
@@ -926,11 +994,37 @@ uv<span class="w"> </span>run<span class="w"> </span>mkdocs<span class="w"> </sp
         
 
         
-        <a href="#docker-optional"
+        <a href="#docker-compose-deployment"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
-            Docker (optional)
+            Docker Compose deployment
         </a>
+        
+        
+        <a href="#quick-start"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            Quick start
+        </a>
+        
+        <a href="#how-it-works"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            How it works
+        </a>
+        
+        <a href="#runtime-configuration"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            Runtime configuration
+        </a>
+        
+        <a href="#production-reverse-proxy"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            Production reverse proxy
+        </a>
+        
         
 
         

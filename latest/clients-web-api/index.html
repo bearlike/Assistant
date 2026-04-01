@@ -629,6 +629,16 @@ npm<span class="w"> </span>run<span class="w"> </span>dev
 - Set <code>VITE_API_KEY</code> to match <code>api.master_token</code> in <code>configs/app.json</code>.
 - Set <code>VITE_API_MODE</code> to <code>live</code> for direct API access or <code>auto</code> (default) for fallback to mock data.
 - During development, the Vite dev server proxies <code>/api/</code> requests to the API backend.</p>
+<h2 id="docker-compose-deployment">Docker Compose deployment</h2>
+<p>Both the API and console are available as pre-built container images:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># From the repo root</span>
+cp<span class="w"> </span>docker.example.env<span class="w"> </span>docker.env
+<span class="c1"># Edit docker.env — set MASTER_API_TOKEN, VITE_API_KEY, HOST_UID/GID</span>
+
+docker<span class="w"> </span>compose<span class="w"> </span>pull<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<p>The console's nginx proxies <code>/api/</code> to the API at <code>127.0.0.1:5125</code> (host networking), so no separate CORS or URL config is needed in the default setup. Runtime environment variables (<code>VITE_API_BASE_URL</code>, <code>VITE_API_KEY</code>, etc.) are injected at container startup via <code>runtime-config.js</code> — no image rebuild required.</p>
+<p>See <a href="../getting-started/#docker-compose-deployment">Installation</a> for the full environment variable reference and production reverse proxy setup.</p>
   </div>
 </article>
                                 <div class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
@@ -809,6 +819,14 @@ npm<span class="w"> </span>run<span class="w"> </span>dev
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
             Run the Console
+        </a>
+        
+
+        
+        <a href="#docker-compose-deployment"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2">
+            Docker Compose deployment
         </a>
         
 
