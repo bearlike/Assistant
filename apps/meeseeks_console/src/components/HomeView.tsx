@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Search, X, Archive, RotateCcw, Loader2 } from 'lucide-react';
 import { SessionItem } from './SessionItem';
 import { InputBar } from './InputBar';
+import { TypewriterGreeting } from './TypewriterGreeting';
 import { QueryMode, SessionContext, SessionSummary } from '../types';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { formatSessionTime } from '../utils/time';
@@ -43,6 +44,26 @@ export function HomeView({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'sessions' | 'archive'>('sessions');
+  const [animPaused, setAnimPaused] = useState(false);
+  const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleInputFocusChange = useCallback((focused: boolean, isEmpty: boolean) => {
+    if (resumeTimer.current) {
+      clearTimeout(resumeTimer.current);
+      resumeTimer.current = null;
+    }
+    if (focused) {
+      setAnimPaused(true);
+    } else if (isEmpty) {
+      resumeTimer.current = setTimeout(() => setAnimPaused(false), 1000);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (resumeTimer.current) clearTimeout(resumeTimer.current);
+    };
+  }, []);
   const listError = activeTab === 'archive' ? archivedError : error;
   const listLoading = activeTab === 'archive' ? archivedLoading : loading;
   const scopedSessions = activeTab === 'archive' ? archivedSessions : sessions;
@@ -67,9 +88,7 @@ export function HomeView({
     <div className="flex flex-col h-full w-full relative overflow-hidden">
       {/* Fixed Top Section */}
       <div className="flex-none flex flex-col items-center pt-16 pb-6 px-4 w-full z-20 bg-[hsl(var(--background))]">
-        <h1 className="text-3xl font-medium text-[hsl(var(--foreground))] mb-8">
-          What should we do next?
-        </h1>
+        <TypewriterGreeting paused={animPaused} />
 
         <div className="w-full max-w-3xl">
           {(listError || actionError) &&
@@ -83,7 +102,8 @@ export function HomeView({
           <InputBar
             mode="home"
             onSubmit={onCreateAndRun}
-            isSubmitting={isCreating} />
+            isSubmitting={isCreating}
+            onFocusChange={handleInputFocusChange} />
           {isCreating &&
           <div className="mt-2 flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
