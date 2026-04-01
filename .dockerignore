@@ -30,6 +30,7 @@ docker.env
 # ── Documentation & meta ─────────────────────────────────────
 docs/
 *.md
+!README.md
 LICENSE
 
 # ── Test / CI artifacts ───────────────────────────────────────
