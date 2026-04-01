@@ -8,18 +8,20 @@ Set these keys in `configs/app.json`:
 ```json
 {
   "llm": {
-    "api_base": "https://your-llm-endpoint/v1",
-    "api_key": "sk-your-key",
-    "default_model": "gpt-5.2"
+    "api_key": "sk-ant-xxxxxxxx",
+    "default_model": "anthropic/claude-sonnet-4-6"
   }
 }
 ```
+
+That's it. LiteLLM auto-routes `anthropic/claude-sonnet-4-6` to the Anthropic API using the key you provide. No `api_base` URL is needed for direct provider access.
 
 See the optional configuration table below.
 
 ## Optional LLM configuration
 | Key | Purpose | Notes |
 | --- | --- | --- |
+| `llm.api_base` | Base URL override. | Only needed when using a proxy (LiteLLM, Bifrost). Leave empty for direct provider access. |
 | `llm.action_plan_model` | Model for plan generation. | Falls back to `llm.default_model` if unset. |
 | `llm.tool_model` | Model for tool execution. | Falls back to `llm.action_plan_model`, then `llm.default_model`. |
 | `llm.reasoning_effort` | Default reasoning effort level. | Values: `low`, `medium`, `high`, `none`. |
@@ -32,7 +34,7 @@ See the optional configuration table below.
 cp configs/app.example.json configs/app.json
 ```
 
-2. Edit the `llm` block with the API base, API key, and model names.
+2. Set `llm.api_key` and `llm.default_model` (and `llm.api_base` only if using a proxy).
 3. Start a client (CLI, API, or chat). See the client pages for run commands.
 
 ## MCP setup
@@ -47,5 +49,5 @@ For more details, see [Installation](getting-started.md).
 ## LiteLLM provider support
 The LLM layer is backed by LiteLLM via `langchain-litellm`.
 
-- Model names can include provider prefixes (for example, `openai/gpt-4-turbo`, `anthropic/claude-3-sonnet`, or `mistral/mistral-small`).
-- If `llm.api_base` is set and a model has no provider prefix, the system defaults to `openai/<model>` to match OpenAI-style endpoints.
+- Use `provider/model` syntax for model IDs (e.g. `anthropic/claude-sonnet-4-6`, `openai/gpt-4o`, `mistral/mistral-small`). LiteLLM routes to the correct API automatically.
+- `llm.api_base` is only needed when routing through a proxy. When set with no provider prefix on the model name, the system defaults to `openai/<model>` to match OpenAI-compatible endpoints.

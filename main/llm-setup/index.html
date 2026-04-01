@@ -587,12 +587,12 @@
 <p>Set these keys in <code>configs/app.json</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;llm&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;api_base&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://your-llm-endpoint/v1&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;api_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sk-your-key&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;default_model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gpt-5.2&quot;</span>
+<span class="w">    </span><span class="nt">&quot;api_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sk-ant-xxxxxxxx&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;default_model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;anthropic/claude-sonnet-4-6&quot;</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
+<p>That's it. LiteLLM auto-routes <code>anthropic/claude-sonnet-4-6</code> to the Anthropic API using the key you provide. No <code>api_base</code> URL is needed for direct provider access.</p>
 <p>See the optional configuration table below.</p>
 <h2 id="optional-llm-configuration">Optional LLM configuration</h2>
 <div class="table-wrapper"><table>
@@ -604,6 +604,11 @@
 </tr>
 </thead>
 <tbody>
+<tr>
+<td><code>llm.api_base</code></td>
+<td>Base URL override.</td>
+<td>Only needed when using a proxy (LiteLLM, Bifrost). Leave empty for direct provider access.</td>
+</tr>
 <tr>
 <td><code>llm.action_plan_model</code></td>
 <td>Model for plan generation.</td>
@@ -633,7 +638,7 @@
 <div class="highlight"><pre><span></span><code>cp<span class="w"> </span>configs/app.example.json<span class="w"> </span>configs/app.json
 </code></pre></div>
 <ol>
-<li>Edit the <code>llm</code> block with the API base, API key, and model names.</li>
+<li>Set <code>llm.api_key</code> and <code>llm.default_model</code> (and <code>llm.api_base</code> only if using a proxy).</li>
 <li>Start a client (CLI, API, or chat). See the client pages for run commands.</li>
 </ol>
 <h2 id="mcp-setup">MCP setup</h2>
@@ -647,8 +652,8 @@
 <h2 id="litellm-provider-support">LiteLLM provider support</h2>
 <p>The LLM layer is backed by LiteLLM via <code>langchain-litellm</code>.</p>
 <ul>
-<li>Model names can include provider prefixes (for example, <code>openai/gpt-4-turbo</code>, <code>anthropic/claude-3-sonnet</code>, or <code>mistral/mistral-small</code>).</li>
-<li>If <code>llm.api_base</code> is set and a model has no provider prefix, the system defaults to <code>openai/&lt;model&gt;</code> to match OpenAI-style endpoints.</li>
+<li>Use <code>provider/model</code> syntax for model IDs (e.g. <code>anthropic/claude-sonnet-4-6</code>, <code>openai/gpt-4o</code>, <code>mistral/mistral-small</code>). LiteLLM routes to the correct API automatically.</li>
+<li><code>llm.api_base</code> is only needed when routing through a proxy. When set with no provider prefix on the model name, the system defaults to <code>openai/&lt;model&gt;</code> to match OpenAI-compatible endpoints.</li>
 </ul>
   </div>
 </article>

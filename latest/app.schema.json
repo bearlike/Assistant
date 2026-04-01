@@ -276,16 +276,17 @@
       "properties": {
         "api_base": {
           "default": "",
-          "description": "Base URL of an OpenAI-compatible LLM API endpoint. Point directly at a provider (e.g. Anthropic, OpenAI) or at an API proxy such as LiteLLM or Bifrost.",
+          "description": "Optional base URL override. Leave empty for direct provider access (LiteLLM routes automatically from the model prefix). Set only when using a proxy (e.g. LiteLLM, Bifrost).",
           "examples": [
-            "https://api.anthropic.com/v1"
+            "",
+            "https://my-litellm-proxy.example.com/v1"
           ],
           "title": "Api Base",
           "type": "string"
         },
         "api_key": {
           "default": "",
-          "description": "API key for the LLM provider or proxy.",
+          "description": "API key for the LLM provider (e.g. Anthropic, OpenAI) or proxy master key.",
           "examples": [
             "sk-ant-xxxxxxxx"
           ],
@@ -294,7 +295,7 @@
         },
         "default_model": {
           "default": "gpt-5.2",
-          "description": "Model ID for conversations and synthesis (e.g. 'anthropic/claude-sonnet-4-6'). If using a proxy, prefix with the provider route the proxy expects (e.g. 'openai/claude-sonnet-4-6').",
+          "description": "Model ID using 'provider/model' syntax. LiteLLM auto-routes to the right API endpoint. When using a proxy, adjust the prefix to match its routing.",
           "examples": [
             "anthropic/claude-sonnet-4-6"
           ],
