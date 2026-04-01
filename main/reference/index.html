@@ -16731,13 +16731,7 @@ always takes precedence over allow.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/tool_registry.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">676</span>
-<span class="normal">677</span>
-<span class="normal">678</span>
-<span class="normal">679</span>
-<span class="normal">680</span>
-<span class="normal">681</span>
-<span class="normal">682</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">682</span>
 <span class="normal">683</span>
 <span class="normal">684</span>
 <span class="normal">685</span>
@@ -16757,7 +16751,13 @@ always takes precedence over allow.</p>
 <span class="normal">699</span>
 <span class="normal">700</span>
 <span class="normal">701</span>
-<span class="normal">702</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">filter_specs</span><span class="p">(</span>
+<span class="normal">702</span>
+<span class="normal">703</span>
+<span class="normal">704</span>
+<span class="normal">705</span>
+<span class="normal">706</span>
+<span class="normal">707</span>
+<span class="normal">708</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">filter_specs</span><span class="p">(</span>
     <span class="n">specs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ToolSpec</span><span class="p">],</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">allowed</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -16916,7 +16916,13 @@ always takes precedence over allow.</p>
 <span class="normal">670</span>
 <span class="normal">671</span>
 <span class="normal">672</span>
-<span class="normal">673</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_registry</span><span class="p">(</span>
+<span class="normal">673</span>
+<span class="normal">674</span>
+<span class="normal">675</span>
+<span class="normal">676</span>
+<span class="normal">677</span>
+<span class="normal">678</span>
+<span class="normal">679</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_registry</span><span class="p">(</span>
     <span class="n">manifest_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">cwd</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -16930,7 +16936,13 @@ always takes precedence over allow.</p>
             <span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span> <span class="k">as</span> <span class="n">_Path</span>
 
             <span class="n">has_cwd_mcp</span> <span class="o">=</span> <span class="p">(</span><span class="n">_Path</span><span class="p">(</span><span class="n">cwd</span><span class="p">)</span> <span class="o">/</span> <span class="s2">&quot;.mcp.json&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_file</span><span class="p">()</span>
-        <span class="k">if</span> <span class="p">(</span><span class="n">mcp_config_path</span> <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">mcp_config_path</span><span class="p">))</span> <span class="ow">or</span> <span class="n">has_cwd_mcp</span><span class="p">:</span>
+        <span class="c1"># Also check for subtree .mcp.json files</span>
+        <span class="n">has_subtree_mcp</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="n">cwd</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">has_cwd_mcp</span><span class="p">:</span>
+            <span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">_discover_subtree_mcp_json</span>
+
+            <span class="n">has_subtree_mcp</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">_discover_subtree_mcp_json</span><span class="p">(</span><span class="n">cwd</span><span class="p">))</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">mcp_config_path</span> <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">mcp_config_path</span><span class="p">))</span> <span class="ow">or</span> <span class="n">has_cwd_mcp</span> <span class="ow">or</span> <span class="n">has_subtree_mcp</span><span class="p">:</span>
             <span class="n">manifest_path</span> <span class="o">=</span> <span class="n">_ensure_auto_manifest</span><span class="p">(</span>
                 <span class="n">mcp_config_path</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">cwd</span><span class="o">=</span><span class="n">cwd</span>
             <span class="p">)</span>
