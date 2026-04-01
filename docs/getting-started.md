@@ -118,11 +118,12 @@ Edit `docker.env` with your values:
 | `VITE_API_BASE_URL` | Override frontend API URL (leave empty when using nginx proxy) | No |
 
 ```bash
-# 2. Pull pre-built images and start
-docker compose pull
-docker compose up -d
+# 2. Pull pre-built images from GHCR and start (recommended)
+docker compose pull && docker compose up -d
+```
 
-# Or build locally from source
+To build from source instead (e.g., for local development):
+```bash
 docker compose up --build -d
 ```
 
