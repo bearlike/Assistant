@@ -58,7 +58,7 @@ def test_aider_read_file_blocks_escape(tmp_path):
     )
     result = tool.get_state(step)
     assert isinstance(result.content, str)
-    assert "outside the project root" in result.content
+    assert "resolves outside all allowed project roots" in result.content
 
 
 def test_aider_read_file_truncates(tmp_path):
@@ -95,7 +95,7 @@ def test_aider_read_file_invalid_argument_type():
 def test_aider_read_file_rejects_non_string_payload():
     """Reject invalid tool input types."""
     tool = AiderReadFileTool()
-    step = ActionStep.construct(
+    step = ActionStep.model_construct(
         tool_id="aider_read_file_tool",
         operation="get",
         tool_input=123,
@@ -142,7 +142,7 @@ def test_aider_list_dir_defaults_to_root(tmp_path):
 def test_aider_list_dir_rejects_invalid_payload_type():
     """Reject invalid tool input types."""
     tool = AiderListDirTool()
-    step = ActionStep.construct(
+    step = ActionStep.model_construct(
         tool_id="aider_list_dir_tool",
         operation="get",
         tool_input=123,

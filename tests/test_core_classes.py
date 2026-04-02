@@ -50,7 +50,7 @@ def test_action_step_invalid_entries():
 def test_action_step_validation_logs_for_invalid_entries():
     """Trigger validation warnings for invalid action data."""
     set_available_tools(["home_assistant_tool"])
-    step = ActionStep.construct(
+    step = ActionStep.model_construct(
         tool_id="bad_tool",
         operation="bad",
         tool_input=None,

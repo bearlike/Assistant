@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 from typing import Any, Protocol, cast
 
@@ -81,17 +82,23 @@ def model_supports_reasoning_effort(model_name: str | None) -> bool:
 def resolve_reasoning_effort(model_name: str | None) -> str | None:
     """Resolve the reasoning effort for a model.
 
-    Returns the configured value if set, otherwise defaults to 'high'.
+    Returns the configured value if set, otherwise ``None`` (let the
+    provider decide).  Only returns a value when the model supports
+    the parameter *and* a value is explicitly configured.
     LiteLLM translates this per-provider:
     - Claude: output_config.effort
     - Gemini: thinking budget_tokens or thinking_level
     - OpenAI: native reasoning_effort
     """
+    if not model_supports_reasoning_effort(model_name):
+        return None
     configured = get_config_value("llm", "reasoning_effort", default="")
     if isinstance(configured, str) and configured.strip():
         return configured.strip().lower()
-    # Default to high for all models
-    return "high"
+    env = os.environ.get("MEESEEKS_REASONING_EFFORT", "").strip().lower()
+    if env:
+        return env
+    return None
 
 
 def _resolve_litellm_model(model_name: str, openai_api_base: str | None) -> str:
@@ -116,13 +123,15 @@ def build_chat_model(
 
     reasoning_effort = resolve_reasoning_effort(model_name)
 
-    model_kwargs: dict[str, Any] = {}
+    model_kwargs: dict[str, Any] = {
+        "drop_params": True,  # Must be in model_kwargs to reach litellm.acompletion();
+        # ChatLiteLLM has no drop_params field so top-level kwarg is silently ignored.
+    }
     if reasoning_effort is not None:
         model_kwargs["reasoning_effort"] = reasoning_effort
 
     kwargs: dict[str, Any] = {
         "model": _resolve_litellm_model(model_name, openai_api_base),
-        "drop_params": True,  # Silently drop unsupported params per-provider
     }
     if openai_api_base:
         kwargs["api_base"] = openai_api_base

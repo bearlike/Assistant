@@ -12,6 +12,7 @@ import {
 import { NotificationItem, SessionSummary } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { formatSessionTime } from '../utils/time';
+import { formatModelName } from '../utils/model';
 import { NotificationPanel } from './NotificationPanel';
 export interface NavBarProps {
   mode: 'home' | 'detail';
@@ -199,6 +200,11 @@ export function NavBar({
             status={session?.status || 'idle'}
             doneReason={session?.done_reason} />
 
+            {session?.context?.model &&
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono leading-none bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border border-[hsl(var(--border))] shrink-0">
+                {formatModelName(session.context.model)}
+              </span>
+            }
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">

@@ -85,7 +85,7 @@ from meeseeks_core.config import (
 from meeseeks_core.hooks import HookManager
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.session_runtime import SessionRuntime
-from meeseeks_core.session_store import SessionStore
+from meeseeks_core.session_store import SessionStoreBase, create_session_store
 from meeseeks_core.task_master import generate_action_plan
 from meeseeks_core.tool_registry import ToolRegistry, load_registry
 from meeseeks_tools.integration.mcp import (
@@ -400,7 +400,7 @@ def run_cli(args: argparse.Namespace) -> int:
             log_level,
             verbosity,
         )
-    store = SessionStore(root_dir=args.session_dir)
+    store = create_session_store(root_dir=args.session_dir)
     runtime = SessionRuntime(session_store=store)
     session_id = _resolve_session_id(runtime, args.session, args.tag, args.fork)
     state = CliState(
@@ -504,8 +504,14 @@ def run_cli(args: argparse.Namespace) -> int:
                 _instructions, _ = activate_skill(_skill, _skill_args)
                 console.print(f"Activating skill: {_skill_name}", style="dim cyan")
                 _run_query(
-                    console, store, runtime, state, tool_registry,
-                    user_input, args, session.prompt,
+                    console,
+                    store,
+                    runtime,
+                    state,
+                    tool_registry,
+                    user_input,
+                    args,
+                    session.prompt,
                     skill_instructions=_instructions,
                 )
                 continue
@@ -529,7 +535,7 @@ def run_cli(args: argparse.Namespace) -> int:
 
 def _run_single_query(
     console: Console,
-    store: SessionStore,
+    store: SessionStoreBase,
     runtime: SessionRuntime,
     state: CliState,
     tool_registry: ToolRegistry,
@@ -542,7 +548,7 @@ def _run_single_query(
 
 def _run_query(
     console: Console,
-    store: SessionStore,
+    store: SessionStoreBase,
     runtime: SessionRuntime,
     state: CliState,
     tool_registry: ToolRegistry,

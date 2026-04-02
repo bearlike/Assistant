@@ -1,28 +1,36 @@
 {
+  "$schema": "https://thekrishna.in/Assistant/latest/app.schema.json",
   "runtime": {
     "envmode": "dev",
-    "log_level": "INFO",
+    "log_level": "DEBUG",
     "log_style": "",
     "cli_log_style": "dark",
     "preflight_enabled": false,
-    "cache_dir": ".cache",
-    "session_dir": "./data/sessions",
-    "config_dir": "~/.meeseeks"
+    "cache_dir": "",
+    "session_dir": "",
+    "config_dir": ""
+  },
+  "storage": {
+    "driver": "json",
+    "mongodb": {
+      "uri": "mongodb://localhost:27017",
+      "database": "meeseeks"
+    }
   },
   "llm": {
-    "api_base": "https://lite-llm.server.local/v1",
-    "api_key": "sk-OPENAI_API_KEY",
-    "default_model": "gpt-5.2",
-    "action_plan_model": "gpt-5.2",
-    "tool_model": "gpt-5.2",
-    "reasoning_effort": "medium",
+    "api_base": "",
+    "api_key": "sk-ant-xxxxxxxx",
+    "default_model": "anthropic/claude-sonnet-4-6",
+    "action_plan_model": "",
+    "tool_model": "",
+    "reasoning_effort": "",
     "reasoning_effort_models": []
   },
   "context": {
     "recent_event_limit": 8,
     "selection_threshold": 0.8,
     "selection_enabled": true,
-    "context_selector_model": "gpt-5.2"
+    "context_selector_model": ""
   },
   "token_budget": {
     "default_context_window": 128000,
@@ -31,7 +39,7 @@
   },
   "reflection": {
     "enabled": true,
-    "model": "gpt-5.2"
+    "model": ""
   },
   "langfuse": {
     "enabled": false,
@@ -45,12 +53,12 @@
     "token": "ha_token_here"
   },
   "permissions": {
-    "policy_path": "./configs/policy.json",
+    "policy_path": "",
     "approval_mode": "ask"
   },
   "cli": {
     "disable_textual": false,
-    "approval_style": "aider"
+    "approval_style": "inline"
   },
   "chat": {
     "port": 8501,
@@ -58,5 +66,21 @@
   },
   "api": {
     "master_token": "msk-strong-password"
-  }
+  },
+  "agent": {
+    "enabled": true,
+    "max_depth": 5,
+    "max_concurrent": 20,
+    "default_sub_model": "",
+    "allowed_models": [],
+    "sub_agent_max_steps": 10,
+    "default_denied_tools": []
+  },
+  "hooks": {
+    "pre_tool_use": [],
+    "post_tool_use": [],
+    "on_session_start": [],
+    "on_session_end": []
+  },
+  "projects": {}
 }

@@ -26,6 +26,7 @@ tools = ["meeseeks-tools>=0.0.8"]
 dev = [
   "autopep8==2.3.2",
   "flake8==7.3.0",
+  "mongomock==4.3.0",
   "mypy==1.19.1",
   "pre-commit==3.8.0",
   "pylint==3.3.9",

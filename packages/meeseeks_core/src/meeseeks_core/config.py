@@ -16,7 +16,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from pydantic.v1 import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 _APP_CONFIG_PATH_OVERRIDE: Path | None = None
 _MCP_CONFIG_PATH_OVERRIDE: Path | None = None
@@ -83,23 +83,52 @@ def _coerce_list(value: Any) -> list[str]:
 
 
 class RuntimeConfig(BaseModel):
-    envmode: str = Field("dev", example="dev")
-    log_level: str = Field("DEBUG", example="INFO")
-    log_style: str = Field("", example="")
-    cli_log_style: str = Field("dark", example="dark")
-    preflight_enabled: bool = False
-    cache_dir: str = Field("", example="~/.meeseeks/cache")
-    session_dir: str = Field("", example="~/.meeseeks/sessions")
-    config_dir: str = Field("", example="~/.meeseeks")
+    """Runtime environment settings."""
 
-    @validator("log_level", pre=True, always=True)
+    model_config = ConfigDict(validate_default=True)
+
+    envmode: str = Field("dev", description="Environment mode (e.g. dev, prod).", examples=["dev"])
+    log_level: str = Field(
+        "DEBUG",
+        description="Logging verbosity. One of DEBUG, INFO, WARNING, ERROR, CRITICAL.",
+        examples=["INFO"],
+    )
+    log_style: str = Field(
+        "", description="Log output style for the core engine (empty for default).", examples=[""]
+    )
+    cli_log_style: str = Field(
+        "dark", description="Rich console log theme for the CLI (dark or light).", examples=["dark"]
+    )
+    preflight_enabled: bool = Field(
+        False,
+        description=("Run connectivity checks for LLM, Langfuse, and Home Assistant on startup."),
+    )
+    cache_dir: str = Field(
+        "",
+        description="Directory for tool caches. Defaults to $MEESEEKS_HOME/cache.",
+        examples=["~/.meeseeks/cache"],
+    )
+    session_dir: str = Field(
+        "",
+        description="Directory for session transcripts. Defaults to $MEESEEKS_HOME/sessions.",
+        examples=["~/.meeseeks/sessions"],
+    )
+    config_dir: str = Field(
+        "",
+        description="Root configuration directory. Defaults to $MEESEEKS_HOME.",
+        examples=["~/.meeseeks"],
+    )
+
+    @field_validator("log_level", mode="before")
+    @classmethod
     def _normalize_log_level(cls, value: Any) -> str:
         if not value:
             return "DEBUG"
         return str(value).strip().upper()
 
-    @validator("cache_dir", "session_dir", "config_dir", pre=True, always=True)
-    def _normalize_paths(cls, value: Any, field: Any) -> str:  # noqa: N805
+    @field_validator("cache_dir", "session_dir", "config_dir", mode="before")
+    @classmethod
+    def _normalize_paths(cls, value: Any, info: ValidationInfo) -> str:
         raw = str(value).strip() if value is not None else ""
         if raw:
             return raw
@@ -109,23 +138,69 @@ class RuntimeConfig(BaseModel):
             "session_dir": str(home / "sessions"),
             "config_dir": str(home),
         }
-        return defaults.get(field.name, str(home))
+        return defaults.get(info.field_name or "", str(home))
 
-    @validator("preflight_enabled", pre=True, always=True)
+    @field_validator("preflight_enabled", mode="before")
+    @classmethod
     def _normalize_preflight_enabled(cls, value: Any) -> bool:
         return _coerce_bool(value, default=False)
 
 
 class LLMConfig(BaseModel):
-    api_base: str = Field("", example="https://lite-llm.server.local/v1")
-    api_key: str = Field("", example="sk-OPENAI_API_KEY")
-    default_model: str = Field("gpt-5.2", example="gpt-5.2")
-    action_plan_model: str = Field("", example="gpt-5.2")
-    tool_model: str = Field("", example="gpt-5.2")
-    reasoning_effort: str = Field("", example="medium")
-    reasoning_effort_models: list[str] = Field(default_factory=list)
+    """LLM provider connection and model selection."""
 
-    @validator("reasoning_effort", pre=True, always=True)
+    model_config = ConfigDict(validate_default=True)
+
+    api_base: str = Field(
+        "",
+        description=(
+            "Optional base URL override. Leave empty for direct "
+            "provider access (LiteLLM routes automatically from "
+            "the model prefix). Set only when using a proxy "
+            "(e.g. LiteLLM, Bifrost)."
+        ),
+        examples=["", "https://my-litellm-proxy.example.com/v1"],
+    )
+    api_key: str = Field(
+        "",
+        description=("API key for the LLM provider (e.g. Anthropic, OpenAI) or proxy master key."),
+        examples=["sk-ant-xxxxxxxx"],
+    )
+    default_model: str = Field(
+        "gpt-5.2",
+        description=(
+            "Model ID using 'provider/model' syntax. LiteLLM "
+            "auto-routes to the right API endpoint. When using "
+            "a proxy, adjust the prefix to match its routing."
+        ),
+        examples=["anthropic/claude-sonnet-4-6"],
+    )
+    action_plan_model: str = Field(
+        "",
+        description=(
+            "Model ID for action-plan generation. Falls back to default_model when empty."
+        ),
+        examples=["anthropic/claude-sonnet-4-6"],
+    )
+    tool_model: str = Field(
+        "",
+        description=("Model ID used by individual tools. Falls back to default_model when empty."),
+        examples=["anthropic/claude-sonnet-4-6"],
+    )
+    reasoning_effort: str = Field(
+        "",
+        description=(
+            "Reasoning effort hint for supported models. One of low, medium, high, none, or empty."
+        ),
+        examples=["medium"],
+    )
+    reasoning_effort_models: list[str] = Field(
+        default_factory=list,
+        description="Model name patterns that support the reasoning_effort parameter.",
+    )
+
+    @field_validator("reasoning_effort", mode="before")
+    @classmethod
     def _normalize_reasoning_effort(cls, value: Any) -> str:
         if value is None:
             return ""
@@ -134,7 +209,8 @@ class LLMConfig(BaseModel):
             return normalized
         return ""
 
-    @validator("reasoning_effort_models", pre=True, always=True)
+    @field_validator("reasoning_effort_models", mode="before")
+    @classmethod
     def _normalize_reasoning_effort_models(cls, value: Any) -> list[str]:
         return [entry.lower() for entry in _coerce_list(value)]
 
@@ -174,8 +250,8 @@ class LLMConfig(BaseModel):
             return ConfigCheck(
                 name="llm",
                 enabled=True,
-                ok=False,
-                reason="llm.api_base is not set",
+                ok=True,
+                reason="api_base not set; using direct provider routing",
             )
         if not self.api_key.strip():
             return ConfigCheck(
@@ -204,12 +280,37 @@ class LLMConfig(BaseModel):
 
 
 class ContextConfig(BaseModel):
-    recent_event_limit: int = Field(8, example=8)
-    selection_threshold: float = Field(0.8, example=0.8)
-    selection_enabled: bool = Field(True, example=True)
-    context_selector_model: str = Field("", example="gpt-5.2")
+    """Context window selection and event filtering."""
 
-    @validator("recent_event_limit", pre=True, always=True)
+    model_config = ConfigDict(validate_default=True)
+
+    recent_event_limit: int = Field(
+        8,
+        description="Maximum number of recent events injected into the context window.",
+        examples=[8],
+    )
+    selection_threshold: float = Field(
+        0.8,
+        description=(
+            "Relevance score threshold (0.0-1.0) for the context selector to keep an event."
+        ),
+        examples=[0.8],
+    )
+    selection_enabled: bool = Field(
+        True,
+        description=(
+            "Enable LLM-based context event selection. When false, all recent events are used."
+        ),
+        examples=[True],
+    )
+    context_selector_model: str = Field(
+        "",
+        description=("Model ID for context selection. Falls back to llm.default_model when empty."),
+        examples=["anthropic/claude-sonnet-4-6"],
+    )
+
+    @field_validator("recent_event_limit", mode="before")
+    @classmethod
     def _normalize_recent_event_limit(cls, value: Any) -> int:
         try:
             parsed = int(value)
@@ -217,7 +318,8 @@ class ContextConfig(BaseModel):
             return 8
         return max(parsed, 1)
 
-    @validator("selection_threshold", pre=True, always=True)
+    @field_validator("selection_threshold", mode="before")
+    @classmethod
     def _normalize_selection_threshold(cls, value: Any) -> float:
         try:
             parsed = float(value)
@@ -225,17 +327,42 @@ class ContextConfig(BaseModel):
             return 0.8
         return min(max(parsed, 0.0), 1.0)
 
-    @validator("selection_enabled", pre=True, always=True)
+    @field_validator("selection_enabled", mode="before")
+    @classmethod
     def _normalize_selection_enabled(cls, value: Any) -> bool:
         return _coerce_bool(value, default=True)
 
 
 class TokenBudgetConfig(BaseModel):
-    default_context_window: int = Field(128000, example=128000)
-    auto_compact_threshold: float = Field(0.8, example=0.8)
-    model_context_windows: dict[str, int] = Field(default_factory=dict)
+    """Token budget and auto-compaction thresholds."""
 
-    @validator("default_context_window", pre=True, always=True)
+    model_config = ConfigDict(validate_default=True)
+
+    default_context_window: int = Field(
+        128000,
+        description=(
+            "Default context window size in tokens used when the "
+            "model is not listed in model_context_windows."
+        ),
+        examples=[128000],
+    )
+    auto_compact_threshold: float = Field(
+        0.8,
+        description=(
+            "Fraction of the context window (0.0-1.0) that triggers "
+            "automatic conversation compaction."
+        ),
+        examples=[0.8],
+    )
+    model_context_windows: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Per-model context window overrides. Keys are model names, values are token counts."
+        ),
+    )
+
+    @field_validator("default_context_window", mode="before")
+    @classmethod
     def _normalize_context_window(cls, value: Any) -> int:
         try:
             parsed = int(value)
@@ -243,7 +370,8 @@ class TokenBudgetConfig(BaseModel):
             return 128000
         return max(parsed, 1)
 
-    @validator("auto_compact_threshold", pre=True, always=True)
+    @field_validator("auto_compact_threshold", mode="before")
+    @classmethod
     def _normalize_compact_threshold(cls, value: Any) -> float:
         try:
             parsed = float(value)
@@ -251,7 +379,8 @@ class TokenBudgetConfig(BaseModel):
             return 0.8
         return min(max(parsed, 0.0), 1.0)
 
-    @validator("model_context_windows", pre=True, always=True)
+    @field_validator("model_context_windows", mode="before")
+    @classmethod
     def _normalize_model_context_windows(cls, value: Any) -> dict[str, int]:
         if not isinstance(value, dict):
             return {}
@@ -265,21 +394,51 @@ class TokenBudgetConfig(BaseModel):
 
 
 class ReflectionConfig(BaseModel):
-    enabled: bool = Field(True, example=True)
-    model: str = Field("", example="gpt-5.2")
+    """Post-execution reflection pass settings."""
 
-    @validator("enabled", pre=True, always=True)
+    model_config = ConfigDict(validate_default=True)
+
+    enabled: bool = Field(
+        True, description="Enable a reflection LLM pass after tool execution to verify results."
+    )
+    model: str = Field(
+        "",
+        description=(
+            "Model ID for the reflection pass. Falls back to llm.default_model when empty."
+        ),
+        examples=["anthropic/claude-sonnet-4-6"],
+    )
+
+    @field_validator("enabled", mode="before")
+    @classmethod
     def _normalize_enabled(cls, value: Any) -> bool:
         return _coerce_bool(value, default=True)
 
 
 class LangfuseConfig(BaseModel):
-    enabled: bool = Field(False, example=False)
-    host: str = Field("", example="https://langfuse.server.local")
-    public_key: str = Field("", example="pk-lf-xxxxxxxxxxxxxxxx")
-    secret_key: str = Field("", example="sk-lf-xxxxxxxxxxxxxxxx")
+    """Langfuse LLM observability integration."""
 
-    @validator("enabled", pre=True, always=True)
+    model_config = ConfigDict(validate_default=True)
+
+    enabled: bool = Field(False, description="Enable Langfuse tracing for all LLM calls.")
+    host: str = Field(
+        "",
+        description="Langfuse server URL.",
+        examples=["https://langfuse.server.local"],
+    )
+    public_key: str = Field(
+        "",
+        description="Langfuse project public key.",
+        examples=["pk-lf-xxxxxxxxxxxxxxxx"],
+    )
+    secret_key: str = Field(
+        "",
+        description="Langfuse project secret key.",
+        examples=["sk-lf-xxxxxxxxxxxxxxxx"],
+    )
+
+    @field_validator("enabled", mode="before")
+    @classmethod
     def _normalize_enabled(cls, value: Any) -> bool:
         return _coerce_bool(value, default=False)
 
@@ -308,11 +467,27 @@ class LangfuseConfig(BaseModel):
 
 
 class HomeAssistantConfig(BaseModel):
-    enabled: bool = Field(False, example=False)
-    url: str = Field("", example="http://homeassistant.local:8123")
-    token: str = Field("", example="ha_token_here")
+    """Home Assistant smart-home integration."""
 
-    @validator("enabled", pre=True, always=True)
+    model_config = ConfigDict(validate_default=True)
+
+    enabled: bool = Field(
+        False,
+        description=("Enable the Home Assistant tool for smart-home control."),
+    )
+    url: str = Field(
+        "",
+        description="Home Assistant API base URL.",
+        examples=["http://homeassistant.local:8123"],
+    )
+    token: str = Field(
+        "",
+        description="Long-lived access token for Home Assistant authentication.",
+        examples=["ha_token_here"],
+    )
+
+    @field_validator("enabled", mode="before")
+    @classmethod
     def _normalize_enabled(cls, value: Any) -> bool:
         return _coerce_bool(value, default=False)
 
@@ -334,10 +509,25 @@ class HomeAssistantConfig(BaseModel):
 
 
 class PermissionsConfig(BaseModel):
-    policy_path: str = Field("", example="./configs/policy.json")
-    approval_mode: str = Field("ask", example="ask")
+    """Tool execution permission policy."""
 
-    @validator("approval_mode", pre=True, always=True)
+    model_config = ConfigDict(validate_default=True)
+
+    policy_path: str = Field(
+        "",
+        description="Path to a JSON or TOML permission policy file. Empty uses built-in defaults.",
+        examples=["./configs/policy.json"],
+    )
+    approval_mode: str = Field(
+        "ask",
+        description=(
+            "Default approval mode: 'ask' prompts the user, 'allow' auto-approves, 'deny' blocks."
+        ),
+        examples=["ask"],
+    )
+
+    @field_validator("approval_mode", mode="before")
+    @classmethod
     def _normalize_approval_mode(cls, value: Any) -> str:
         if value is None:
             return "ask"
@@ -350,14 +540,30 @@ class PermissionsConfig(BaseModel):
 
 
 class CLIConfig(BaseModel):
-    disable_textual: bool = Field(False, example=False)
-    approval_style: str = Field("inline", example="aider")
+    """Terminal CLI display and interaction settings."""
 
-    @validator("disable_textual", pre=True, always=True)
+    model_config = ConfigDict(validate_default=True)
+
+    disable_textual: bool = Field(
+        False,
+        description="Disable the Textual TUI and fall back to plain Rich output.",
+    )
+    approval_style: str = Field(
+        "inline",
+        description=(
+            "Tool-approval UI style: 'inline' (plain prompt), "
+            "'textual' (TUI dialog), or 'aider' (diff-style)."
+        ),
+        examples=["aider"],
+    )
+
+    @field_validator("disable_textual", mode="before")
+    @classmethod
     def _normalize_disable_textual(cls, value: Any) -> bool:
         return _coerce_bool(value, default=False)
 
-    @validator("approval_style", pre=True, always=True)
+    @field_validator("approval_style", mode="before")
+    @classmethod
     def _normalize_approval_style(cls, value: Any) -> str:
         if value is None:
             return "inline"
@@ -370,10 +576,21 @@ class CLIConfig(BaseModel):
 class ChatConfig(BaseModel):
     """Legacy config section kept for backward compatibility with app.json files."""
 
-    port: int = Field(8501, example=8501)
-    address: str = Field("127.0.0.1", example="127.0.0.1")
+    model_config = ConfigDict(validate_default=True)
 
-    @validator("port", pre=True, always=True)
+    port: int = Field(
+        8501,
+        description="TCP port for the legacy chat interface.",
+        examples=[8501],
+    )
+    address: str = Field(
+        "127.0.0.1",
+        description="Bind address for the legacy chat interface.",
+        examples=["127.0.0.1"],
+    )
+
+    @field_validator("port", mode="before")
+    @classmethod
     def _normalize_port(cls, value: Any) -> int:
         try:
             parsed = int(value)
@@ -383,34 +600,56 @@ class ChatConfig(BaseModel):
 
 
 class APIConfig(BaseModel):
-    master_token: str = Field("msk-strong-password", example="msk-strong-password")
+    """REST API authentication."""
+
+    master_token: str = Field(
+        "msk-strong-password",
+        description=(
+            "Bearer token required for all REST API requests. "
+            "Change from the default before deploying."
+        ),
+        examples=["msk-strong-password"],
+    )
 
 
 class HookEntry(BaseModel):
     """A single hook configuration entry."""
 
-    type: str = "command"
-    command: str = ""
-    matcher: str | None = None
-    timeout: int = 30
+    type: str = Field("command", description="Hook type. Currently only 'command' is supported.")
+    command: str = Field("", description="Shell command to execute when the hook fires.")
+    matcher: str | None = Field(
+        None, description="Optional fnmatch pattern to limit which tool IDs trigger this hook."
+    )
+    timeout: int = Field(30, description="Maximum seconds to wait for the hook command to finish.")
 
 
 class HooksConfig(BaseModel):
-    """Configuration for external hooks."""
+    """External shell hooks fired during the session lifecycle."""
 
-    pre_tool_use: list[HookEntry] = Field(default_factory=list)
-    post_tool_use: list[HookEntry] = Field(default_factory=list)
-    on_session_start: list[HookEntry] = Field(default_factory=list)
-    on_session_end: list[HookEntry] = Field(default_factory=list)
+    pre_tool_use: list[HookEntry] = Field(
+        default_factory=list, description="Hooks executed before each tool invocation."
+    )
+    post_tool_use: list[HookEntry] = Field(
+        default_factory=list, description="Hooks executed after each tool invocation."
+    )
+    on_session_start: list[HookEntry] = Field(
+        default_factory=list, description="Hooks executed when a new session begins."
+    )
+    on_session_end: list[HookEntry] = Field(
+        default_factory=list, description="Hooks executed when a session ends."
+    )
 
 
 class ProjectConfig(BaseModel):
-    """A configured project accessible via the API."""
+    """A project directory exposed to the REST API for session scoping."""
 
-    path: str = ""
-    description: str = ""
+    model_config = ConfigDict(validate_default=True)
 
-    @validator("path", pre=True, always=True)
+    path: str = Field("", description="Absolute path to the project root. Tilde (~) is expanded.")
+    description: str = Field("", description="Short human-readable description of the project.")
+
+    @field_validator("path", mode="before")
+    @classmethod
     def _normalize_path(cls, value: Any) -> str:
         raw = str(value).strip() if value else ""
         if raw:
@@ -423,21 +662,45 @@ def _projects_config_default() -> dict[str, ProjectConfig]:
 
 
 class AgentConfig(BaseModel):
-    """Configuration for the sub-agent hypervisor."""
+    """Sub-agent hypervisor settings."""
 
-    enabled: bool = Field(True, example=True)
-    max_depth: int = Field(5, example=5)
-    max_concurrent: int = Field(20, example=20)
-    default_sub_model: str = Field("", example="openai/claude-haiku-4-5")
-    allowed_models: list[str] = Field(default_factory=list)
-    sub_agent_max_steps: int = Field(10, example=10)
-    default_denied_tools: list[str] = Field(default_factory=list)
+    model_config = ConfigDict(validate_default=True)
 
-    @validator("enabled", pre=True, always=True)
+    enabled: bool = Field(True, description="Enable the sub-agent spawning system.")
+    max_depth: int = Field(
+        5, description="Maximum nesting depth for sub-agent delegation (1 = no sub-agents)."
+    )
+    max_concurrent: int = Field(
+        20, description="Maximum number of sub-agents allowed to run concurrently."
+    )
+    default_sub_model: str = Field(
+        "",
+        description=(
+            "Default LLM model for sub-agents. Falls back to the root agent's model when empty."
+        ),
+        examples=["anthropic/claude-haiku-4-5"],
+    )
+    allowed_models: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Allowlist of model names sub-agents may use. Empty means all models are allowed."
+        ),
+    )
+    sub_agent_max_steps: int = Field(
+        10, description="Default maximum tool-use steps per sub-agent before forced termination."
+    )
+    default_denied_tools: list[str] = Field(
+        default_factory=list,
+        description="Tool IDs denied to all sub-agents by default (e.g. spawn_agent).",
+    )
+
+    @field_validator("enabled", mode="before")
+    @classmethod
     def _normalize_enabled(cls, value: Any) -> bool:
         return _coerce_bool(value, default=True)
 
-    @validator("max_depth", pre=True, always=True)
+    @field_validator("max_depth", mode="before")
+    @classmethod
     def _normalize_max_depth(cls, value: Any) -> int:
         try:
             parsed = int(value)
@@ -445,7 +708,8 @@ class AgentConfig(BaseModel):
             return 5
         return max(parsed, 1)
 
-    @validator("max_concurrent", pre=True, always=True)
+    @field_validator("max_concurrent", mode="before")
+    @classmethod
     def _normalize_max_concurrent(cls, value: Any) -> int:
         try:
             parsed = int(value)
@@ -453,7 +717,8 @@ class AgentConfig(BaseModel):
             return 20
         return max(parsed, 1)
 
-    @validator("sub_agent_max_steps", pre=True, always=True)
+    @field_validator("sub_agent_max_steps", mode="before")
+    @classmethod
     def _normalize_sub_agent_max_steps(cls, value: Any) -> int:
         try:
             parsed = int(value)
@@ -461,107 +726,212 @@ class AgentConfig(BaseModel):
             return 10
         return max(parsed, 1)
 
-    @validator("allowed_models", "default_denied_tools", pre=True, always=True)
+    @field_validator("allowed_models", "default_denied_tools", mode="before")
+    @classmethod
     def _normalize_string_lists(cls, value: Any) -> list[str]:
         return _coerce_list(value)
 
 
+class MongoDBConfig(BaseModel):
+    """MongoDB connection settings."""
+
+    uri: str = Field(
+        "mongodb://localhost:27017",
+        description="MongoDB connection URI (includes host, port, credentials).",
+        examples=["mongodb://user:pass@localhost:27017/meeseeks?authSource=admin"],
+    )
+    database: str = Field(
+        "meeseeks",
+        description="MongoDB database name for session storage.",
+        examples=["meeseeks"],
+    )
+
+    @field_validator("uri", mode="before")
+    @classmethod
+    def _normalize_uri(cls, value: Any) -> str:
+        env = os.environ.get("MEESEEKS_MONGODB_URI")
+        if env:
+            return env
+        return str(value).strip() if value else "mongodb://localhost:27017"
+
+    @field_validator("database", mode="before")
+    @classmethod
+    def _normalize_database(cls, value: Any) -> str:
+        env = os.environ.get("MEESEEKS_MONGODB_DATABASE")
+        if env:
+            return env
+        return str(value).strip() if value else "meeseeks"
+
+
+class StorageConfig(BaseModel):
+    """Session storage backend configuration."""
+
+    model_config = ConfigDict(validate_default=True)
+
+    driver: str = Field(
+        "json",
+        description="Storage driver: 'json' (filesystem) or 'mongodb'.",
+        examples=["json", "mongodb"],
+    )
+    mongodb: MongoDBConfig = Field(
+        default_factory=lambda: MongoDBConfig.model_validate({}),
+        description="MongoDB connection settings (used when driver is 'mongodb').",
+    )
+
+    @field_validator("driver", mode="before")
+    @classmethod
+    def _normalize_driver(cls, value: Any) -> str:
+        env = os.environ.get("MEESEEKS_STORAGE_DRIVER")
+        if env:
+            return env.strip().lower()
+        raw = str(value).strip().lower() if value else "json"
+        if raw not in {"json", "mongodb"}:
+            _logger.warning("Unknown storage driver %r, falling back to 'json'.", raw)
+            return "json"
+        return raw
+
+
+def _storage_config_default() -> StorageConfig:
+    return StorageConfig.model_validate({})
+
+
 def _runtime_config_default() -> RuntimeConfig:
-    return RuntimeConfig.parse_obj({})
+    return RuntimeConfig.model_validate({})
 
 
 def _llm_config_default() -> LLMConfig:
-    return LLMConfig.parse_obj({})
+    return LLMConfig.model_validate({})
 
 
 def _context_config_default() -> ContextConfig:
-    return ContextConfig.parse_obj({})
+    return ContextConfig.model_validate({})
 
 
 def _token_budget_config_default() -> TokenBudgetConfig:
-    return TokenBudgetConfig.parse_obj({})
+    return TokenBudgetConfig.model_validate({})
 
 
 def _reflection_config_default() -> ReflectionConfig:
-    return ReflectionConfig.parse_obj({})
+    return ReflectionConfig.model_validate({})
 
 
 def _langfuse_config_default() -> LangfuseConfig:
-    return LangfuseConfig.parse_obj({})
+    return LangfuseConfig.model_validate({})
 
 
 def _home_assistant_config_default() -> HomeAssistantConfig:
-    return HomeAssistantConfig.parse_obj({})
+    return HomeAssistantConfig.model_validate({})
 
 
 def _permissions_config_default() -> PermissionsConfig:
-    return PermissionsConfig.parse_obj({})
+    return PermissionsConfig.model_validate({})
 
 
 def _cli_config_default() -> CLIConfig:
-    return CLIConfig.parse_obj({})
+    return CLIConfig.model_validate({})
 
 
 def _chat_config_default() -> ChatConfig:
-    return ChatConfig.parse_obj({})
+    return ChatConfig.model_validate({})
 
 
 def _api_config_default() -> APIConfig:
-    return APIConfig.parse_obj({})
+    return APIConfig.model_validate({})
 
 
 def _agent_config_default() -> AgentConfig:
-    return AgentConfig.parse_obj({})
+    return AgentConfig.model_validate({})
 
 
 def _hooks_config_default() -> HooksConfig:
-    return HooksConfig.parse_obj({})
+    return HooksConfig.model_validate({})
 
 
 class AppConfig(BaseModel):
     """Typed configuration for the Meeseeks runtime."""
 
-    runtime: RuntimeConfig = Field(default_factory=_runtime_config_default)
-    llm: LLMConfig = Field(default_factory=_llm_config_default)
-    context: ContextConfig = Field(default_factory=_context_config_default)
-    token_budget: TokenBudgetConfig = Field(default_factory=_token_budget_config_default)
-    reflection: ReflectionConfig = Field(default_factory=_reflection_config_default)
-    langfuse: LangfuseConfig = Field(default_factory=_langfuse_config_default)
-    home_assistant: HomeAssistantConfig = Field(default_factory=_home_assistant_config_default)
-    permissions: PermissionsConfig = Field(default_factory=_permissions_config_default)
-    cli: CLIConfig = Field(default_factory=_cli_config_default)
-    chat: ChatConfig = Field(default_factory=_chat_config_default)
-    api: APIConfig = Field(default_factory=_api_config_default)
-    agent: AgentConfig = Field(default_factory=_agent_config_default)
-    hooks: HooksConfig = Field(default_factory=_hooks_config_default)
-    projects: dict[str, ProjectConfig] = Field(default_factory=_projects_config_default)
+    model_config = ConfigDict(extra="ignore", validate_default=True)
 
-    @validator("projects", pre=True, always=True)
+    runtime: RuntimeConfig = Field(
+        default_factory=_runtime_config_default, description="Runtime environment settings."
+    )
+    storage: StorageConfig = Field(
+        default_factory=_storage_config_default,
+        description="Session storage backend (json or mongodb).",
+    )
+    llm: LLMConfig = Field(
+        default_factory=_llm_config_default,
+        description="LLM provider connection and model selection.",
+    )
+    context: ContextConfig = Field(
+        default_factory=_context_config_default,
+        description="Context window selection and event filtering.",
+    )
+    token_budget: TokenBudgetConfig = Field(
+        default_factory=_token_budget_config_default,
+        description="Token budget and auto-compaction thresholds.",
+    )
+    reflection: ReflectionConfig = Field(
+        default_factory=_reflection_config_default,
+        description="Post-execution reflection pass settings.",
+    )
+    langfuse: LangfuseConfig = Field(
+        default_factory=_langfuse_config_default,
+        description="Langfuse LLM observability integration.",
+    )
+    home_assistant: HomeAssistantConfig = Field(
+        default_factory=_home_assistant_config_default,
+        description="Home Assistant smart-home integration.",
+    )
+    permissions: PermissionsConfig = Field(
+        default_factory=_permissions_config_default,
+        description="Tool execution permission policy.",
+    )
+    cli: CLIConfig = Field(
+        default_factory=_cli_config_default,
+        description="Terminal CLI display and interaction settings.",
+    )
+    chat: ChatConfig = Field(
+        default_factory=_chat_config_default,
+        description="Legacy chat interface settings.",
+    )
+    api: APIConfig = Field(
+        default_factory=_api_config_default, description="REST API authentication."
+    )
+    agent: AgentConfig = Field(
+        default_factory=_agent_config_default, description="Sub-agent hypervisor settings."
+    )
+    hooks: HooksConfig = Field(
+        default_factory=_hooks_config_default,
+        description="External shell hooks fired during the session lifecycle.",
+    )
+    projects: dict[str, ProjectConfig] = Field(
+        default_factory=_projects_config_default,
+        description="Named project directories exposed to the REST API for session scoping.",
+    )
+
+    @field_validator("projects", mode="before")
+    @classmethod
     def _normalize_projects(cls, value: Any) -> dict[str, ProjectConfig]:
         if not isinstance(value, dict):
             return {}
         result: dict[str, ProjectConfig] = {}
         for name, cfg in value.items():
             if isinstance(cfg, dict):
-                result[str(name)] = ProjectConfig.parse_obj(cfg)
+                result[str(name)] = ProjectConfig.model_validate(cfg)
             elif isinstance(cfg, ProjectConfig):
                 result[str(name)] = cfg
         return result
-
-    class Config:
-        """Pydantic configuration settings."""
-
-        extra = "ignore"
 
     @classmethod
     def load(cls, path: str | Path) -> AppConfig:
         """Load configuration from a JSON file."""
         payload = _load_json(path)
-        return cls.parse_obj(payload)
+        return cls.model_validate(payload)
 
     def to_json(self, *, indent: int = 2) -> str:
         """Serialize config to JSON."""
-        return self.json(indent=indent, exclude_none=True)
+        return self.model_dump_json(indent=indent, exclude_none=True)
 
     def write(self, path: str | Path, *, indent: int = 2) -> None:
         """Write config JSON to disk."""
@@ -807,12 +1177,12 @@ def get_config() -> AppConfig:
             config_path,
         )
         _CONFIG_WARNED = True
-    base_payload = AppConfig().dict()
+    base_payload = AppConfig().model_dump()
     file_payload = _load_json(get_app_config_path())
     merged = _deep_merge(base_payload, file_payload)
     if _APP_CONFIG_OVERRIDE:
         merged = _deep_merge(merged, _APP_CONFIG_OVERRIDE)
-    _CONFIG_CACHE = AppConfig.parse_obj(merged)
+    _CONFIG_CACHE = AppConfig.model_validate(merged)
     return _CONFIG_CACHE
 
 
@@ -835,7 +1205,7 @@ def get_config_section(*keys: str) -> dict[str, Any]:
     """Return a config section as a dictionary."""
     value = get_config_value(*keys, default={})
     if isinstance(value, BaseModel):
-        return value.dict()
+        return value.model_dump()
     if isinstance(value, dict):
         return value
     return {}
@@ -849,10 +1219,26 @@ def ensure_app_config(path: str | Path) -> None:
     AppConfig().write(target)
 
 
+_APP_SCHEMA_URL = "https://thekrishna.in/Assistant/latest/app.schema.json"
+_MCP_SCHEMA_URL = (
+    "https://gist.githubusercontent.com/bearlike"
+    "/874db9d60a070706e4a703db1290b8d2/raw"
+    "/mcp-server-config.schema.json"
+)
+
+
 def _example_app_payload() -> dict[str, Any]:
-    payload = AppConfig().dict()
-    payload["llm"]["api_base"] = "https://lite-llm.server.local/v1"
-    payload["llm"]["api_key"] = "sk-OPENAI_API_KEY"
+    payload: dict[str, Any] = {"$schema": _APP_SCHEMA_URL}
+    payload.update(AppConfig().model_dump())
+    # Reset resolved paths to empty so users get $MEESEEKS_HOME defaults
+    payload["runtime"]["cache_dir"] = ""
+    payload["runtime"]["session_dir"] = ""
+    payload["runtime"]["config_dir"] = ""
+    # Sensible placeholders for the LLM section
+    payload["llm"]["api_base"] = ""
+    payload["llm"]["api_key"] = "sk-ant-xxxxxxxx"
+    payload["llm"]["default_model"] = "anthropic/claude-sonnet-4-6"
+    # Placeholder credentials for optional integrations
     payload["langfuse"]["host"] = "https://langfuse.server.local"
     payload["langfuse"]["public_key"] = "pk-lf-xxxxxxxxxxxxxxxx"
     payload["langfuse"]["secret_key"] = "sk-lf-xxxxxxxxxxxxxxxx"
@@ -887,13 +1273,14 @@ def ensure_example_configs(
         mcp_target.write_text(
             json.dumps(
                 {
+                    "$schema": _MCP_SCHEMA_URL,
                     "servers": {
                         "codex_tools": {
                             "transport": "streamable_http",
                             "url": "http://127.0.0.1:6783/mcp/Codex-Tools-Personal",
                             "headers": {"Authorization": "Bearer YOUR_MCP_TOKEN"},
                         }
-                    }
+                    },
                 },
                 indent=2,
             )
@@ -901,6 +1288,54 @@ def ensure_example_configs(
             encoding="utf-8",
         )
     return app_target, mcp_target
+
+
+_MAX_MCP_SUBTREE_DEPTH = 5
+
+
+def _discover_subtree_mcp_json(
+    cwd: str | None = None,
+    *,
+    max_depth: int = _MAX_MCP_SUBTREE_DEPTH,
+) -> list[dict[str, Any]]:
+    """Walk DOWN from *cwd* to find ``.mcp.json`` in subdirectories.
+
+    Returns parsed configs ordered deepest-first so callers can merge
+    in sequence (shallower configs naturally override deeper ones).
+    Skips CWD itself (handled by ``_discover_cwd_mcp_json``).
+    """
+    work_dir = Path(cwd) if cwd else Path.cwd()
+    found: list[tuple[int, str, dict[str, Any]]] = []
+    for dirpath, dirnames, _filenames in os.walk(work_dir):
+        rel = Path(dirpath).relative_to(work_dir)
+        depth = len(rel.parts)
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
+        ]
+        if depth == 0:
+            continue
+        if depth > max_depth:
+            dirnames.clear()
+            continue
+        mcp_json = Path(dirpath) / ".mcp.json"
+        if not mcp_json.is_file():
+            continue
+        try:
+            with mcp_json.open(encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            _logger.warning("Failed to read %s: %s", mcp_json, exc)
+            continue
+        if not isinstance(raw, dict):
+            continue
+        if "mcpServers" in raw and "servers" not in raw:
+            raw["servers"] = raw.pop("mcpServers")
+        found.append((depth, str(mcp_json), raw))
+    # Deepest first, then alphabetical for determinism at same depth
+    found.sort(key=lambda t: (-t[0], t[1]))
+    return [cfg for _, _, cfg in found]
 
 
 def _discover_cwd_mcp_json(cwd: str | None = None) -> dict[str, Any] | None:
@@ -928,9 +1363,9 @@ def _discover_cwd_mcp_json(cwd: str | None = None) -> dict[str, Any] | None:
 
 
 def get_merged_mcp_config(cwd: str | None = None) -> dict[str, Any]:
-    """Load and merge MCP configs: global config + CWD ``.mcp.json``.
+    """Load and merge MCP configs: global + subtree + CWD ``.mcp.json``.
 
-    CWD servers override global servers with the same name.
+    Priority (lowest → highest): global < subtree (deep→shallow) < CWD.
     Returns the merged config dict with a ``servers`` key.
     When MCP is disabled (via ``set_mcp_config_path(None)``), returns ``{}``.
     """
@@ -950,14 +1385,18 @@ def get_merged_mcp_config(cwd: str | None = None) -> dict[str, Any]:
     if not isinstance(global_config, dict):
         global_config = {}
 
-    # 2. Discover CWD .mcp.json
+    # 2. Discover subtree .mcp.json files (deepest first)
+    subtree_configs = _discover_subtree_mcp_json(cwd)
+
+    # 3. Discover CWD .mcp.json
     cwd_config = _discover_cwd_mcp_json(cwd)
 
-    # 3. Merge: CWD overrides global
+    # 4. Merge: global ← subtree (deep→shallow) ← CWD
+    merged = dict(global_config)
+    for sub_cfg in subtree_configs:
+        merged = _deep_merge(merged, sub_cfg)
     if cwd_config:
-        merged = _deep_merge(dict(global_config), cwd_config)
-    else:
-        merged = global_config
+        merged = _deep_merge(merged, cwd_config)
 
     return merged
 

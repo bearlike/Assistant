@@ -1,4 +1,24 @@
 services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "${MONGO_PORT:-27018}:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-meeseeks}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-meeseeks}
+      MONGO_INITDB_DATABASE: ${MEESEEKS_MONGODB_DATABASE:-meeseeks}
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
   api:
     image: ghcr.io/bearlike/meeseeks-api:latest
     pull_policy: always
@@ -10,12 +30,13 @@ services:
     network_mode: host
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file: docker.env
+    depends_on:
+      - mongo
     volumes:
       - ./configs:/app/configs:ro
       - api-data:/app/data
-      - /home/kk/Agents:/home/kk/Agents
-      - /home/kk/Projects/Personal-Assistant:/home/kk/Projects/Personal-Assistant
-      - /home/kk/Projects/Simple-Secrets-Manager:/home/kk/Projects/Simple-Secrets-Manager
+      # Project directories — add your mounts in docker-compose.override.yml
+      # (see docker-compose.override.example.yml for the template)
     environment:
       - MEESEEKS_HOME=/app/data
 
@@ -28,10 +49,6 @@ services:
     network_mode: host
     env_file: docker.env
 
-networks:
-  default:
-    external: true
-    name: host
-
 volumes:
   api-data:
+  mongo-data:

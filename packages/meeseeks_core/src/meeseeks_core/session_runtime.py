@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from meeseeks_core.classes import Plan, TaskQueue
-from meeseeks_core.session_store import SessionStore
+from meeseeks_core.session_store import SessionStoreBase, create_session_store
 from meeseeks_core.task_master import orchestrate_session
 from meeseeks_core.types import EventRecord
 
@@ -148,15 +148,15 @@ class SessionRuntime:
     def __init__(
         self,
         *,
-        session_store: SessionStore | None = None,
+        session_store: SessionStoreBase | None = None,
         run_registry: RunRegistry | None = None,
     ) -> None:
         """Initialize the runtime with session storage and optional run registry."""
-        self._session_store = session_store or SessionStore()
+        self._session_store = session_store or create_session_store()
         self._run_registry = run_registry or RunRegistry()
 
     @property
-    def session_store(self) -> SessionStore:
+    def session_store(self) -> SessionStoreBase:
         """Expose the underlying session store."""
         return self._session_store
 
@@ -257,6 +257,7 @@ class SessionRuntime:
             if not include_archived and summary.get("archived"):
                 continue
             summaries.append(summary)
+        summaries.sort(key=lambda s: str(s.get("created_at") or ""), reverse=True)
         return summaries
 
     def load_events(self, session_id: str, after: str | None = None) -> list[EventRecord]:

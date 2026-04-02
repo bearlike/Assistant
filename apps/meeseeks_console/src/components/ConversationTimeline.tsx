@@ -5,6 +5,7 @@ import { DiffFile, EventRecord, TimelineEntry, TurnMeta } from '../types';
 import { FileList } from './FileList';
 import { SummaryBlock } from './SummaryBlock';
 import { copyText } from '../utils/clipboard';
+import { formatModelName } from '../utils/model';
 interface ConversationTimelineProps {
   timeline: TimelineEntry[];
   onShowTrace: (turn: TurnMeta) => void;
@@ -13,6 +14,7 @@ interface ConversationTimelineProps {
   isRunning?: boolean;
   onShowActiveTrace?: () => void;
   events?: EventRecord[];
+  model?: string;
   systemBlock?: {
     summary?: {
       text: string[];
@@ -31,6 +33,7 @@ export function ConversationTimeline({
   isRunning = false,
   onShowActiveTrace,
   events = [],
+  model,
   systemBlock
 }: ConversationTimelineProps) {
   const activeAgents = useMemo(() => {
@@ -57,7 +60,7 @@ export function ConversationTimeline({
       <div key={entry.id} className="flex flex-col gap-2">
           {entry.role === 'user' ?
         <div className="flex justify-end">
-              <div className="inline-flex flex-col items-end max-w-[70%]">
+              <div className="inline-flex flex-col items-end max-w-[85%]">
                 <MessageBubble role={entry.role} content={entry.content} />
                 <div className="mt-2 inline-flex items-center gap-3">
                   <button
@@ -95,6 +98,7 @@ export function ConversationTimeline({
                           {[...activeAgents.entries()].map(([id, a]) => (
                             <div key={id} className="flex items-center gap-1.5 text-[10px] text-[hsl(var(--muted-foreground))]">
                               <span className="font-mono shrink-0">{id}</span>
+                              {a.model && <span className="opacity-50 shrink-0">{formatModelName(a.model)}</span>}
                               <span className="truncate opacity-70">{a.detail}</span>
                             </div>
                           ))}
@@ -113,6 +117,11 @@ export function ConversationTimeline({
               {entry.role === 'assistant' && entry.turn &&
           <div className="mt-5 pt-4 border-t border-[hsl(var(--border))] space-y-4">
                   <div className="flex items-center gap-4 text-xs text-[hsl(var(--muted-foreground))]">
+                    {model &&
+              <span className="font-mono opacity-70">
+                        {formatModelName(model)}
+                      </span>
+              }
                     {entry.turn.duration &&
               <span className="font-mono opacity-70">
                         {entry.turn.duration}

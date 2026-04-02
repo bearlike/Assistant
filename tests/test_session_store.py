@@ -2,9 +2,10 @@
 
 import os
 import shutil
+from unittest.mock import patch
 
 from meeseeks_core.compaction import should_compact, summarize_events
-from meeseeks_core.session_store import SessionStore
+from meeseeks_core.session_store import SessionStore, SessionStoreBase, create_session_store
 
 
 def test_session_store_roundtrip(tmp_path):
@@ -92,6 +93,41 @@ def test_session_store_archive_roundtrip(tmp_path):
     assert store.is_archived(session_id) is True
     store.unarchive_session(session_id)
     assert store.is_archived(session_id) is False
+
+
+def test_create_session_store_default_json(tmp_path):
+    """Factory returns SessionStore (json) when no driver is configured."""
+    store = create_session_store(root_dir=str(tmp_path))
+    assert isinstance(store, SessionStore)
+    assert isinstance(store, SessionStoreBase)
+
+
+def test_create_session_store_mongodb(tmp_path):
+    """Factory returns MongoSessionStore when driver is 'mongodb'."""
+    import mongomock
+    from meeseeks_core.session_store_mongo import MongoSessionStore
+
+    with (
+        patch("meeseeks_core.session_store.get_config_value", return_value="mongodb"),
+        patch("meeseeks_core.session_store_mongo.MongoClient", mongomock.MongoClient),
+    ):
+        store = create_session_store(root_dir=str(tmp_path))
+    assert isinstance(store, MongoSessionStore)
+    assert isinstance(store, SessionStoreBase)
+
+
+def test_base_class_template_fork(tmp_path):
+    """Verify fork_session works through the base class template method."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hello"}})
+    store.save_summary(session_id, "summary text")
+
+    forked_id = store.fork_session(session_id)
+    assert forked_id != session_id
+    events = store.load_transcript(forked_id)
+    assert len(events) == 1
+    assert store.load_summary(forked_id) == "summary text"
 
 
 def test_compaction_helpers():

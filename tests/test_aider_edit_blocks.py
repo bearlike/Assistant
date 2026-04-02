@@ -116,7 +116,7 @@ def test_edit_block_tool_rejects_invalid_inputs(tmp_path, operation, content, fi
 def test_edit_block_tool_rejects_invalid_payload_type(tmp_path):
     """Reject non-string/non-object payloads."""
     tool = AiderEditBlockTool()
-    step = ActionStep.construct(
+    step = ActionStep.model_construct(
         tool_id="aider_edit_block_tool",
         operation="set",
         tool_input=123,

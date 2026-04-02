@@ -1,5 +1,11 @@
 # Agents Guide - Personal Assistant (Meeseeks)
 
+> **⚠️ MANDATORY — HYDRATE CONTEXT WITH DEEPWIKI FIRST ⚠️**
+>
+> Before reading files, writing code, or even asking clarifying questions — **use DeepWiki to hydrate yourself with project context**. This is non-negotiable. DeepWiki (`mcp__deepwiki__Deepwiki-OSS-ask_question` on `bearlike/Assistant`) gives you an instant architecture map, deep relationship understanding between components, and answers about how subsystems interact — all without reading a single file. **Do this at the start of every conversation and every non-trivial task.**
+>
+> Quick-start: `ask_question` with your task context → then `read_wiki_structure` to find relevant sections → then `read_wiki_contents` for details. Only after this should you touch local files.
+
 ## What this codebase is
 Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervisor. The core engine uses a single async `ToolUseLoop` that the LLM drives via native `bind_tools` / `tool_use`. Sub-agents are spawned via a `spawn_agent` tool, tracked by an `AgentHypervisor`, and cleaned up via structured concurrency. It ships multiple interfaces (CLI, web console, REST API, Home Assistant) that share the same core engine.
 
@@ -28,25 +34,49 @@ Meeseeks is a multi-agent LLM personal assistant with an async sub-agent hypervi
 - `meeseeks_ha_conversation/`: Home Assistant integration
 
 ## How to get context fast
-1. Use the DeepWiki MCP tool on `bearlike/Assistant` for a fast architecture map.
-2. Read `README.md` and component READMEs for configuration/runtime details.
-3. Use `rg` to locate specific behavior and follow the exact file path.
-4. For CI issues, use GitHub Actions logs (GH CLI or MCP GitHub tools).
 
-## MCP tools (use first for external research)
-When you need external context (other repos, CI failures, specs, APIs), prefer MCP tools instead of guessing.
+**DeepWiki is your primary context source. Use it before touching local files.**
 
-### DeepWiki (`mcp__deepwiki__Deepwiki-OSS-*`)
-Fast AI-powered Q&A about any public GitHub repository without cloning or loading large files.
-- **`read_wiki_structure`**: Get the table of contents for a repo wiki. Use this first to discover what sections exist. Pass `repoName` in `owner/repo` format (e.g., `bearlike/Personal-Assistant`, `anthropics/claude-code`).
-- **`read_wiki_contents`**: Get the full wiki page content for a repo. Use after `read_wiki_structure` to read specific sections.
-- **`ask_question`**: Ask any question about a repo and get a grounded, cited answer. Supports passing a single repo or a list of up to 10 repos for cross-repo questions.
-- **When to use**: Architecture overviews, understanding how another project works, comparing implementations, finding specific patterns in large repos you haven't cloned.
-- **Tip**: Start with `read_wiki_structure` to see available topics, then use `ask_question` with targeted questions. For this project, use `bearlike/Personal-Assistant`.
+1. **DeepWiki first (always)**: Use `ask_question` on `bearlike/Assistant` to understand the area you're about to work on. Ask about architecture, data flow, component relationships, and hidden dependencies. This is faster and more comprehensive than reading files piecemeal.
+2. **DeepWiki wiki structure**: Use `read_wiki_structure` on `bearlike/Assistant` to discover what sections exist, then `read_wiki_contents` to read specific sections relevant to your task.
+3. **Cross-repo context**: When your task involves external libraries or integrations, use `ask_question` with multiple repos (up to 10) to understand compatibility and relationships between projects.
+4. Read `README.md` and component READMEs for configuration/runtime details.
+5. Use `rg` to locate specific behavior and follow the exact file path.
+6. For CI issues, use GitHub Actions logs (GH CLI or MCP GitHub tools).
+
+**Example hydration workflow** (do this at conversation start):
+```
+# 1. Ask DeepWiki about the area you're working on
+ask_question(repo="bearlike/Assistant", question="How does the tool-use loop interact with the agent hypervisor?")
+
+# 2. Browse wiki structure for related sections
+read_wiki_structure(repoName="bearlike/Assistant")
+
+# 3. Read specific sections
+read_wiki_contents(repoName="bearlike/Assistant", page="...")
+
+# 4. NOW read local files with full context
+```
+
+## MCP tools (use first — for both internal and external context)
+**DeepWiki is not just for external repos — it is the fastest way to understand THIS project too.** Use `ask_question` on `bearlike/Assistant` before diving into local files. It understands component relationships, data flows, and architectural decisions that you would otherwise need to read dozens of files to piece together. When you need external context (other repos, CI failures, specs, APIs), prefer MCP tools instead of guessing.
+
+### DeepWiki (`mcp__deepwiki__Deepwiki-OSS-*`) — YOUR PRIMARY CONTEXT HYDRATION TOOL
+Fast AI-powered Q&A about any public GitHub repository without cloning or loading large files. **This is the single most valuable tool for understanding this codebase quickly.** Use it at the start of every task to build a mental model before touching code.
+
+- **`ask_question`**: Ask any question about a repo and get a grounded, cited answer. Supports passing a single repo or a list of up to 10 repos for cross-repo questions. **Use this as your first action** when starting any non-trivial task — ask about the subsystem you're about to modify, its dependencies, and how it connects to other components.
+- **`read_wiki_structure`**: Get the table of contents for a repo wiki. Use this to discover what sections exist and find relevant deep-dives. Pass `repoName` in `owner/repo` format (e.g., `bearlike/Assistant`, `anthropics/claude-code`).
+- **`read_wiki_contents`**: Get the full wiki page content for a repo. Use after `read_wiki_structure` to read specific sections for detailed context.
+- **When to use**:
+  - **Start of every conversation**: Hydrate yourself with architecture context before reading files.
+  - **Before modifying any subsystem**: Ask how it works, what depends on it, and what invariants it maintains.
+  - **Cross-repo understanding**: Compare implementations across repos, check compatibility between libraries, understand how external projects work.
+  - **Debugging**: Ask about expected behavior of a component before investigating what went wrong.
+- **Tip**: Start with `ask_question` for targeted context (e.g., "How does the ToolUseLoop handle sub-agent spawning?"), then use `read_wiki_structure` → `read_wiki_contents` for broader exploration. For this project, always use `bearlike/Assistant`.
 
 ### Devin Wiki (`mcp__devin__Devin-Wiki-Personal-*`)
 Devin-hosted wiki with the same structure as DeepWiki but from Devin's index. Also provides session management, knowledge notes, and scheduling.
-- **`read_wiki_structure`** / **`read_wiki_contents`** / **`ask_question`**: Same as DeepWiki but uses Devin's index. Use `bearlike/Personal-Assistant` for this project.
+- **`read_wiki_structure`** / **`read_wiki_contents`** / **`ask_question`**: Same as DeepWiki but uses Devin's index. Use `bearlike/Assistant` for this project.
 - **`devin_session_create`**: Spawn child Devin sessions for complex tasks. Pass `sessions: [{prompt: "...", title: "..."}]`. Returned `session_id` values need `devin-` prefix for subsequent calls.
 - **`devin_session_interact`**: Interact with a running session — `action: "get"` (status), `"message"` (send message), `"terminate"`, `"archive"`, `"get_messages"`, `"get_attachments"`, `"set_tags"`. Always include the `devin-` prefix on `session_id`.
 - **`devin_session_events`**: Inspect session event timeline — `action: "list"` (summaries), `"details"` (full content), `"search"` (full-text). Filter by `categories` (shell, file, browser, git, message, etc.) or `event_types`.
@@ -102,6 +132,7 @@ Official library/framework documentation and code examples.
 - **When to use**: Looking up API signatures, configuration options, or usage examples for dependencies like LangChain, Pydantic, LiteLLM, Textual, etc.
 
 ### General MCP investigation tips
+- **DeepWiki before local reads**: When starting any task, use DeepWiki `ask_question` to understand the relevant subsystem BEFORE reading local files. This gives you architectural context that makes file reads far more productive.
 - **Parallel queries**: When investigating, fire multiple MCP calls in parallel (e.g., DeepWiki for architecture + Langfuse for traces + SearXNG for docs).
 - **Cross-reference**: Use DeepWiki/Devin wiki for "how should it work" and Langfuse for "how did it actually work" during debugging.
 - **Session IDs bridge Meeseeks and Langfuse**: The `session_id` from `SessionStore` is the same ID used in Langfuse traces. Use it to jump between local transcript analysis and Langfuse observability.
@@ -109,7 +140,40 @@ Official library/framework documentation and code examples.
 - **Age parameter**: Langfuse tools use `age` in minutes (not timestamps). Common values: 60 (1h), 1440 (24h), 10080 (7 days max).
 
 ## Engineering principles (project-specific)
-- KISS and DRY: prefer small, obvious changes; remove redundancy instead of adding layers.
+
+### KISS & DRY — keep the codebase lean
+This is the core philosophy. Every decision — from picking a dependency to writing a single function — should bias toward less code, not more. KISS means writing code that does real work at the point of definition (validates itself, constrains its inputs, encodes the logic once) so callers stay simple. DRY means that logic lives in exactly one place and everything else just calls it. These aren't just infrastructure concerns — they apply equally when writing everyday application code.
+
+**What this looks like in practice:**
+
+- **Research before building**: Before writing a custom solution, search for well-reputed existing libraries or tools that solve the problem. Use DeepWiki (`ask_question`) to check how similar projects handle it, SearXNG to find established packages, and Context7 to check library APIs. A well-maintained dependency with a clear API beats a hand-rolled implementation every time.
+- **Write code that carries its own weight**: Every function, model, or class should validate, constrain, and make sense at the point of definition — not push that burden to callers. Example: `AppConfig` uses Pydantic not just to define the config shape but to validate values at load time (`field_validator`, `ConfigDict(extra=”forbid”)`) so invalid config fails immediately instead of causing mysterious runtime errors downstream. That's KISS — the config is simple to *use* because it's smart where it's *defined*.
+- **Define logic once, call it everywhere**: When a piece of logic applies in multiple contexts, encode it in one place. Example: `filter_specs()` encodes allowlist/denylist tool scoping once and is called by spawn_agent, skills, and the API — not reimplemented at each call site. That's DRY.
+- **Prefer small, obvious changes**: The best diff is the smallest one that solves the problem. Remove redundancy instead of adding layers.
+- **Do not over-engineer**: No speculative abstractions, no premature generalization, no “just in case” flexibility. Build what the task requires — nothing more.
+- **Reuse before creating**: Check what already exists in the codebase (grep first) and in the ecosystem (search first). Only create new utilities, helpers, or abstractions when there is genuinely nothing suitable.
+- **Lean dependencies**: When adding a dependency, prefer well-reputed, actively maintained packages with minimal transitive dependencies. Check download counts, maintenance status, and whether the project already uses something similar. Don't add a library for something the stdlib or an existing dependency already handles.
+
+**Precedents — decisions already made in this codebase that embody this philosophy:**
+
+| What we needed | What we use | What we did NOT build |
+|---|---|---|
+| Multi-provider LLM calls | **LiteLLM via LangChain** (`ChatLiteLLM`) — one adapter for OpenAI, Claude, Gemini, etc. | Custom provider adapters, API client wrappers, or model routing logic |
+| Terminal UI (panels, spinners, layout) | **Rich** (`Console`, `Panel`, `Live`, `Syntax`) | Custom ANSI escape sequences, manual box-drawing, terminal width math |
+| Full-screen CLI dialogs & REPL history | **Textual** + **Prompt-toolkit** (`PromptSession`, `FileHistory`) | Custom TTY handling, modal rendering, history file management |
+| Data validation & serialization | **Pydantic** (`BaseModel`, `field_validator`, `ConfigDict`) | Hand-written validators, manual JSON parsing, custom schema generation |
+| REST API | **Flask + Flask-RESTX** | Custom HTTP server, manual route dispatch, hand-written API docs |
+| LLM observability & tracing | **Langfuse** (`CallbackHandler`) — plugs into LangChain callbacks | Custom telemetry pipeline, manual trace correlation |
+| Prompt templating | **Jinja2** (`Environment`, `PackageLoader`) | Custom string interpolation or fragile f-string assembly |
+| Token counting | **Tiktoken** — OpenAI's tokenizer | Heuristic character-ratio guessing |
+| Structured logging | **Loguru** — one-liner config with color, context, formatting | Custom log handlers, formatters, rotation logic |
+| MCP protocol integration | **langchain-mcp-adapters** (`MultiServerMCPClient`) | Custom MCP protocol client from scratch |
+| MongoDB access | **PyMongo** — connection pooling, indexing, CRUD | Custom database driver or raw socket queries |
+
+The pattern: **proven library for infrastructure, custom code only for business logic** (orchestration, agent state, tool coordination). When in doubt, check if a library already does it.
+
+### Other principles
+- **Context before code**: Use DeepWiki (`ask_question` on `bearlike/Assistant`) to understand the subsystem before modifying it. Uninformed changes waste everyone's time.
 - KRY: keep requirements and acceptance criteria in view; do not drift.
 - Keep tool contracts stable (`AbstractTool`, `ActionStep`, `TaskQueue`) and the tool field names (`tool_id`, `operation`, `tool_input`).
 - Favor composition and reuse across interfaces; avoid duplicating core logic.
@@ -189,6 +253,7 @@ Official library/framework documentation and code examples.
 - Pre-commit hooks are defined in `.pre-commit-config.yaml` (install with `make precommit-install`).
 
 ## Expectations for agents
-- Start with DeepWiki for overview, then verify details in code.
+- **DeepWiki first, always**: Before reading files or writing code, use DeepWiki `ask_question` on `bearlike/Assistant` to understand the area you're about to work on. Ask about architecture, data flow, component relationships, and invariants. Then verify details in local code. Skipping this step wastes time and leads to uninformed changes.
+- **Hydrate subagents too**: When spawning subagents or parallel agents, include instructions to use DeepWiki for context hydration in their prompts.
 - Keep changes minimal, readable, and well‑scoped.
 - Document assumptions in PRs/notes when behavior is inferred.

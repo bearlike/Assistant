@@ -12,6 +12,7 @@ from meeseeks_core.config import (
     LLMConfig,
     ProjectConfig,
     _discover_cwd_mcp_json,
+    _discover_subtree_mcp_json,
     ensure_example_configs,
     get_config,
     get_config_section,
@@ -48,12 +49,12 @@ def test_get_config_merges_file_and_override(tmp_path):
     assert section.get("api_key") == "key"
 
 
-def test_llm_validate_models_requires_api_base():
-    """Fail validation when api_base is missing."""
+def test_llm_validate_models_skips_when_no_api_base():
+    """Skip model listing gracefully when api_base is empty."""
     llm = LLMConfig(api_base="", api_key="key")
     result = llm.validate_models()
-    assert result.ok is False
-    assert "api_base" in (result.reason or "")
+    assert result.ok is True
+    assert "direct provider" in (result.reason or "")
 
 
 def test_llm_validate_models_requires_api_key():
@@ -77,7 +78,7 @@ def test_preflight_disables_failed_integrations(monkeypatch):
     """Disable optional integrations when preflight checks fail."""
     set_mcp_config_path("")
 
-    app_config = AppConfig.parse_obj(
+    app_config = AppConfig.model_validate(
         {
             "langfuse": {
                 "enabled": True,
@@ -131,7 +132,8 @@ def test_ensure_example_configs_writes_files(tmp_path):
     assert app_path.exists()
     assert mcp_path.exists()
     payload = json.loads(app_path.read_text(encoding="utf-8"))
-    assert payload["llm"]["api_base"]
+    assert "$schema" in payload
+    assert payload["llm"]["default_model"]
 
 
 def test_get_config_warns_once_for_missing_file(tmp_path, monkeypatch):
@@ -206,23 +208,23 @@ class TestRuntimeConfigDefaults:
     def test_empty_session_dir_resolves_to_home(self, monkeypatch, tmp_path):
         monkeypatch.setenv("MEESEEKS_HOME", str(tmp_path))
         config_module.reset_config()
-        rt = config_module.RuntimeConfig.parse_obj({})
+        rt = config_module.RuntimeConfig.model_validate({})
         assert rt.session_dir == str(tmp_path / "sessions")
 
     def test_empty_cache_dir_resolves_to_home(self, monkeypatch, tmp_path):
         monkeypatch.setenv("MEESEEKS_HOME", str(tmp_path))
         config_module.reset_config()
-        rt = config_module.RuntimeConfig.parse_obj({})
+        rt = config_module.RuntimeConfig.model_validate({})
         assert rt.cache_dir == str(tmp_path / "cache")
 
     def test_explicit_relative_path_preserved(self):
-        rt = config_module.RuntimeConfig.parse_obj(
+        rt = config_module.RuntimeConfig.model_validate(
             {"session_dir": "./data/sessions"},
         )
         assert rt.session_dir == "./data/sessions"
 
     def test_explicit_absolute_path_preserved(self, tmp_path):
-        rt = config_module.RuntimeConfig.parse_obj(
+        rt = config_module.RuntimeConfig.model_validate(
             {"cache_dir": str(tmp_path / "my_cache")},
         )
         assert rt.cache_dir == str(tmp_path / "my_cache")
@@ -329,6 +331,72 @@ class TestDiscoverCwdMcpJson:
         assert result is None
 
 
+class TestDiscoverSubtreeMcpJson:
+    """Tests for _discover_subtree_mcp_json()."""
+
+    def test_discovers_nested_mcp_json(self, tmp_path):
+        """Find .mcp.json files in subdirectories."""
+        (tmp_path / "pkg_a").mkdir()
+        (tmp_path / "pkg_a" / ".mcp.json").write_text(
+            json.dumps({"servers": {"srv_a": {"command": "a"}}}),
+            encoding="utf-8",
+        )
+        (tmp_path / "pkg_b" / "sub").mkdir(parents=True)
+        (tmp_path / "pkg_b" / "sub" / ".mcp.json").write_text(
+            json.dumps({"servers": {"srv_b": {"command": "b"}}}),
+            encoding="utf-8",
+        )
+        result = _discover_subtree_mcp_json(str(tmp_path))
+        assert len(result) == 2
+        # Deepest first
+        assert "srv_b" in result[0]["servers"]
+        assert "srv_a" in result[1]["servers"]
+
+    def test_skips_cwd_itself(self, tmp_path):
+        """CWD's own .mcp.json is NOT included (handled by _discover_cwd_mcp_json)."""
+        (tmp_path / ".mcp.json").write_text(
+            json.dumps({"servers": {"root": {}}}), encoding="utf-8"
+        )
+        result = _discover_subtree_mcp_json(str(tmp_path))
+        assert result == []
+
+    def test_prunes_hidden_dirs(self, tmp_path):
+        """Hidden directories are skipped."""
+        (tmp_path / ".hidden").mkdir()
+        (tmp_path / ".hidden" / ".mcp.json").write_text(
+            json.dumps({"servers": {"hidden": {}}}), encoding="utf-8"
+        )
+        result = _discover_subtree_mcp_json(str(tmp_path))
+        assert result == []
+
+    def test_respects_max_depth(self, tmp_path):
+        """Files beyond max_depth are not discovered."""
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        (deep / ".mcp.json").write_text(
+            json.dumps({"servers": {"deep": {}}}), encoding="utf-8"
+        )
+        assert _discover_subtree_mcp_json(str(tmp_path), max_depth=2) == []
+        assert len(_discover_subtree_mcp_json(str(tmp_path), max_depth=3)) == 1
+
+    def test_normalizes_mcpservers_key(self, tmp_path):
+        """Claude Code schema (mcpServers) is normalized to servers."""
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / ".mcp.json").write_text(
+            json.dumps({"mcpServers": {"claude_srv": {}}}), encoding="utf-8"
+        )
+        result = _discover_subtree_mcp_json(str(tmp_path))
+        assert "servers" in result[0]
+        assert "claude_srv" in result[0]["servers"]
+
+    def test_skips_invalid_json(self, tmp_path):
+        """Malformed files are skipped without crashing."""
+        (tmp_path / "bad").mkdir()
+        (tmp_path / "bad" / ".mcp.json").write_text("{bad", encoding="utf-8")
+        result = _discover_subtree_mcp_json(str(tmp_path))
+        assert result == []
+
+
 class TestGetMergedMcpConfig:
     """Tests for get_merged_mcp_config()."""
 
@@ -398,6 +466,60 @@ class TestGetMergedMcpConfig:
         finally:
             reset_config()
 
+    def test_get_merged_mcp_config_with_subtree(self, tmp_path):
+        """Subtree .mcp.json servers are merged; CWD overrides subtree."""
+        # Global config
+        global_cfg = tmp_path / "mcp.json"
+        global_cfg.write_text(
+            json.dumps({"servers": {"global_srv": {"command": "g"}}}),
+            encoding="utf-8",
+        )
+        # CWD with its own .mcp.json
+        cwd_dir = tmp_path / "project"
+        cwd_dir.mkdir()
+        (cwd_dir / ".mcp.json").write_text(
+            json.dumps({"servers": {"cwd_srv": {"command": "c"}}}),
+            encoding="utf-8",
+        )
+        # Subtree .mcp.json
+        (cwd_dir / "packages" / "api").mkdir(parents=True)
+        (cwd_dir / "packages" / "api" / ".mcp.json").write_text(
+            json.dumps({"servers": {"sub_srv": {"command": "s"}}}),
+            encoding="utf-8",
+        )
+
+        set_mcp_config_path(str(global_cfg))
+        try:
+            result = get_merged_mcp_config(cwd=str(cwd_dir))
+            servers = result.get("servers", {})
+            assert "global_srv" in servers
+            assert "cwd_srv" in servers
+            assert "sub_srv" in servers  # subtree server discovered
+        finally:
+            reset_config()
+
+    def test_get_merged_mcp_config_cwd_overrides_subtree(self, tmp_path):
+        """CWD .mcp.json overrides a subtree server with the same name."""
+        cwd_dir = tmp_path / "project"
+        cwd_dir.mkdir()
+        (cwd_dir / ".mcp.json").write_text(
+            json.dumps({"servers": {"shared": {"command": "cwd_wins"}}}),
+            encoding="utf-8",
+        )
+        (cwd_dir / "sub").mkdir()
+        (cwd_dir / "sub" / ".mcp.json").write_text(
+            json.dumps({"servers": {"shared": {"command": "subtree_loses"}}}),
+            encoding="utf-8",
+        )
+
+        # Point global to a non-existent file (not empty string, which disables MCP)
+        set_mcp_config_path(str(tmp_path / "no_such_global.json"))
+        try:
+            result = get_merged_mcp_config(cwd=str(cwd_dir))
+            assert result["servers"]["shared"]["command"] == "cwd_wins"
+        finally:
+            reset_config()
+
 
 # -- ProjectConfig in AppConfig -----------------------------------------------
 
@@ -423,23 +545,23 @@ class TestProjectConfigInAppConfig:
 
     def test_project_config_path_normalization(self):
         """Verify path expansion (~ expansion and resolution)."""
-        proj = ProjectConfig.parse_obj({"path": "~/my-project"})
+        proj = ProjectConfig.model_validate({"path": "~/my-project"})
         # ~ should be expanded to an absolute path
         assert "~" not in proj.path
         assert proj.path.startswith("/")
 
     def test_project_config_empty_path(self):
         """Empty path stays empty after normalization."""
-        proj = ProjectConfig.parse_obj({"path": ""})
+        proj = ProjectConfig.model_validate({"path": ""})
         assert proj.path == ""
 
     def test_project_config_non_dict_ignored(self):
         """Non-dict projects value results in empty dict."""
-        config = AppConfig.parse_obj({"projects": "bad"})
+        config = AppConfig.model_validate({"projects": "bad"})
         assert config.projects == {}
 
     def test_project_config_nested_non_dict_skipped(self):
         """Non-dict project entries are skipped."""
-        config = AppConfig.parse_obj({"projects": {"a": "not_a_dict", "b": {"path": "/tmp"}}})
+        config = AppConfig.model_validate({"projects": {"a": "not_a_dict", "b": {"path": "/tmp"}}})
         assert "a" not in config.projects
         assert "b" in config.projects

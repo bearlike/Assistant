@@ -1,4 +1,5 @@
 {
+  "$schema": "https://gist.githubusercontent.com/bearlike/874db9d60a070706e4a703db1290b8d2/raw/mcp-server-config.schema.json",
   "servers": {
     "codex_tools": {
       "transport": "streamable_http",

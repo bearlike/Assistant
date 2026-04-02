@@ -161,16 +161,28 @@ def langfuse_trace_span(name: str) -> Iterator[object | None]:
     except Exception:  # pragma: no cover - defensive
         yield None
         return
+    # Setup phase: if Langfuse fails, yield None (graceful degradation).
+    # Body exceptions MUST propagate — never suppress them.
+    span = None
+    cm = None
     try:
         langfuse = get_client()
-        with langfuse.start_as_current_observation(
+        cm = langfuse.start_as_current_observation(
             as_type="span",
             name=name,
             trace_context=trace_context,
-        ) as span:
-            yield span
+        )
+        span = cm.__enter__()
     except Exception:  # pragma: no cover - defensive
-        yield None
+        logging.debug("Langfuse trace span setup failed.", exc_info=True)
+    try:
+        yield span
+    finally:
+        if cm is not None:
+            try:
+                cm.__exit__(None, None, None)
+            except Exception:  # pragma: no cover - defensive
+                pass
 
 
 def _ensure_langfuse_client(config) -> None:

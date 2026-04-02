@@ -10,7 +10,7 @@ from pathlib import Path
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
-from pydantic.v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 
 from meeseeks_core.common import (
     InstructionSource,
@@ -21,7 +21,7 @@ from meeseeks_core.common import (
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
 from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.llm import build_chat_model
-from meeseeks_core.session_store import SessionStore
+from meeseeks_core.session_store import SessionStoreBase
 from meeseeks_core.token_budget import TokenBudget, get_token_budget
 from meeseeks_core.types import EventRecord
 
@@ -129,7 +129,7 @@ def _load_attachment_texts(session_dir: str, events: list[EventRecord]) -> list[
 class ContextBuilder:
     """Build short-term and selected context for a session."""
 
-    def __init__(self, session_store: SessionStore) -> None:
+    def __init__(self, session_store: SessionStoreBase) -> None:
         """Initialize the context builder."""
         self._session_store = session_store
         self._instruction_cache: list[InstructionSource] | None = None
@@ -211,7 +211,7 @@ class ContextBuilder:
         )
         if not selector_model:
             return events
-        parser = PydanticOutputParser(pydantic_object=ContextSelection)  # type: ignore[type-var]
+        parser = PydanticOutputParser(pydantic_object=ContextSelection)
         prompt = ChatPromptTemplate(
             messages=[
                 SystemMessage(

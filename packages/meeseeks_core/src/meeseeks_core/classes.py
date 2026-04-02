@@ -12,7 +12,7 @@ from typing import cast
 
 from langchain_community.document_loaders import JSONLoader
 from langchain_core.documents import Document
-from pydantic.v1 import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from meeseeks_core.common import MockSpeaker, get_logger, get_mock_speaker, get_unique_timestamp
 from meeseeks_core.components import build_langfuse_handler
@@ -79,11 +79,7 @@ class ActionStep(BaseModel):
         description="Private field to persist the action status and other data.",
     )
 
-    class Config:
-        """Allow both alias and field-name population."""
-
-        allow_population_by_field_name = True
-        extra = "forbid"
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
 class PlanStep(BaseModel):
@@ -123,8 +119,8 @@ class TaskQueue(BaseModel):
         description="Short description of the most recent tool failure.",
     )
 
-    @validator("action_steps", allow_reuse=True)
-    # pylint: disable=E0213,W0613
+    @field_validator("action_steps")
+    @classmethod
     def validate_actions(cls, field: list[ActionStep]) -> list[ActionStep]:
         """Normalize and validate action steps."""
         for action in field:
@@ -149,7 +145,7 @@ class TaskQueue(BaseModel):
         return field
 
 
-ActionStep.update_forward_refs(ToolInput=ToolInput)
+ActionStep.model_rebuild()
 
 
 class OrchestrationState(BaseModel):
@@ -315,4 +311,4 @@ def get_task_master_examples(
     if example_id not in range(0, len(examples)):
         raise ValueError(f"Invalid example ID: {example_id}")
 
-    return create_plan(step_data=examples[example_id], is_example=True).json()
+    return create_plan(step_data=examples[example_id], is_example=True).model_dump_json()

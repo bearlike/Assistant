@@ -19,7 +19,7 @@ from meeseeks_core.hooks import HookManager
 from meeseeks_core.orchestrator import Orchestrator
 from meeseeks_core.permissions import PermissionPolicy
 from meeseeks_core.planning import Planner
-from meeseeks_core.session_store import SessionStore
+from meeseeks_core.session_store import SessionStoreBase
 from meeseeks_core.token_budget import get_token_budget
 from meeseeks_core.tool_registry import ToolRegistry, load_registry
 from meeseeks_core.types import EventRecord
@@ -70,7 +70,11 @@ def generate_action_plan(
         resolved_model,
     )
     return Planner(tool_registry).generate(
-        user_query, resolved_model, context=context, mode=mode, feedback=feedback,
+        user_query,
+        resolved_model,
+        context=context,
+        mode=mode,
+        feedback=feedback,
     )
 
 
@@ -81,7 +85,7 @@ def orchestrate_session(
     initial_plan: Plan | None = None,
     return_state: bool = False,
     session_id: str | None = None,
-    session_store: SessionStore | None = None,
+    session_store: SessionStoreBase | None = None,
     tool_registry: ToolRegistry | None = None,
     permission_policy: PermissionPolicy | None = None,
     approval_callback: Callable[[ActionStep], bool] | None = None,

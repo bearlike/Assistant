@@ -42,15 +42,35 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 # Maps tool_id patterns to the AbstractTool operation ("get" or "set").
 _OPERATION_SET_KEYWORDS = frozenset(
     {
-        "shell", "edit", "write", "create", "set", "update",
-        "delete", "apply", "remove", "patch", "insert", "append",
-        "replace", "upload", "post", "put",
+        "shell",
+        "edit",
+        "write",
+        "create",
+        "set",
+        "update",
+        "delete",
+        "apply",
+        "remove",
+        "patch",
+        "insert",
+        "append",
+        "replace",
+        "upload",
+        "post",
+        "put",
     }
 )
 _OPERATION_GET_KEYWORDS = frozenset(
     {
-        "read", "list", "search", "get", "fetch", "query",
-        "lookup", "web_search", "web_url_read",
+        "read",
+        "list",
+        "search",
+        "get",
+        "fetch",
+        "query",
+        "lookup",
+        "web_search",
+        "web_url_read",
     }
 )
 
@@ -170,7 +190,10 @@ class ToolUseLoop:
             if self._ctx.depth == 0:
                 agent_tree = await self._ctx.registry.render_agent_tree()
             messages = self._build_messages(
-                user_query, context, plan, agent_tree=agent_tree,
+                user_query,
+                context,
+                plan,
+                agent_tree=agent_tree,
             )
             tool_schemas = specs_to_langchain_tools(tool_specs)
             model = self._bind_model(tool_schemas)
@@ -222,19 +245,47 @@ class ToolUseLoop:
                     # Ref: [AgentCgroup §4.2] Graduated enforcement — NL feedback, not kill.
                     # Inject budget warning so the agent can adapt its strategy.
                     if self._ctx.registry.budget_exhausted():
-                        messages.append(SystemMessage(
-                            content="BUDGET WARNING: Session step budget exhausted. "
-                            "Summarize your current findings and return results immediately."
-                        ))
+                        messages.append(
+                            SystemMessage(
+                                content="BUDGET WARNING: Session step budget exhausted. "
+                                "Summarize your current findings and return results immediately."
+                            )
+                        )
 
                     response: AIMessage = await model.ainvoke(
                         messages, config=invoke_config or None
                     )
+                    # Strip thinking blocks from the response before appending
+                    # to the conversation history.  Anthropic requires a
+                    # ``signature`` field on thinking blocks when replayed,
+                    # but proxies (LiteLLM) may not preserve it.
+                    raw = getattr(response, "content", None)
+                    if isinstance(raw, list):
+                        sanitized = [
+                            block
+                            for block in raw
+                            if not (isinstance(block, dict) and block.get("type") == "thinking")
+                        ]
+                        response = AIMessage(
+                            content=sanitized or "",
+                            tool_calls=response.tool_calls,
+                            additional_kwargs=response.additional_kwargs,
+                            id=response.id,
+                        )
                     messages.append(response)
 
                     if not response.tool_calls:
                         # Text response — task is done.
-                        content = str(getattr(response, "content", "") or "")
+                        raw_content = getattr(response, "content", "") or ""
+                        if isinstance(raw_content, list):
+                            # Claude extended thinking: extract text blocks only.
+                            content = "\n".join(
+                                block.get("text", "")
+                                for block in raw_content
+                                if isinstance(block, dict) and block.get("type") == "text"
+                            )
+                        else:
+                            content = str(raw_content)
                         final_response = content
                         tool_outputs.append(content)
                         state.done = True
@@ -244,23 +295,16 @@ class ToolUseLoop:
                     # Execute tool calls with concurrency-aware partitioning.
                     # Exclusive tools run alone; concurrent-safe tools are gathered.
                     specs_map = {s.tool_id: s for s in tool_specs}
-                    batches = self._partition_tool_calls(
-                        response.tool_calls, specs_map
-                    )
+                    batches = self._partition_tool_calls(response.tool_calls, specs_map)
                     results: list[ToolCallResult] = []
                     for batch in batches:
                         if batch.concurrent:
                             batch_results = await asyncio.gather(
-                                *[
-                                    self._safe_execute(tc, tool_specs)
-                                    for tc in batch.calls
-                                ],
+                                *[self._safe_execute(tc, tool_specs) for tc in batch.calls],
                             )
                             results.extend(batch_results)
                         else:
-                            result = await self._safe_execute(
-                                batch.calls[0], tool_specs
-                            )
+                            result = await self._safe_execute(batch.calls[0], tool_specs)
                             results.append(result)
 
                     for tool_call, result in zip(response.tool_calls, results):
@@ -286,6 +330,25 @@ class ToolUseLoop:
                     )
                     steps_run += 1
 
+                    # Inject step progress so the model can self-regulate.
+                    remaining_steps = max_steps - steps_run
+                    failures = [r for r in results if not r.success]
+                    progress_parts = [
+                        f"[Step {steps_run}/{max_steps}"
+                        f" — {remaining_steps} step{'s' if remaining_steps != 1 else ''}"
+                        " remaining]",
+                    ]
+                    if failures:
+                        progress_parts.append(
+                            f"{len(failures)}/{len(results)} tool call(s)"
+                            " failed this step — adapt your approach."
+                        )
+                    if remaining_steps <= 2 and remaining_steps > 0:
+                        progress_parts.append(
+                            "Approaching step limit: wrap up and synthesize your findings soon."
+                        )
+                    messages.append(SystemMessage(content=" ".join(progress_parts)))
+
                     if span is not None:
                         try:
                             span.update_trace(
@@ -297,12 +360,54 @@ class ToolUseLoop:
                         except Exception:
                             pass
 
-            # Determine final state if loop exhausted without breaking.
+            # When the step budget is exhausted without a text response,
+            # give the LLM one final turn WITHOUT tools to force synthesis.
+            if not state.done and final_response is None and messages:
+                try:
+                    messages.append(
+                        SystemMessage(
+                            content=(
+                                "STEP LIMIT REACHED. You MUST now provide your final "
+                                "answer based on all the information gathered so far. "
+                                "Do NOT call any more tools. Respond with text only."
+                            )
+                        )
+                    )
+                    # Invoke without tool bindings to prevent further tool calls.
+                    unbound = build_chat_model(
+                        model_name=self._ctx.model_name,
+                        openai_api_base=get_config_value("llm", "api_base"),
+                        api_key=get_config_value("llm", "api_key"),
+                    )
+                    synthesis: AIMessage = await unbound.ainvoke(
+                        messages, config=invoke_config or None
+                    )
+                    raw = getattr(synthesis, "content", "") or ""
+                    if isinstance(raw, list):
+                        final_response = "\n".join(
+                            block.get("text", "")
+                            for block in raw
+                            if isinstance(block, dict) and block.get("type") == "text"
+                        )
+                    else:
+                        final_response = str(raw)
+                except Exception:
+                    logging.warning("Final synthesis turn failed.", exc_info=True)
+
+                # Fallback: if synthesis produced nothing, build a minimal
+                # response from successful tool outputs so the user isn't
+                # left with an empty result.
+                if not final_response or not final_response.strip():
+                    successful = [o for o in tool_outputs if o and not o.startswith("ERROR")]
+                    if successful:
+                        final_response = (
+                            "Step limit reached before full synthesis. "
+                            "Partial results:\n\n" + "\n\n".join(successful[-5:])
+                        )
+
             if not state.done:
                 state.done = True
-                state.done_reason = (
-                    "max_steps_reached" if steps_run >= max_steps else "completed"
-                )
+                state.done_reason = "max_steps_reached" if steps_run >= max_steps else "completed"
 
             # Build TaskQueue for compatibility with CLI / API consumers.
             plan_steps = list(plan.steps) if plan and plan.steps else []
@@ -353,9 +458,7 @@ class ToolUseLoop:
                 current_concurrent.append(tc)
             else:
                 if current_concurrent:
-                    batches.append(
-                        ToolBatch(calls=list(current_concurrent), concurrent=True)
-                    )
+                    batches.append(ToolBatch(calls=list(current_concurrent), concurrent=True))
                     current_concurrent = []
                 batches.append(ToolBatch(calls=[tc], concurrent=False))
         if current_concurrent:
@@ -424,9 +527,7 @@ class ToolUseLoop:
 
         # Project instructions (CLAUDE.md / AGENTS.md).
         if self._project_instructions:
-            system_parts.append(
-                f"Project instructions:\n{self._project_instructions}"
-            )
+            system_parts.append(f"Project instructions:\n{self._project_instructions}")
 
         # Ref: [DeepMind-Delegation §4.5] Root agent's global eye — live agent tree
         if agent_tree:
@@ -439,9 +540,7 @@ class ToolUseLoop:
 
         # Active skill instructions (from user /skill invocation).
         if self._skill_instructions:
-            system_parts.append(
-                f"Active skill instructions:\n{self._skill_instructions}"
-            )
+            system_parts.append(f"Active skill instructions:\n{self._skill_instructions}")
 
         # Auto-invocable skills catalog (for LLM-driven activation).
         if self._skill_registry is not None:
@@ -459,9 +558,7 @@ class ToolUseLoop:
 
         # Attached file contents.
         if context and context.attachment_texts:
-            system_parts.append(
-                "Attached files:\n" + "\n---\n".join(context.attachment_texts)
-            )
+            system_parts.append("Attached files:\n" + "\n---\n".join(context.attachment_texts))
 
         # Tool-specific guidance from prompt files.
         tool_guidance = self._render_tool_guidance()
@@ -471,8 +568,7 @@ class ToolUseLoop:
         # Plan context.
         if plan and plan.steps:
             plan_lines = "\n".join(
-                f"{i + 1}. {s.title} — {s.description}"
-                for i, s in enumerate(plan.steps)
+                f"{i + 1}. {s.title} — {s.description}" for i, s in enumerate(plan.steps)
             )
             system_parts.append(
                 f"Execute this plan:\n{plan_lines}\n"
@@ -620,10 +716,7 @@ class ToolUseLoop:
 
         instructions, _ = activate_skill(skill, skill_args)
         logging.info("LLM auto-activated skill '{}'", skill_name)
-        body = (
-            f"## Skill: {skill_name}\n\n{instructions}\n\n"
-            "Follow these instructions now."
-        )
+        body = f"## Skill: {skill_name}\n\n{instructions}\n\nFollow these instructions now."
         return type("R", (), {"content": body})()
 
     # ------------------------------------------------------------------
@@ -674,16 +767,20 @@ class ToolUseLoop:
             if coercion_error:
                 self._emit_tool_result_event(action_step, None, error=coercion_error)
                 return ToolCallResult(
-                    tool_call_id=tool_call_id, tool_id=tool_id,
-                    content=f"ERROR: {coercion_error}", success=False,
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content=f"ERROR: {coercion_error}",
+                    success=False,
                 )
 
         # Permission check.
         if not self._check_permission(action_step):
             self._emit_tool_result_event(action_step, None, error="Permission denied")
             return ToolCallResult(
-                tool_call_id=tool_call_id, tool_id=tool_id,
-                content="Permission denied", success=False,
+                tool_call_id=tool_call_id,
+                tool_id=tool_id,
+                content="Permission denied",
+                success=False,
             )
 
         # Pre-tool hook.
@@ -697,8 +794,10 @@ class ToolUseLoop:
                 logging.error("spawn_agent failed: {}", exc)
                 self._emit_tool_result_event(action_step, None, error=str(exc))
                 return ToolCallResult(
-                    tool_call_id=tool_call_id, tool_id=tool_id,
-                    content=f"ERROR: {exc}", success=False,
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content=f"ERROR: {exc}",
+                    success=False,
                 )
         elif tool_id == "activate_skill" and self._skill_registry is not None:
             result = self._handle_activate_skill(action_step)
@@ -707,8 +806,10 @@ class ToolUseLoop:
             if tool is None:
                 self._emit_tool_result_event(action_step, None, error="Tool not available")
                 return ToolCallResult(
-                    tool_call_id=tool_call_id, tool_id=tool_id,
-                    content="ERROR: Tool not available", success=False,
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content="ERROR: Tool not available",
+                    success=False,
                 )
             try:
                 # Prefer async execution for tools that support it (MCP tools).
@@ -721,8 +822,10 @@ class ToolUseLoop:
                 logging.error("Tool execution failed: {}", exc)
                 self._emit_tool_result_event(action_step, None, error=str(exc))
                 return ToolCallResult(
-                    tool_call_id=tool_call_id, tool_id=tool_id,
-                    content=f"ERROR: {exc}", success=False,
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content=f"ERROR: {exc}",
+                    success=False,
                 )
 
         # Post-tool hook.
@@ -744,8 +847,10 @@ class ToolUseLoop:
 
         self._emit_tool_result_event(action_step, content_str)
         return ToolCallResult(
-            tool_call_id=tool_call_id, tool_id=tool_id,
-            content=content_str, success=True,
+            tool_call_id=tool_call_id,
+            tool_id=tool_id,
+            content=content_str,
+            success=True,
         )
 
     # ------------------------------------------------------------------
@@ -773,9 +878,7 @@ class ToolUseLoop:
         decision = self._permission_policy.decide(action_step)
         decision = self._hook_manager.run_permission_request(action_step, decision)
         if decision == PermissionDecision.ASK:
-            approved = (
-                self._approval_callback(action_step) if self._approval_callback else False
-            )
+            approved = self._approval_callback(action_step) if self._approval_callback else False
             decision = PermissionDecision.ALLOW if approved else PermissionDecision.DENY
             self._emit_event(
                 {

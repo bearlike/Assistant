@@ -1,0 +1,8 @@
+# Local overrides — copy to docker-compose.override.yml (auto-loaded by Compose).
+# Mount your project directories so the agent can access them inside the container.
+# Each path is mounted at the same location so tool configs work identically.
+services:
+  api:
+    volumes:
+      - /home/you/Projects/my-project:/home/you/Projects/my-project
+      - /home/you/Projects/another-repo:/home/you/Projects/another-repo
