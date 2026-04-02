@@ -63,6 +63,48 @@ All dropdown popups use `<Popover>` from `components/Popover.tsx`. Do not duplic
 - Permission events rendered with icons: ⛔ deny, ✓ allow
 - Sub-agent logs show lifecycle status and step count (▶ start, ■ stop with status)
 
+## Dependency Selection — KISS/DRY Policy
+
+Before adding any dependency, verify:
+1. **Read the actual installed version's API** — not blog posts, not older docs. Run `node -e "console.log(Object.keys(require('pkg')))"` or read `node_modules/pkg/dist/*.d.ts` to confirm exports and prop names. Major versions often rename everything.
+2. **Check units and defaults** — numeric props may mean pixels in one version and percentages in another. Always confirm from the type definitions what a bare number means.
+3. **Prefer rehype/remark plugins over component-level libraries** — AST-level plugins (e.g., `rehype-highlight`) integrate with one prop addition and don't require component overrides. Component-level libraries (e.g., `react-syntax-highlighter`) require custom wiring, are harder to maintain, and tend to be larger.
+4. **Verify bundle size claims yourself** — bundlephobia numbers and blog claims are often stale or wrong. Check the actual package after install.
+
+### Current dependency rationale
+
+| Package | Purpose | Why this one (not alternatives) |
+|---------|---------|-------------------------------|
+| `react-markdown` + `remark-gfm` | Markdown rendering | Renders to React elements (no `dangerouslySetInnerHTML` / XSS risk). Standard for React chat UIs. |
+| `rehype-highlight` | Syntax highlighting | One-line rehype plugin integration (~50 KB gz, 37 languages). Rejected: `react-syntax-highlighter` (75-495 KB, not tree-shakeable, 138 open issues), Shiki (async init, complex setup), `prism-react-renderer` (low maintenance). |
+| `react-resizable-panels` v4 | Draggable split pane | Zero deps, ~7.7 KB gz, built-in ARIA/keyboard accessibility, by Brian Vaughn (React core team). Rejected: `allotment` (heavier, 82 issues), custom impl (loses a11y). **v4 API:** exports are `Group`, `Panel`, `Separator` (not `PanelGroup`/`PanelResizeHandle`). Prop `orientation` (not `direction`). Numeric sizes = **pixels**; use strings for percentages (`"40%"`, not `40`). |
+
+## CSS / Component Pitfalls — Lessons Learned
+
+### Never nest duplicate width constraints
+A `max-w-[70%]` inside another `max-w-[70%]` compounds to ~49%. Width constraints must live in exactly one place (DRY). The parent container owns the constraint; child components fill their parent.
+
+### Markdown `components` map belongs outside the render function
+Define `const markdownComponents = { ... }` as a module-level constant, not inside a component body. This avoids recreating the object on every render and prevents unnecessary ReactMarkdown re-renders.
+
+### rehype-highlight + custom `code` component coexistence
+`rehype-highlight` adds `hljs` / `language-*` classes to `<code>` inside `<pre>`. The custom `code` component must detect these classes and pass through (not restyle as inline code). Pattern:
+```tsx
+code: ({ className, ...props }) => {
+  if (className?.startsWith('hljs') || className?.startsWith('language-')) {
+    return <code className={className} {...props} />;
+  }
+  return <code className="inline-code-styles" {...props} />;
+}
+```
+The `pre` component uses `[&_code.hljs]:bg-transparent [&_code.hljs]:p-0` to prevent double-background on highlighted blocks.
+
+### InputBar session context hydration
+When rendering InputBar in detail mode, pass `sessionContext={session.context}` so project/skill/MCP tool selections reflect the session's stored context. Without this, the toolbar defaults to null/global state regardless of what the session was created with.
+
+### Data ordering must be explicit
+Never rely on storage enumeration order for user-facing lists. UUIDs sort randomly; filesystem `readdir`/`os.listdir` order is undefined. Sort by `created_at` (or the appropriate field) at the data source — not in the UI layer — so all consumers get correct order (DRY). The backend `session_runtime.list_sessions()` sorts descending by `created_at`.
+
 ## Testing
 - Tests use Vitest + React Testing Library
 - All API functions must be mocked in `__tests__/app.test.tsx` `vi.mock` block

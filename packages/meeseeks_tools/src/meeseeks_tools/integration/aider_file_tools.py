@@ -10,6 +10,7 @@ from pathlib import Path
 from meeseeks_core.classes import AbstractTool, ActionStep
 from meeseeks_core.common import MockSpeaker, get_mock_speaker
 
+from meeseeks_tools.core import resolve_safe_path
 from meeseeks_tools.vendor.aider.file_ops import expand_subdir
 from meeseeks_tools.vendor.aider.io import InputOutput
 
@@ -26,19 +27,6 @@ class ListDirRequest:
     path: str
     root: str
     max_entries: int | None
-
-
-def _resolve_path(root: str, rel_path: str) -> Path:
-    root_path = Path(root).resolve()
-    candidate = Path(rel_path)
-    if not candidate.is_absolute():
-        candidate = root_path / candidate
-    resolved = candidate.resolve()
-    try:
-        resolved.relative_to(root_path)
-    except ValueError as exc:
-        raise ValueError(f"Path '{rel_path}' resolves outside the project root.") from exc
-    return resolved
 
 
 def _parse_read_request(action_step: ActionStep | None) -> ReadFileRequest:
@@ -101,7 +89,7 @@ class AiderReadFileTool(AbstractTool):
         """Return the contents of a file or a readable error message."""
         try:
             request = _parse_read_request(action_step)
-            target = _resolve_path(request.root, request.path)
+            target = resolve_safe_path(request.path, root=request.root)
         except ValueError as exc:
             MockSpeaker = get_mock_speaker()
             return MockSpeaker(content=str(exc))
@@ -137,7 +125,7 @@ class AiderListDirTool(AbstractTool):
         """Return directory entries or a readable error message."""
         try:
             request = _parse_list_request(action_step)
-            target = _resolve_path(request.root, request.path)
+            target = resolve_safe_path(request.path, root=request.root)
         except ValueError as exc:
             MockSpeaker = get_mock_speaker()
             return MockSpeaker(content=str(exc))

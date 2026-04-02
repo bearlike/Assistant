@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from meeseeks_tools.core import resolve_safe_path
+
 DEFAULT_FENCE = ("`" * 3, "`" * 3)
 
 HEAD = r"^<{5,9} SEARCH>?\s*$"
@@ -115,7 +117,10 @@ def apply_search_replace_blocks(
     results: list[AppliedEdit] = []
 
     for edit in edits:
-        target_path = _resolve_target(root_path, edit.path)
+        try:
+            target_path = resolve_safe_path(edit.path, root=str(root_path))
+        except ValueError as exc:
+            raise EditBlockApplyError(str(exc)) from exc
         exists = file_exists.get(target_path)
         if exists is None:
             exists = target_path.exists()
@@ -149,20 +154,6 @@ def apply_search_replace_blocks(
 
     return results
 
-
-def _resolve_target(root_path: Path, rel_path: str) -> Path:
-    rel_path = rel_path.strip()
-    candidate = Path(rel_path)
-    if not candidate.is_absolute():
-        candidate = root_path / candidate
-    resolved = candidate.resolve()
-    try:
-        resolved.relative_to(root_path)
-    except ValueError as exc:
-        raise EditBlockApplyError(
-            f"Edit path '{rel_path}' resolves outside the project root."
-        ) from exc
-    return resolved
 
 
 def _compute_replacement(

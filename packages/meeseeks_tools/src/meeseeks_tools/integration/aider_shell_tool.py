@@ -7,29 +7,17 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 from meeseeks_core.classes import AbstractTool, ActionStep
 from meeseeks_core.common import MockSpeaker, get_mock_speaker
+
+from meeseeks_tools.core import resolve_safe_path
 
 
 @dataclass(frozen=True)
 class ShellRequest:
     command: str
     cwd: str
-
-
-def _resolve_cwd(root: str, cwd: str | None) -> str:
-    root_path = Path(root).resolve()
-    target = Path(cwd) if cwd else root_path
-    if not target.is_absolute():
-        target = root_path / target
-    resolved = target.resolve()
-    try:
-        resolved.relative_to(root_path)
-    except ValueError as exc:
-        raise ValueError(f"CWD '{cwd}' resolves outside the project root.") from exc
-    return str(resolved)
 
 
 def _parse_shell_request(action_step: ActionStep | None) -> ShellRequest:
@@ -46,7 +34,7 @@ def _parse_shell_request(action_step: ActionStep | None) -> ShellRequest:
         if not command:
             raise ValueError("command is required.")
         root = str(argument.get("root") or os.getcwd())
-        cwd = _resolve_cwd(root, argument.get("cwd"))
+        cwd = str(resolve_safe_path(argument.get("cwd") or root, root=root))
         return ShellRequest(command=command, cwd=cwd)
     raise ValueError("Tool input must be a string command or an object payload.")
 

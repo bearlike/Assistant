@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Session transcript storage and management."""
+"""Session transcript storage and management.
+
+Provides a ``SessionStoreBase`` ABC, a filesystem-backed ``SessionStore``
+implementation, and a ``create_session_store()`` factory that returns the
+configured driver (json or mongodb).
+"""
 
 from __future__ import annotations
 
+import abc
 import json
 import os
 import uuid
@@ -23,6 +29,127 @@ logging = get_logger(name="core.session_store")
 def _utc_now() -> str:
     """Return an ISO-8601 UTC timestamp string."""
     return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Abstract base
+# ---------------------------------------------------------------------------
+
+
+class SessionStoreBase(abc.ABC):
+    """Abstract interface for session storage backends.
+
+    Each driver implements the 13 abstract storage primitives.  Higher-level
+    operations (``fork_session``, ``load_recent_events``, ``compact_session``)
+    are concrete template methods built on top of those primitives.
+    """
+
+    root_dir: str  # local directory — always present (used for attachment files)
+
+    # -- abstract primitives ------------------------------------------------
+
+    @abc.abstractmethod
+    def create_session(self) -> str:
+        """Create a new session and return its identifier."""
+
+    @abc.abstractmethod
+    def append_event(self, session_id: str, event: Event) -> None:
+        """Append a single event record to the session transcript."""
+
+    @abc.abstractmethod
+    def load_transcript(self, session_id: str) -> list[EventRecord]:
+        """Load all transcript events for a session."""
+
+    @abc.abstractmethod
+    def save_summary(self, session_id: str, summary: str) -> None:
+        """Persist a summary for a session."""
+
+    @abc.abstractmethod
+    def load_summary(self, session_id: str) -> str | None:
+        """Load a previously saved summary, if present."""
+
+    @abc.abstractmethod
+    def list_sessions(self) -> list[str]:
+        """List all session IDs."""
+
+    @abc.abstractmethod
+    def session_dir(self, session_id: str) -> str:
+        """Return the local directory path for a session (used for attachments)."""
+
+    @abc.abstractmethod
+    def tag_session(self, session_id: str, tag: str) -> None:
+        """Associate a tag with a session ID for quick lookup."""
+
+    @abc.abstractmethod
+    def resolve_tag(self, tag: str) -> str | None:
+        """Resolve a tag to a session ID, if present."""
+
+    @abc.abstractmethod
+    def list_tags(self) -> dict[str, str]:
+        """Return a mapping of tags to session IDs."""
+
+    @abc.abstractmethod
+    def archive_session(self, session_id: str) -> None:
+        """Mark a session as archived."""
+
+    @abc.abstractmethod
+    def unarchive_session(self, session_id: str) -> None:
+        """Remove archived status from a session."""
+
+    @abc.abstractmethod
+    def is_archived(self, session_id: str) -> bool:
+        """Return True if a session is archived."""
+
+    # -- concrete template methods ------------------------------------------
+
+    def fork_session(self, source_session_id: str) -> str:
+        """Create a new session by copying events and summary from another."""
+        events = self.load_transcript(source_session_id)
+        summary = self.load_summary(source_session_id)
+        new_session_id = self.create_session()
+        for event in events:
+            self.append_event(new_session_id, event)
+        if summary:
+            self.save_summary(new_session_id, summary)
+        return new_session_id
+
+    def load_recent_events(
+        self,
+        session_id: str,
+        limit: int = 8,
+        include_types: set[str] | None = None,
+    ) -> list[EventRecord]:
+        """Load the most recent events, optionally filtered by type."""
+        events = self.load_transcript(session_id)
+        if include_types:
+            events = [event for event in events if event.get("type") in include_types]
+        if limit <= 0:
+            return []
+        return events[-limit:]
+
+    async def compact_session(
+        self,
+        session_id: str,
+        mode: CompactionMode | None = None,
+        **kwargs: Any,
+    ) -> CompactionResult:
+        """Compact a session's transcript using structured summarization."""
+        from meeseeks_core.compact import (
+            CompactionMode as CM,
+            CompactionResult as CR,
+            compact_conversation,
+        )
+
+        resolved_mode: CM = CM(mode) if mode is not None else CM.PARTIAL
+        events = self.load_transcript(session_id)
+        result: CR = await compact_conversation(events, resolved_mode, **kwargs)
+        self.save_summary(session_id, result.summary)
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Filesystem (JSON) driver
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -48,7 +175,7 @@ class SessionPaths:
         return os.path.join(self.session_dir, "summary.json")
 
 
-class SessionStore:
+class SessionStore(SessionStoreBase):
     """Filesystem-backed storage for session transcripts and summaries."""
 
     def __init__(self, root_dir: str | None = None) -> None:
@@ -115,20 +242,6 @@ class SessionStore:
                     logging.warning("Skipping malformed transcript line.")
         return events
 
-    def load_recent_events(
-        self,
-        session_id: str,
-        limit: int = 8,
-        include_types: set[str] | None = None,
-    ) -> list[EventRecord]:
-        """Load the most recent events, optionally filtered by type."""
-        events = self.load_transcript(session_id)
-        if include_types:
-            events = [event for event in events if event.get("type") in include_types]
-        if limit <= 0:
-            return []
-        return events[-limit:]
-
     def save_summary(self, session_id: str, summary: str) -> None:
         """Persist a summary for a session."""
         paths = self._paths(session_id)
@@ -154,17 +267,6 @@ class SessionStore:
             for name in os.listdir(self.root_dir)
             if os.path.isdir(os.path.join(self.root_dir, name))
         )
-
-    def fork_session(self, source_session_id: str) -> str:
-        """Create a new session by copying events and summary from another."""
-        events = self.load_transcript(source_session_id)
-        summary = self.load_summary(source_session_id)
-        new_session_id = self.create_session()
-        for event in events:
-            self.append_event(new_session_id, event)
-        if summary:
-            self.save_summary(new_session_id, summary)
-        return new_session_id
 
     def tag_session(self, session_id: str, tag: str) -> None:
         """Associate a tag with a session ID for quick lookup."""
@@ -204,33 +306,29 @@ class SessionStore:
         archived = index.get("archived", {})
         return session_id in archived
 
-    async def compact_session(
-        self,
-        session_id: str,
-        mode: CompactionMode | None = None,
-        **kwargs: Any,
-    ) -> CompactionResult:
-        """Compact a session's transcript using structured summarization.
 
-        Args:
-            session_id: The session to compact.
-            mode: Compaction mode (FULL or PARTIAL). Defaults to PARTIAL.
-            **kwargs: Forwarded to ``compact_conversation()``.
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
 
-        Returns:
-            CompactionResult with summary, kept events, and restored attachments.
-        """
-        from meeseeks_core.compact import (
-            CompactionMode as CM,
-            CompactionResult as CR,
-            compact_conversation,
-        )
 
-        resolved_mode: CM = CM(mode) if mode is not None else CM.PARTIAL
-        events = self.load_transcript(session_id)
-        result: CR = await compact_conversation(events, resolved_mode, **kwargs)
+def create_session_store(root_dir: str | None = None) -> SessionStoreBase:
+    """Return the configured session store driver.
 
-        # Persist the new summary
-        self.save_summary(session_id, result.summary)
+    Reads ``storage.driver`` from the app config.  Defaults to ``"json"``
+    (filesystem).  Set to ``"mongodb"`` to use MongoDB.
+    """
+    driver = get_config_value("storage", "driver", default="json")
+    if driver == "mongodb":
+        from meeseeks_core.session_store_mongo import MongoSessionStore
 
-        return result
+        return MongoSessionStore(root_dir=root_dir)
+    return SessionStore(root_dir=root_dir)
+
+
+__all__ = [
+    "SessionStoreBase",
+    "SessionStore",
+    "SessionPaths",
+    "create_session_store",
+]

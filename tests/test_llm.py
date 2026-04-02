@@ -12,18 +12,18 @@ from meeseeks_core.llm import (
 )
 
 
-def test_resolve_reasoning_effort_defaults_to_high(monkeypatch):
-    """Default to high for all models when config is empty."""
+def test_resolve_reasoning_effort_none_when_unconfigured(monkeypatch):
+    """Return None for supported models when no reasoning_effort is configured."""
     set_config_override({"llm": {"reasoning_effort": "", "reasoning_effort_models": []}})
-    assert resolve_reasoning_effort("gpt-5.2") == "high"
-    assert resolve_reasoning_effort("openai/claude-sonnet-4-6") == "high"
-    assert resolve_reasoning_effort("gemini/gemini-2.5-pro") == "high"
-    assert resolve_reasoning_effort("unknown-model") == "high"
+    assert resolve_reasoning_effort("gpt-5.2") is None
+    assert resolve_reasoning_effort("openai/claude-sonnet-4-6") is None
+    assert resolve_reasoning_effort("gemini/gemini-2.5-pro") is None
+    assert resolve_reasoning_effort("unknown-model") is None
 
 
 def test_build_chat_model_includes_reasoning_effort(monkeypatch):
-    """Attach reasoning_effort to model kwargs — defaults to high."""
-    set_config_override({"llm": {"reasoning_effort": "", "reasoning_effort_models": []}})
+    """Attach reasoning_effort to model kwargs when explicitly configured."""
+    set_config_override({"llm": {"reasoning_effort": "high", "reasoning_effort_models": []}})
     captured: dict[str, object] = {}
 
     class DummyChatLiteLLM:
@@ -38,8 +38,9 @@ def test_build_chat_model_includes_reasoning_effort(monkeypatch):
     model_kwargs = captured.get("model_kwargs") or {}
     assert model_kwargs.get("reasoning_effort") == "high"
     assert "temperature" not in captured
-    # drop_params must be set for graceful degradation
-    assert captured.get("drop_params") is True
+    # drop_params must be inside model_kwargs to reach litellm.acompletion();
+    # ChatLiteLLM has no drop_params field so top-level kwarg is silently ignored.
+    assert model_kwargs.get("drop_params") is True
 
 
 def test_build_chat_model_prefixes_openai_model(monkeypatch):

@@ -39,8 +39,10 @@ jobs:
           SHORT_SHA=$(git rev-parse --short HEAD)
           printf '{\"commit\":\"%s\"}\n' "$SHORT_SHA" > docs/build-info.json
 
-      - name: Build docs
-        run: .venv/bin/mkdocs build
+      - name: Generate config schema into docs/
+        run: |
+          .venv/bin/python scripts/ci/generate_config_schema.py || true
+          cp configs/app.schema.json docs/app.schema.json
 
       - name: Configure git for mike
         run: |

@@ -6,6 +6,7 @@ import json
 import time
 
 from meeseeks_api import backend
+from meeseeks_core.session_store import SessionStore
 
 
 class DummyQueue:
@@ -187,7 +188,7 @@ def test_query_fork_from(monkeypatch, tmp_path):
 
 
 def _reset_backend(tmp_path, monkeypatch):
-    backend.session_store = backend.SessionStore(root_dir=str(tmp_path))
+    backend.session_store = SessionStore(root_dir=str(tmp_path))
     backend.runtime = backend.SessionRuntime(session_store=backend.session_store)
     backend.notification_store = backend.NotificationStore(root_dir=str(tmp_path))
     backend.share_store = backend.ShareStore(root_dir=str(tmp_path))

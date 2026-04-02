@@ -574,7 +574,13 @@ def load_registry(
             from pathlib import Path as _Path
 
             has_cwd_mcp = (_Path(cwd) / ".mcp.json").is_file()
-        if (mcp_config_path and os.path.exists(mcp_config_path)) or has_cwd_mcp:
+        # Also check for subtree .mcp.json files
+        has_subtree_mcp = False
+        if cwd and not has_cwd_mcp:
+            from meeseeks_core.config import _discover_subtree_mcp_json
+
+            has_subtree_mcp = bool(_discover_subtree_mcp_json(cwd))
+        if (mcp_config_path and os.path.exists(mcp_config_path)) or has_cwd_mcp or has_subtree_mcp:
             manifest_path = _ensure_auto_manifest(
                 mcp_config_path or "", cwd=cwd
             )

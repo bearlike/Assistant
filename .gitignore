@@ -4,6 +4,10 @@ repo-to-prompt.codemod.js
 # MCP config (contains auth tokens)
 .mcp.json
 
+# Node / JavaScript
+node_modules/
+*.tsbuildinfo
+
 # macOS resource forks / metadata
 ._*
 .DS_Store
@@ -179,5 +183,6 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 docker.env
+docker-compose.override.yml
 /.claude/settings.json
 /.playwright-mcp

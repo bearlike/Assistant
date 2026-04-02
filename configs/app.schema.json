@@ -1,0 +1,613 @@
+{
+  "$id": "https://thekrishna.in/Assistant/latest/app.schema.json",
+  "$defs": {
+    "APIConfig": {
+      "description": "REST API authentication.",
+      "properties": {
+        "master_token": {
+          "default": "msk-strong-password",
+          "description": "Bearer token required for all REST API requests. Change from the default before deploying.",
+          "examples": [
+            "msk-strong-password"
+          ],
+          "title": "Master Token",
+          "type": "string"
+        }
+      },
+      "title": "APIConfig",
+      "type": "object"
+    },
+    "AgentConfig": {
+      "description": "Sub-agent hypervisor settings.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable the sub-agent spawning system.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "max_depth": {
+          "default": 5,
+          "description": "Maximum nesting depth for sub-agent delegation (1 = no sub-agents).",
+          "title": "Max Depth",
+          "type": "integer"
+        },
+        "max_concurrent": {
+          "default": 20,
+          "description": "Maximum number of sub-agents allowed to run concurrently.",
+          "title": "Max Concurrent",
+          "type": "integer"
+        },
+        "default_sub_model": {
+          "default": "",
+          "description": "Default LLM model for sub-agents. Falls back to the root agent's model when empty.",
+          "examples": [
+            "anthropic/claude-haiku-4-5"
+          ],
+          "title": "Default Sub Model",
+          "type": "string"
+        },
+        "allowed_models": {
+          "description": "Allowlist of model names sub-agents may use. Empty means all models are allowed.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Models",
+          "type": "array"
+        },
+        "sub_agent_max_steps": {
+          "default": 10,
+          "description": "Default maximum tool-use steps per sub-agent before forced termination.",
+          "title": "Sub Agent Max Steps",
+          "type": "integer"
+        },
+        "default_denied_tools": {
+          "description": "Tool IDs denied to all sub-agents by default (e.g. spawn_agent).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Default Denied Tools",
+          "type": "array"
+        }
+      },
+      "title": "AgentConfig",
+      "type": "object"
+    },
+    "CLIConfig": {
+      "description": "Terminal CLI display and interaction settings.",
+      "properties": {
+        "disable_textual": {
+          "default": false,
+          "description": "Disable the Textual TUI and fall back to plain Rich output.",
+          "title": "Disable Textual",
+          "type": "boolean"
+        },
+        "approval_style": {
+          "default": "inline",
+          "description": "Tool-approval UI style: 'inline' (plain prompt), 'textual' (TUI dialog), or 'aider' (diff-style).",
+          "examples": [
+            "aider"
+          ],
+          "title": "Approval Style",
+          "type": "string"
+        }
+      },
+      "title": "CLIConfig",
+      "type": "object"
+    },
+    "ChatConfig": {
+      "description": "Legacy config section kept for backward compatibility with app.json files.",
+      "properties": {
+        "port": {
+          "default": 8501,
+          "description": "TCP port for the legacy chat interface.",
+          "examples": [
+            8501
+          ],
+          "title": "Port",
+          "type": "integer"
+        },
+        "address": {
+          "default": "127.0.0.1",
+          "description": "Bind address for the legacy chat interface.",
+          "examples": [
+            "127.0.0.1"
+          ],
+          "title": "Address",
+          "type": "string"
+        }
+      },
+      "title": "ChatConfig",
+      "type": "object"
+    },
+    "ContextConfig": {
+      "description": "Context window selection and event filtering.",
+      "properties": {
+        "recent_event_limit": {
+          "default": 8,
+          "description": "Maximum number of recent events injected into the context window.",
+          "examples": [
+            8
+          ],
+          "title": "Recent Event Limit",
+          "type": "integer"
+        },
+        "selection_threshold": {
+          "default": 0.8,
+          "description": "Relevance score threshold (0.0-1.0) for the context selector to keep an event.",
+          "examples": [
+            0.8
+          ],
+          "title": "Selection Threshold",
+          "type": "number"
+        },
+        "selection_enabled": {
+          "default": true,
+          "description": "Enable LLM-based context event selection. When false, all recent events are used.",
+          "examples": [
+            true
+          ],
+          "title": "Selection Enabled",
+          "type": "boolean"
+        },
+        "context_selector_model": {
+          "default": "",
+          "description": "Model ID for context selection. Falls back to llm.default_model when empty.",
+          "examples": [
+            "anthropic/claude-sonnet-4-6"
+          ],
+          "title": "Context Selector Model",
+          "type": "string"
+        }
+      },
+      "title": "ContextConfig",
+      "type": "object"
+    },
+    "HomeAssistantConfig": {
+      "description": "Home Assistant smart-home integration.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable the Home Assistant tool for smart-home control.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "url": {
+          "default": "",
+          "description": "Home Assistant API base URL.",
+          "examples": [
+            "http://homeassistant.local:8123"
+          ],
+          "title": "Url",
+          "type": "string"
+        },
+        "token": {
+          "default": "",
+          "description": "Long-lived access token for Home Assistant authentication.",
+          "examples": [
+            "ha_token_here"
+          ],
+          "title": "Token",
+          "type": "string"
+        }
+      },
+      "title": "HomeAssistantConfig",
+      "type": "object"
+    },
+    "HookEntry": {
+      "description": "A single hook configuration entry.",
+      "properties": {
+        "type": {
+          "default": "command",
+          "description": "Hook type. Currently only 'command' is supported.",
+          "title": "Type",
+          "type": "string"
+        },
+        "command": {
+          "default": "",
+          "description": "Shell command to execute when the hook fires.",
+          "title": "Command",
+          "type": "string"
+        },
+        "matcher": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional fnmatch pattern to limit which tool IDs trigger this hook.",
+          "title": "Matcher"
+        },
+        "timeout": {
+          "default": 30,
+          "description": "Maximum seconds to wait for the hook command to finish.",
+          "title": "Timeout",
+          "type": "integer"
+        }
+      },
+      "title": "HookEntry",
+      "type": "object"
+    },
+    "HooksConfig": {
+      "description": "External shell hooks fired during the session lifecycle.",
+      "properties": {
+        "pre_tool_use": {
+          "description": "Hooks executed before each tool invocation.",
+          "items": {
+            "$ref": "#/$defs/HookEntry"
+          },
+          "title": "Pre Tool Use",
+          "type": "array"
+        },
+        "post_tool_use": {
+          "description": "Hooks executed after each tool invocation.",
+          "items": {
+            "$ref": "#/$defs/HookEntry"
+          },
+          "title": "Post Tool Use",
+          "type": "array"
+        },
+        "on_session_start": {
+          "description": "Hooks executed when a new session begins.",
+          "items": {
+            "$ref": "#/$defs/HookEntry"
+          },
+          "title": "On Session Start",
+          "type": "array"
+        },
+        "on_session_end": {
+          "description": "Hooks executed when a session ends.",
+          "items": {
+            "$ref": "#/$defs/HookEntry"
+          },
+          "title": "On Session End",
+          "type": "array"
+        }
+      },
+      "title": "HooksConfig",
+      "type": "object"
+    },
+    "LLMConfig": {
+      "description": "LLM provider connection and model selection.",
+      "properties": {
+        "api_base": {
+          "default": "",
+          "description": "Optional base URL override. Leave empty for direct provider access (LiteLLM routes automatically from the model prefix). Set only when using a proxy (e.g. LiteLLM, Bifrost).",
+          "examples": [
+            "",
+            "https://my-litellm-proxy.example.com/v1"
+          ],
+          "title": "Api Base",
+          "type": "string"
+        },
+        "api_key": {
+          "default": "",
+          "description": "API key for the LLM provider (e.g. Anthropic, OpenAI) or proxy master key.",
+          "examples": [
+            "sk-ant-xxxxxxxx"
+          ],
+          "title": "Api Key",
+          "type": "string"
+        },
+        "default_model": {
+          "default": "gpt-5.2",
+          "description": "Model ID using 'provider/model' syntax. LiteLLM auto-routes to the right API endpoint. When using a proxy, adjust the prefix to match its routing.",
+          "examples": [
+            "anthropic/claude-sonnet-4-6"
+          ],
+          "title": "Default Model",
+          "type": "string"
+        },
+        "action_plan_model": {
+          "default": "",
+          "description": "Model ID for action-plan generation. Falls back to default_model when empty.",
+          "examples": [
+            "anthropic/claude-sonnet-4-6"
+          ],
+          "title": "Action Plan Model",
+          "type": "string"
+        },
+        "tool_model": {
+          "default": "",
+          "description": "Model ID used by individual tools. Falls back to default_model when empty.",
+          "examples": [
+            "anthropic/claude-sonnet-4-6"
+          ],
+          "title": "Tool Model",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "default": "",
+          "description": "Reasoning effort hint for supported models. One of low, medium, high, none, or empty.",
+          "examples": [
+            "medium"
+          ],
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "reasoning_effort_models": {
+          "description": "Model name patterns that support the reasoning_effort parameter.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasoning Effort Models",
+          "type": "array"
+        }
+      },
+      "title": "LLMConfig",
+      "type": "object"
+    },
+    "LangfuseConfig": {
+      "description": "Langfuse LLM observability integration.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable Langfuse tracing for all LLM calls.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "host": {
+          "default": "",
+          "description": "Langfuse server URL.",
+          "examples": [
+            "https://langfuse.server.local"
+          ],
+          "title": "Host",
+          "type": "string"
+        },
+        "public_key": {
+          "default": "",
+          "description": "Langfuse project public key.",
+          "examples": [
+            "pk-lf-xxxxxxxxxxxxxxxx"
+          ],
+          "title": "Public Key",
+          "type": "string"
+        },
+        "secret_key": {
+          "default": "",
+          "description": "Langfuse project secret key.",
+          "examples": [
+            "sk-lf-xxxxxxxxxxxxxxxx"
+          ],
+          "title": "Secret Key",
+          "type": "string"
+        }
+      },
+      "title": "LangfuseConfig",
+      "type": "object"
+    },
+    "PermissionsConfig": {
+      "description": "Tool execution permission policy.",
+      "properties": {
+        "policy_path": {
+          "default": "",
+          "description": "Path to a JSON or TOML permission policy file. Empty uses built-in defaults.",
+          "examples": [
+            "./configs/policy.json"
+          ],
+          "title": "Policy Path",
+          "type": "string"
+        },
+        "approval_mode": {
+          "default": "ask",
+          "description": "Default approval mode: 'ask' prompts the user, 'allow' auto-approves, 'deny' blocks.",
+          "examples": [
+            "ask"
+          ],
+          "title": "Approval Mode",
+          "type": "string"
+        }
+      },
+      "title": "PermissionsConfig",
+      "type": "object"
+    },
+    "ProjectConfig": {
+      "description": "A project directory exposed to the REST API for session scoping.",
+      "properties": {
+        "path": {
+          "default": "",
+          "description": "Absolute path to the project root. Tilde (~) is expanded.",
+          "title": "Path",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "description": "Short human-readable description of the project.",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "title": "ProjectConfig",
+      "type": "object"
+    },
+    "ReflectionConfig": {
+      "description": "Post-execution reflection pass settings.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable a reflection LLM pass after tool execution to verify results.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "model": {
+          "default": "",
+          "description": "Model ID for the reflection pass. Falls back to llm.default_model when empty.",
+          "examples": [
+            "anthropic/claude-sonnet-4-6"
+          ],
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "title": "ReflectionConfig",
+      "type": "object"
+    },
+    "RuntimeConfig": {
+      "description": "Runtime environment settings.",
+      "properties": {
+        "envmode": {
+          "default": "dev",
+          "description": "Environment mode (e.g. dev, prod).",
+          "examples": [
+            "dev"
+          ],
+          "title": "Envmode",
+          "type": "string"
+        },
+        "log_level": {
+          "default": "DEBUG",
+          "description": "Logging verbosity. One of DEBUG, INFO, WARNING, ERROR, CRITICAL.",
+          "examples": [
+            "INFO"
+          ],
+          "title": "Log Level",
+          "type": "string"
+        },
+        "log_style": {
+          "default": "",
+          "description": "Log output style for the core engine (empty for default).",
+          "examples": [
+            ""
+          ],
+          "title": "Log Style",
+          "type": "string"
+        },
+        "cli_log_style": {
+          "default": "dark",
+          "description": "Rich console log theme for the CLI (dark or light).",
+          "examples": [
+            "dark"
+          ],
+          "title": "Cli Log Style",
+          "type": "string"
+        },
+        "preflight_enabled": {
+          "default": false,
+          "description": "Run connectivity checks for LLM, Langfuse, and Home Assistant on startup.",
+          "title": "Preflight Enabled",
+          "type": "boolean"
+        },
+        "cache_dir": {
+          "default": "",
+          "description": "Directory for tool caches. Defaults to $MEESEEKS_HOME/cache.",
+          "examples": [
+            "~/.meeseeks/cache"
+          ],
+          "title": "Cache Dir",
+          "type": "string"
+        },
+        "session_dir": {
+          "default": "",
+          "description": "Directory for session transcripts. Defaults to $MEESEEKS_HOME/sessions.",
+          "examples": [
+            "~/.meeseeks/sessions"
+          ],
+          "title": "Session Dir",
+          "type": "string"
+        },
+        "config_dir": {
+          "default": "",
+          "description": "Root configuration directory. Defaults to $MEESEEKS_HOME.",
+          "examples": [
+            "~/.meeseeks"
+          ],
+          "title": "Config Dir",
+          "type": "string"
+        }
+      },
+      "title": "RuntimeConfig",
+      "type": "object"
+    },
+    "TokenBudgetConfig": {
+      "description": "Token budget and auto-compaction thresholds.",
+      "properties": {
+        "default_context_window": {
+          "default": 128000,
+          "description": "Default context window size in tokens used when the model is not listed in model_context_windows.",
+          "examples": [
+            128000
+          ],
+          "title": "Default Context Window",
+          "type": "integer"
+        },
+        "auto_compact_threshold": {
+          "default": 0.8,
+          "description": "Fraction of the context window (0.0-1.0) that triggers automatic conversation compaction.",
+          "examples": [
+            0.8
+          ],
+          "title": "Auto Compact Threshold",
+          "type": "number"
+        },
+        "model_context_windows": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Per-model context window overrides. Keys are model names, values are token counts.",
+          "title": "Model Context Windows",
+          "type": "object"
+        }
+      },
+      "title": "TokenBudgetConfig",
+      "type": "object"
+    }
+  },
+  "description": "Typed configuration for the Meeseeks runtime.",
+  "properties": {
+    "runtime": {
+      "$ref": "#/$defs/RuntimeConfig"
+    },
+    "llm": {
+      "$ref": "#/$defs/LLMConfig"
+    },
+    "context": {
+      "$ref": "#/$defs/ContextConfig"
+    },
+    "token_budget": {
+      "$ref": "#/$defs/TokenBudgetConfig"
+    },
+    "reflection": {
+      "$ref": "#/$defs/ReflectionConfig"
+    },
+    "langfuse": {
+      "$ref": "#/$defs/LangfuseConfig"
+    },
+    "home_assistant": {
+      "$ref": "#/$defs/HomeAssistantConfig"
+    },
+    "permissions": {
+      "$ref": "#/$defs/PermissionsConfig"
+    },
+    "cli": {
+      "$ref": "#/$defs/CLIConfig"
+    },
+    "chat": {
+      "$ref": "#/$defs/ChatConfig",
+      "description": "Legacy chat interface settings."
+    },
+    "api": {
+      "$ref": "#/$defs/APIConfig"
+    },
+    "agent": {
+      "$ref": "#/$defs/AgentConfig"
+    },
+    "hooks": {
+      "$ref": "#/$defs/HooksConfig"
+    },
+    "projects": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ProjectConfig"
+      },
+      "description": "Named project directories exposed to the REST API for session scoping.",
+      "title": "Projects",
+      "type": "object"
+    }
+  },
+  "title": "AppConfig",
+  "type": "object"
+}

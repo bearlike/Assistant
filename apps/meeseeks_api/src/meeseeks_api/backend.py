@@ -27,7 +27,7 @@ from meeseeks_core.config import (
 from meeseeks_core.notifications import NotificationStore
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.session_runtime import SessionRuntime, parse_core_command
-from meeseeks_core.session_store import SessionStore
+from meeseeks_core.session_store import SessionStoreBase, create_session_store
 from meeseeks_core.share_store import ShareStore
 from meeseeks_core.tool_registry import load_registry
 from werkzeug.utils import secure_filename
@@ -36,7 +36,7 @@ from werkzeug.utils import secure_filename
 class NotificationService:
     """Emit session lifecycle notifications for the API."""
 
-    def __init__(self, store: NotificationStore, session_store: SessionStore) -> None:
+    def __init__(self, store: NotificationStore, session_store: SessionStoreBase) -> None:
         """Initialize with notification and session stores."""
         self._store = store
         self._session_store = session_store
@@ -132,9 +132,8 @@ class NotificationService:
 
 
 # Get the API token from app config
-MASTER_API_TOKEN = (
-    os.environ.get("MASTER_API_TOKEN")
-    or get_config_value("api", "master_token", default="msk-strong-password")
+MASTER_API_TOKEN = os.environ.get("MASTER_API_TOKEN") or get_config_value(
+    "api", "master_token", default="msk-strong-password"
 )
 
 # Initialize logger
@@ -149,7 +148,7 @@ if _config.runtime.preflight_enabled:
 
 # Create Flask application
 app = Flask(__name__)
-session_store = SessionStore()
+session_store = create_session_store()
 runtime = SessionRuntime(session_store=session_store)
 notification_store = NotificationStore(root_dir=session_store.root_dir)
 share_store = ShareStore(root_dir=session_store.root_dir)
@@ -429,12 +428,15 @@ class Sessions(Resource):
         except ValueError:
             project_cwd = None
         if project_cwd:
-            project_name = (payload.get("project") or "")
+            project_name = payload.get("project") or ""
             if not project_name:
                 ctx = payload.get("context")
                 if isinstance(ctx, dict):
                     project_name = ctx.get("project", "")
             context_payload["project"] = project_name
+        context_payload["model"] = get_config_value(
+            "llm", "default_model", default="unknown"
+        )
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
         return {"session_id": session_id}, 200
@@ -463,6 +465,9 @@ class SessionQuery(Resource):
             return {"message": "Session is already running."}, 409
 
         context_payload = _build_context_payload(request_data)
+        context_payload["model"] = get_config_value(
+            "llm", "default_model", default="unknown"
+        )
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
 
@@ -471,9 +476,7 @@ class SessionQuery(Resource):
         allowed_tools = _extract_allowed_tools(context_payload)
 
         # Skill activation: resolve from top-level "skill" field or context.skill.
-        skill_instructions = _resolve_skill_instructions(
-            request_data, user_query, context_payload
-        )
+        skill_instructions = _resolve_skill_instructions(request_data, user_query, context_payload)
 
         # Resolve project → cwd
         try:
@@ -614,9 +617,7 @@ class SessionAgents(Resource):
         if auth_error:
             return auth_error
         events = runtime.load_events(session_id)
-        total_steps = sum(
-            1 for e in events if e.get("type") == "tool_result"
-        )
+        total_steps = sum(1 for e in events if e.get("type") == "tool_result")
         agents = [
             {
                 "agent_id": e.get("payload", {}).get("agent_id"),
@@ -853,9 +854,7 @@ class Tools(Resource):
             if gpath and os.path.exists(gpath):
                 with open(gpath, encoding="utf-8") as _f:
                     gc = json.load(_f)
-                    global_servers = set(
-                        gc.get("servers", gc.get("mcpServers", {})).keys()
-                    )
+                    global_servers = set(gc.get("servers", gc.get("mcpServers", {})).keys())
         except Exception:
             pass
 
@@ -870,8 +869,7 @@ class Tools(Resource):
                 "server": spec.metadata.get("server"),
                 "scope": (
                     "global"
-                    if spec.kind != "mcp"
-                    or spec.metadata.get("server") in global_servers
+                    if spec.kind != "mcp" or spec.metadata.get("server") in global_servers
                     else "project"
                 ),
             }

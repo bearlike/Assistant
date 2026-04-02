@@ -16,7 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 from meeseeks_core.classes import AbstractTool, ActionStep
 from meeseeks_core.common import MockSpeaker, get_logger, get_mock_speaker, ha_render_system_prompt
 from meeseeks_core.config import get_config_value
-from pydantic.v1 import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from typing_extensions import NotRequired
 
 logging = get_logger(name="tools.integration.homeassistant")
@@ -233,16 +233,15 @@ class HomeAssistantCall(BaseModel):
         )
     )
 
-    @validator("entity_id", allow_reuse=True)
-    # pylint: disable=E0213,W0613
-    def validate_entity_id(cls, entity_id: str, values: dict[str, Any], **kwargs: Any) -> str:
+    @field_validator("entity_id")
+    @classmethod
+    def validate_entity_id(cls, entity_id: str, info: ValidationInfo) -> str:
         """Validate the entity_id against the cache when available.
 
         Args:
             cls: Pydantic model class.
             entity_id: Candidate entity identifier.
-            values: Parsed model values.
-            **kwargs: Additional validator arguments.
+            info: Pydantic validation info with access to other field values.
 
         Returns:
             Validated entity identifier.
@@ -252,21 +251,20 @@ class HomeAssistantCall(BaseModel):
         """
         # ! BUG: The entity_id may not be validated correctly as the cache
         # !     is not passed to the validator.
-        ha_cache = values.get("ha_cache")
+        ha_cache = info.data.get("cache")
         if ha_cache and entity_id not in ha_cache.cache["entity_ids"]:
             raise ValueError(f"Entity ID '{entity_id}' is not in the Home Assistant cache.")
         return entity_id
 
-    @validator("domain", allow_reuse=True)
-    # pylint: disable=E0213,W0613
-    def validate_domain(cls, domain: str, values: dict[str, Any], **kwargs: Any) -> str:
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, domain: str, info: ValidationInfo) -> str:
         """Validate the domain against the cache when available.
 
         Args:
             cls: Pydantic model class.
             domain: Domain string to validate.
-            values: Parsed model values.
-            **kwargs: Additional validator arguments.
+            info: Pydantic validation info with access to other field values.
 
         Returns:
             Validated domain string.
@@ -276,15 +274,12 @@ class HomeAssistantCall(BaseModel):
         """
         # ! BUG: The entity_id may not be validated correctly as the cache
         # !     is not passed to the validator.
-        ha_cache = values.get("ha_cache")
+        ha_cache = info.data.get("cache")
         if ha_cache and domain not in ha_cache.cache["allowed_domains"]:
             raise ValueError(f"Domain '{domain}' is not in the Home Assistant cache.")
         return domain
 
-    class Config:
-        """Pydantic configuration for HomeAssistantCall."""
-
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class HomeAssistant(AbstractTool):
@@ -460,7 +455,7 @@ class HomeAssistant(AbstractTool):
             messages=[
                 SystemMessage(content=system_prompt),
                 HumanMessage(content="Turn on the lamp lights."),
-                AIMessage(content=example.json()),
+                AIMessage(content=example.model_dump_json()),
                 HumanMessagePromptTemplate.from_template(
                     "The user asked you to `{action_step}`. You must use the information "
                     "provided to pick the right Home Assistant service call values only "
@@ -603,7 +598,7 @@ class HomeAssistant(AbstractTool):
             name="homeassistant-set-state", all_entities=self.cache["entity_ids"]
         )
 
-        parser = PydanticOutputParser(pydantic_object=HomeAssistantCall)  # type: ignore[type-var]
+        parser = PydanticOutputParser(pydantic_object=HomeAssistantCall)
         prompt = self._create_set_prompt(system_prompt, parser)
         if self.model is None:
             raise RuntimeError("LLM client not initialized for Home Assistant.")

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { InputBar } from "./InputBar";
@@ -91,17 +92,16 @@ export function SessionDetailView({
       setSelectedFile(selectedTurn.files[0]);
     }
   }, [selectedTurn, selectedFile]);
-  return <div className="flex flex-1 overflow-hidden h-full">
-      {/* Left Panel: Conversation */}
-      <div className={`flex flex-col h-full transition-all duration-300 ${isWorkspaceOpen ? "w-[40%]" : "w-full max-w-4xl mx-auto"}`}>
-        {errorMessage && <div className="px-6 pt-4">
-            <Alert variant="destructive">
-              <AlertTitle>{errorTitle}</AlertTitle>
-              <AlertDescription>{errorMessage}</AlertDescription>
-            </Alert>
-          </div>}
+  const conversationPanel = (
+    <>
+      {errorMessage && <div className="px-6 pt-4">
+        <Alert variant="destructive">
+          <AlertTitle>{errorTitle}</AlertTitle>
+          <AlertDescription>{errorMessage}</AlertDescription>
+        </Alert>
+      </div>}
 
-        <ConversationTimeline
+      <ConversationTimeline
         timeline={timeline}
         onShowTrace={handleShowTrace}
         onOpenFiles={handleOpenFiles}
@@ -109,15 +109,15 @@ export function SessionDetailView({
         isRunning={running || submitting}
         onShowActiveTrace={handleShowLiveTrace}
         events={events}
+        model={session.context?.model}
         systemBlock={summaryData.summary.length || summaryData.testing.length ? {
-        summary: {
-          text: summaryData.summary,
-          testing: summaryData.testing
-        }
-      } : undefined} />
+          summary: {
+            text: summaryData.summary,
+            testing: summaryData.testing
+          }
+        } : undefined} />
 
-        <InputBar mode="detail" onSubmit={async (query, newContext, mode, attachments) => {
-        // Merge stored session context (project, skill, etc.) with new selections
+      <InputBar mode="detail" sessionContext={session.context} onSubmit={async (query, newContext, mode, attachments) => {
         const mergedContext = { ...session.context, ...newContext };
         await send(query, mergedContext, mode, attachments);
         resume();
@@ -125,11 +125,28 @@ export function SessionDetailView({
         await stop();
         resume();
       }} isRunning={running} isSubmitting={submitting} error={queryError} />
-      </div>
+    </>
+  );
 
-      {/* Right Panel: Workspace */}
-      {isWorkspaceOpen && <div className="flex-1 h-full min-w-0">
+  if (isWorkspaceOpen) {
+    return (
+      <PanelGroup orientation="horizontal" className="flex-1 overflow-hidden h-full">
+        <Panel id="conversation" defaultSize="40%" minSize="25%" maxSize="75%" className="flex flex-col h-full">
+          {conversationPanel}
+        </Panel>
+        <PanelResizeHandle className="w-1.5 bg-[hsl(var(--border))] hover:bg-[hsl(var(--primary))]/60 active:bg-[hsl(var(--primary))] transition-colors cursor-col-resize" />
+        <Panel id="workspace" minSize="25%" className="h-full min-w-0">
           <WorkspacePanel onClose={() => setIsWorkspaceOpen(false)} activeTab={activeTab} onTabChange={setActiveTab} events={selectedTurn ? selectedTurn.events : events} diffContent={selectedFile?.diff} filename={selectedFile?.path || selectedFile?.name} />
-        </div>}
-    </div>;
+        </Panel>
+      </PanelGroup>
+    );
+  }
+
+  return (
+    <div className="flex flex-1 overflow-hidden h-full">
+      <div className="flex flex-col h-full w-full max-w-4xl mx-auto">
+        {conversationPanel}
+      </div>
+    </div>
+  );
 }

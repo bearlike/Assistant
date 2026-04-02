@@ -23,7 +23,7 @@ from meeseeks_core.permissions import (
     load_permission_policy,
 )
 from meeseeks_core.planning import Planner
-from meeseeks_core.session_store import SessionStore
+from meeseeks_core.session_store import SessionStoreBase, create_session_store
 from meeseeks_core.skills import SkillRegistry, activate_skill
 from meeseeks_core.token_budget import get_token_budget
 from meeseeks_core.tool_registry import ToolRegistry, filter_specs, load_registry
@@ -39,7 +39,7 @@ class Orchestrator:
         self,
         *,
         model_name: str | None = None,
-        session_store: SessionStore | None = None,
+        session_store: SessionStoreBase | None = None,
         tool_registry: ToolRegistry | None = None,
         permission_policy: PermissionPolicy | None = None,
         approval_callback: Callable[[ActionStep], bool] | None = None,
@@ -55,7 +55,7 @@ class Orchestrator:
             or get_config_value("llm", "action_plan_model")
             or get_config_value("llm", "default_model", default="gpt-5.2")
         )
-        self._session_store = session_store or SessionStore()
+        self._session_store = session_store or create_session_store()
         self._tool_registry = tool_registry or load_registry(cwd=cwd)
         self._permission_policy = permission_policy or load_permission_policy()
         self._approval_callback = approval_callback or approval_callback_from_config()
@@ -185,12 +185,8 @@ class Orchestrator:
                 task_queue = TaskQueue(plan_steps=plan.steps, action_steps=[])
             else:
                 # Act mode: run the async tool-use loop via the agent hypervisor.
-                max_depth = int(
-                    get_config_value("agent", "max_depth", default=5)
-                )
-                max_concurrent = int(
-                    get_config_value("agent", "max_concurrent", default=20)
-                )
+                max_depth = int(get_config_value("agent", "max_depth", default=5))
+                max_concurrent = int(get_config_value("agent", "max_concurrent", default=20))
                 registry = AgentHypervisor(
                     max_concurrent=max_concurrent,
                     session_step_budget=self._session_step_budget,
@@ -199,9 +195,7 @@ class Orchestrator:
                     model_name=self._model_name,
                     max_depth=max_depth,
                     should_cancel=should_cancel,
-                    event_logger=lambda event: self._session_store.append_event(
-                        session_id, event
-                    ),
+                    event_logger=lambda event: self._session_store.append_event(session_id, event),
                     registry=registry,
                     message_queue=message_queue,
                     interrupt_step=interrupt_step,
@@ -331,8 +325,13 @@ class Orchestrator:
     def _should_update_summary(text: str) -> bool:
         lowered = text.lower()
         keywords = [
-            "remember", "note this", "save this", "pin this",
-            "keep this", "magic number", "magic numbers",
+            "remember",
+            "note this",
+            "save this",
+            "pin this",
+            "keep this",
+            "magic number",
+            "magic numbers",
         ]
         return any(keyword in lowered for keyword in keywords)
 
@@ -384,8 +383,12 @@ class Orchestrator:
             return mode
         lowered = user_query.strip().lower()
         plan_triggers = [
-            "make a plan", "create a plan", "draft a plan",
-            "plan the", "plan for", "planning",
+            "make a plan",
+            "create a plan",
+            "draft a plan",
+            "plan the",
+            "plan for",
+            "planning",
         ]
         if any(trigger in lowered for trigger in plan_triggers):
             return "plan"

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Mic,
   ArrowUp,
@@ -25,6 +25,7 @@ type McpToolOption = McpOption & {
 };
 interface InputBarProps {
   mode: 'home' | 'detail';
+  sessionContext?: SessionContext;
   onSubmit?: (
     query: string,
     context?: SessionContext,
@@ -39,6 +40,7 @@ interface InputBarProps {
 }
 export function InputBar({
   mode,
+  sessionContext,
   onSubmit,
   onStop,
   isRunning = false,
@@ -50,8 +52,9 @@ export function InputBar({
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSkillOpen, setIsSkillOpen] = useState(false);
   const [isProjectOpen, setIsProjectOpen] = useState(false);
-  const [activeSkill, setActiveSkill] = useState<string | null>(null);
-  const [activeProject, setActiveProject] = useState<string | null>(null);
+  const [activeSkill, setActiveSkill] = useState<string | null>(sessionContext?.skill ?? null);
+  const [activeProject, setActiveProject] = useState<string | null>(sessionContext?.project ?? null);
+  const pendingMcpToolsRef = useRef<string[] | null>(sessionContext?.mcp_tools ?? null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>('act');
   const popupDirection = mode === 'home' ? 'down' : 'up';
@@ -101,12 +104,27 @@ export function InputBar({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+  // Sync local state from session context when navigating between sessions
+  useEffect(() => {
+    setActiveProject(sessionContext?.project ?? null);
+    setActiveSkill(sessionContext?.skill ?? null);
+    pendingMcpToolsRef.current = sessionContext?.mcp_tools ?? null;
+    setMcps([]);
+  }, [sessionContext?.project, sessionContext?.skill, sessionContext?.mcp_tools]);
   useEffect(() => {
     setMcps((prev) => {
       if (mcpTools.length === 0) {
         return prev.length ? prev : [];
       }
       const prevMap = new Map(prev.map((mcp) => [mcp.id, mcp.active]));
+      // On fresh load after session context change, use stored mcp_tools
+      const pendingTools = pendingMcpToolsRef.current;
+      const sessionToolSet = (prevMap.size === 0 && pendingTools)
+        ? new Set(pendingTools)
+        : null;
+      if (sessionToolSet) {
+        pendingMcpToolsRef.current = null;
+      }
       return mcpTools.map((tool) => {
         const reason = tool.disabled_reason ?? '';
         const isFailed = reason.toLowerCase().includes('fail') || reason.toLowerCase().includes('error');
@@ -114,7 +132,8 @@ export function InputBar({
         return {
           id: tool.tool_id,
           name: tool.name,
-          active: prevMap.get(tool.tool_id) ?? tool.enabled,
+          active: prevMap.get(tool.tool_id)
+            ?? (sessionToolSet ? sessionToolSet.has(tool.tool_id) : tool.enabled),
           enabled: tool.enabled,
           server: tool.server,
           disabled_reason: tool.disabled_reason,

@@ -18,6 +18,7 @@ from meeseeks_tools.aider_bridge import (
     apply_search_replace_blocks,
     parse_search_replace_blocks,
 )
+from meeseeks_tools.core import resolve_safe_path
 
 
 @dataclass(frozen=True)
@@ -124,22 +125,11 @@ def _collect_target_paths(request: EditBlockRequest) -> dict[str, Path]:
     root_path = Path(request.root).resolve()
     targets: dict[str, Path] = {}
     for edit in edits:
-        targets[edit.path] = _resolve_path(root_path, edit.path)
+        try:
+            targets[edit.path] = resolve_safe_path(edit.path, root=str(root_path))
+        except ValueError as exc:
+            raise EditBlockApplyError(str(exc)) from exc
     return targets
-
-
-def _resolve_path(root_path: Path, rel_path: str) -> Path:
-    candidate = Path(rel_path)
-    if not candidate.is_absolute():
-        candidate = root_path / candidate
-    resolved = candidate.resolve()
-    try:
-        resolved.relative_to(root_path)
-    except ValueError as exc:
-        raise EditBlockApplyError(
-            f"Edit path '{rel_path}' resolves outside the project root."
-        ) from exc
-    return resolved
 
 
 def _read_targets(targets: dict[str, Path]) -> dict[str, str]:
