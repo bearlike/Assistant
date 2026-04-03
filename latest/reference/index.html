@@ -1843,12 +1843,12 @@
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/tool_use_loop.py</code></summary>
-                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">68</span>
-<span class="normal">69</span>
-<span class="normal">70</span>
-<span class="normal">71</span>
-<span class="normal">72</span>
-<span class="normal">73</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">88</span>
+<span class="normal">89</span>
+<span class="normal">90</span>
+<span class="normal">91</span>
+<span class="normal">92</span>
+<span class="normal">93</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">ToolBatch</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;A batch of tool calls with shared concurrency mode.&quot;&quot;&quot;</span>
 
@@ -1908,14 +1908,14 @@
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/tool_use_loop.py</code></summary>
-                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">58</span>
-<span class="normal">59</span>
-<span class="normal">60</span>
-<span class="normal">61</span>
-<span class="normal">62</span>
-<span class="normal">63</span>
-<span class="normal">64</span>
-<span class="normal">65</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">78</span>
+<span class="normal">79</span>
+<span class="normal">80</span>
+<span class="normal">81</span>
+<span class="normal">82</span>
+<span class="normal">83</span>
+<span class="normal">84</span>
+<span class="normal">85</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">ToolCallResult</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Result of executing a single tool call.&quot;&quot;&quot;</span>
 
@@ -1976,27 +1976,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/tool_use_loop.py</code></summary>
-                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 76</span>
-<span class="normal"> 77</span>
-<span class="normal"> 78</span>
-<span class="normal"> 79</span>
-<span class="normal"> 80</span>
-<span class="normal"> 81</span>
-<span class="normal"> 82</span>
-<span class="normal"> 83</span>
-<span class="normal"> 84</span>
-<span class="normal"> 85</span>
-<span class="normal"> 86</span>
-<span class="normal"> 87</span>
-<span class="normal"> 88</span>
-<span class="normal"> 89</span>
-<span class="normal"> 90</span>
-<span class="normal"> 91</span>
-<span class="normal"> 92</span>
-<span class="normal"> 93</span>
-<span class="normal"> 94</span>
-<span class="normal"> 95</span>
-<span class="normal"> 96</span>
+                <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 96</span>
 <span class="normal"> 97</span>
 <span class="normal"> 98</span>
 <span class="normal"> 99</span>
@@ -2787,7 +2767,54 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 <span class="normal">884</span>
 <span class="normal">885</span>
 <span class="normal">886</span>
-<span class="normal">887</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ToolUseLoop</span><span class="p">:</span>
+<span class="normal">887</span>
+<span class="normal">888</span>
+<span class="normal">889</span>
+<span class="normal">890</span>
+<span class="normal">891</span>
+<span class="normal">892</span>
+<span class="normal">893</span>
+<span class="normal">894</span>
+<span class="normal">895</span>
+<span class="normal">896</span>
+<span class="normal">897</span>
+<span class="normal">898</span>
+<span class="normal">899</span>
+<span class="normal">900</span>
+<span class="normal">901</span>
+<span class="normal">902</span>
+<span class="normal">903</span>
+<span class="normal">904</span>
+<span class="normal">905</span>
+<span class="normal">906</span>
+<span class="normal">907</span>
+<span class="normal">908</span>
+<span class="normal">909</span>
+<span class="normal">910</span>
+<span class="normal">911</span>
+<span class="normal">912</span>
+<span class="normal">913</span>
+<span class="normal">914</span>
+<span class="normal">915</span>
+<span class="normal">916</span>
+<span class="normal">917</span>
+<span class="normal">918</span>
+<span class="normal">919</span>
+<span class="normal">920</span>
+<span class="normal">921</span>
+<span class="normal">922</span>
+<span class="normal">923</span>
+<span class="normal">924</span>
+<span class="normal">925</span>
+<span class="normal">926</span>
+<span class="normal">927</span>
+<span class="normal">928</span>
+<span class="normal">929</span>
+<span class="normal">930</span>
+<span class="normal">931</span>
+<span class="normal">932</span>
+<span class="normal">933</span>
+<span class="normal">934</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ToolUseLoop</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Async tool-use conversation loop.</span>
 
 <span class="sd">    Each instance owns one conversation with one LLM. Sub-agents are</span>
@@ -2884,7 +2911,10 @@ created by spawning new <code>ToolUseLoop</code> instances via the
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">depth</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
                 <span class="n">agent_tree</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">registry</span><span class="o">.</span><span class="n">render_agent_tree</span><span class="p">()</span>
             <span class="n">messages</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_messages</span><span class="p">(</span>
-                <span class="n">user_query</span><span class="p">,</span> <span class="n">context</span><span class="p">,</span> <span class="n">plan</span><span class="p">,</span> <span class="n">agent_tree</span><span class="o">=</span><span class="n">agent_tree</span><span class="p">,</span>
+                <span class="n">user_query</span><span class="p">,</span>
+                <span class="n">context</span><span class="p">,</span>
+                <span class="n">plan</span><span class="p">,</span>
+                <span class="n">agent_tree</span><span class="o">=</span><span class="n">agent_tree</span><span class="p">,</span>
             <span class="p">)</span>
             <span class="n">tool_schemas</span> <span class="o">=</span> <span class="n">specs_to_langchain_tools</span><span class="p">(</span><span class="n">tool_specs</span><span class="p">)</span>
             <span class="n">model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_bind_model</span><span class="p">(</span><span class="n">tool_schemas</span><span class="p">)</span>
@@ -2936,10 +2966,12 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                     <span class="c1"># Ref: [AgentCgroup §4.2] Graduated enforcement — NL feedback, not kill.</span>
                     <span class="c1"># Inject budget warning so the agent can adapt its strategy.</span>
                     <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">registry</span><span class="o">.</span><span class="n">budget_exhausted</span><span class="p">():</span>
-                        <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">SystemMessage</span><span class="p">(</span>
-                            <span class="n">content</span><span class="o">=</span><span class="s2">&quot;BUDGET WARNING: Session step budget exhausted. &quot;</span>
-                            <span class="s2">&quot;Summarize your current findings and return results immediately.&quot;</span>
-                        <span class="p">))</span>
+                        <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                            <span class="n">SystemMessage</span><span class="p">(</span>
+                                <span class="n">content</span><span class="o">=</span><span class="s2">&quot;BUDGET WARNING: Session step budget exhausted. &quot;</span>
+                                <span class="s2">&quot;Summarize your current findings and return results immediately.&quot;</span>
+                            <span class="p">)</span>
+                        <span class="p">)</span>
 
                     <span class="n">response</span><span class="p">:</span> <span class="n">AIMessage</span> <span class="o">=</span> <span class="k">await</span> <span class="n">model</span><span class="o">.</span><span class="n">ainvoke</span><span class="p">(</span>
                         <span class="n">messages</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">invoke_config</span> <span class="ow">or</span> <span class="kc">None</span>
@@ -2951,7 +2983,8 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                     <span class="n">raw</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
                     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
                         <span class="n">sanitized</span> <span class="o">=</span> <span class="p">[</span>
-                            <span class="n">block</span> <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">raw</span>
+                            <span class="n">block</span>
+                            <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">raw</span>
                             <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="n">block</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;thinking&quot;</span><span class="p">)</span>
                         <span class="p">]</span>
                         <span class="n">response</span> <span class="o">=</span> <span class="n">AIMessage</span><span class="p">(</span>
@@ -2983,23 +3016,16 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                     <span class="c1"># Execute tool calls with concurrency-aware partitioning.</span>
                     <span class="c1"># Exclusive tools run alone; concurrent-safe tools are gathered.</span>
                     <span class="n">specs_map</span> <span class="o">=</span> <span class="p">{</span><span class="n">s</span><span class="o">.</span><span class="n">tool_id</span><span class="p">:</span> <span class="n">s</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">tool_specs</span><span class="p">}</span>
-                    <span class="n">batches</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_partition_tool_calls</span><span class="p">(</span>
-                        <span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">,</span> <span class="n">specs_map</span>
-                    <span class="p">)</span>
+                    <span class="n">batches</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_partition_tool_calls</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">,</span> <span class="n">specs_map</span><span class="p">)</span>
                     <span class="n">results</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ToolCallResult</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
                     <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">batches</span><span class="p">:</span>
                         <span class="k">if</span> <span class="n">batch</span><span class="o">.</span><span class="n">concurrent</span><span class="p">:</span>
                             <span class="n">batch_results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span>
-                                <span class="o">*</span><span class="p">[</span>
-                                    <span class="bp">self</span><span class="o">.</span><span class="n">_safe_execute</span><span class="p">(</span><span class="n">tc</span><span class="p">,</span> <span class="n">tool_specs</span><span class="p">)</span>
-                                    <span class="k">for</span> <span class="n">tc</span> <span class="ow">in</span> <span class="n">batch</span><span class="o">.</span><span class="n">calls</span>
-                                <span class="p">],</span>
+                                <span class="o">*</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_safe_execute</span><span class="p">(</span><span class="n">tc</span><span class="p">,</span> <span class="n">tool_specs</span><span class="p">)</span> <span class="k">for</span> <span class="n">tc</span> <span class="ow">in</span> <span class="n">batch</span><span class="o">.</span><span class="n">calls</span><span class="p">],</span>
                             <span class="p">)</span>
                             <span class="n">results</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">batch_results</span><span class="p">)</span>
                         <span class="k">else</span><span class="p">:</span>
-                            <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_safe_execute</span><span class="p">(</span>
-                                <span class="n">batch</span><span class="o">.</span><span class="n">calls</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">tool_specs</span>
-                            <span class="p">)</span>
+                            <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_safe_execute</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">calls</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">tool_specs</span><span class="p">)</span>
                             <span class="n">results</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
 
                     <span class="k">for</span> <span class="n">tool_call</span><span class="p">,</span> <span class="n">result</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">,</span> <span class="n">results</span><span class="p">):</span>
@@ -3025,6 +3051,25 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                     <span class="p">)</span>
                     <span class="n">steps_run</span> <span class="o">+=</span> <span class="mi">1</span>
 
+                    <span class="c1"># Inject step progress so the model can self-regulate.</span>
+                    <span class="n">remaining_steps</span> <span class="o">=</span> <span class="n">max_steps</span> <span class="o">-</span> <span class="n">steps_run</span>
+                    <span class="n">failures</span> <span class="o">=</span> <span class="p">[</span><span class="n">r</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">results</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">r</span><span class="o">.</span><span class="n">success</span><span class="p">]</span>
+                    <span class="n">progress_parts</span> <span class="o">=</span> <span class="p">[</span>
+                        <span class="sa">f</span><span class="s2">&quot;[Step </span><span class="si">{</span><span class="n">steps_run</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">max_steps</span><span class="si">}</span><span class="s2">&quot;</span>
+                        <span class="sa">f</span><span class="s2">&quot; — </span><span class="si">{</span><span class="n">remaining_steps</span><span class="si">}</span><span class="s2"> step</span><span class="si">{</span><span class="s1">&#39;s&#39;</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">remaining_steps</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="si">}</span><span class="s2">&quot;</span>
+                        <span class="s2">&quot; remaining]&quot;</span><span class="p">,</span>
+                    <span class="p">]</span>
+                    <span class="k">if</span> <span class="n">failures</span><span class="p">:</span>
+                        <span class="n">progress_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">failures</span><span class="p">)</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">results</span><span class="p">)</span><span class="si">}</span><span class="s2"> tool call(s)&quot;</span>
+                            <span class="s2">&quot; failed this step — adapt your approach.&quot;</span>
+                        <span class="p">)</span>
+                    <span class="k">if</span> <span class="n">remaining_steps</span> <span class="o">&lt;=</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">remaining_steps</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                        <span class="n">progress_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                            <span class="s2">&quot;Approaching step limit: wrap up and synthesize your findings soon.&quot;</span>
+                        <span class="p">)</span>
+                    <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">SystemMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">progress_parts</span><span class="p">)))</span>
+
                     <span class="k">if</span> <span class="n">span</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                         <span class="k">try</span><span class="p">:</span>
                             <span class="n">span</span><span class="o">.</span><span class="n">update_trace</span><span class="p">(</span>
@@ -3040,13 +3085,15 @@ created by spawning new <code>ToolUseLoop</code> instances via the
             <span class="c1"># give the LLM one final turn WITHOUT tools to force synthesis.</span>
             <span class="k">if</span> <span class="ow">not</span> <span class="n">state</span><span class="o">.</span><span class="n">done</span> <span class="ow">and</span> <span class="n">final_response</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">messages</span><span class="p">:</span>
                 <span class="k">try</span><span class="p">:</span>
-                    <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">SystemMessage</span><span class="p">(</span>
-                        <span class="n">content</span><span class="o">=</span><span class="p">(</span>
-                            <span class="s2">&quot;STEP LIMIT REACHED. You MUST now provide your final &quot;</span>
-                            <span class="s2">&quot;answer based on all the information gathered so far. &quot;</span>
-                            <span class="s2">&quot;Do NOT call any more tools. Respond with text only.&quot;</span>
+                    <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                        <span class="n">SystemMessage</span><span class="p">(</span>
+                            <span class="n">content</span><span class="o">=</span><span class="p">(</span>
+                                <span class="s2">&quot;STEP LIMIT REACHED. You MUST now provide your final &quot;</span>
+                                <span class="s2">&quot;answer based on all the information gathered so far. &quot;</span>
+                                <span class="s2">&quot;Do NOT call any more tools. Respond with text only.&quot;</span>
+                            <span class="p">)</span>
                         <span class="p">)</span>
-                    <span class="p">))</span>
+                    <span class="p">)</span>
                     <span class="c1"># Invoke without tool bindings to prevent further tool calls.</span>
                     <span class="n">unbound</span> <span class="o">=</span> <span class="n">build_chat_model</span><span class="p">(</span>
                         <span class="n">model_name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">model_name</span><span class="p">,</span>
@@ -3068,11 +3115,20 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                 <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
                     <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Final synthesis turn failed.&quot;</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
+                <span class="c1"># Fallback: if synthesis produced nothing, build a minimal</span>
+                <span class="c1"># response from successful tool outputs so the user isn&#39;t</span>
+                <span class="c1"># left with an empty result.</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">final_response</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">final_response</span><span class="o">.</span><span class="n">strip</span><span class="p">():</span>
+                    <span class="n">successful</span> <span class="o">=</span> <span class="p">[</span><span class="n">o</span> <span class="k">for</span> <span class="n">o</span> <span class="ow">in</span> <span class="n">tool_outputs</span> <span class="k">if</span> <span class="n">o</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">o</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;ERROR&quot;</span><span class="p">)]</span>
+                    <span class="k">if</span> <span class="n">successful</span><span class="p">:</span>
+                        <span class="n">final_response</span> <span class="o">=</span> <span class="p">(</span>
+                            <span class="s2">&quot;Step limit reached before full synthesis. &quot;</span>
+                            <span class="s2">&quot;Partial results:</span><span class="se">\n\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">successful</span><span class="p">[</span><span class="o">-</span><span class="mi">5</span><span class="p">:])</span>
+                        <span class="p">)</span>
+
             <span class="k">if</span> <span class="ow">not</span> <span class="n">state</span><span class="o">.</span><span class="n">done</span><span class="p">:</span>
                 <span class="n">state</span><span class="o">.</span><span class="n">done</span> <span class="o">=</span> <span class="kc">True</span>
-                <span class="n">state</span><span class="o">.</span><span class="n">done_reason</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="s2">&quot;max_steps_reached&quot;</span> <span class="k">if</span> <span class="n">steps_run</span> <span class="o">&gt;=</span> <span class="n">max_steps</span> <span class="k">else</span> <span class="s2">&quot;completed&quot;</span>
-                <span class="p">)</span>
+                <span class="n">state</span><span class="o">.</span><span class="n">done_reason</span> <span class="o">=</span> <span class="s2">&quot;max_steps_reached&quot;</span> <span class="k">if</span> <span class="n">steps_run</span> <span class="o">&gt;=</span> <span class="n">max_steps</span> <span class="k">else</span> <span class="s2">&quot;completed&quot;</span>
 
             <span class="c1"># Build TaskQueue for compatibility with CLI / API consumers.</span>
             <span class="n">plan_steps</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">plan</span><span class="o">.</span><span class="n">steps</span><span class="p">)</span> <span class="k">if</span> <span class="n">plan</span> <span class="ow">and</span> <span class="n">plan</span><span class="o">.</span><span class="n">steps</span> <span class="k">else</span> <span class="p">[]</span>
@@ -3123,9 +3179,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                 <span class="n">current_concurrent</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tc</span><span class="p">)</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">if</span> <span class="n">current_concurrent</span><span class="p">:</span>
-                    <span class="n">batches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                        <span class="n">ToolBatch</span><span class="p">(</span><span class="n">calls</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">current_concurrent</span><span class="p">),</span> <span class="n">concurrent</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-                    <span class="p">)</span>
+                    <span class="n">batches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ToolBatch</span><span class="p">(</span><span class="n">calls</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">current_concurrent</span><span class="p">),</span> <span class="n">concurrent</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
                     <span class="n">current_concurrent</span> <span class="o">=</span> <span class="p">[]</span>
                 <span class="n">batches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ToolBatch</span><span class="p">(</span><span class="n">calls</span><span class="o">=</span><span class="p">[</span><span class="n">tc</span><span class="p">],</span> <span class="n">concurrent</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
         <span class="k">if</span> <span class="n">current_concurrent</span><span class="p">:</span>
@@ -3194,9 +3248,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 
         <span class="c1"># Project instructions (CLAUDE.md / AGENTS.md).</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_project_instructions</span><span class="p">:</span>
-            <span class="n">system_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Project instructions:</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_project_instructions</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
+            <span class="n">system_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Project instructions:</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_project_instructions</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
         <span class="c1"># Ref: [DeepMind-Delegation §4.5] Root agent&#39;s global eye — live agent tree</span>
         <span class="k">if</span> <span class="n">agent_tree</span><span class="p">:</span>
@@ -3209,9 +3261,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 
         <span class="c1"># Active skill instructions (from user /skill invocation).</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_skill_instructions</span><span class="p">:</span>
-            <span class="n">system_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Active skill instructions:</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_skill_instructions</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
+            <span class="n">system_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Active skill instructions:</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_skill_instructions</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
         <span class="c1"># Auto-invocable skills catalog (for LLM-driven activation).</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_skill_registry</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -3229,9 +3279,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 
         <span class="c1"># Attached file contents.</span>
         <span class="k">if</span> <span class="n">context</span> <span class="ow">and</span> <span class="n">context</span><span class="o">.</span><span class="n">attachment_texts</span><span class="p">:</span>
-            <span class="n">system_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                <span class="s2">&quot;Attached files:</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">---</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">context</span><span class="o">.</span><span class="n">attachment_texts</span><span class="p">)</span>
-            <span class="p">)</span>
+            <span class="n">system_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;Attached files:</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">---</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">context</span><span class="o">.</span><span class="n">attachment_texts</span><span class="p">))</span>
 
         <span class="c1"># Tool-specific guidance from prompt files.</span>
         <span class="n">tool_guidance</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_render_tool_guidance</span><span class="p">()</span>
@@ -3241,8 +3289,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
         <span class="c1"># Plan context.</span>
         <span class="k">if</span> <span class="n">plan</span> <span class="ow">and</span> <span class="n">plan</span><span class="o">.</span><span class="n">steps</span><span class="p">:</span>
             <span class="n">plan_lines</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">. </span><span class="si">{</span><span class="n">s</span><span class="o">.</span><span class="n">title</span><span class="si">}</span><span class="s2"> — </span><span class="si">{</span><span class="n">s</span><span class="o">.</span><span class="n">description</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">plan</span><span class="o">.</span><span class="n">steps</span><span class="p">)</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">. </span><span class="si">{</span><span class="n">s</span><span class="o">.</span><span class="n">title</span><span class="si">}</span><span class="s2"> — </span><span class="si">{</span><span class="n">s</span><span class="o">.</span><span class="n">description</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">plan</span><span class="o">.</span><span class="n">steps</span><span class="p">)</span>
             <span class="p">)</span>
             <span class="n">system_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
                 <span class="sa">f</span><span class="s2">&quot;Execute this plan:</span><span class="se">\n</span><span class="si">{</span><span class="n">plan_lines</span><span class="si">}</span><span class="se">\n</span><span class="s2">&quot;</span>
@@ -3390,10 +3437,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 
         <span class="n">instructions</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">activate_skill</span><span class="p">(</span><span class="n">skill</span><span class="p">,</span> <span class="n">skill_args</span><span class="p">)</span>
         <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;LLM auto-activated skill &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="p">,</span> <span class="n">skill_name</span><span class="p">)</span>
-        <span class="n">body</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;## Skill: </span><span class="si">{</span><span class="n">skill_name</span><span class="si">}</span><span class="se">\n\n</span><span class="si">{</span><span class="n">instructions</span><span class="si">}</span><span class="se">\n\n</span><span class="s2">&quot;</span>
-            <span class="s2">&quot;Follow these instructions now.&quot;</span>
-        <span class="p">)</span>
+        <span class="n">body</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;## Skill: </span><span class="si">{</span><span class="n">skill_name</span><span class="si">}</span><span class="se">\n\n</span><span class="si">{</span><span class="n">instructions</span><span class="si">}</span><span class="se">\n\n</span><span class="s2">Follow these instructions now.&quot;</span>
         <span class="k">return</span> <span class="nb">type</span><span class="p">(</span><span class="s2">&quot;R&quot;</span><span class="p">,</span> <span class="p">(),</span> <span class="p">{</span><span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">body</span><span class="p">})()</span>
 
     <span class="c1"># ------------------------------------------------------------------</span>
@@ -3444,16 +3488,20 @@ created by spawning new <code>ToolUseLoop</code> instances via the
             <span class="k">if</span> <span class="n">coercion_error</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_emit_tool_result_event</span><span class="p">(</span><span class="n">action_step</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="n">coercion_error</span><span class="p">)</span>
                 <span class="k">return</span> <span class="n">ToolCallResult</span><span class="p">(</span>
-                    <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span> <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
-                    <span class="n">content</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;ERROR: </span><span class="si">{</span><span class="n">coercion_error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                    <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span>
+                    <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
+                    <span class="n">content</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;ERROR: </span><span class="si">{</span><span class="n">coercion_error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                    <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                 <span class="p">)</span>
 
         <span class="c1"># Permission check.</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_check_permission</span><span class="p">(</span><span class="n">action_step</span><span class="p">):</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_emit_tool_result_event</span><span class="p">(</span><span class="n">action_step</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="s2">&quot;Permission denied&quot;</span><span class="p">)</span>
             <span class="k">return</span> <span class="n">ToolCallResult</span><span class="p">(</span>
-                <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span> <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
-                <span class="n">content</span><span class="o">=</span><span class="s2">&quot;Permission denied&quot;</span><span class="p">,</span> <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span>
+                <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
+                <span class="n">content</span><span class="o">=</span><span class="s2">&quot;Permission denied&quot;</span><span class="p">,</span>
+                <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
             <span class="p">)</span>
 
         <span class="c1"># Pre-tool hook.</span>
@@ -3467,8 +3515,10 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                 <span class="n">logging</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;spawn_agent failed: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">exc</span><span class="p">)</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_emit_tool_result_event</span><span class="p">(</span><span class="n">action_step</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">exc</span><span class="p">))</span>
                 <span class="k">return</span> <span class="n">ToolCallResult</span><span class="p">(</span>
-                    <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span> <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
-                    <span class="n">content</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;ERROR: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                    <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span>
+                    <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
+                    <span class="n">content</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;ERROR: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                    <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                 <span class="p">)</span>
         <span class="k">elif</span> <span class="n">tool_id</span> <span class="o">==</span> <span class="s2">&quot;activate_skill&quot;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">_skill_registry</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">result</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_handle_activate_skill</span><span class="p">(</span><span class="n">action_step</span><span class="p">)</span>
@@ -3477,8 +3527,10 @@ created by spawning new <code>ToolUseLoop</code> instances via the
             <span class="k">if</span> <span class="n">tool</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_emit_tool_result_event</span><span class="p">(</span><span class="n">action_step</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="s2">&quot;Tool not available&quot;</span><span class="p">)</span>
                 <span class="k">return</span> <span class="n">ToolCallResult</span><span class="p">(</span>
-                    <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span> <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
-                    <span class="n">content</span><span class="o">=</span><span class="s2">&quot;ERROR: Tool not available&quot;</span><span class="p">,</span> <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                    <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span>
+                    <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
+                    <span class="n">content</span><span class="o">=</span><span class="s2">&quot;ERROR: Tool not available&quot;</span><span class="p">,</span>
+                    <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                 <span class="p">)</span>
             <span class="k">try</span><span class="p">:</span>
                 <span class="c1"># Prefer async execution for tools that support it (MCP tools).</span>
@@ -3491,8 +3543,10 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                 <span class="n">logging</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Tool execution failed: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">exc</span><span class="p">)</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_emit_tool_result_event</span><span class="p">(</span><span class="n">action_step</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">exc</span><span class="p">))</span>
                 <span class="k">return</span> <span class="n">ToolCallResult</span><span class="p">(</span>
-                    <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span> <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
-                    <span class="n">content</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;ERROR: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                    <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span>
+                    <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
+                    <span class="n">content</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;ERROR: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                    <span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                 <span class="p">)</span>
 
         <span class="c1"># Post-tool hook.</span>
@@ -3514,8 +3568,10 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_emit_tool_result_event</span><span class="p">(</span><span class="n">action_step</span><span class="p">,</span> <span class="n">content_str</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">ToolCallResult</span><span class="p">(</span>
-            <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span> <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
-            <span class="n">content</span><span class="o">=</span><span class="n">content_str</span><span class="p">,</span> <span class="n">success</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">tool_call_id</span><span class="o">=</span><span class="n">tool_call_id</span><span class="p">,</span>
+            <span class="n">tool_id</span><span class="o">=</span><span class="n">tool_id</span><span class="p">,</span>
+            <span class="n">content</span><span class="o">=</span><span class="n">content_str</span><span class="p">,</span>
+            <span class="n">success</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="p">)</span>
 
     <span class="c1"># ------------------------------------------------------------------</span>
@@ -3543,9 +3599,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
         <span class="n">decision</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_permission_policy</span><span class="o">.</span><span class="n">decide</span><span class="p">(</span><span class="n">action_step</span><span class="p">)</span>
         <span class="n">decision</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hook_manager</span><span class="o">.</span><span class="n">run_permission_request</span><span class="p">(</span><span class="n">action_step</span><span class="p">,</span> <span class="n">decision</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">decision</span> <span class="o">==</span> <span class="n">PermissionDecision</span><span class="o">.</span><span class="n">ASK</span><span class="p">:</span>
-            <span class="n">approved</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_approval_callback</span><span class="p">(</span><span class="n">action_step</span><span class="p">)</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_approval_callback</span> <span class="k">else</span> <span class="kc">False</span>
-            <span class="p">)</span>
+            <span class="n">approved</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_approval_callback</span><span class="p">(</span><span class="n">action_step</span><span class="p">)</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_approval_callback</span> <span class="k">else</span> <span class="kc">False</span>
             <span class="n">decision</span> <span class="o">=</span> <span class="n">PermissionDecision</span><span class="o">.</span><span class="n">ALLOW</span> <span class="k">if</span> <span class="n">approved</span> <span class="k">else</span> <span class="n">PermissionDecision</span><span class="o">.</span><span class="n">DENY</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_emit_event</span><span class="p">(</span>
                 <span class="p">{</span>
@@ -3800,27 +3854,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/tool_use_loop.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 84</span>
-<span class="normal"> 85</span>
-<span class="normal"> 86</span>
-<span class="normal"> 87</span>
-<span class="normal"> 88</span>
-<span class="normal"> 89</span>
-<span class="normal"> 90</span>
-<span class="normal"> 91</span>
-<span class="normal"> 92</span>
-<span class="normal"> 93</span>
-<span class="normal"> 94</span>
-<span class="normal"> 95</span>
-<span class="normal"> 96</span>
-<span class="normal"> 97</span>
-<span class="normal"> 98</span>
-<span class="normal"> 99</span>
-<span class="normal">100</span>
-<span class="normal">101</span>
-<span class="normal">102</span>
-<span class="normal">103</span>
-<span class="normal">104</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">104</span>
 <span class="normal">105</span>
 <span class="normal">106</span>
 <span class="normal">107</span>
@@ -3851,7 +3885,27 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 <span class="normal">132</span>
 <span class="normal">133</span>
 <span class="normal">134</span>
-<span class="normal">135</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+<span class="normal">135</span>
+<span class="normal">136</span>
+<span class="normal">137</span>
+<span class="normal">138</span>
+<span class="normal">139</span>
+<span class="normal">140</span>
+<span class="normal">141</span>
+<span class="normal">142</span>
+<span class="normal">143</span>
+<span class="normal">144</span>
+<span class="normal">145</span>
+<span class="normal">146</span>
+<span class="normal">147</span>
+<span class="normal">148</span>
+<span class="normal">149</span>
+<span class="normal">150</span>
+<span class="normal">151</span>
+<span class="normal">152</span>
+<span class="normal">153</span>
+<span class="normal">154</span>
+<span class="normal">155</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">agent_context</span><span class="p">:</span> <span class="n">AgentContext</span><span class="p">,</span>
@@ -3929,27 +3983,7 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/tool_use_loop.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">141</span>
-<span class="normal">142</span>
-<span class="normal">143</span>
-<span class="normal">144</span>
-<span class="normal">145</span>
-<span class="normal">146</span>
-<span class="normal">147</span>
-<span class="normal">148</span>
-<span class="normal">149</span>
-<span class="normal">150</span>
-<span class="normal">151</span>
-<span class="normal">152</span>
-<span class="normal">153</span>
-<span class="normal">154</span>
-<span class="normal">155</span>
-<span class="normal">156</span>
-<span class="normal">157</span>
-<span class="normal">158</span>
-<span class="normal">159</span>
-<span class="normal">160</span>
-<span class="normal">161</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">161</span>
 <span class="normal">162</span>
 <span class="normal">163</span>
 <span class="normal">164</span>
@@ -4174,7 +4208,56 @@ created by spawning new <code>ToolUseLoop</code> instances via the
 <span class="normal">383</span>
 <span class="normal">384</span>
 <span class="normal">385</span>
-<span class="normal">386</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
+<span class="normal">386</span>
+<span class="normal">387</span>
+<span class="normal">388</span>
+<span class="normal">389</span>
+<span class="normal">390</span>
+<span class="normal">391</span>
+<span class="normal">392</span>
+<span class="normal">393</span>
+<span class="normal">394</span>
+<span class="normal">395</span>
+<span class="normal">396</span>
+<span class="normal">397</span>
+<span class="normal">398</span>
+<span class="normal">399</span>
+<span class="normal">400</span>
+<span class="normal">401</span>
+<span class="normal">402</span>
+<span class="normal">403</span>
+<span class="normal">404</span>
+<span class="normal">405</span>
+<span class="normal">406</span>
+<span class="normal">407</span>
+<span class="normal">408</span>
+<span class="normal">409</span>
+<span class="normal">410</span>
+<span class="normal">411</span>
+<span class="normal">412</span>
+<span class="normal">413</span>
+<span class="normal">414</span>
+<span class="normal">415</span>
+<span class="normal">416</span>
+<span class="normal">417</span>
+<span class="normal">418</span>
+<span class="normal">419</span>
+<span class="normal">420</span>
+<span class="normal">421</span>
+<span class="normal">422</span>
+<span class="normal">423</span>
+<span class="normal">424</span>
+<span class="normal">425</span>
+<span class="normal">426</span>
+<span class="normal">427</span>
+<span class="normal">428</span>
+<span class="normal">429</span>
+<span class="normal">430</span>
+<span class="normal">431</span>
+<span class="normal">432</span>
+<span class="normal">433</span>
+<span class="normal">434</span>
+<span class="normal">435</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
@@ -4206,7 +4289,10 @@ created by spawning new <code>ToolUseLoop</code> instances via the
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">depth</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
             <span class="n">agent_tree</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">registry</span><span class="o">.</span><span class="n">render_agent_tree</span><span class="p">()</span>
         <span class="n">messages</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_messages</span><span class="p">(</span>
-            <span class="n">user_query</span><span class="p">,</span> <span class="n">context</span><span class="p">,</span> <span class="n">plan</span><span class="p">,</span> <span class="n">agent_tree</span><span class="o">=</span><span class="n">agent_tree</span><span class="p">,</span>
+            <span class="n">user_query</span><span class="p">,</span>
+            <span class="n">context</span><span class="p">,</span>
+            <span class="n">plan</span><span class="p">,</span>
+            <span class="n">agent_tree</span><span class="o">=</span><span class="n">agent_tree</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">tool_schemas</span> <span class="o">=</span> <span class="n">specs_to_langchain_tools</span><span class="p">(</span><span class="n">tool_specs</span><span class="p">)</span>
         <span class="n">model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_bind_model</span><span class="p">(</span><span class="n">tool_schemas</span><span class="p">)</span>
@@ -4258,10 +4344,12 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                 <span class="c1"># Ref: [AgentCgroup §4.2] Graduated enforcement — NL feedback, not kill.</span>
                 <span class="c1"># Inject budget warning so the agent can adapt its strategy.</span>
                 <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">registry</span><span class="o">.</span><span class="n">budget_exhausted</span><span class="p">():</span>
-                    <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">SystemMessage</span><span class="p">(</span>
-                        <span class="n">content</span><span class="o">=</span><span class="s2">&quot;BUDGET WARNING: Session step budget exhausted. &quot;</span>
-                        <span class="s2">&quot;Summarize your current findings and return results immediately.&quot;</span>
-                    <span class="p">))</span>
+                    <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                        <span class="n">SystemMessage</span><span class="p">(</span>
+                            <span class="n">content</span><span class="o">=</span><span class="s2">&quot;BUDGET WARNING: Session step budget exhausted. &quot;</span>
+                            <span class="s2">&quot;Summarize your current findings and return results immediately.&quot;</span>
+                        <span class="p">)</span>
+                    <span class="p">)</span>
 
                 <span class="n">response</span><span class="p">:</span> <span class="n">AIMessage</span> <span class="o">=</span> <span class="k">await</span> <span class="n">model</span><span class="o">.</span><span class="n">ainvoke</span><span class="p">(</span>
                     <span class="n">messages</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">invoke_config</span> <span class="ow">or</span> <span class="kc">None</span>
@@ -4273,7 +4361,8 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                 <span class="n">raw</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
                 <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
                     <span class="n">sanitized</span> <span class="o">=</span> <span class="p">[</span>
-                        <span class="n">block</span> <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">raw</span>
+                        <span class="n">block</span>
+                        <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">raw</span>
                         <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="n">block</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;thinking&quot;</span><span class="p">)</span>
                     <span class="p">]</span>
                     <span class="n">response</span> <span class="o">=</span> <span class="n">AIMessage</span><span class="p">(</span>
@@ -4305,23 +4394,16 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                 <span class="c1"># Execute tool calls with concurrency-aware partitioning.</span>
                 <span class="c1"># Exclusive tools run alone; concurrent-safe tools are gathered.</span>
                 <span class="n">specs_map</span> <span class="o">=</span> <span class="p">{</span><span class="n">s</span><span class="o">.</span><span class="n">tool_id</span><span class="p">:</span> <span class="n">s</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">tool_specs</span><span class="p">}</span>
-                <span class="n">batches</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_partition_tool_calls</span><span class="p">(</span>
-                    <span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">,</span> <span class="n">specs_map</span>
-                <span class="p">)</span>
+                <span class="n">batches</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_partition_tool_calls</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">,</span> <span class="n">specs_map</span><span class="p">)</span>
                 <span class="n">results</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ToolCallResult</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
                 <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">batches</span><span class="p">:</span>
                     <span class="k">if</span> <span class="n">batch</span><span class="o">.</span><span class="n">concurrent</span><span class="p">:</span>
                         <span class="n">batch_results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span>
-                            <span class="o">*</span><span class="p">[</span>
-                                <span class="bp">self</span><span class="o">.</span><span class="n">_safe_execute</span><span class="p">(</span><span class="n">tc</span><span class="p">,</span> <span class="n">tool_specs</span><span class="p">)</span>
-                                <span class="k">for</span> <span class="n">tc</span> <span class="ow">in</span> <span class="n">batch</span><span class="o">.</span><span class="n">calls</span>
-                            <span class="p">],</span>
+                            <span class="o">*</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_safe_execute</span><span class="p">(</span><span class="n">tc</span><span class="p">,</span> <span class="n">tool_specs</span><span class="p">)</span> <span class="k">for</span> <span class="n">tc</span> <span class="ow">in</span> <span class="n">batch</span><span class="o">.</span><span class="n">calls</span><span class="p">],</span>
                         <span class="p">)</span>
                         <span class="n">results</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">batch_results</span><span class="p">)</span>
                     <span class="k">else</span><span class="p">:</span>
-                        <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_safe_execute</span><span class="p">(</span>
-                            <span class="n">batch</span><span class="o">.</span><span class="n">calls</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">tool_specs</span>
-                        <span class="p">)</span>
+                        <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_safe_execute</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">calls</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">tool_specs</span><span class="p">)</span>
                         <span class="n">results</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
 
                 <span class="k">for</span> <span class="n">tool_call</span><span class="p">,</span> <span class="n">result</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">tool_calls</span><span class="p">,</span> <span class="n">results</span><span class="p">):</span>
@@ -4347,6 +4429,25 @@ created by spawning new <code>ToolUseLoop</code> instances via the
                 <span class="p">)</span>
                 <span class="n">steps_run</span> <span class="o">+=</span> <span class="mi">1</span>
 
+                <span class="c1"># Inject step progress so the model can self-regulate.</span>
+                <span class="n">remaining_steps</span> <span class="o">=</span> <span class="n">max_steps</span> <span class="o">-</span> <span class="n">steps_run</span>
+                <span class="n">failures</span> <span class="o">=</span> <span class="p">[</span><span class="n">r</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">results</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">r</span><span class="o">.</span><span class="n">success</span><span class="p">]</span>
+                <span class="n">progress_parts</span> <span class="o">=</span> <span class="p">[</span>
+                    <span class="sa">f</span><span class="s2">&quot;[Step </span><span class="si">{</span><span class="n">steps_run</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">max_steps</span><span class="si">}</span><span class="s2">&quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot; — </span><span class="si">{</span><span class="n">remaining_steps</span><span class="si">}</span><span class="s2"> step</span><span class="si">{</span><span class="s1">&#39;s&#39;</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">remaining_steps</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="si">}</span><span class="s2">&quot;</span>
+                    <span class="s2">&quot; remaining]&quot;</span><span class="p">,</span>
+                <span class="p">]</span>
+                <span class="k">if</span> <span class="n">failures</span><span class="p">:</span>
+                    <span class="n">progress_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">failures</span><span class="p">)</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">results</span><span class="p">)</span><span class="si">}</span><span class="s2"> tool call(s)&quot;</span>
+                        <span class="s2">&quot; failed this step — adapt your approach.&quot;</span>
+                    <span class="p">)</span>
+                <span class="k">if</span> <span class="n">remaining_steps</span> <span class="o">&lt;=</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">remaining_steps</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">progress_parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                        <span class="s2">&quot;Approaching step limit: wrap up and synthesize your findings soon.&quot;</span>
+                    <span class="p">)</span>
+                <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">SystemMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">progress_parts</span><span class="p">)))</span>
+
                 <span class="k">if</span> <span class="n">span</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="k">try</span><span class="p">:</span>
                         <span class="n">span</span><span class="o">.</span><span class="n">update_trace</span><span class="p">(</span>
@@ -4362,13 +4463,15 @@ created by spawning new <code>ToolUseLoop</code> instances via the
         <span class="c1"># give the LLM one final turn WITHOUT tools to force synthesis.</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">state</span><span class="o">.</span><span class="n">done</span> <span class="ow">and</span> <span class="n">final_response</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">messages</span><span class="p">:</span>
             <span class="k">try</span><span class="p">:</span>
-                <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">SystemMessage</span><span class="p">(</span>
-                    <span class="n">content</span><span class="o">=</span><span class="p">(</span>
-                        <span class="s2">&quot;STEP LIMIT REACHED. You MUST now provide your final &quot;</span>
-                        <span class="s2">&quot;answer based on all the information gathered so far. &quot;</span>
-                        <span class="s2">&quot;Do NOT call any more tools. Respond with text only.&quot;</span>
+                <span class="n">messages</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                    <span class="n">SystemMessage</span><span class="p">(</span>
+                        <span class="n">content</span><span class="o">=</span><span class="p">(</span>
+                            <span class="s2">&quot;STEP LIMIT REACHED. You MUST now provide your final &quot;</span>
+                            <span class="s2">&quot;answer based on all the information gathered so far. &quot;</span>
+                            <span class="s2">&quot;Do NOT call any more tools. Respond with text only.&quot;</span>
+                        <span class="p">)</span>
                     <span class="p">)</span>
-                <span class="p">))</span>
+                <span class="p">)</span>
                 <span class="c1"># Invoke without tool bindings to prevent further tool calls.</span>
                 <span class="n">unbound</span> <span class="o">=</span> <span class="n">build_chat_model</span><span class="p">(</span>
                     <span class="n">model_name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">model_name</span><span class="p">,</span>
@@ -4390,11 +4493,20 @@ created by spawning new <code>ToolUseLoop</code> instances via the
             <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
                 <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Final synthesis turn failed.&quot;</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
+            <span class="c1"># Fallback: if synthesis produced nothing, build a minimal</span>
+            <span class="c1"># response from successful tool outputs so the user isn&#39;t</span>
+            <span class="c1"># left with an empty result.</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">final_response</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">final_response</span><span class="o">.</span><span class="n">strip</span><span class="p">():</span>
+                <span class="n">successful</span> <span class="o">=</span> <span class="p">[</span><span class="n">o</span> <span class="k">for</span> <span class="n">o</span> <span class="ow">in</span> <span class="n">tool_outputs</span> <span class="k">if</span> <span class="n">o</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">o</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;ERROR&quot;</span><span class="p">)]</span>
+                <span class="k">if</span> <span class="n">successful</span><span class="p">:</span>
+                    <span class="n">final_response</span> <span class="o">=</span> <span class="p">(</span>
+                        <span class="s2">&quot;Step limit reached before full synthesis. &quot;</span>
+                        <span class="s2">&quot;Partial results:</span><span class="se">\n\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">successful</span><span class="p">[</span><span class="o">-</span><span class="mi">5</span><span class="p">:])</span>
+                    <span class="p">)</span>
+
         <span class="k">if</span> <span class="ow">not</span> <span class="n">state</span><span class="o">.</span><span class="n">done</span><span class="p">:</span>
             <span class="n">state</span><span class="o">.</span><span class="n">done</span> <span class="o">=</span> <span class="kc">True</span>
-            <span class="n">state</span><span class="o">.</span><span class="n">done_reason</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="s2">&quot;max_steps_reached&quot;</span> <span class="k">if</span> <span class="n">steps_run</span> <span class="o">&gt;=</span> <span class="n">max_steps</span> <span class="k">else</span> <span class="s2">&quot;completed&quot;</span>
-            <span class="p">)</span>
+            <span class="n">state</span><span class="o">.</span><span class="n">done_reason</span> <span class="o">=</span> <span class="s2">&quot;max_steps_reached&quot;</span> <span class="k">if</span> <span class="n">steps_run</span> <span class="o">&gt;=</span> <span class="n">max_steps</span> <span class="k">else</span> <span class="s2">&quot;completed&quot;</span>
 
         <span class="c1"># Build TaskQueue for compatibility with CLI / API consumers.</span>
         <span class="n">plan_steps</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">plan</span><span class="o">.</span><span class="n">steps</span><span class="p">)</span> <span class="k">if</span> <span class="n">plan</span> <span class="ow">and</span> <span class="n">plan</span><span class="o">.</span><span class="n">steps</span> <span class="k">else</span> <span class="p">[]</span>
@@ -11692,7 +11804,8 @@ never sees them.</p>
 <span class="normal">386</span>
 <span class="normal">387</span>
 <span class="normal">388</span>
-<span class="normal">389</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">SessionRuntime</span><span class="p">:</span>
+<span class="normal">389</span>
+<span class="normal">390</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">SessionRuntime</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Shared orchestration runtime surface for CLI and API.&quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
@@ -11807,6 +11920,7 @@ never sees them.</p>
             <span class="k">if</span> <span class="ow">not</span> <span class="n">include_archived</span> <span class="ow">and</span> <span class="n">summary</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;archived&quot;</span><span class="p">):</span>
                 <span class="k">continue</span>
             <span class="n">summaries</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">summary</span><span class="p">)</span>
+        <span class="n">summaries</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;created_at&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">),</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">summaries</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">load_events</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">after</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">EventRecord</span><span class="p">]:</span>
@@ -12061,9 +12175,9 @@ never sees them.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/session_runtime.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">360</span>
-<span class="normal">361</span>
-<span class="normal">362</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">cancel</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">361</span>
+<span class="normal">362</span>
+<span class="normal">363</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">cancel</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Cancel an active run if present.&quot;&quot;&quot;</span>
     <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_run_registry</span><span class="o">.</span><span class="n">cancel</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span>
 </code></pre></div></td></tr></table></div></div>
@@ -12089,8 +12203,7 @@ never sees them.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/session_runtime.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">368</span>
-<span class="normal">369</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">369</span>
 <span class="normal">370</span>
 <span class="normal">371</span>
 <span class="normal">372</span>
@@ -12098,7 +12211,8 @@ never sees them.</p>
 <span class="normal">374</span>
 <span class="normal">375</span>
 <span class="normal">376</span>
-<span class="normal">377</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">enqueue_message</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="normal">377</span>
+<span class="normal">378</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">enqueue_message</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Enqueue a steering message for the root agent of a running session.</span>
 
 <span class="sd">    Returns False if no active run or no message queue.</span>
@@ -12132,8 +12246,7 @@ Returns False if no active run or no interrupt event.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/session_runtime.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">379</span>
-<span class="normal">380</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">380</span>
 <span class="normal">381</span>
 <span class="normal">382</span>
 <span class="normal">383</span>
@@ -12142,7 +12255,8 @@ Returns False if no active run or no interrupt event.</p>
 <span class="normal">386</span>
 <span class="normal">387</span>
 <span class="normal">388</span>
-<span class="normal">389</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">interrupt_step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="normal">389</span>
+<span class="normal">390</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">interrupt_step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Interrupt the current tool execution step.</span>
 
 <span class="sd">    The loop continues after the interrupted step with error results.</span>
@@ -12175,9 +12289,9 @@ Returns False if no active run or no interrupt event.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/session_runtime.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">364</span>
-<span class="normal">365</span>
-<span class="normal">366</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">is_running</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">365</span>
+<span class="normal">366</span>
+<span class="normal">367</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">is_running</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Return True if session has an active run.&quot;&quot;&quot;</span>
     <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_run_registry</span><span class="o">.</span><span class="n">is_running</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span>
 </code></pre></div></td></tr></table></div></div>
@@ -12218,7 +12332,8 @@ Returns False if no active run or no interrupt event.</p>
 <span class="normal">257</span>
 <span class="normal">258</span>
 <span class="normal">259</span>
-<span class="normal">260</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">list_sessions</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">include_archived</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]]:</span>
+<span class="normal">260</span>
+<span class="normal">261</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">list_sessions</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">include_archived</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;List sessions with summary metadata.&quot;&quot;&quot;</span>
     <span class="n">summaries</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">session_id</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_session_store</span><span class="o">.</span><span class="n">list_sessions</span><span class="p">():</span>
@@ -12234,6 +12349,7 @@ Returns False if no active run or no interrupt event.</p>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">include_archived</span> <span class="ow">and</span> <span class="n">summary</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;archived&quot;</span><span class="p">):</span>
             <span class="k">continue</span>
         <span class="n">summaries</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">summary</span><span class="p">)</span>
+    <span class="n">summaries</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;created_at&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">),</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">summaries</span>
 </code></pre></div></td></tr></table></div></div>
             </details>
@@ -12257,10 +12373,10 @@ Returns False if no active run or no interrupt event.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/session_runtime.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">262</span>
-<span class="normal">263</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">263</span>
 <span class="normal">264</span>
-<span class="normal">265</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_events</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">after</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">EventRecord</span><span class="p">]:</span>
+<span class="normal">265</span>
+<span class="normal">266</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_events</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">after</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">EventRecord</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Load events for a session with optional timestamp filtering.&quot;&quot;&quot;</span>
     <span class="n">events</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_session_store</span><span class="o">.</span><span class="n">load_transcript</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">_filter_events</span><span class="p">(</span><span class="n">events</span><span class="p">,</span> <span class="n">after</span><span class="p">)</span>
@@ -12347,8 +12463,7 @@ Returns False if no active run or no interrupt event.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/session_runtime.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">317</span>
-<span class="normal">318</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">318</span>
 <span class="normal">319</span>
 <span class="normal">320</span>
 <span class="normal">321</span>
@@ -12388,7 +12503,8 @@ Returns False if no active run or no interrupt event.</p>
 <span class="normal">355</span>
 <span class="normal">356</span>
 <span class="normal">357</span>
-<span class="normal">358</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run_sync</span><span class="p">(</span>
+<span class="normal">358</span>
+<span class="normal">359</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run_sync</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">user_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
@@ -12452,8 +12568,7 @@ Returns False if no active run or no interrupt event.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/session_runtime.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">267</span>
-<span class="normal">268</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">268</span>
 <span class="normal">269</span>
 <span class="normal">270</span>
 <span class="normal">271</span>
@@ -12500,7 +12615,8 @@ Returns False if no active run or no interrupt event.</p>
 <span class="normal">312</span>
 <span class="normal">313</span>
 <span class="normal">314</span>
-<span class="normal">315</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">start_async</span><span class="p">(</span>
+<span class="normal">315</span>
+<span class="normal">316</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">start_async</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">session_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
@@ -27598,7 +27714,9 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 <span class="normal">138</span>
 <span class="normal">139</span>
 <span class="normal">140</span>
-<span class="normal">141</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">build_chat_model</span><span class="p">(</span>
+<span class="normal">141</span>
+<span class="normal">142</span>
+<span class="normal">143</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">build_chat_model</span><span class="p">(</span>
     <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">openai_api_base</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -27612,13 +27730,15 @@ Respects the <code>&lt;!-- meeseeks:noload --&gt;</code> marker (checked via fir
 
     <span class="n">reasoning_effort</span> <span class="o">=</span> <span class="n">resolve_reasoning_effort</span><span class="p">(</span><span class="n">model_name</span><span class="p">)</span>
 
-    <span class="n">model_kwargs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">model_kwargs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;drop_params&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># Must be in model_kwargs to reach litellm.acompletion();</span>
+        <span class="c1"># ChatLiteLLM has no drop_params field so top-level kwarg is silently ignored.</span>
+    <span class="p">}</span>
     <span class="k">if</span> <span class="n">reasoning_effort</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">model_kwargs</span><span class="p">[</span><span class="s2">&quot;reasoning_effort&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">reasoning_effort</span>
 
     <span class="n">kwargs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
         <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="n">_resolve_litellm_model</span><span class="p">(</span><span class="n">model_name</span><span class="p">,</span> <span class="n">openai_api_base</span><span class="p">),</span>
-        <span class="s2">&quot;drop_params&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># Silently drop unsupported params per-provider</span>
     <span class="p">}</span>
     <span class="k">if</span> <span class="n">openai_api_base</span><span class="p">:</span>
         <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;api_base&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">openai_api_base</span>
@@ -27791,9 +27911,7 @@ Specs without a schema are silently skipped.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/llm.py</code></summary>
-              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">144</span>
-<span class="normal">145</span>
-<span class="normal">146</span>
+              <div class="highlight"><div class="table-wrapper"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">146</span>
 <span class="normal">147</span>
 <span class="normal">148</span>
 <span class="normal">149</span>
@@ -27815,7 +27933,9 @@ Specs without a schema are silently skipped.</p>
 <span class="normal">165</span>
 <span class="normal">166</span>
 <span class="normal">167</span>
-<span class="normal">168</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">specs_to_langchain_tools</span><span class="p">(</span><span class="n">specs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">object</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]:</span>
+<span class="normal">168</span>
+<span class="normal">169</span>
+<span class="normal">170</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">specs_to_langchain_tools</span><span class="p">(</span><span class="n">specs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">object</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert ToolSpecs to LangChain bind_tools() format.</span>
 
 <span class="sd">    Each spec must have ``tool_id``, ``description``, and ``metadata[&quot;schema&quot;]``.</span>
