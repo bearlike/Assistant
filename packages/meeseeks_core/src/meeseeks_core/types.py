@@ -90,6 +90,14 @@ class SubAgentPayload(TypedDict):
     detail: str
 
 
+class AgentMessagePayload(TypedDict):
+    """Payload describing an intermediate agent text message."""
+
+    text: str
+    agent_id: str
+    depth: int
+
+
 EventPayload = (
     ActionPlanPayload
     | PermissionPayload
@@ -98,6 +106,7 @@ EventPayload = (
     | AssistantPayload
     | CompletionPayload
     | SubAgentPayload
+    | AgentMessagePayload
     | dict[str, JsonValue]
 )
 

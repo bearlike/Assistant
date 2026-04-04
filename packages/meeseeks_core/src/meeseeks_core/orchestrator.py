@@ -157,7 +157,9 @@ class Orchestrator:
             )
             tool_specs = self._tool_registry.list_specs_for_mode(resolved_mode)
             if allowed_tools:
-                tool_specs = filter_specs(tool_specs, allowed=allowed_tools)
+                # allowed_tools from frontend scopes MCP tools; built-in tools must stay.
+                builtin_ids = [s.tool_id for s in tool_specs if s.kind != "mcp"]
+                tool_specs = filter_specs(tool_specs, allowed=allowed_tools + builtin_ids)
 
             # Skill invocation detection and hot-reload.
             self._skill_registry.maybe_reload()

@@ -320,12 +320,13 @@ class TestSpawnAgentResult:
     """Ref: [CoA §3.1] Sub-agents return structured AgentResult (Communication Unit)."""
 
     def test_result_is_json_with_status(self):
-        """Successful spawn returns JSON AgentResult, not raw text."""
+        """Non-root spawn returns blocking JSON AgentResult."""
         import json
 
         async def _test():
             registry = _make_registry("shell_tool")
-            ctx = _make_context()
+            # Use depth=1 (non-root) to test blocking spawn path.
+            ctx = _make_context(depth=1)
             tool = SpawnAgentTool(
                 agent_context=ctx,
                 tool_registry=registry,
@@ -351,13 +352,57 @@ class TestSpawnAgentResult:
                 )
                 result = await tool.run_async(step)
 
-            # Result should be valid JSON
+            # Result should be valid JSON AgentResult (blocking path)
             parsed = json.loads(result.content)
             assert "status" in parsed
             assert "content" in parsed
             assert "steps_used" in parsed
             assert "summary" in parsed
             assert parsed["status"] in ("completed", "failed")
+
+        asyncio.run(_test())
+
+    def test_root_spawn_returns_immediately(self):
+        """Root spawn returns non-blocking submission confirmation."""
+        import json
+
+        async def _test():
+            registry = _make_registry("shell_tool")
+            # Root (depth=0) gets non-blocking spawn.
+            ctx = _make_context(depth=0)
+            tool = SpawnAgentTool(
+                agent_context=ctx,
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+            fake_model = MagicMock()
+            fake_model.ainvoke = AsyncMock(
+                return_value=_text_response("Done!")
+            )
+            bound = MagicMock()
+            bound.ainvoke = fake_model.ainvoke
+
+            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+                mock_build.return_value = MagicMock()
+                mock_build.return_value.bind_tools.return_value = bound
+
+                step = ActionStep(
+                    tool_id="spawn_agent",
+                    operation="set",
+                    tool_input={"task": "do work"},
+                )
+                result = await tool.run_async(step)
+
+            # Non-blocking: returns submission confirmation, not full result.
+            parsed = json.loads(result.content)
+            assert parsed["status"] == "submitted"
+            assert "agent_id" in parsed
+            assert "task" in parsed
+
+            # Clean up lifecycle tasks.
+            await tool.await_lifecycle_managers(timeout=5.0)
 
         asyncio.run(_test())
 

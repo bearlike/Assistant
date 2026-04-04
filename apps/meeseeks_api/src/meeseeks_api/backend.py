@@ -18,10 +18,15 @@ from flask_restx import Api, Resource, fields
 from meeseeks_core.classes import TaskQueue
 from meeseeks_core.common import get_logger
 from meeseeks_core.config import (
+    AppConfig,
+    _deep_merge,
+    _load_json,
+    get_app_config_path,
     get_config,
     get_config_value,
     get_mcp_config_path,
     get_version,
+    reset_config,
     start_preflight,
 )
 from meeseeks_core.notifications import NotificationStore
@@ -30,6 +35,7 @@ from meeseeks_core.session_runtime import SessionRuntime, parse_core_command
 from meeseeks_core.session_store import SessionStoreBase, create_session_store
 from meeseeks_core.share_store import ShareStore
 from meeseeks_core.tool_registry import load_registry
+from pydantic import ValidationError
 from werkzeug.utils import secure_filename
 
 
@@ -235,7 +241,7 @@ def _add_cors_headers(response: Response) -> Response:
     """Allow cross-origin requests. Set CORS_ORIGIN env var to restrict."""
     response.headers["Access-Control-Allow-Origin"] = _CORS_ORIGIN
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
     return response
 
 
@@ -331,6 +337,11 @@ def _resolve_project_cwd(request_data: dict[str, object]) -> str | None:
         raise ValueError(f"Project '{project_name}' not configured.")
     if not project.path:
         raise ValueError(f"Project '{project_name}' has no path configured.")
+    if not os.path.isdir(project.path):
+        raise ValueError(
+            f"Project '{project_name}' directory not found: {project.path}. "
+            f"In Docker, mount it via docker-compose.override.yml."
+        )
     return project.path
 
 
@@ -372,6 +383,27 @@ def _resolve_skill_instructions(
 notification_service = NotificationService(notification_store, runtime.session_store)
 
 
+@ns.route("/models")
+class Models(Resource):
+    """List available LLM models."""
+
+    @api.doc(security="apikey")
+    def get(self) -> tuple[dict, int]:
+        """Return available models from the LiteLLM proxy."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        default_model = get_config_value("llm", "default_model", default="unknown")
+        try:
+            models = get_config().llm.list_models()
+        except ValueError:
+            return {
+                "models": [default_model] if default_model != "unknown" else [],
+                "default": default_model,
+            }, 200
+        return {"models": models, "default": default_model}, 200
+
+
 @ns.route("/projects")
 class Projects(Resource):
     """List configured projects."""
@@ -388,6 +420,7 @@ class Projects(Resource):
                 "name": name,
                 "path": cfg.path,
                 "description": cfg.description,
+                "available": os.path.isdir(cfg.path),
             }
             for name, cfg in projects.items()
             if cfg.path
@@ -434,9 +467,10 @@ class Sessions(Resource):
                 if isinstance(ctx, dict):
                     project_name = ctx.get("project", "")
             context_payload["project"] = project_name
-        context_payload["model"] = get_config_value(
-            "llm", "default_model", default="unknown"
-        )
+        if "model" not in context_payload:
+            context_payload["model"] = get_config_value(
+                "llm", "default_model", default="unknown"
+            )
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
         return {"session_id": session_id}, 200
@@ -465,9 +499,11 @@ class SessionQuery(Resource):
             return {"message": "Session is already running."}, 409
 
         context_payload = _build_context_payload(request_data)
-        context_payload["model"] = get_config_value(
-            "llm", "default_model", default="unknown"
-        )
+        # Use model from context if provided, else config default
+        if "model" not in context_payload:
+            context_payload["model"] = get_config_value(
+                "llm", "default_model", default="unknown"
+            )
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
 
@@ -484,15 +520,21 @@ class SessionQuery(Resource):
         except ValueError as exc:
             return {"message": str(exc)}, 400
 
+        # Extract model for orchestration (may differ from config default)
+        model_name = str(context_payload.get("model", "")) or None
+
         budget = int(get_config_value("agent", "session_step_budget", default=0))
+        max_iters = int(get_config_value("agent", "max_iters", default=30))
         started = runtime.start_async(
             session_id=session_id,
             user_query=user_query,
+            model_name=model_name,
             approval_callback=auto_approve,
             mode=mode,
             allowed_tools=allowed_tools,
             skill_instructions=skill_instructions,
             cwd=project_cwd,
+            max_iters=max_iters,
             session_step_budget=budget,
         )
         if not started:
@@ -984,6 +1026,143 @@ class MeeseeksQuery(Resource):
         logging.info("Returning executed action plan.")
         to_return["session_id"] = session_id
         return to_return, 200
+
+
+# ---------------------------------------------------------------------------
+# Config API helpers
+# ---------------------------------------------------------------------------
+
+_PROTECTED_KEY = "x-protected"
+
+
+def _collect_protected_paths(
+    schema: dict,
+    *,
+    defs: dict | None = None,
+    prefix: str = "",
+) -> set[str]:
+    """Return dot-separated paths of all x-protected fields in *schema*."""
+    if defs is None:
+        defs = schema.get("$defs", {})
+    protected: set[str] = set()
+    props = schema.get("properties", {})
+    for name, prop in props.items():
+        path = f"{prefix}{name}" if not prefix else f"{prefix}.{name}"
+        if prop.get(_PROTECTED_KEY):
+            protected.add(path)
+        # Recurse into $ref
+        ref = prop.get("$ref")
+        if ref:
+            ref_name = ref.rsplit("/", 1)[-1]
+            if ref_name in defs:
+                protected |= _collect_protected_paths(
+                    defs[ref_name], defs=defs, prefix=path
+                )
+        # Recurse into inline objects
+        if prop.get("type") == "object" and "properties" in prop:
+            protected |= _collect_protected_paths(prop, defs=defs, prefix=path)
+    return protected
+
+
+def _strip_protected_from_schema(schema: dict) -> dict:
+    """Return a copy of *schema* with x-protected properties removed."""
+    schema = json.loads(json.dumps(schema))  # deep copy
+    defs = schema.get("$defs", {})
+    for def_schema in defs.values():
+        props = def_schema.get("properties")
+        if not props:
+            continue
+        to_remove = [k for k, v in props.items() if v.get(_PROTECTED_KEY)]
+        for k in to_remove:
+            del props[k]
+        req = def_schema.get("required")
+        if req:
+            def_schema["required"] = [r for r in req if r not in to_remove]
+    return schema
+
+
+def _strip_protected_values(data: dict, protected_paths: set[str], prefix: str = "") -> None:
+    """Remove protected keys from a config dict **in-place**."""
+    for key in list(data.keys()):
+        path = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
+        if path in protected_paths:
+            del data[key]
+        elif isinstance(data[key], dict):
+            _strip_protected_values(data[key], protected_paths, path)
+
+
+def _find_protected_in_patch(patch: dict, protected_paths: set[str], prefix: str = "") -> list[str]:
+    """Return protected dot-paths found in *patch*."""
+    violations: list[str] = []
+    for key, value in patch.items():
+        path = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
+        if path in protected_paths:
+            violations.append(path)
+        elif isinstance(value, dict):
+            violations.extend(_find_protected_in_patch(value, protected_paths, path))
+    return violations
+
+
+@ns.route("/config/schema")
+class ConfigSchemaResource(Resource):
+    """Serve the JSON Schema for AppConfig (protected fields stripped)."""
+
+    @api.doc(security="apikey", description="Get the AppConfig JSON Schema.")
+    def get(self) -> tuple[dict, int]:
+        """Return the JSON Schema with protected fields stripped."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        schema = AppConfig.model_json_schema()
+        return _strip_protected_from_schema(schema), 200
+
+
+@ns.route("/config")
+class ConfigResource(Resource):
+    """Read and update the application configuration."""
+
+    @api.doc(security="apikey", description="Get current configuration values.")
+    def get(self) -> tuple[dict, int]:
+        """Return current config values with protected fields omitted."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        config = get_config()
+        data = config.model_dump()
+        schema = AppConfig.model_json_schema()
+        protected = _collect_protected_paths(schema)
+        _strip_protected_values(data, protected)
+        return {"config": data}, 200
+
+    @api.doc(security="apikey", description="Partially update configuration.")
+    def patch(self) -> tuple[dict, int]:
+        """Apply a partial config update, validate, and persist."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        patch = request.get_json(silent=True) or {}
+        if not patch:
+            return {"message": "Empty payload"}, 400
+
+        schema = AppConfig.model_json_schema()
+        protected = _collect_protected_paths(schema)
+        violations = _find_protected_in_patch(patch, protected)
+        if violations:
+            return {"message": f"Cannot modify protected fields: {violations}"}, 403
+
+        config_path = get_app_config_path()
+        raw = _load_json(config_path)
+        merged = _deep_merge(dict(raw), patch)
+        try:
+            validated = AppConfig.model_validate(merged)
+        except ValidationError as exc:
+            return {"message": "Validation failed", "errors": exc.errors()}, 422
+        validated.write(config_path)
+        reset_config()
+
+        data = validated.model_dump()
+        _strip_protected_values(data, protected)
+        return {"config": data}, 200
 
 
 def main() -> None:

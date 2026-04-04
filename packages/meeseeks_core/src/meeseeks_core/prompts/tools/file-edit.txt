@@ -1,0 +1,20 @@
+File Edit tool — exact string replacement
+
+Use this tool to edit a single file by replacing an exact string match.
+Each invocation edits one file. For multiple files, call the tool once per file.
+
+Tool inputs (JSON):
+- file_path: path to the file (absolute or relative to the project root).
+- old_string: exact text to find. Must match precisely (whitespace, newlines, indentation).
+  - To create a new file, pass an empty string.
+  - To append to an existing file, pass an empty string.
+- new_string: replacement text. Pass empty string to delete the matched text.
+- replace_all: (optional, default false) when true, replace every occurrence.
+  When false, the tool fails if the old_string appears more than once.
+
+Rules:
+- old_string must match exactly. Include enough surrounding context to be unique.
+- Prefer small, targeted edits over large replacements.
+- For creating a new file: set old_string to "" and put the full content in new_string.
+- Only one file per tool call. Chain multiple calls for multi-file edits.
+- Do not include shell code blocks; use the shell tool for commands.

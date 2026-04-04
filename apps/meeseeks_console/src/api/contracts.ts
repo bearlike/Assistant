@@ -37,6 +37,11 @@ export type ProjectSummary = {
   description?: string;
 };
 
+export type ModelInfo = {
+  models: string[];
+  default: string;
+};
+
 export type AgentSummary = {
   agent_id: string;
   parent_id: string | null;
@@ -81,6 +86,7 @@ export type ApiClient = {
     onEvent: (event: EventRecord) => void,
     onEnd: () => void
   ) => () => void;
+  listModels: () => Promise<ModelInfo>;
   listProjects: () => Promise<ProjectSummary[]>;
   listNotifications: () => Promise<NotificationItem[]>;
   dismissNotification: (ids: string[]) => Promise<void>;
@@ -90,6 +96,9 @@ export type ApiClient = {
     running: boolean;
     total_steps: number;
   }>;
+  getConfigSchema: () => Promise<Record<string, unknown>>;
+  getConfig: () => Promise<Record<string, unknown>>;
+  patchConfig: (patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
 };
 
 export type ApiConfig = {

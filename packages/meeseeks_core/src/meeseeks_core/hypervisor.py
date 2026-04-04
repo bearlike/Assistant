@@ -106,6 +106,10 @@ class AgentHandle:
     asyncio_task: asyncio.Task[object] | None = None
     # Ref: [DeepMind-Delegation §4.4] Bidirectional message passing
     message_queue: queue.Queue[str] | None = None
+    # Ref: [CoA §3.1] Completed CU stored on handle for async retrieval
+    result: AgentResult | None = None
+    # Ref: [DeepMind-Delegation §4.5] Auto-updated progress for monitoring
+    progress_note: str | None = None
 
 
 class AgentHypervisor:
@@ -343,12 +347,61 @@ class AgentHypervisor:
                     status_marker = " -> FAILED"
                 elif h.status == "cancelled":
                     status_marker = " -> cancelled"
+                # Ref: [DeepMind-Delegation §4.5] Progress/result in tree view
+                extra = ""
+                if h.result and h.result.summary:
+                    extra = f" | result({h.result.status}): {h.result.summary[:120]}"
+                elif h.progress_note:
+                    extra = f" | progress: {h.progress_note[:120]}"
                 task_preview = h.task_description[:80]
                 lines.append(
                     f"{indent}- [{h.agent_id[:8]}] {h.status}: "
-                    f"\"{task_preview}\" ({step_info}{status_marker})"
+                    f"\"{task_preview}\" ({step_info}{status_marker}{extra})"
                 )
             return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Async delegation queries  (Ref: [CoA §3.1], [DeepMind-Delegation §4.5])
+    # ------------------------------------------------------------------
+
+    async def collect_completed(self, parent_id: str) -> list[AgentHandle]:
+        """Return children that reached a terminal state with a stored result.
+
+        Ref: [CoA §3.1] Async CU retrieval — parent reads results
+        when ready, not when child finishes.
+        """
+        terminal = {"completed", "failed", "cancelled"}
+        async with self._lock:
+            return [
+                h for h in self._agents.values()
+                if h.parent_id == parent_id
+                and h.status in terminal
+                and h.result is not None
+            ]
+
+    async def collect_running(self, parent_id: str) -> list[AgentHandle]:
+        """Return children of *parent_id* that are still active."""
+        async with self._lock:
+            return [
+                h for h in self._agents.values()
+                if h.parent_id == parent_id
+                and h.status in ("submitted", "running")
+            ]
+
+    async def send_to_parent(self, child_agent_id: str, message: str) -> bool:
+        """Route a message from a child agent to its parent's queue.
+
+        Ref: [DeepMind-Delegation §4.4] Bidirectional message passing —
+        enables lifecycle manager to notify parent on child completion.
+        """
+        async with self._lock:
+            child = self._agents.get(child_agent_id)
+            if child and child.parent_id:
+                parent = self._agents.get(child.parent_id)
+                if parent and parent.message_queue:
+                    parent.message_queue.put_nowait(message)
+                    return True
+        return False
 
     # ------------------------------------------------------------------
     # Cancellation

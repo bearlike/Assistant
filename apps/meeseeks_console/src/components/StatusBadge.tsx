@@ -6,96 +6,64 @@ import {
   PlayCircle,
   XCircle } from
 'lucide-react';
+import { cn } from '../utils/cn';
+
 interface StatusBadgeProps {
   status: string;
   doneReason?: string | null;
+  compact?: boolean;
 }
-export function StatusBadge({ status, doneReason }: StatusBadgeProps) {
-  const normalizedReason = String(doneReason || '').toLowerCase();
-  if (normalizedReason === 'blocked') {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-600 text-xs font-semibold shadow-sm">
-        <AlertCircle className="w-3.5 h-3.5" />
-        <span>Blocked</span>
-      </div>);
 
-  }
-  if (normalizedReason === 'canceled') {
-    return (
-      <div className="flex items-center gap-1.5 px-2 py-0.5 text-[hsl(var(--muted-foreground))] text-xs font-medium">
-        <XCircle className="w-3.5 h-3.5" />
-        <span>Canceled</span>
-      </div>);
+type StatusConfig = {
+  icon: React.ElementType;
+  label: string;
+  style: string;
+  padding: string;
+};
 
-  }
-  if (normalizedReason === 'error') {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-red-500/30 bg-red-500/10 text-red-600 text-xs font-semibold shadow-sm">
-        <AlertCircle className="w-3.5 h-3.5" />
-        <span>Failed</span>
-      </div>);
+const PILL = "rounded-full border shadow-sm text-xs font-semibold";
+const PILL_MUTED = "rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-xs font-medium";
+const PAD_STD = "px-2.5 py-1";
 
-  }
-  if (normalizedReason === 'incomplete' || normalizedReason === 'max_iterations_reached' || normalizedReason === 'max_steps_reached') {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-600 text-xs font-semibold shadow-sm">
-        <AlertCircle className="w-3.5 h-3.5" />
-        <span>Incomplete</span>
-      </div>);
+function resolveStatus(status: string, doneReason?: string | null): StatusConfig {
+  const reason = String(doneReason || '').toLowerCase();
 
-  }
-  if (status === 'running') {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-blue-500/30 bg-blue-500/10 text-blue-600 text-xs font-semibold shadow-sm">
-        <PlayCircle className="w-3.5 h-3.5" />
-        <span>Running</span>
-      </div>);
+  if (reason === 'blocked')
+    return { icon: AlertCircle, label: 'Blocked', style: `${PILL} border-amber-500/30 bg-amber-500/10 text-amber-600`, padding: PAD_STD };
+  if (reason === 'canceled')
+    return { icon: XCircle, label: 'Canceled', style: "text-[hsl(var(--muted-foreground))] text-xs font-medium", padding: "px-2 py-0.5" };
+  if (reason === 'error')
+    return { icon: AlertCircle, label: 'Failed', style: `${PILL} border-red-500/30 bg-red-500/10 text-red-600`, padding: PAD_STD };
+  if (reason === 'incomplete' || reason === 'max_iterations_reached' || reason === 'max_steps_reached')
+    return { icon: AlertCircle, label: 'Incomplete', style: `${PILL} border-amber-500/30 bg-amber-500/10 text-amber-600`, padding: PAD_STD };
 
-  }
-  if (status === 'completed' || status === 'merged') {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 text-xs font-semibold shadow-sm">
-        <CheckCircle2 className="w-3.5 h-3.5" />
-        <span>Completed</span>
-      </div>);
+  if (status === 'running')
+    return { icon: PlayCircle, label: 'Running', style: `${PILL} border-blue-500/30 bg-blue-500/10 text-blue-600`, padding: PAD_STD };
+  if (status === 'completed' || status === 'merged')
+    return { icon: CheckCircle2, label: 'Completed', style: `${PILL} border-emerald-500/30 bg-emerald-500/10 text-emerald-600`, padding: PAD_STD };
+  if (status === 'incomplete')
+    return { icon: AlertCircle, label: 'Incomplete', style: `${PILL} border-amber-500/30 bg-amber-500/10 text-amber-600`, padding: PAD_STD };
+  if (status === 'idle')
+    return { icon: Circle, label: 'Idle', style: `${PILL_MUTED} text-[hsl(var(--muted-foreground))]`, padding: PAD_STD };
+  if (status === 'open')
+    return { icon: Circle, label: 'Open', style: `${PILL_MUTED} text-[hsl(var(--foreground))]`, padding: PAD_STD };
+  if (status === 'failed')
+    return { icon: AlertCircle, label: 'Failed', style: `${PILL} border-red-500/30 bg-red-500/10 text-red-600`, padding: PAD_STD };
 
-  }
-  if (status === 'incomplete') {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-600 text-xs font-semibold shadow-sm">
-        <AlertCircle className="w-3.5 h-3.5" />
-        <span>Incomplete</span>
-      </div>);
+  return { icon: Archive, label: 'Archived', style: `${PILL_MUTED} text-[hsl(var(--muted-foreground))]`, padding: PAD_STD };
+}
 
-  }
-  if (status === 'idle') {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] text-xs font-medium">
-        <Circle className="w-3.5 h-3.5" />
-        <span>Idle</span>
-      </div>);
+export function StatusBadge({ status, doneReason, compact }: StatusBadgeProps) {
+  const { icon: Icon, label, style, padding } = resolveStatus(status, doneReason);
 
-  }
-  if (status === 'open') {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--foreground))] text-xs font-medium">
-        <Circle className="w-3.5 h-3.5" />
-        <span>Open</span>
-      </div>);
-
-  }
-  if (status === 'failed') {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-red-500/30 bg-red-500/10 text-red-600 text-xs font-semibold shadow-sm">
-        <AlertCircle className="w-3.5 h-3.5" />
-        <span>Failed</span>
-      </div>);
-
-  }
   return (
-    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] text-xs font-medium">
-      <Archive className="w-3.5 h-3.5" />
-      <span>Archived</span>
-    </div>);
-
+    <div className={cn(
+      "flex items-center shrink-0",
+      compact ? "gap-0 px-1.5 py-0.5" : cn("gap-1.5", padding),
+      style
+    )}>
+      <Icon className="w-3.5 h-3.5" />
+      {!compact && <span>{label}</span>}
+    </div>
+  );
 }

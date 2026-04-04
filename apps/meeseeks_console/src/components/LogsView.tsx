@@ -1,4 +1,3 @@
-import { useRef, useState, useEffect } from 'react';
 import {
   Bot,
   CheckCircle2,
@@ -11,7 +10,12 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { SummaryBlock } from './SummaryBlock';
+import { MarkdownContent } from './MessageBubble';
 import { LogEventCard, AccentColor } from './LogEventCard';
+import { TerminalCard } from './TerminalCard';
+import { DiffCard } from './DiffCard';
+import { ScrollToBottom } from './ScrollToBottom';
+import { useAutoScroll } from '../hooks/useAutoScroll';
 import { EventRecord, LogEntry } from '../types';
 import { buildLogs, extractSummaryTesting } from '../utils/logs';
 import { formatSessionTime } from '../utils/time';
@@ -215,7 +219,7 @@ function renderAgentResult(log: LogEntry) {
   );
 }
 
-function renderCompletion(log: LogEntry) {
+function renderCompletion(log: LogEntry, onContinue?: () => void) {
   const reason = (log.doneReason || '').toLowerCase();
   const accent: AccentColor =
     reason === 'completed' ? 'emerald' :
@@ -231,7 +235,10 @@ function renderCompletion(log: LogEntry) {
   const label = reason === 'completed' ? 'Run completed' :
     reason === 'canceled' || reason === 'cancelled' ? 'Run canceled' :
     reason === 'error' ? 'Run failed' :
+    reason === 'max_steps_reached' ? 'Task interrupted — step limit reached' :
     `Run ${reason || 'ended'}`;
+
+  const showContinue = reason === 'max_steps_reached' && !!onContinue;
 
   return (
     <LogEventCard
@@ -241,18 +248,42 @@ function renderCompletion(log: LogEntry) {
       badge={log.doneReason && log.doneReason !== reason ? <Badge color={accent}>{log.doneReason}</Badge> : undefined}
       timestamp={log.timestamp}
       accent={accent}
-      defaultExpanded={!!log.error}
+      defaultExpanded={!!log.error || showContinue}
     >
       {log.error && (
         <p className="text-xs text-red-500 font-mono">{log.error}</p>
+      )}
+      {showContinue && (
+        <button
+          onClick={onContinue}
+          className="mt-2 px-3 py-1.5 text-xs font-medium rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
+        >
+          Continue from here
+        </button>
       )}
     </LogEventCard>
   );
 }
 
 function renderShell(log: LogEntry) {
+  // Structured shell result → TerminalCard
+  if (log.shellCommand) {
+    return (
+      <TerminalCard
+        key={log.id}
+        command={log.shellCommand}
+        cwd={log.shellCwd}
+        exitCode={log.shellExitCode}
+        stdout={log.shellStdout}
+        stderr={log.shellStderr}
+        durationMs={log.shellDurationMs}
+      />
+    );
+  }
+
+  // Fallback: non-shell tools or old events → existing LogEventCard
   const hasError = !!log.error;
-  const toolName = (log.title || 'tool').replace(/\s*\(.*\)$/, ''); // strip "(set)" suffix for matching
+  const toolName = (log.title || 'tool').replace(/\s*\(.*\)$/, '');
   return (
     <LogEventCard
       key={log.id}
@@ -293,6 +324,17 @@ function renderShell(log: LogEntry) {
   );
 }
 
+function renderDiff(log: LogEntry) {
+  return (
+    <DiffCard
+      key={log.id}
+      title={log.diffTitle}
+      diffText={log.diffText || ''}
+      success={log.diffSuccess}
+    />
+  );
+}
+
 function renderReflection(log: LogEntry) {
   return (
     <LogEventCard
@@ -308,44 +350,38 @@ function renderReflection(log: LogEntry) {
   );
 }
 
-export function LogsView({ events }: { events: EventRecord[] }) {
+function renderAgentMessage(log: LogEntry) {
+  const colorIdx = agentColorIndex(log.agentId || 'root');
+  const agentColor = AGENT_COLOR_CLASSES[colorIdx];
+  const agentName = log.detail || 'meeseeks';
+  return (
+    <div key={log.id} className="flex items-start gap-2 px-1 py-1">
+      {log.timestamp && (
+        <span className="text-[10px] text-[hsl(var(--muted-foreground))] whitespace-nowrap shrink-0 font-mono pt-0.5">
+          {formatSessionTime(log.timestamp)}
+        </span>
+      )}
+      <span className={`text-xs font-mono font-semibold whitespace-nowrap shrink-0 ${agentColor}`}>
+        &lt;{agentName}&gt;
+      </span>
+      <div className="text-xs text-[hsl(var(--foreground))] leading-relaxed opacity-80 min-w-0 overflow-hidden [&_pre]:text-[11px] [&_p]:mb-1 [&_p:last-child]:mb-0">
+        <MarkdownContent content={log.content} />
+      </div>
+    </div>
+  );
+}
+
+export function LogsView({ events, onContinue }: { events: EventRecord[]; onContinue?: () => void }) {
   const logs = buildLogs(events);
   const summaryData = extractSummaryTesting(events);
   const hasSummary =
     summaryData.summary.length > 0 || summaryData.testing.length > 0;
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [isAtBottom, setIsAtBottom] = useState(true);
-
-  const scrollToBottom = () => {
-    const container = scrollRef.current;
-    if (!container) {
-      return;
-    }
-    container.scrollTop = container.scrollHeight;
-  };
-
-  useEffect(() => {
-    if (isAtBottom) {
-      scrollToBottom();
-    }
-  }, [events.length, isAtBottom]);
-
-  const handleScroll = () => {
-    const container = scrollRef.current;
-    if (!container) {
-      return;
-    }
-    const threshold = 64;
-    const atBottom =
-      container.scrollTop + container.clientHeight >=
-      container.scrollHeight - threshold;
-    setIsAtBottom(atBottom);
-  };
+  const { scrollRef, isAtBottom, scrollToBottom, onScroll } = useAutoScroll(events.length);
   return (
     <div className="relative h-full">
       <div
         ref={scrollRef}
-        onScroll={handleScroll}
+        onScroll={onScroll}
         className="h-full overflow-y-auto bg-[hsl(var(--background))] p-4 space-y-2"
       >
         {logs.map((log) => {
@@ -407,8 +443,10 @@ export function LogsView({ events }: { events: EventRecord[] }) {
           if (log.type === 'permission') return renderPermission(log);
           if (log.type === 'agent') return renderAgent(log);
           if (log.type === 'agent_result') return renderAgentResult(log);
-          if (log.type === 'completion') return renderCompletion(log);
+          if (log.type === 'completion') return renderCompletion(log, onContinue);
+          if (log.type === 'diff') return renderDiff(log);
           if (log.type === 'shell') return renderShell(log);
+          if (log.type === 'agent_message') return renderAgentMessage(log);
           if (log.type === 'system') return renderReflection(log);
 
           // Fallback for unknown types
@@ -435,26 +473,7 @@ export function LogsView({ events }: { events: EventRecord[] }) {
         )}
       </div>
       {!isAtBottom && (
-        <button
-          type="button"
-          onClick={() => {
-            scrollToBottom();
-            setIsAtBottom(true);
-          }}
-          aria-label="Jump to latest logs"
-          className="absolute bottom-4 right-4 h-10 w-10 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))] shadow-md transition hover:-translate-y-0.5"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            className="mx-auto h-5 w-5"
-          >
-            <path
-              fill="currentColor"
-              d="M12 16.5 5 9.5l1.4-1.4L12 13.7l5.6-5.6L19 9.5z"
-            />
-          </svg>
-        </button>
+        <ScrollToBottom onClick={scrollToBottom} label="Jump to latest logs" />
       )}
     </div>
   );

@@ -107,16 +107,24 @@ class RuntimeConfig(BaseModel):
         "",
         description="Directory for tool caches. Defaults to $MEESEEKS_HOME/cache.",
         examples=["~/.meeseeks/cache"],
+        json_schema_extra={"x-protected": True},
     )
     session_dir: str = Field(
         "",
         description="Directory for session transcripts. Defaults to $MEESEEKS_HOME/sessions.",
         examples=["~/.meeseeks/sessions"],
+        json_schema_extra={"x-protected": True},
     )
     config_dir: str = Field(
         "",
         description="Root configuration directory. Defaults to $MEESEEKS_HOME.",
         examples=["~/.meeseeks"],
+        json_schema_extra={"x-protected": True},
+    )
+    result_export_dir: str = Field(
+        "",
+        description="Directory for large tool result exports. Empty to disable.",
+        examples=["/tmp/meeseeks-results"],
     )
 
     @field_validator("log_level", mode="before")
@@ -165,6 +173,7 @@ class LLMConfig(BaseModel):
         "",
         description=("API key for the LLM provider (e.g. Anthropic, OpenAI) or proxy master key."),
         examples=["sk-ant-xxxxxxxx"],
+        json_schema_extra={"x-protected": True},
     )
     default_model: str = Field(
         "gpt-5.2",
@@ -426,15 +435,22 @@ class LangfuseConfig(BaseModel):
         description="Langfuse server URL.",
         examples=["https://langfuse.server.local"],
     )
+    project_id: str = Field(
+        "",
+        description="Langfuse project ID for constructing dashboard URLs.",
+        examples=["clvh22gis002oru6ay1rm2eh0"],
+    )
     public_key: str = Field(
         "",
         description="Langfuse project public key.",
         examples=["pk-lf-xxxxxxxxxxxxxxxx"],
+        json_schema_extra={"x-protected": True},
     )
     secret_key: str = Field(
         "",
         description="Langfuse project secret key.",
         examples=["sk-lf-xxxxxxxxxxxxxxxx"],
+        json_schema_extra={"x-protected": True},
     )
 
     @field_validator("enabled", mode="before")
@@ -484,6 +500,7 @@ class HomeAssistantConfig(BaseModel):
         "",
         description="Long-lived access token for Home Assistant authentication.",
         examples=["ha_token_here"],
+        json_schema_extra={"x-protected": True},
     )
 
     @field_validator("enabled", mode="before")
@@ -609,6 +626,7 @@ class APIConfig(BaseModel):
             "Change from the default before deploying."
         ),
         examples=["msk-strong-password"],
+        json_schema_extra={"x-protected": True},
     )
 
 
@@ -686,6 +704,10 @@ class AgentConfig(BaseModel):
             "Allowlist of model names sub-agents may use. Empty means all models are allowed."
         ),
     )
+    max_iters: int = Field(
+        30,
+        description="Maximum orchestration iterations for root agent (max_steps = max_iters * 3).",
+    )
     sub_agent_max_steps: int = Field(
         10, description="Default maximum tool-use steps per sub-agent before forced termination."
     )
@@ -693,6 +715,25 @@ class AgentConfig(BaseModel):
         default_factory=list,
         description="Tool IDs denied to all sub-agents by default (e.g. spawn_agent).",
     )
+    edit_tool: str = Field(
+        "search_replace_block",
+        description=(
+            "File editing mechanism: 'search_replace_block' (Aider-style "
+            "SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact "
+            "string replacement)."
+        ),
+        examples=["search_replace_block", "structured_patch"],
+    )
+
+    @field_validator("edit_tool", mode="before")
+    @classmethod
+    def _normalize_edit_tool(cls, value: Any) -> str:
+        if value is None:
+            return "search_replace_block"
+        normalized = str(value).strip().lower()
+        if normalized in {"search_replace_block", "structured_patch"}:
+            return normalized
+        return "search_replace_block"
 
     @field_validator("enabled", mode="before")
     @classmethod
@@ -715,6 +756,15 @@ class AgentConfig(BaseModel):
             parsed = int(value)
         except (TypeError, ValueError):
             return 20
+        return max(parsed, 1)
+
+    @field_validator("max_iters", mode="before")
+    @classmethod
+    def _normalize_max_iters(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 30
         return max(parsed, 1)
 
     @field_validator("sub_agent_max_steps", mode="before")

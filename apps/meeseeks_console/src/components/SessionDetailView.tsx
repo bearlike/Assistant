@@ -5,6 +5,7 @@ import { WorkspacePanel } from "./WorkspacePanel";
 import { InputBar } from "./InputBar";
 import { useSessionEvents } from "../hooks/useSessionEvents";
 import { useSessionQuery } from "../hooks/useSessionQuery";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { DiffFile, SessionSummary, TurnMeta } from "../types";
 import { buildTimeline, getActiveTurn } from "../utils/timeline";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
@@ -15,7 +16,9 @@ interface SessionDetailViewProps {
 export function SessionDetailView({
   session
 }: SessionDetailViewProps) {
+  const isMobile = useIsMobile();
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [activeTab, setActiveTab] = useState<"diff" | "logs">("logs");
   const [selectedFile, setSelectedFile] = useState<DiffFile | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
@@ -55,6 +58,7 @@ export function SessionDetailView({
     setSelectedTurnId(null);
     setSelectedFile(null);
     setIsWorkspaceOpen(false);
+    setIsMaximized(false);
     setActiveTab("logs");
   }, [session.session_id]);
   const handleShowTrace = (turn: TurnMeta) => {
@@ -128,6 +132,29 @@ export function SessionDetailView({
     </>
   );
 
+  const effectiveMaximized = isMobile || isMaximized;
+  const workspaceProps = {
+    activeTab,
+    onTabChange: setActiveTab,
+    events: selectedTurn ? selectedTurn.events : events,
+    diffContent: selectedFile?.diff,
+    filename: selectedFile?.path || selectedFile?.name,
+    onContinue: !running ? async () => { await send("Continue the task from where you left off.", session.context ?? {}, undefined, []); resume(); } : undefined,
+  };
+
+  if (isWorkspaceOpen && effectiveMaximized) {
+    return (
+      <div className="flex flex-col h-full overflow-hidden">
+        <WorkspacePanel
+          {...workspaceProps}
+          onClose={() => { setIsWorkspaceOpen(false); setIsMaximized(false); }}
+          isMaximized
+          onToggleMaximize={isMobile ? undefined : () => setIsMaximized(false)}
+        />
+      </div>
+    );
+  }
+
   if (isWorkspaceOpen) {
     return (
       <PanelGroup orientation="horizontal" className="flex-1 overflow-hidden h-full">
@@ -136,7 +163,12 @@ export function SessionDetailView({
         </Panel>
         <PanelResizeHandle className="w-1.5 bg-[hsl(var(--border))] hover:bg-[hsl(var(--primary))]/60 active:bg-[hsl(var(--primary))] transition-colors cursor-col-resize" />
         <Panel id="workspace" minSize="25%" className="h-full min-w-0">
-          <WorkspacePanel onClose={() => setIsWorkspaceOpen(false)} activeTab={activeTab} onTabChange={setActiveTab} events={selectedTurn ? selectedTurn.events : events} diffContent={selectedFile?.diff} filename={selectedFile?.path || selectedFile?.name} />
+          <WorkspacePanel
+            {...workspaceProps}
+            onClose={() => setIsWorkspaceOpen(false)}
+            isMaximized={false}
+            onToggleMaximize={() => setIsMaximized(true)}
+          />
         </Panel>
       </PanelGroup>
     );

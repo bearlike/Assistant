@@ -1,84 +1,80 @@
-import { DiffFile } from "../types";
-const DIFF_HEADER_OLD = "--- ";
-const DIFF_HEADER_NEW = "+++ ";
-function normalizePath(raw: string): string {
-  const cleaned = raw.replace(/^[ab]\//, "").trim();
-  if (!cleaned || cleaned === "/dev/null") {
-    return "unknown";
-  }
-  return cleaned;
-}
+import { parse } from "diff2html";
+import { DiffFile, ParsedDiffFile } from "../types";
+
 function deriveName(path: string): string {
-  if (!path) {
-    return "unknown";
-  }
+  if (!path) return "unknown";
   const parts = path.split("/");
   return parts[parts.length - 1] || path;
 }
+
+/**
+ * Extract file-level diff info from unified diff text.
+ * Backward-compatible wrapper around diff2html's parse().
+ */
 export function extractUnifiedDiffs(text: string): DiffFile[] {
-  if (!text) {
-    return [];
-  }
-  const lines = text.split(/\r?\n/);
-  const files: DiffFile[] = [];
-  let current: DiffFile | null = null;
-  let buffer: string[] = [];
-  const finalize = () => {
-    if (current && buffer.length) {
-      current.diff = buffer.join("\n");
-      files.push(current);
-    }
-    current = null;
-    buffer = [];
-  };
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (line.startsWith(DIFF_HEADER_OLD)) {
-      const next = lines[i + 1];
-      if (next && next.startsWith(DIFF_HEADER_NEW)) {
-        finalize();
-        const oldPath = normalizePath(line.slice(DIFF_HEADER_OLD.length));
-        const newPath = normalizePath(next.slice(DIFF_HEADER_NEW.length));
-        const path = newPath !== "unknown" ? newPath : oldPath;
-        current = {
-          path,
-          name: deriveName(path),
-          additions: 0,
-          deletions: 0,
-          diff: ""
-        };
-        buffer.push(line, next);
-        i += 1;
-        continue;
-      }
-    }
-    if (current) {
-      buffer.push(line);
-      if (line.startsWith("+") && !line.startsWith(DIFF_HEADER_NEW)) {
-        current.additions += 1;
-      } else if (line.startsWith("-") && !line.startsWith(DIFF_HEADER_OLD)) {
-        current.deletions += 1;
-      }
-    }
-  }
-  finalize();
-  return files;
+  if (!text) return [];
+  const parsed = parse(text);
+  return parsed.map((f) => ({
+    name: deriveName(f.newName || f.oldName),
+    path: f.newName || f.oldName,
+    additions: f.addedLines,
+    deletions: f.deletedLines,
+    diff: reconstructRawDiff(f),
+  }));
 }
+
+/** Reconstruct raw unified diff text from parsed blocks for DiffView compatibility. */
+function reconstructRawDiff(
+  f: ReturnType<typeof parse>[number]
+): string {
+  const lines: string[] = [];
+  lines.push(`--- ${f.oldName}`);
+  lines.push(`+++ ${f.newName}`);
+  for (const block of f.blocks) {
+    lines.push(block.header);
+    for (const line of block.lines) {
+      lines.push(line.content);
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Parse unified diff text into rich hunk/line data for DiffCard rendering.
+ * Each line includes oldNumber/newNumber for the two-column gutter.
+ */
+export function parseDiffHunks(text: string): ParsedDiffFile[] {
+  if (!text) return [];
+  const parsed = parse(text);
+  return parsed.map((f) => ({
+    name: deriveName(f.newName || f.oldName),
+    path: f.newName || f.oldName,
+    additions: f.addedLines,
+    deletions: f.deletedLines,
+    isNewFile: !!f.isNew,
+    isDeleted: !!f.isDeleted,
+    hunks: f.blocks.map((b) => ({
+      header: b.header,
+      lines: b.lines.map((l) => ({
+        type: l.type as "context" | "insert" | "delete",
+        oldNumber: l.oldNumber,
+        newNumber: l.newNumber,
+        content: l.content,
+      })),
+    })),
+  }));
+}
+
 export function mergeDiffFiles(files: DiffFile[]): DiffFile[] {
   const merged = new Map<string, DiffFile>();
   for (const file of files) {
     const key = file.path || file.name;
     if (!merged.has(key)) {
-      merged.set(key, {
-        ...file,
-        diff: file.diff || ""
-      });
+      merged.set(key, { ...file, diff: file.diff || "" });
       continue;
     }
     const existing = merged.get(key);
-    if (!existing) {
-      continue;
-    }
+    if (!existing) continue;
     existing.additions += file.additions;
     existing.deletions += file.deletions;
     const nextDiff = file.diff || "";

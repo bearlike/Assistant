@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -7,9 +9,11 @@ import {
 import { AppLayout } from './components/AppLayout';
 import { HomeView } from './components/HomeView';
 import { SessionDetailView } from './components/SessionDetailView';
+const SettingsView = lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
 import {
   createShare,
   exportSession,
+  getConfig,
   postQuery,
   uploadAttachments
 } from './api/client';
@@ -19,6 +23,9 @@ import { logApiError } from './utils/errors';
 import { useNotifications } from './hooks/useNotifications';
 const SESSION_PATH_PREFIX = '/s/';
 function parseRoute(pathname: string) {
+  if (pathname === '/settings') {
+    return { view: 'settings' as const, sessionId: null };
+  }
   if (pathname.startsWith(SESSION_PATH_PREFIX)) {
     const rawId = pathname.slice(SESSION_PATH_PREFIX.length);
     if (rawId) {
@@ -40,7 +47,7 @@ function pushRoute(path: string) {
 }
 export function App() {
   const initialRoute = useMemo(() => parseRoute(window.location.pathname), []);
-  const [activeView, setActiveView] = useState<'home' | 'detail'>(
+  const [activeView, setActiveView] = useState<'home' | 'detail' | 'settings'>(
     initialRoute.view
   );
   const [activeSessionId, setActiveSessionId] = useState<string | null>(
@@ -49,6 +56,7 @@ export function App() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [langfuseBaseUrl, setLangfuseBaseUrl] = useState<string | null>(null);
   const {
     notifications,
     dismiss: dismissNotification,
@@ -57,6 +65,18 @@ export function App() {
   // Ensure dark mode is applied on initial mount
   useEffect(() => {
     document.documentElement.classList.remove('light');
+  }, []);
+  // Fetch Langfuse config once to construct session dashboard URLs
+  useEffect(() => {
+    getConfig()
+      .then((cfg) => {
+        const lf = cfg?.langfuse as Record<string, unknown> | undefined;
+        if (lf?.enabled && lf?.host && lf?.project_id) {
+          const host = String(lf.host).replace(/\/+$/, '');
+          setLangfuseBaseUrl(`${host}/project/${lf.project_id}/sessions`);
+        }
+      })
+      .catch(() => { /* Langfuse link is optional */ });
   }, []);
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
@@ -148,6 +168,12 @@ export function App() {
     goHome();
     void refresh();
   };
+  const handleSettingsClick = () => {
+    setActiveView('settings');
+    setActiveSessionId(null);
+    setActionError(null);
+    pushRoute('/settings');
+  };
   const handleShareSession = useCallback(async (sessionId: string) => {
     try {
       const record = await createShare(sessionId);
@@ -182,7 +208,9 @@ export function App() {
     }
   }, []);
   useEffect(() => {
-    if (activeView === 'home') {
+    if (activeView === 'settings') {
+      document.title = 'Meeseeks | Settings';
+    } else if (activeView === 'home') {
       document.title = 'Meeseeks';
     } else {
       const title = activeSession?.title?.trim();
@@ -191,7 +219,7 @@ export function App() {
   }, [activeView, activeSession]);
   return (
     <AppLayout
-      mode={activeView}
+      mode={activeView === 'settings' ? 'home' : activeView}
       session={activeSession}
       onBack={handleBack}
       theme={theme}
@@ -202,8 +230,14 @@ export function App() {
       onArchiveSession={archive}
       onUnarchiveSession={unarchive}
       onShareSession={handleShareSession}
-      onExportSession={handleExportSession}>
-      {activeView === 'home' ?
+      onExportSession={handleExportSession}
+      onSettingsClick={handleSettingsClick}
+      langfuseUrl={langfuseBaseUrl && activeSessionId ? `${langfuseBaseUrl}/${activeSessionId}` : null}>
+      {activeView === 'settings' ?
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center"><span className="text-sm text-[hsl(var(--muted-foreground))]">Loading…</span></div>}>
+          <SettingsView />
+        </Suspense> :
+      activeView === 'home' ?
       <div className="flex-1 overflow-y-auto">
           <HomeView
           sessions={sessions}

@@ -414,13 +414,21 @@ def discover_project_instructions(cwd: str | None = None) -> str | None:
         for src in subtree:
             rel = Path(src.path).relative_to(work_dir)
             lines.append(f"- {rel}")
-        index_section = (
-            "# Sub-package instruction files\n\n"
-            "The following instruction files exist in subdirectories. "
-            "Read them when working on the relevant package.\n\n"
-            + "\n".join(lines)
-        )
-        parts.append(index_section)
+        if sources:
+            heading = (
+                "# Sub-package instruction files\n\n"
+                "The following instruction files exist in subdirectories. "
+                "Read them when working on the relevant package."
+            )
+        else:
+            heading = (
+                "# No root-level instruction files — read before proceeding\n\n"
+                "No CLAUDE.md or AGENTS.md was found at the project root. "
+                "The following instruction files exist in subdirectories. "
+                "You MUST read the most relevant instruction file before "
+                "starting any task — they contain critical project context."
+            )
+        parts.append(heading + "\n\n" + "\n".join(lines))
 
     if not parts:
         return None

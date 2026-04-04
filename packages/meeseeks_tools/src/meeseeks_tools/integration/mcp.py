@@ -293,15 +293,17 @@ def mark_tool_auto_approved(
 class MCPToolRunner:
     """Wrapper to invoke MCP tools via langchain-mcp-adapters."""
 
-    def __init__(self, server_name: str, tool_name: str) -> None:
+    def __init__(self, server_name: str, tool_name: str, *, cwd: str | None = None) -> None:
         """Initialize the MCP tool runner for a specific server tool.
 
         Args:
             server_name: MCP server name from configuration.
             tool_name: Tool name to invoke on the server.
+            cwd: Project working directory for merged config loading.
         """
         self.server_name = server_name
         self.tool_name = tool_name
+        self._cwd = cwd
 
     async def _invoke_async(self, input_payload: str | dict[str, Any]) -> str:
         """Invoke an MCP tool asynchronously and return its output.
@@ -339,7 +341,7 @@ class MCPToolRunner:
 
         # Ensure the pool has the latest MCP config so it can detect
         # config changes between invocations.
-        config = _load_mcp_config()
+        config = _load_mcp_config(cwd=self._cwd)
         config = _normalize_mcp_config(config)
         await pool.refresh_if_config_changed(config)
 
@@ -363,7 +365,7 @@ class MCPToolRunner:
         except Exception as exc:  # pragma: no cover - runtime dependency
             raise RuntimeError("langchain-mcp-adapters is required for MCP tools.") from exc
 
-        config = _load_mcp_config()
+        config = _load_mcp_config(cwd=self._cwd)
         servers = config.get("servers", {})
         if not servers or self.server_name not in servers:
             raise ValueError(f"MCP server '{self.server_name}' not found in config.")

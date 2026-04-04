@@ -90,3 +90,21 @@ def test_shell_tool_rejects_invalid_payload_type():
     result = tool.set_state(step)
     assert isinstance(result.content, str)
     assert "Tool input must be a string command" in result.content
+
+
+def test_run_command_valid_cwd(tmp_path):
+    """_run_command succeeds with a valid cwd."""
+    from meeseeks_tools.integration.aider_shell_tool import _run_command
+
+    exit_code, output = _run_command("echo hello", str(tmp_path))
+    assert exit_code == 0
+    assert "hello" in output
+
+
+def test_run_command_nonexistent_cwd(tmp_path):
+    """_run_command returns error tuple for nonexistent cwd, not exception."""
+    from meeseeks_tools.integration.aider_shell_tool import _run_command
+
+    exit_code, output = _run_command("echo hello", str(tmp_path / "does_not_exist"))
+    assert exit_code != 0
+    assert "does_not_exist" in output or "No such file" in output

@@ -4,7 +4,7 @@
 ARG BASE_IMAGE="ghcr.io/bearlike/meeseeks-base:latest"
 FROM $BASE_IMAGE
 
-ARG VERSION="0.0.8"
+ARG VERSION="0.0.9"
 
 LABEL org.opencontainers.image.title="Meeseeks API" \
       org.opencontainers.image.description="REST API for the Meeseeks task-agent assistant" \
@@ -39,7 +39,11 @@ COPY packages/ packages/
 COPY apps/meeseeks_api/ apps/meeseeks_api/
 COPY configs/ configs/
 
-# 3. Install with BuildKit cache mount (pip wheels survive rebuilds)
+# 3. Entrypoint (runs runtime init.d scripts, then execs gunicorn)
+COPY docker/entrypoint-api.sh /app/docker/entrypoint-api.sh
+RUN chmod +x /app/docker/entrypoint-api.sh
+
+# 4. Install with BuildKit cache mount (pip wheels survive rebuilds)
 RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
@@ -51,6 +55,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ENV MASTER_API_TOKEN='msk-strong-password' \
     API_PORT=5125
 
-# Single worker (RunRegistry is in-memory), 8 HTTP threads, 5-min timeout
-ENTRYPOINT ["sh", "-c", \
-    "exec gunicorn --bind 0.0.0.0:${API_PORT} --workers 1 --threads 8 --timeout 300 --graceful-timeout 30 --access-logfile - meeseeks_api.backend:app"]
+# Single worker (RunRegistry is in-memory), 8 HTTP threads, 5-min timeout.
+# entrypoint-api.sh runs docker/init.d/*.sh scripts before exec'ing gunicorn.
+ENTRYPOINT ["/app/docker/entrypoint-api.sh"]

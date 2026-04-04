@@ -184,5 +184,7 @@ cython_debug/
 #.idea/
 docker.env
 docker-compose.override.yml
+docker/init.d/*
+!docker/init.d/10-git-setup.sh
 /.claude/settings.json
 /.playwright-mcp

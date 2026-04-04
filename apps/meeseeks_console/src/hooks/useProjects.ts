@@ -1,33 +1,33 @@
 import { useCallback, useEffect, useState } from "react";
-import { listProjects, invalidateCache, ProjectSummary } from "../api/client";
+import { listProjects, invalidateCache, peekCache, ProjectSummary } from "../api/client";
 import { logApiError } from "../utils/errors";
 
+function readCached(): ProjectSummary[] {
+  return peekCache<ProjectSummary[]>('projects') ?? [];
+}
+
 export function useProjects() {
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [projects, setProjects] = useState<ProjectSummary[]>(readCached);
+  const [loading, setLoading] = useState(() => !readCached().length);
   const [error, setError] = useState<string | null>(null);
   const [fetchKey, setFetchKey] = useState(0);
 
   useEffect(() => {
     let mounted = true;
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        const all = await listProjects();
-        if (!mounted) return;
-        setProjects(all);
-      } catch (err) {
+    const stale = readCached();
+    if (stale.length) setProjects(stale);
+    setLoading(!stale.length);
+    setError(null);
+    listProjects()
+      .then((all) => { if (mounted) setProjects(all); })
+      .catch((err) => {
         if (mounted) {
           const message = logApiError("listProjects", err);
           setError(message);
-          setProjects([]);
+          if (!stale.length) setProjects([]);
         }
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    }
-    void load();
+      })
+      .finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
   }, [fetchKey]);
 

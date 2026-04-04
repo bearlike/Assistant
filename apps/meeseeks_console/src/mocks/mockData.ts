@@ -237,13 +237,20 @@ function makeEvents(sessionId: string): EventRecord[] {
     ts: t(8000),
     type: 'tool_result',
     payload: {
-      tool_id: 'shell',
+      tool_id: 'aider_shell_tool',
       operation: 'run',
-      tool_input:
-      "$ grep -rn 'verifyToken' src/\nsrc/middleware/auth.ts:1:import { verifyToken } from '../utils/token';\nsrc/middleware/auth.ts:5:  if (!token || !verifyToken(token)) {",
-      summary:
-      "$ grep -rn 'verifyToken' src/\nsrc/middleware/auth.ts:1:import { verifyToken } from '../utils/token';\nsrc/middleware/auth.ts:5:  if (!token || !verifyToken(token)) {",
-      result: 'Found 2 references to verifyToken in auth middleware.'
+      tool_input: { command: "grep -rn 'verifyToken' src/" },
+      summary: "Found 2 references to verifyToken in auth middleware.",
+      result: JSON.stringify({
+        kind: 'shell',
+        command: "grep -rn 'verifyToken' src/",
+        cwd: '/home/user/workspace/express-api',
+        exit_code: 0,
+        stdout: "src/middleware/auth.ts:1:import { verifyToken } from '../utils/token';\nsrc/middleware/auth.ts:5:  if (!token || !verifyToken(token)) {",
+        stderr: '',
+        duration_ms: 45,
+      }),
+      success: true,
     }
   },
   {
@@ -280,23 +287,73 @@ function makeEvents(sessionId: string): EventRecord[] {
     ts: t(35000),
     type: 'tool_result',
     payload: {
-      tool_id: 'shell',
+      tool_id: 'aider_shell_tool',
       operation: 'run',
-      tool_input: '$ npm test',
-      summary:
-      '$ npm test\n\n PASS  src/__tests__/auth.test.ts\n  ✓ rejects requests without token (4ms)\n  ✓ rejects invalid tokens (2ms)\n  ✓ passes valid JWT through (3ms)\n\nTest Suites: 1 passed, 1 total\nTests:       3 passed, 3 total',
-      result: 'All 3 tests passed.'
+      tool_input: { command: 'npm test' },
+      summary: 'All 3 tests passed.',
+      result: JSON.stringify({
+        kind: 'shell',
+        command: 'npm test',
+        cwd: '/home/user/workspace/express-api',
+        exit_code: 0,
+        stdout: ' PASS  src/__tests__/auth.test.ts\n  \u2713 rejects requests without token (4ms)\n  \u2713 rejects invalid tokens (2ms)\n  \u2713 passes valid JWT through (3ms)\n\nTest Suites: 1 passed, 1 total\nTests:       3 passed, 3 total',
+        stderr: '',
+        duration_ms: 3200,
+      }),
+      success: true,
+    }
+  },
+  {
+    ts: t(37000),
+    type: 'tool_result',
+    payload: {
+      tool_id: 'aider_shell_tool',
+      operation: 'run',
+      tool_input: { command: 'npm run typecheck' },
+      summary: 'Type checking failed.',
+      result: JSON.stringify({
+        kind: 'shell',
+        command: 'npm run typecheck',
+        cwd: '/home/user/workspace/express-api',
+        exit_code: 2,
+        stdout: '',
+        stderr: "src/middleware/auth.ts(3,7): error TS2322: Type 'string | undefined' is not assignable to type 'string'.\nsrc/config.ts(12,5): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.",
+        duration_ms: 1200,
+      }),
+      success: false,
+    }
+  },
+  {
+    ts: t(38500),
+    type: 'tool_result',
+    payload: {
+      tool_id: 'aider_shell_tool',
+      operation: 'run',
+      tool_input: { command: 'docker compose up -d db' },
+      summary: 'Command timed out after 120s: docker compose up -d db',
+      result: 'Command timed out after 120s: docker compose up -d db',
+      success: false,
+      error: 'Command timed out after 120s: docker compose up -d db',
     }
   },
   {
     ts: t(40000),
     type: 'tool_result',
     payload: {
-      tool_id: 'shell',
+      tool_id: 'aider_shell_tool',
       operation: 'run',
-      tool_input: '$ npm run lint',
-      summary: '$ npm run lint\n\n✔ No lint errors found.',
-      result: 'Linter passed with no errors.'
+      tool_input: { command: 'npm run lint' },
+      summary: 'Linter passed with no errors.',
+      result: JSON.stringify({
+        kind: 'shell',
+        command: 'npm run lint',
+        cwd: '/home/user/workspace/express-api',
+        exit_code: 0,
+        stdout: '\u2714 No lint errors found.',
+        stderr: '',
+        duration_ms: 890,
+      }),
+      success: true,
     }
   },
 

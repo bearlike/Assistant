@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import time
 
+import pytest
 from meeseeks_core.skills import (
     ACTIVATE_SKILL_SCHEMA,
     SkillRegistry,
@@ -13,6 +14,13 @@ from meeseeks_core.skills import (
     activate_skill,
     discover_skills,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_personal_skills(tmp_path, monkeypatch):
+    """Prevent real ~/.claude/skills from leaking into tests."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "_home")
+
 
 # ------------------------------------------------------------------
 # Helpers

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import difflib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +18,11 @@ from meeseeks_tools.aider_bridge import (
     parse_search_replace_blocks,
 )
 from meeseeks_tools.core import resolve_safe_path
+from meeseeks_tools.integration.edit_common import (
+    build_unified_diff,
+    format_diff_result,
+    read_file_contents,
+)
 
 
 @dataclass(frozen=True)
@@ -46,7 +50,7 @@ class AiderEditBlockTool(AbstractTool):
         try:
             request = _parse_request(action_step)
             target_paths = _collect_target_paths(request)
-            before_map = _read_targets(target_paths)
+            before_map = read_file_contents(target_paths)
             results = apply_search_replace_blocks(
                 request.content,
                 root=request.root,
@@ -55,13 +59,11 @@ class AiderEditBlockTool(AbstractTool):
             )
             if not results:
                 raise ToolInputError(_format_tool_input_error("No SEARCH/REPLACE blocks found."))
-            diff_text = _build_diff(before_map, target_paths)
+            diff_text = build_unified_diff(before_map, target_paths)
             if diff_text:
-                message: object = {
-                    "kind": "diff",
-                    "title": "Aider Edit Blocks",
-                    "text": diff_text,
-                }
+                message: object = format_diff_result(
+                    diff_text, "Aider Edit Blocks", list(target_paths.keys())
+                )
             else:
                 message = _format_summary(results, dry_run=False)
             MockSpeaker = get_mock_speaker()
@@ -131,32 +133,6 @@ def _collect_target_paths(request: EditBlockRequest) -> dict[str, Path]:
             raise EditBlockApplyError(str(exc)) from exc
     return targets
 
-
-def _read_targets(targets: dict[str, Path]) -> dict[str, str]:
-    before: dict[str, str] = {}
-    for rel_path, abs_path in targets.items():
-        if abs_path.exists():
-            before[rel_path] = abs_path.read_text(encoding="utf-8")
-        else:
-            before[rel_path] = ""
-    return before
-
-
-def _build_diff(before_map: dict[str, str], targets: dict[str, Path]) -> str:
-    chunks: list[str] = []
-    for rel_path, abs_path in targets.items():
-        before = before_map.get(rel_path, "")
-        after = abs_path.read_text(encoding="utf-8") if abs_path.exists() else ""
-        diff = difflib.unified_diff(
-            before.splitlines(keepends=True),
-            after.splitlines(keepends=True),
-            fromfile=rel_path,
-            tofile=rel_path,
-        )
-        diff_text = "".join(diff)
-        if diff_text:
-            chunks.append(diff_text)
-    return "".join(chunks)
 
 
 def _format_summary(results, *, dry_run: bool) -> str:

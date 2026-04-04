@@ -1,4 +1,39 @@
 import { EventRecord, LogEntry, PlanStep } from "../types";
+
+// ── Shared structured result parser ──────────────────────────────────
+// Tool results may be JSON strings with a `kind` discriminator.
+// Both buildLogs() and buildTimeline() use this to avoid duplication.
+
+export type ParsedResult =
+  | { kind: "diff"; title: string; text: string; files?: string[] }
+  | {
+      kind: "shell";
+      command?: string;
+      cwd?: string;
+      exit_code?: number;
+      stdout?: string;
+      stderr?: string;
+      duration_ms?: number;
+    }
+  | { kind: "file"; path: string; text: string }
+  | { kind: "raw"; text: string };
+
+export function parseStructuredResult(result: unknown): ParsedResult {
+  if (typeof result !== "string")
+    return { kind: "raw", text: String(result ?? "") };
+  try {
+    const parsed = JSON.parse(result);
+    if (parsed && typeof parsed === "object" && typeof parsed.kind === "string") {
+      return parsed as ParsedResult;
+    }
+  } catch {
+    /* not JSON */
+  }
+  return { kind: "raw", text: result };
+}
+
+// ── Existing exports ─────────────────────────────────────────────────
+
 export type SummaryTesting = {
   summary: string[];
   testing: {
@@ -112,9 +147,61 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         } catch { /* not JSON, fall through to shell */ }
       }
 
+      // Parse structured result (diff, shell, or raw text)
+      const parsedResult = parseStructuredResult(result);
+
+      // Diff result → dedicated diff card
+      if (parsedResult.kind === "diff") {
+        logs.push({
+          id: `diff-${idx++}`,
+          type: "diff",
+          content: "",
+          timestamp: event.ts,
+          diffTitle: parsedResult.title || toolId,
+          diffText: parsedResult.text || "",
+          diffSuccess: success,
+          agentId: eventAgentId,
+          model: eventModel,
+        });
+        continue;
+      }
+
+      // Try to parse structured shell result
+      let shellData: {
+        command?: string; cwd?: string; exit_code?: number;
+        stdout?: string; stderr?: string; duration_ms?: number;
+      } | null = null;
+      if (parsedResult.kind === "shell") {
+        shellData = parsedResult;
+      }
+
+      // For shell tools without structured JSON (timeouts, internal errors),
+      // synthesize shell fields from tool_input so TerminalCard still renders.
+      const isShellTool = /shell|bash|exec|run_command/i.test(toolId);
+      if (!shellData && isShellTool) {
+        const inp = payload.tool_input;
+        let cmd: string | undefined;
+        if (inp && typeof inp === "object" && typeof (inp as Record<string, unknown>).command === "string") {
+          cmd = (inp as Record<string, unknown>).command as string;
+        } else if (typeof inp === "string") {
+          cmd = inp.replace(/^\$\s*/, "");
+        }
+        if (cmd) {
+          const errorMsg = !success ? String(payload.error || summary || "") : undefined;
+          shellData = {
+            command: cmd,
+            cwd: typeof (inp as Record<string, unknown>)?.cwd === "string"
+              ? (inp as Record<string, unknown>).cwd as string : undefined,
+            exit_code: !success ? 1 : undefined,
+            stdout: success ? (summary ? String(summary) : undefined) : undefined,
+            stderr: errorMsg || undefined,
+          };
+        }
+      }
+
       // Regular tool result → shell card with separated input/output
-      const shellInput = rawInput || undefined;
-      const shellOutput = summary ? String(summary) : undefined;
+      const shellInput = shellData?.command || rawInput || undefined;
+      const shellOutput = shellData?.stdout ?? (summary ? String(summary) : undefined);
       const content = [
         shellInput ? `input: ${shellInput}` : "",
         shellOutput || "",
@@ -131,6 +218,12 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         error: !success ? String(payload.error || "Error") : undefined,
         agentId: eventAgentId,
         model: eventModel,
+        shellCommand: shellData?.command,
+        shellCwd: shellData?.cwd,
+        shellExitCode: shellData?.exit_code,
+        shellStdout: shellData?.stdout,
+        shellStderr: shellData?.stderr,
+        shellDurationMs: shellData?.duration_ms,
       });
     }
     if (event.type === "action_plan") {
@@ -243,6 +336,23 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         stepsCompleted: steps,
         detail: detail ? truncate(detail, 200) : undefined,
       });
+    }
+    if (event.type === "agent_message") {
+      const payload = event.payload || {};
+      const text = typeof payload.text === "string" ? payload.text : "";
+      const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "";
+      const depth = typeof payload.depth === "number" ? payload.depth : 0;
+      if (text) {
+        logs.push({
+          id: `msg-${idx++}`,
+          type: "agent_message",
+          content: text,
+          timestamp: event.ts,
+          agentId,
+          depth,
+          detail: depth === 0 ? "meeseeks" : `agent-${agentId.slice(0, 6)}`,
+        });
+      }
     }
   }
   return logs;

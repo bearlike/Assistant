@@ -9,7 +9,7 @@ Core orchestration engine for Meeseeks. This package owns the unified async tool
 - Permission policies and hooks for tool execution gating.
 - `HookManager` with error-isolated execution, session lifecycle hooks (`on_session_start`/`on_session_end`/`on_compact`), and external hook configuration via `HooksConfig`.
 - Session runtime, transcripts (JSONL), summaries, and two-mode compaction (full/partial) with structured summaries and post-compact file restoration.
-- `ToolSpec` with typed metadata: `concurrency_safe`, `read_only`, `max_result_chars`, `timeout` for fine-grained tool execution control.
+- `ToolSpec` with typed metadata: `concurrency_safe`, `read_only`, `max_result_chars`, `timeout`, `capabilities` for fine-grained tool execution control. The file edit tool is conditionally registered based on `AgentConfig.edit_tool`.
 - `ToolResult` for structured tool execution results.
 - Hierarchical instruction discovery (user → project → rules → local) via `discover_all_instructions()`.
 - Git context injection (`get_git_context()`) in the system prompt.

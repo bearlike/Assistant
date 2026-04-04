@@ -1,10 +1,12 @@
 import { useMemo } from 'react';
-import { ChevronRight, Loader2, Copy } from 'lucide-react';
+import { ChevronRight, Loader2 } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { CopyButton } from './CopyButton';
+import { ScrollToBottom } from './ScrollToBottom';
 import { DiffFile, EventRecord, TimelineEntry, TurnMeta } from '../types';
 import { FileList } from './FileList';
 import { SummaryBlock } from './SummaryBlock';
-import { copyText } from '../utils/clipboard';
+import { useAutoScroll } from '../hooks/useAutoScroll';
 import { formatModelName } from '../utils/model';
 interface ConversationTimelineProps {
   timeline: TimelineEntry[];
@@ -54,8 +56,10 @@ export function ConversationTimeline({
     }
     return agents;
   }, [events]);
+  const { scrollRef, isAtBottom, scrollToBottom, onScroll } = useAutoScroll(timeline.length);
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-10">
+    <div className="relative flex-1 overflow-hidden">
+    <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto p-6 space-y-10">
       {timeline.map((entry) =>
       <div key={entry.id} className="flex flex-col gap-2">
           {entry.role === 'user' ?
@@ -63,15 +67,12 @@ export function ConversationTimeline({
               <div className="inline-flex flex-col items-end max-w-[85%]">
                 <MessageBubble role={entry.role} content={entry.content} />
                 <div className="mt-2 inline-flex items-center gap-3">
-                  <button
-                  onClick={() => copyText(entry.content)}
-                  className="group inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors shrink-0">
-
-                    <Copy className="w-3 h-3" />
-                    <span className="hidden text-[10px] group-hover:inline-block">
-                      Copy
-                    </span>
-                  </button>
+                  <CopyButton
+                    text={entry.content}
+                    className="group inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors shrink-0"
+                  >
+                    <span className="hidden text-[10px] group-hover:inline-block">Copy</span>
+                  </CopyButton>
                   {entry.turnId === activeTurnId &&
               <div className="inline-flex flex-col text-xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-lg overflow-hidden max-w-[320px]">
                       <div className="flex items-center justify-between gap-3 px-3 py-1.5">
@@ -175,6 +176,10 @@ export function ConversationTimeline({
           </div>
         </MessageBubble>
       }
+    </div>
+    {!isAtBottom && (
+      <ScrollToBottom onClick={scrollToBottom} />
+    )}
     </div>);
 
 }

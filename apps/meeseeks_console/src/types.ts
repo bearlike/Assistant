@@ -87,9 +87,31 @@ export type TimelineEntry = {
   turnId: string;
   turn?: TurnMeta;
 };
+export type ParsedDiffFile = {
+  name: string;
+  path: string;
+  additions: number;
+  deletions: number;
+  isNewFile: boolean;
+  isDeleted: boolean;
+  hunks: ParsedHunk[];
+};
+
+export type ParsedHunk = {
+  header: string;
+  lines: ParsedLine[];
+};
+
+export type ParsedLine = {
+  type: "context" | "insert" | "delete";
+  oldNumber?: number;
+  newNumber?: number;
+  content: string;
+};
+
 export type LogEntry = {
   id: string;
-  type: "shell" | "system" | "plan" | "permission" | "agent" | "agent_result" | "completion";
+  type: "shell" | "diff" | "system" | "plan" | "permission" | "agent" | "agent_result" | "completion" | "agent_message";
   content: string;
   title?: string;
   timestamp?: string;
@@ -120,9 +142,20 @@ export type LogEntry = {
   // Completion fields
   doneReason?: string;
   error?: string;
+  // Diff fields (parsed from kind="diff" results)
+  diffTitle?: string;
+  diffText?: string;
+  diffSuccess?: boolean;
   // Shell separated fields
   shellInput?: string;
   shellOutput?: string;
+  // Structured shell fields (parsed from JSON result)
+  shellCommand?: string;
+  shellCwd?: string;
+  shellExitCode?: number;
+  shellStdout?: string;
+  shellStderr?: string;
+  shellDurationMs?: number;
 };
 
 export type PlanStep = {

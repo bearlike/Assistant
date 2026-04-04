@@ -3,7 +3,7 @@
 # Dockerfile.base — Dev-equipped agent runtime for Meeseeks
 FROM python:3.11-bookworm
 
-ARG VERSION="0.0.8"
+ARG VERSION="0.0.9"
 ARG USERNAME=meeseeks
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
