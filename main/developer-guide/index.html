@@ -610,7 +610,7 @@
 <ul>
 <li><code>AbstractTool</code> (<code>meeseeks_core.classes</code>): base class for local tools; implement <code>get_state</code> and <code>set_state</code> and return a <code>MockSpeaker</code>.</li>
 <li><code>ToolRunner</code> protocol (<code>meeseeks_core.tool_registry</code>): interface for tool runners with <code>run(ActionStep)</code>.</li>
-<li><code>ToolSpec</code> / <code>ToolRegistry</code> (<code>meeseeks_core.tool_registry</code>): register tools with <code>tool_id</code>, metadata, and a factory.</li>
+<li><code>ToolSpec</code> / <code>ToolRegistry</code> (<code>meeseeks_core.tool_registry</code>): register tools with <code>tool_id</code>, metadata, and a factory. The file edit tool is conditionally registered based on <code>agent.edit_tool</code> config — either <code>aider_edit_block_tool</code> or <code>file_edit_tool</code>.</li>
 <li><code>ActionStep</code>, <code>Plan</code>, <code>TaskQueue</code> (<code>meeseeks_core.classes</code>): planning and tool-execution payloads.</li>
 <li><code>PermissionPolicy</code> (<code>meeseeks_core.permissions</code>): allow/deny/ask rules for tool execution.</li>
 <li><code>HookManager</code> (<code>meeseeks_core.hooks</code>): pre/post hooks and compaction transforms.</li>

@@ -615,6 +615,7 @@
 <h2 id="extensibility-points">Extensibility points</h2>
 <ul>
 <li>Add tools by implementing <code>AbstractTool</code> or by registering MCP servers with schemas.</li>
+<li><strong>Configurable file edit tool:</strong> Set <code>agent.edit_tool</code> in config to <code>"search_replace_block"</code> (Aider-style) or <code>"structured_patch"</code> (per-file exact match). The tool schema, LLM prompt instructions, and backend implementation all switch together — they're bundled in the same <code>ToolSpec</code> registration.</li>
 <li>Add hooks through <code>HookManager</code> for pre/post events and compaction transforms.</li>
 <li>Add new interfaces by reusing <code>SessionRuntime</code> and the event transcript model.</li>
 </ul>
