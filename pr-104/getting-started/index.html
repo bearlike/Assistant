@@ -648,8 +648,34 @@
 <li>Console: <code>cd apps/meeseeks_console &amp;&amp; npm run dev</code> (details in <a href="../clients-web-api/">Console + API</a>)</li>
 <li>Home Assistant: see <a href="../clients-home-assistant/">Home Assistant voice</a></li>
 </ul>
-<h2 id="aider-edit-blocks-local-tool">Aider edit blocks (local tool)</h2>
-<p>The edit-block tool expects strict SEARCH/REPLACE blocks and returns format guidance on mismatches.</p>
+<h2 id="file-edit-tool">File edit tool</h2>
+<p>Meeseeks ships two file-editing mechanisms. Set <code>agent.edit_tool</code> in <code>configs/app.json</code> to choose which one is active:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Mechanism</th>
+<th>Best for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"search_replace_block"</code> (default)</td>
+<td>Aider-style SEARCH/REPLACE blocks</td>
+<td>Models trained on diff/patch formats; multi-file edits in one call</td>
+</tr>
+<tr>
+<td><code>"structured_patch"</code></td>
+<td>Per-file <code>file_path</code> + <code>old_string</code> / <code>new_string</code></td>
+<td>Models that perform better with explicit per-file parameters (e.g., smaller or instruction-tuned models)</td>
+</tr>
+</tbody>
+</table></div>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="w"> </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;edit_tool&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;structured_patch&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>Research shows that edit format significantly impacts LLM coding accuracy — the same model can vary by 20+ percentage points depending on the edit schema it's given (<a href="https://aider.chat/docs/more/edit-formats.html">Aider benchmarks</a>, <a href="https://arxiv.org/abs/2511.04486">EDIT-Bench</a>). For example, a model struggling with SEARCH/REPLACE block syntax (misplacing the filename line, botching the fence markers) may succeed immediately when given the simpler <code>old_string</code> / <code>new_string</code> interface. This setting lets you match the edit format to whatever works best for your chosen model.</p>
+<p>Both mechanisms produce identical output (<code>kind: "diff"</code> with a unified diff), so the web console, CLI, and API all render edits the same way regardless of which mechanism is active.</p>
+<h3 id="searchreplace-blocks-search_replace_block">SEARCH/REPLACE blocks (<code>search_replace_block</code>)</h3>
 <div class="highlight"><pre><span></span><code>&lt;path&gt;
 ```text
 &lt;&lt;&lt;&lt;&lt;&lt;&lt; SEARCH
@@ -663,6 +689,13 @@
 - Filename line immediately before the opening fence.
 - SEARCH must match exactly (including whitespace/newlines).
 - Use a line with <code>...</code> in both SEARCH and REPLACE to skip unchanged sections.</p>
+<h3 id="structured-patch-structured_patch">Structured patch (<code>structured_patch</code>)</h3>
+<p>The LLM calls the tool with three parameters:
+- <code>file_path</code> — path to the file to edit.
+- <code>old_string</code> — exact text to find (empty to create a new file).
+- <code>new_string</code> — replacement text.
+- <code>replace_all</code> — (optional, default false) replace all occurrences.</p>
+<p>One file per call. The tool fails with guidance if the match is ambiguous.</p>
 <h2 id="docker-compose-deployment">Docker Compose deployment</h2>
 <p>The API and web console ship as container images published to GHCR. A <code>docker-compose.yml</code> in the repo root orchestrates both services with host networking.</p>
 <h3 id="quick-start">Quick start</h3>
@@ -729,6 +762,20 @@ docker<span class="w"> </span>compose<span class="w"> </span>pull<span class="w"
 <li>Both services use <strong>host networking</strong> so they share <code>127.0.0.1</code>.</li>
 <li>The API image is built on top of <code>ghcr.io/bearlike/meeseeks-base</code> which includes Python, Node.js, and the core/tools packages.</li>
 </ul>
+<h3 id="project-directories-overrides">Project directories &amp; overrides</h3>
+<p>Create a <code>docker-compose.override.yml</code> (auto-loaded by Compose) to mount your project directories and init scripts. A template is provided:</p>
+<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>docker-compose.override.example.yml<span class="w"> </span>docker-compose.override.yml
+</code></pre></div>
+<p>Mount each project at <strong>the same path</strong> as on the host so <code>configs/app.json</code> paths work without translation:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">api</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./docker/init.d:/app/docker/init.d:ro</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/home/you/Projects/my-repo:/home/you/Projects/my-repo</span>
+</code></pre></div>
+<h3 id="post-init-scripts">Post-init scripts</h3>
+<p>The API entrypoint runs all <code>*.sh</code> scripts in <code>docker/init.d/</code> (sorted by filename) before starting Gunicorn. Scripts are sourced so they can export env vars; a failing script logs a warning but does not block startup.</p>
+<p>The included <code>10-git-setup.sh</code> configures git to authenticate via <code>gh</code> CLI (using <code>GITHUB_TOKEN</code>) and trusts all volume-mounted repos (<code>safe.directory *</code>). Add your own numbered scripts to the same directory — only <code>10-git-setup.sh</code> is version-controlled; the rest are gitignored.</p>
 <h3 id="runtime-configuration">Runtime configuration</h3>
 <ul>
 <li>Mount <code>configs/app.json</code> and <code>configs/mcp.json</code> (read-only) for runtime + MCP settings.</li>
@@ -986,11 +1033,25 @@ uv<span class="w"> </span>run<span class="w"> </span>mkdocs<span class="w"> </sp
         
 
         
-        <a href="#aider-edit-blocks-local-tool"
+        <a href="#file-edit-tool"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
-            Aider edit blocks (local tool)
+            File edit tool
         </a>
+        
+        
+        <a href="#searchreplace-blocks-search_replace_block"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            SEARCH/REPLACE blocks (search_replace_block)
+        </a>
+        
+        <a href="#structured-patch-structured_patch"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            Structured patch (structured_patch)
+        </a>
+        
         
 
         
@@ -1011,6 +1072,18 @@ uv<span class="w"> </span>run<span class="w"> </span>mkdocs<span class="w"> </sp
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3">
             How it works
+        </a>
+        
+        <a href="#project-directories-overrides"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            Project directories &amp; overrides
+        </a>
+        
+        <a href="#post-init-scripts"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            Post-init scripts
         </a>
         
         <a href="#runtime-configuration"
