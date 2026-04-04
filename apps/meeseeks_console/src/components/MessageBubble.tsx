@@ -3,8 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
-import { ChevronDown, ChevronUp, Copy } from 'lucide-react';
-import { copyText } from '../utils/clipboard';
+import { ChevronDown, ChevronUp } from 'lucide-react';
+import { CopyButton } from './CopyButton';
 interface MessageBubbleProps {
   role: 'user' | 'system' | 'ai' | 'assistant';
   content?: string;
@@ -14,22 +14,6 @@ const USER_COLLAPSE_THRESHOLD = 300;
 export function MessageBubble({ role, content, children }: MessageBubbleProps) {
   const [expanded, setExpanded] = useState(false);
   const markdown = content ? <MarkdownContent content={content} /> : null;
-  const copyContent = async () => {
-    if (!content) {
-      return;
-    }
-    await copyText(content);
-  };
-  const CopyButton = () =>
-  <button
-    onClick={copyContent}
-    className="group mt-2 inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
-
-      <Copy className="w-3 h-3" />
-      <span className="hidden text-[10px] group-hover:inline-block">
-        Copy
-      </span>
-    </button>;
   if (role === 'user') {
     const safeContent = content ?? '';
     const isLong = safeContent.length > USER_COLLAPSE_THRESHOLD;
@@ -76,7 +60,14 @@ export function MessageBubble({ role, content, children }: MessageBubbleProps) {
         {content &&
         <div className="text-[hsl(var(--foreground))] text-sm">{markdown}</div>
         }
-        {content && <CopyButton />}
+        {content && (
+          <CopyButton
+            text={content}
+            className="group mt-2 inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+          >
+            <span className="hidden text-[10px] group-hover:inline-block">Copy</span>
+          </CopyButton>
+        )}
         {children}
       </div>);
 
@@ -174,7 +165,7 @@ const markdownComponents: React.ComponentProps<typeof ReactMarkdown>['components
     <td className="px-3 py-2 text-[hsl(var(--foreground))]" {...props} />,
 };
 
-function MarkdownContent({ content }: {content: string;}) {
+export function MarkdownContent({ content }: {content: string;}) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}

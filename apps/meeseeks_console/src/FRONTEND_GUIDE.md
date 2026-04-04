@@ -42,7 +42,7 @@
 │      └── WorkspacePanel (right side)            │
 │          ├── DiffView                           │
 │          └── LogsView                           │
-│              └── ShellBlock × N                 │
+│              └── TerminalCard × N                 │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -60,6 +60,7 @@
 │   ├── ui/
 │   │   └── alert.tsx      # Shadcn Alert primitive
 │   ├── ConversationTimeline.tsx
+│   ├── CopyButton.tsx       # Shared copy-to-clipboard button with icon feedback
 │   ├── DiffStats.tsx
 │   ├── DiffView.tsx
 │   ├── FileList.tsx
@@ -71,7 +72,7 @@
 │   ├── NotificationPanel.tsx
 │   ├── SessionDetailView.tsx
 │   ├── SessionItem.tsx
-│   ├── ShellBlock.tsx
+│   ├── TerminalCard.tsx
 │   ├── StatusBadge.tsx
 │   ├── SummaryBlock.tsx
 │   ├── NavBar.tsx
@@ -383,10 +384,10 @@ Uses `--diff-add-*`, `--diff-del-*`, `--diff-hunk-*` CSS variables for theme-awa
 
 ---
 
-### 4.13 ShellBlock
+### 4.13 TerminalCard
 
-**File:** `components/ShellBlock.tsx`  
-**Purpose:** Styled terminal output block with copy button
+**File:** `components/TerminalCard.tsx`
+**Purpose:** Terminal emulator-style card for shell tool calls. Dark background with window chrome (traffic-light dots), CWD tab title, duration, exit status. Click to expand/collapse output. Used by `LogsView` when structured shell JSON is parsed from `payload.result`.
 
 ---
 

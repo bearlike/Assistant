@@ -653,7 +653,7 @@ class TestDepthGuidance:
             hook_manager=_make_hook_manager(),
         )
         guidance = loop._build_depth_guidance()
-        assert "Root orchestrator" in guidance
+        assert "Root hypervisor" in guidance
         # Direct execution should come BEFORE spawning guidance
         direct_pos = guidance.index("Direct execution")
         spawn_pos = guidance.index("When to spawn")

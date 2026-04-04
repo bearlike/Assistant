@@ -9,7 +9,7 @@ import {
   SessionSummary,
   ShareRecord
 } from "../types";
-import { AgentSummary, ApiClient, ApiConfig, ProjectSummary, SkillSummary, ToolSummary } from "./contracts";
+import { AgentSummary, ApiClient, ApiConfig, ModelInfo, ProjectSummary, SkillSummary, ToolSummary } from "./contracts";
 
 function withBase(baseUrl: string, path: string) {
   if (!baseUrl) {
@@ -250,6 +250,13 @@ export function createRealClient(config: ApiConfig): ApiClient {
       return () => source.close();
     },
 
+    async listModels(): Promise<ModelInfo> {
+      const response = await fetch(withBase(baseUrl, "/api/models"), {
+        headers: headers(apiKey)
+      });
+      return handleJson<ModelInfo>(response);
+    },
+
     async listProjects(): Promise<ProjectSummary[]> {
       const response = await fetch(withBase(baseUrl, "/api/projects"), {
         headers: headers(apiKey)
@@ -319,6 +326,31 @@ export function createRealClient(config: ApiConfig): ApiClient {
         running: boolean;
         total_steps: number;
       }>(response);
+    },
+
+    async getConfigSchema(): Promise<Record<string, unknown>> {
+      const response = await fetch(withBase(baseUrl, "/api/config/schema"), {
+        headers: headers(apiKey)
+      });
+      return handleJson<Record<string, unknown>>(response);
+    },
+
+    async getConfig(): Promise<Record<string, unknown>> {
+      const response = await fetch(withBase(baseUrl, "/api/config"), {
+        headers: headers(apiKey)
+      });
+      const payload = await handleJson<{ config: Record<string, unknown> }>(response);
+      return payload.config;
+    },
+
+    async patchConfig(patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const response = await fetch(withBase(baseUrl, "/api/config"), {
+        method: "PATCH",
+        headers: headers(apiKey),
+        body: JSON.stringify(patch)
+      });
+      const payload = await handleJson<{ config: Record<string, unknown> }>(response);
+      return payload.config;
     },
   };
 }

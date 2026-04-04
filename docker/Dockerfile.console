@@ -14,7 +14,7 @@ RUN npm run build
 # ---------- runtime stage ----------
 FROM nginx:alpine
 
-ARG VERSION="0.0.8"
+ARG VERSION="0.0.9"
 
 LABEL org.opencontainers.image.title="Meeseeks Console" \
       org.opencontainers.image.description="Web console for the Meeseeks task-agent assistant" \

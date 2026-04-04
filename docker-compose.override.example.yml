@@ -1,8 +1,12 @@
 # Local overrides — copy to docker-compose.override.yml (auto-loaded by Compose).
-# Mount your project directories so the agent can access them inside the container.
-# Each path is mounted at the same location so tool configs work identically.
+#
+# Post-init scripts: docker/init.d/*.sh run at container startup before the API.
+# Mount the directory read-only so scripts can be added/edited without rebuilding.
+#
+# Project directories: mount at identical paths so configs/app.json works as-is.
 services:
   api:
     volumes:
+      - ./docker/init.d:/app/docker/init.d:ro
       - /home/you/Projects/my-project:/home/you/Projects/my-project
       - /home/you/Projects/another-repo:/home/you/Projects/another-repo

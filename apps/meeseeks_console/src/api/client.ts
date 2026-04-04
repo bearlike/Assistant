@@ -9,7 +9,7 @@ import {
   SessionSummary,
   ShareRecord
 } from '../types';
-import { AgentSummary, ApiClient, ApiMode, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
+import { AgentSummary, ApiClient, ApiMode, ModelInfo, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
 import { createRealClient } from './realClient';
 import {
   mockListSessions,
@@ -58,11 +58,15 @@ const mockClient: ApiClient = {
   streamEvents: () => () => { /* no-op mock */ },
   listTools: (_project?: string) => mockListTools(),
   listSkills: (_project?: string) => mockListSkills(),
+  listModels: async () => ({ models: [], default: 'unknown' }),
   listProjects: async () => [],
   listNotifications: mockListNotifications,
   dismissNotification: mockDismissNotification,
   clearNotifications: mockClearNotifications,
   listAgents: async () => ({ agents: [], running: false, total_steps: 0 }),
+  getConfigSchema: async () => ({ type: "object", properties: {} }),
+  getConfig: async () => ({}),
+  patchConfig: async () => ({}),
 };
 
 // When true in auto mode, skip real fetch and use mocks directly.
@@ -80,10 +84,16 @@ const CACHE_TTL = 60_000;
 function getCached<T>(key: string): T | undefined {
   const e = _cache.get(key);
   if (!e || Date.now() - e.ts > CACHE_TTL) {
-    _cache.delete(key);
+    if (e) _cache.delete(key);
     return undefined;
   }
   return e.data as T;
+}
+
+/** Return cached data regardless of TTL (stale-while-revalidate reads). */
+export function peekCache<T>(key: string): T | undefined {
+  const e = _cache.get(key);
+  return e ? (e.data as T) : undefined;
 }
 
 function setCache<T>(key: string, data: T): void {
@@ -248,6 +258,18 @@ export async function listTools(project?: string): Promise<ToolSummary[]> {
   return result;
 }
 
+export async function listModels(): Promise<ModelInfo> {
+  const key = 'models';
+  const hit = getCached<ModelInfo>(key);
+  if (hit) return hit;
+  const result = await withFallback(
+    () => realClient.listModels(),
+    () => mockClient.listModels()
+  );
+  setCache(key, result);
+  return result;
+}
+
 export async function listProjects(): Promise<ProjectSummary[]> {
   const key = 'projects';
   const hit = getCached<ProjectSummary[]>(key);
@@ -315,6 +337,33 @@ export async function listAgents(sessionId: string): Promise<{
   return withFallback(
     () => realClient.listAgents(sessionId),
     () => mockClient.listAgents(sessionId)
+  );
+}
+
+export async function getConfigSchema(): Promise<Record<string, unknown>> {
+  const key = 'config:schema';
+  const hit = getCached<Record<string, unknown>>(key);
+  if (hit) return hit;
+  const result = await withFallback(
+    () => realClient.getConfigSchema(),
+    () => mockClient.getConfigSchema()
+  );
+  setCache(key, result);
+  return result;
+}
+
+export async function getConfig(): Promise<Record<string, unknown>> {
+  return withFallback(
+    () => realClient.getConfig(),
+    () => mockClient.getConfig()
+  );
+}
+
+export async function patchConfig(patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+  invalidateCache('config:');
+  return withFallback(
+    () => realClient.patchConfig(patch),
+    () => mockClient.patchConfig(patch)
   );
 }
 

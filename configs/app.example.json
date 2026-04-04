@@ -74,7 +74,8 @@
     "default_sub_model": "",
     "allowed_models": [],
     "sub_agent_max_steps": 10,
-    "default_denied_tools": []
+    "default_denied_tools": [],
+    "edit_tool": "search_replace_block"
   },
   "hooks": {
     "pre_tool_use": [],

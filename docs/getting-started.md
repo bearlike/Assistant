@@ -75,8 +75,24 @@ See [LLM setup](llm-setup.md) for MCP configuration and auto-discovery details.
 - Console: `cd apps/meeseeks_console && npm run dev` (details in [Console + API](clients-web-api.md))
 - Home Assistant: see [Home Assistant voice](clients-home-assistant.md)
 
-## Aider edit blocks (local tool)
-The edit-block tool expects strict SEARCH/REPLACE blocks and returns format guidance on mismatches.
+## File edit tool
+
+Meeseeks ships two file-editing mechanisms. Set `agent.edit_tool` in `configs/app.json` to choose which one is active:
+
+| Value | Mechanism | Best for |
+|-------|-----------|----------|
+| `"search_replace_block"` (default) | Aider-style SEARCH/REPLACE blocks | Models trained on diff/patch formats; multi-file edits in one call |
+| `"structured_patch"` | Per-file `file_path` + `old_string` / `new_string` | Models that perform better with explicit per-file parameters (e.g., smaller or instruction-tuned models) |
+
+```json
+{ "agent": { "edit_tool": "structured_patch" } }
+```
+
+Research shows that edit format significantly impacts LLM coding accuracy — the same model can vary by 20+ percentage points depending on the edit schema it's given ([Aider benchmarks](https://aider.chat/docs/more/edit-formats.html), [EDIT-Bench](https://arxiv.org/abs/2511.04486)). For example, a model struggling with SEARCH/REPLACE block syntax (misplacing the filename line, botching the fence markers) may succeed immediately when given the simpler `old_string` / `new_string` interface. This setting lets you match the edit format to whatever works best for your chosen model.
+
+Both mechanisms produce identical output (`kind: "diff"` with a unified diff), so the web console, CLI, and API all render edits the same way regardless of which mechanism is active.
+
+### SEARCH/REPLACE blocks (`search_replace_block`)
 
 ````text
 <path>
@@ -93,6 +109,16 @@ Rules:
 - Filename line immediately before the opening fence.
 - SEARCH must match exactly (including whitespace/newlines).
 - Use a line with `...` in both SEARCH and REPLACE to skip unchanged sections.
+
+### Structured patch (`structured_patch`)
+
+The LLM calls the tool with three parameters:
+- `file_path` — path to the file to edit.
+- `old_string` — exact text to find (empty to create a new file).
+- `new_string` — replacement text.
+- `replace_all` — (optional, default false) replace all occurrences.
+
+One file per call. The tool fails with guidance if the match is ambiguous.
 
 ## Docker Compose deployment
 
@@ -133,6 +159,30 @@ docker compose up --build -d
 - **Console** (`ghcr.io/bearlike/meeseeks-console`) — Nginx serving the React SPA on port `3001`. Proxies `/api/` requests to the API at `127.0.0.1:5125`.
 - Both services use **host networking** so they share `127.0.0.1`.
 - The API image is built on top of `ghcr.io/bearlike/meeseeks-base` which includes Python, Node.js, and the core/tools packages.
+
+### Project directories & overrides
+
+Create a `docker-compose.override.yml` (auto-loaded by Compose) to mount your project directories and init scripts. A template is provided:
+
+```bash
+cp docker-compose.override.example.yml docker-compose.override.yml
+```
+
+Mount each project at **the same path** as on the host so `configs/app.json` paths work without translation:
+
+```yaml
+services:
+  api:
+    volumes:
+      - ./docker/init.d:/app/docker/init.d:ro
+      - /home/you/Projects/my-repo:/home/you/Projects/my-repo
+```
+
+### Post-init scripts
+
+The API entrypoint runs all `*.sh` scripts in `docker/init.d/` (sorted by filename) before starting Gunicorn. Scripts are sourced so they can export env vars; a failing script logs a warning but does not block startup.
+
+The included `10-git-setup.sh` configures git to authenticate via `gh` CLI (using `GITHUB_TOKEN`) and trusts all volume-mounted repos (`safe.directory *`). Add your own numbered scripts to the same directory — only `10-git-setup.sh` is version-controlled; the rest are gitignored.
 
 ### Runtime configuration
 

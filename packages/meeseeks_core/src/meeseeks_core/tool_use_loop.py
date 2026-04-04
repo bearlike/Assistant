@@ -8,6 +8,7 @@ import json
 import platform as _platform
 import queue as _queue_mod
 import re
+import time as _time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date as _date
@@ -184,6 +185,12 @@ class ToolUseLoop:
         )
         await self._ctx.registry.register(handle)
 
+        # Ref: [AgentCgroup §4.2] Background watchdog for stall detection.
+        # Code-level reflex — zero token cost. Root only.
+        watchdog_task: asyncio.Task[None] | None = None
+        if self._ctx.depth == 0:
+            watchdog_task = asyncio.create_task(self._watchdog())
+
         try:
             # Ref: [DeepMind-Delegation §4.5] Global eye for root agent
             agent_tree = ""
@@ -208,6 +215,9 @@ class ToolUseLoop:
             invoke_config: dict[str, Any] = {}
             if langfuse_handler is not None:
                 invoke_config["callbacks"] = [langfuse_handler]
+                metadata = getattr(langfuse_handler, "langfuse_metadata", None)
+                if isinstance(metadata, dict) and metadata:
+                    invoke_config["metadata"] = metadata
 
             steps_run = 0
             for _ in range(max_steps):
@@ -276,21 +286,28 @@ class ToolUseLoop:
 
                     if not response.tool_calls:
                         # Text response — task is done.
-                        raw_content = getattr(response, "content", "") or ""
-                        if isinstance(raw_content, list):
-                            # Claude extended thinking: extract text blocks only.
-                            content = "\n".join(
-                                block.get("text", "")
-                                for block in raw_content
-                                if isinstance(block, dict) and block.get("type") == "text"
-                            )
-                        else:
-                            content = str(raw_content)
+                        content = self._extract_text_content(
+                            getattr(response, "content", "")
+                        )
                         final_response = content
                         tool_outputs.append(content)
                         state.done = True
                         state.done_reason = "completed"
                         break
+
+                    # Emit intermediate text as agent_message for trace logs.
+                    text_content = self._extract_text_content(
+                        getattr(response, "content", "")
+                    )
+                    if text_content:
+                        self._emit_event({
+                            "type": "agent_message",
+                            "payload": {
+                                "text": text_content,
+                                "agent_id": self._ctx.agent_id,
+                                "depth": self._ctx.depth,
+                            },
+                        })
 
                     # Execute tool calls with concurrency-aware partitioning.
                     # Exclusive tools run alone; concurrent-safe tools are gathered.
@@ -330,6 +347,22 @@ class ToolUseLoop:
                     )
                     steps_run += 1
 
+                    # Ref: [DeepMind-Delegation §4.5] Auto-update progress
+                    # for parent monitoring. Zero token cost — direct write.
+                    if self._ctx.depth > 0 and results:
+                        last = results[-1]
+                        note = f"step {steps_run}: {last.tool_id}"
+                        snippet = last.content[:100] if last.content else ""
+                        if last.success:
+                            note += f" -> {snippet}"
+                        else:
+                            note += f" -> FAILED: {snippet}"
+                        handle = await self._ctx.registry.get(
+                            self._ctx.agent_id,
+                        )
+                        if handle:
+                            handle.progress_note = note
+
                     # Inject step progress so the model can self-regulate.
                     remaining_steps = max_steps - steps_run
                     failures = [r for r in results if not r.success]
@@ -363,6 +396,43 @@ class ToolUseLoop:
             # When the step budget is exhausted without a text response,
             # give the LLM one final turn WITHOUT tools to force synthesis.
             if not state.done and final_response is None and messages:
+                # Ref: [DeepMind-Delegation §4.5] Inject child results at synthesis.
+                # Root may have non-blocking children still running — give them
+                # a brief grace period, then include available results.
+                if self._ctx.depth == 0:
+                    running = await self._ctx.registry.collect_running(
+                        self._ctx.agent_id,
+                    )
+                    if running:
+                        await asyncio.sleep(2.0)
+                    completed = await self._ctx.registry.collect_completed(
+                        self._ctx.agent_id,
+                    )
+                    if completed:
+                        result_lines = []
+                        for h in completed:
+                            r = h.result
+                            if r:
+                                result_lines.append(
+                                    f"[{h.agent_id[:8]}] {r.status}: "
+                                    f"{r.summary or r.content[:300]}"
+                                )
+                        if result_lines:
+                            messages.append(SystemMessage(
+                                content="Completed sub-agent results:\n"
+                                + "\n".join(result_lines),
+                            ))
+                    still_running = await self._ctx.registry.collect_running(
+                        self._ctx.agent_id,
+                    )
+                    if still_running:
+                        ids = ", ".join(h.agent_id[:8] for h in still_running)
+                        messages.append(SystemMessage(
+                            content=f"WARNING: {len(still_running)} agent(s) "
+                            f"still running ({ids}). Include their partial "
+                            "progress in your synthesis.",
+                        ))
+
                 try:
                     messages.append(
                         SystemMessage(
@@ -382,15 +452,9 @@ class ToolUseLoop:
                     synthesis: AIMessage = await unbound.ainvoke(
                         messages, config=invoke_config or None
                     )
-                    raw = getattr(synthesis, "content", "") or ""
-                    if isinstance(raw, list):
-                        final_response = "\n".join(
-                            block.get("text", "")
-                            for block in raw
-                            if isinstance(block, dict) and block.get("type") == "text"
-                        )
-                    else:
-                        final_response = str(raw)
+                    final_response = self._extract_text_content(
+                        getattr(synthesis, "content", "")
+                    )
                 except Exception:
                     logging.warning("Final synthesis turn failed.", exc_info=True)
 
@@ -421,6 +485,14 @@ class ToolUseLoop:
             state.tool_results = tool_outputs
 
         finally:
+            # Stop the background watchdog.
+            if watchdog_task is not None and not watchdog_task.done():
+                watchdog_task.cancel()
+
+            # Wait for lifecycle managers to complete cleanup.
+            if self._spawn_agent_tool is not None:
+                await self._spawn_agent_tool.await_lifecycle_managers(timeout=3.0)
+
             # Cleanup: cancel any child agents still running.
             children = await self._ctx.registry.list_children(self._ctx.agent_id)
             for child in children:
@@ -599,9 +671,10 @@ class ToolUseLoop:
         is_leaf = not self._ctx.can_spawn
 
         if is_root:
-            # Ref: [CoA §3.2] Root = manager agent. Direct execution first.
+            # Ref: [CoA §3.2] Root = manager/hypervisor. Direct execution first.
+            # Ref: [DeepMind-Delegation §4.4] Non-blocking delegation protocol.
             lines = [
-                f"# Agent role: Root orchestrator (depth {depth}/{max_depth})",
+                f"# Agent role: Root hypervisor (depth {depth}/{max_depth})",
                 "",
                 "## Default: Direct execution",
                 "- Handle tasks directly using your tools. Most tasks do NOT need sub-agents.",
@@ -615,20 +688,33 @@ class ToolUseLoop:
                 "- Each sub-task must be self-contained with clear acceptance_criteria.",
                 "- Scope sub-agents with allowed_tools/denied_tools and max_steps.",
                 "",
+                "## Async delegation protocol (when you spawn)",
+                "- spawn_agent returns immediately with {agent_id, status: 'submitted'}.",
+                "- Continue with independent work while children execute in background.",
+                "- React to '[Agent xxx finished: ...]' notifications between your steps.",
+                "- Call check_agents to see tree state and collect completed results.",
+                "- Call check_agents(wait=true) when you have no independent work left.",
+                "- Use steer_agent to inject context or course-correct running agents.",
+                "- Do NOT call check_agents in a loop — trust notifications. (epoll, not poll)",
+                "",
+                "## Safety",
+                "- steer_agent(action='cancel') stops a stuck or misbehaving agent.",
+                "- A background watchdog warns stalled agents automatically (2min+ no progress).",
+                "",
+                "## Synthesize",
+                "- When all children complete, collect results via check_agents.",
+                "- Verify results against acceptance_criteria before trusting them.",
+                "- Check 'status' before using: completed=reliable, failed/cannot_solve=handle.",
+                "",
                 "## System awareness",
                 "- You operate within a bounded environment with intentional guardrails.",
                 "- CWD restrictions, permission denials, and tool scope limits are non-negotiable.",
-                "- If a tool or sub-agent reports a restriction, do NOT retry with a different",
-                "  agent or workaround. Adapt your approach or report the limitation.",
+                "- If a tool or sub-agent reports a restriction, adapt — do NOT retry blindly.",
                 "",
                 "## When to stop",
                 "- If the same operation fails twice, do not retry it a third time.",
                 "- If a sub-agent fails, do not spawn another sub-agent for the same task.",
                 "- Report what failed, why, and what you tried — then let the user decide.",
-                "",
-                "## Sub-agent results",
-                "- Results are JSON with status/content/summary/steps_used fields.",
-                "- Check 'status' before using: completed=reliable, failed/cannot_solve=handle.",
             ]
         elif is_leaf:
             # Ref: [DeepMind-Delegation §4.7] Liability firebreak at leaf
@@ -674,6 +760,38 @@ class ToolUseLoop:
                 )
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Background watchdog  (Ref: [AgentCgroup §4.2])
+    # ------------------------------------------------------------------
+
+    async def _watchdog(self) -> None:
+        """Code-level safety monitor — zero token cost.
+
+        Periodically checks for stalled agents and injects NL warnings.
+        Runs only for the root agent as a background asyncio task.
+
+        Ref: [AgentCgroup §4.2] Graduated enforcement via NL injection.
+        Ref: [DeepMind-Delegation §4.4] Internal trigger: delegatee
+        unresponsive → diagnose → intervene.
+        """
+        try:
+            while True:
+                await asyncio.sleep(30)
+                stalled = await self._ctx.registry.stalled_agents(threshold=120.0)
+                for h in stalled:
+                    await self._ctx.registry.send_message(
+                        h.agent_id,
+                        "STALL WARNING: No progress for 2+ minutes. "
+                        "Wrap up or report status.",
+                    )
+                    if self._ctx.message_queue is not None:
+                        self._ctx.message_queue.put_nowait(
+                            f"[Watchdog: Agent {h.agent_id[:8]} stalled "
+                            f"on {h.last_tool_id}]",
+                        )
+        except asyncio.CancelledError:
+            pass  # Normal shutdown path.
 
     def _render_tool_guidance(self) -> str:
         """Render tool-specific prompt guidance for local tools."""
@@ -736,6 +854,15 @@ class ToolUseLoop:
             from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
 
             tool_schemas = [*tool_schemas, SPAWN_AGENT_SCHEMA]
+            # Ref: [DeepMind-Delegation §4.4] Root-only management tools
+            # for non-blocking agent monitoring and steering.
+            if self._ctx.depth == 0:
+                from meeseeks_core.spawn_agent import (
+                    CHECK_AGENTS_SCHEMA,
+                    STEER_AGENT_SCHEMA,
+                )
+
+                tool_schemas = [*tool_schemas, CHECK_AGENTS_SCHEMA, STEER_AGENT_SCHEMA]
         # Inject activate_skill schema when auto-invocable skills exist.
         if self._skill_registry is not None and self._skill_registry.list_auto_invocable():
             from meeseeks_core.skills import ACTIVATE_SKILL_SCHEMA
@@ -799,6 +926,30 @@ class ToolUseLoop:
                     content=f"ERROR: {exc}",
                     success=False,
                 )
+        elif tool_id == "check_agents" and self._spawn_agent_tool is not None:
+            try:
+                result = await self._spawn_agent_tool.handle_check_agents(action_step)
+            except Exception as exc:
+                logging.error("check_agents failed: {}", exc)
+                self._emit_tool_result_event(action_step, None, error=str(exc))
+                return ToolCallResult(
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content=f"ERROR: {exc}",
+                    success=False,
+                )
+        elif tool_id == "steer_agent" and self._spawn_agent_tool is not None:
+            try:
+                result = await self._spawn_agent_tool.handle_steer_agent(action_step)
+            except Exception as exc:
+                logging.error("steer_agent failed: {}", exc)
+                self._emit_tool_result_event(action_step, None, error=str(exc))
+                return ToolCallResult(
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content=f"ERROR: {exc}",
+                    success=False,
+                )
         elif tool_id == "activate_skill" and self._skill_registry is not None:
             result = self._handle_activate_skill(action_step)
         else:
@@ -835,17 +986,56 @@ class ToolUseLoop:
         if content is None:
             content = "" if result is None else str(result)
         content_str = str(content) if not isinstance(content, str) else content
-        if isinstance(content, dict):
-            content_str = json.dumps(content, ensure_ascii=False, default=str)
-
-        # Micro-compaction: strip ANSI escapes and truncate for the LLM.
-        content_str = _ANSI_ESCAPE_RE.sub("", content_str)
         spec = self._tool_registry.get_spec(tool_id)
         max_chars = spec.max_result_chars if spec else 2000
+        if isinstance(content, dict):
+            # Truncate large text fields inside the dict before serializing,
+            # so the JSON envelope (metadata like exit_code, duration_ms) is
+            # always preserved even when stdout/stderr are huge.
+            if max_chars:
+                truncated = dict(content)
+                for field in ("stdout", "stderr", "output", "result", "content", "text"):
+                    val = truncated.get(field)
+                    if isinstance(val, str) and len(val) > max_chars:
+                        truncated[field] = val[:max_chars] + "\n[truncated]"
+                content = truncated
+            content_str = json.dumps(content, ensure_ascii=False, default=str)
+
+        # Micro-compaction: strip ANSI escapes.
+        content_str = _ANSI_ESCAPE_RE.sub("", content_str)
+
+        # Snapshot for the event — preserves the JSON envelope so the
+        # frontend can always parse structured fields (exit_code, duration_ms).
+        event_str = content_str
+        if max_chars and len(event_str) > max_chars:
+            event_str = event_str[:max_chars] + "\n[truncated]"
+
+        # Save large results to file when export dir is configured.
+        result_file: str | None = None
+        export_dir = str(
+            get_config_value("runtime", "result_export_dir", default="") or ""
+        )
+        if export_dir and max_chars and len(content_str) > max_chars:
+            try:
+                export_path = Path(export_dir)
+                export_path.mkdir(parents=True, exist_ok=True)
+                fid = tool_call_id or f"{tool_id}-{int(_time.time() * 1000)}"
+                safe_id = re.sub(r"[^\w\-]", "_", fid)
+                result_path = export_path / f"{safe_id}.txt"
+                result_path.write_text(content_str, encoding="utf-8")
+                result_file = str(result_path)
+                content_str = (
+                    f"[Full output ({len(content_str)} chars) saved to {result_file}. "
+                    f"Read the file for complete content.]"
+                )
+            except OSError:
+                pass  # Fall through to normal truncation
+
+        # Final truncation for the LLM (safety net).
         if max_chars and len(content_str) > max_chars:
             content_str = content_str[:max_chars] + "\n[truncated]"
 
-        self._emit_tool_result_event(action_step, content_str)
+        self._emit_tool_result_event(action_step, event_str, result_file=result_file)
         return ToolCallResult(
             tool_call_id=tool_call_id,
             tool_id=tool_id,
@@ -861,6 +1051,12 @@ class ToolUseLoop:
         """Convert an LLM tool_call dict to an ActionStep."""
         tool_id: str = tool_call.get("name") or ""
         args: Any = tool_call.get("args") or {}
+        # Inject session CWD as default root for built-in tools so the LLM
+        # doesn't need to repeat it on every file/shell call.
+        if self._cwd and isinstance(args, dict) and "root" not in args:
+            spec = self._tool_registry.get_spec(tool_id)
+            if spec is None or spec.kind != "mcp":
+                args = {**args, "root": self._cwd}
         operation = _infer_operation(tool_id)
         return ActionStep(
             title=tool_id,
@@ -907,6 +1103,7 @@ class ToolUseLoop:
         result: str | None,
         *,
         error: str | None = None,
+        result_file: str | None = None,
     ) -> None:
         spec = self._tool_registry.get_spec(action_step.tool_id)
         max_chars = spec.max_result_chars if spec else 2000
@@ -924,6 +1121,8 @@ class ToolUseLoop:
         }
         if error:
             payload["error"] = error
+        if result_file:
+            payload["result_file"] = result_file
         # Tag with agent_id for sub-agent tracking.
         if self._ctx.depth > 0:
             payload["agent_id"] = self._ctx.agent_id
@@ -932,6 +1131,17 @@ class ToolUseLoop:
     def _emit_event(self, event: Event) -> None:
         if self._ctx.event_logger is not None:
             self._ctx.event_logger(event)
+
+    @staticmethod
+    def _extract_text_content(content: object) -> str:
+        """Extract plain text from an AIMessage content field."""
+        if isinstance(content, list):
+            return "\n".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            ).strip()
+        return (str(content) if content else "").strip()
 
 
 # ------------------------------------------------------------------

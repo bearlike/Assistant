@@ -114,6 +114,80 @@ SPAWN_AGENT_SCHEMA: dict[str, object] = {
 }
 
 
+CHECK_AGENTS_SCHEMA: dict[str, object] = {
+    "type": "function",
+    "function": {
+        "name": "check_agents",
+        "description": (
+            "Check the status of all spawned sub-agents. Returns the agent "
+            "tree with progress notes and completed results. Use after "
+            "spawning agents to monitor progress and collect results. "
+            "Ref: [DeepMind-Delegation §4.5] Process-level monitoring."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "wait": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, wait up to timeout seconds for at least "
+                        "one running agent to complete before returning. "
+                        "Default: false."
+                    ),
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": (
+                        "Max seconds to wait when wait=true. Default: 30."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
+STEER_AGENT_SCHEMA: dict[str, object] = {
+    "type": "function",
+    "function": {
+        "name": "steer_agent",
+        "description": (
+            "Send a steering message to a running sub-agent, or cancel it. "
+            "Use to inject context, course-correct, or stop stuck agents. "
+            "Ref: [DeepMind-Delegation §4.4] Adaptive coordination."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": (
+                        "The agent_id to steer (8-char prefix from "
+                        "check_agents output)."
+                    ),
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["message", "cancel"],
+                    "description": (
+                        "Action: 'message' sends NL feedback to the agent, "
+                        "'cancel' cancels the agent."
+                    ),
+                },
+                "message": {
+                    "type": "string",
+                    "description": (
+                        "The steering message to send "
+                        "(required when action='message')."
+                    ),
+                },
+            },
+            "required": ["agent_id", "action"],
+        },
+    },
+}
+
+
 # ------------------------------------------------------------------
 # SpawnAgentTool
 # ------------------------------------------------------------------
@@ -141,6 +215,8 @@ class SpawnAgentTool:
         self._hook_manager = hook_manager
         self._project_instructions = project_instructions
         self._cwd = cwd
+        # Track lifecycle manager tasks for deterministic cleanup.
+        self._lifecycle_tasks: list[asyncio.Task[None]] = []
 
     async def run_async(self, action_step: ActionStep) -> MockSpeaker:
         """Execute a sub-agent asynchronously. Returns result as MockSpeaker."""
@@ -222,6 +298,33 @@ class SpawnAgentTool:
                 child_loop.run(task_desc, tool_specs=child_specs, max_steps=max_steps)
             )
             handle.asyncio_task = child_task
+
+            # Ref: [DeepMind-Delegation §4.4] Root agent delegates non-blockingly
+            # to maintain continuous monitoring capability (epoll model).
+            if self._agent_context.depth == 0:
+                # Non-blocking: lifecycle manager handles completion in background
+                lm_task = asyncio.create_task(
+                    self._run_child_lifecycle(
+                        child_task, child_ctx, handle, task_desc,
+                    )
+                )
+                self._lifecycle_tasks.append(lm_task)
+                # Store child_id before clearing refs (finally guard)
+                child_id = child_ctx.agent_id
+                # Prevent finally block from cleaning up — lifecycle manager owns it
+                child_ctx = None
+                handle = None
+                return MockSpeaker(content=json.dumps({
+                    "agent_id": child_id,
+                    "status": "submitted",
+                    "task": task_desc[:200],
+                    "message": (
+                        "Agent spawned. Use check_agents to monitor "
+                        "progress and collect results."
+                    ),
+                }))
+
+            # Blocking: current behavior for non-root agents.
             tq, state = await child_task
 
             # 7. Mark done.
@@ -354,6 +457,110 @@ class SpawnAgentTool:
         )
 
     # ------------------------------------------------------------------
+    # Agent management handlers (root-only, Ref: [DeepMind-Delegation §4.5])
+    # ------------------------------------------------------------------
+
+    async def handle_check_agents(self, action_step: ActionStep) -> MockSpeaker:
+        """Return agent tree state with completed results and progress."""
+        args = (
+            action_step.tool_input
+            if isinstance(action_step.tool_input, dict)
+            else {}
+        )
+        wait = bool(args.get("wait", False))
+        timeout = float(args.get("timeout", 30))
+        registry = self._agent_context.registry
+        parent_id = self._agent_context.agent_id
+
+        if wait:
+            deadline = asyncio.get_event_loop().time() + timeout
+            while asyncio.get_event_loop().time() < deadline:
+                running = await registry.collect_running(parent_id)
+                if not running:
+                    break
+                completed = await registry.collect_completed(parent_id)
+                if completed:
+                    break
+                await asyncio.sleep(1.0)
+
+        # Build response.
+        tree = await registry.render_agent_tree()
+        completed = await registry.collect_completed(parent_id)
+        running = await registry.collect_running(parent_id)
+
+        parts: list[str] = []
+        if tree:
+            parts.append(f"Agent tree:\n{tree}")
+
+        if completed:
+            parts.append("\nCompleted results:")
+            for h in completed:
+                r = h.result
+                if r:
+                    parts.append(
+                        f"  [{h.agent_id[:8]}] {r.status}: "
+                        f"{r.summary or r.content[:300]}"
+                    )
+
+        if running:
+            parts.append(f"\n{len(running)} agent(s) still running.")
+        elif not completed:
+            parts.append("No agents spawned.")
+
+        return MockSpeaker(content="\n".join(parts) or "No agents.")
+
+    async def handle_steer_agent(self, action_step: ActionStep) -> MockSpeaker:
+        """Send a steering message to or cancel a running agent."""
+        args = (
+            action_step.tool_input
+            if isinstance(action_step.tool_input, dict)
+            else {}
+        )
+        agent_id = str(args.get("agent_id", ""))
+        action = str(args.get("action", ""))
+        message = str(args.get("message", ""))
+        registry = self._agent_context.registry
+
+        # Resolve short prefix to full agent_id.
+        handle = await registry.get(agent_id)
+        if handle is None:
+            all_agents = await registry.list_all()
+            matches = [h for h in all_agents if h.agent_id.startswith(agent_id)]
+            if len(matches) == 1:
+                handle = matches[0]
+                agent_id = handle.agent_id
+            elif len(matches) > 1:
+                return MockSpeaker(
+                    content=f"ERROR: Ambiguous prefix '{agent_id}' "
+                    f"matches {len(matches)} agents.",
+                )
+            else:
+                return MockSpeaker(
+                    content=f"ERROR: Agent '{agent_id}' not found.",
+                )
+
+        if action == "cancel":
+            ok = await registry.cancel_agent(agent_id)
+            status = "cancelled" if ok else "not running"
+            return MockSpeaker(
+                content=f"Agent {agent_id[:8]} {status}.",
+            )
+        if action == "message":
+            if not message:
+                return MockSpeaker(
+                    content="ERROR: 'message' is required when action='message'.",
+                )
+            ok = await registry.send_message(
+                agent_id, f"[From parent] {message}",
+            )
+            status = "sent" if ok else "failed (agent not running)"
+            return MockSpeaker(content=f"Message {status}.")
+
+        return MockSpeaker(
+            content=f"ERROR: Unknown action '{action}'. Use 'message' or 'cancel'.",
+        )
+
+    # ------------------------------------------------------------------
     # Event emission
     # ------------------------------------------------------------------
 
@@ -382,4 +589,119 @@ class SpawnAgentTool:
             ctx.event_logger(event)
 
 
-__all__ = ["AgentError", "SPAWN_AGENT_SCHEMA", "SpawnAgentTool"]
+    # ------------------------------------------------------------------
+    # Non-blocking lifecycle manager  (Ref: [DeepMind-Delegation §4.4])
+    # ------------------------------------------------------------------
+
+    async def _run_child_lifecycle(
+        self,
+        child_task: asyncio.Task[Any],
+        child_ctx: AgentContext,
+        handle: AgentHandle,
+        task_desc: str,
+    ) -> None:
+        """Background lifecycle manager for non-blocking child execution.
+
+        Wraps child execution, stores the ``AgentResult`` on the handle,
+        and notifies the parent via ``send_to_parent``.
+
+        Ref: [DeepMind-Delegation §4.5] Lifecycle events at phase transitions.
+        Ref: [CoA §3.1] CU stored on handle for async retrieval.
+        """
+        registry = self._agent_context.registry
+        tq = None
+        try:
+            tq, state = await child_task
+
+            await registry.mark_done(child_ctx.agent_id, "completed")
+            self._hook_manager.run_on_agent_stop(handle)
+            self._emit_event(
+                child_ctx, "stop", state.done_reason or "completed", handle=handle,
+            )
+
+            from meeseeks_core.hypervisor import AgentResult
+
+            handle.result = AgentResult(
+                content=tq.task_result or state.done_reason or "No result",
+                status="completed" if state.done else "failed",
+                steps_used=handle.steps_completed,
+                summary=(tq.task_result or "")[:500],
+            )
+
+        except asyncio.CancelledError:
+            await registry.mark_done(child_ctx.agent_id, "cancelled")
+            self._hook_manager.run_on_agent_stop(handle)
+
+            from meeseeks_core.hypervisor import AgentResult
+
+            handle.result = AgentResult(
+                content="Cancelled",
+                status="cancelled",
+                steps_used=handle.steps_completed,
+            )
+
+        except Exception as exc:
+            logging.error("Sub-agent lifecycle failed: {}", exc)
+            agent_error = AgentError(
+                agent_id=child_ctx.agent_id,
+                depth=child_ctx.depth,
+                task=task_desc[:200],
+                error=str(exc),
+                last_tool=handle.last_tool_id,
+                steps_completed=handle.steps_completed,
+            )
+            await registry.mark_done(
+                child_ctx.agent_id, "failed", error=agent_error,
+            )
+            self._hook_manager.run_on_agent_stop(handle)
+
+            from meeseeks_core.hypervisor import AgentResult
+
+            partial = (tq.task_result or "")[:500] if tq is not None else ""
+            handle.result = AgentResult(
+                content=f"Sub-agent failed: {exc}",
+                status="failed",
+                steps_used=handle.steps_completed,
+                warnings=[str(exc)],
+                summary=partial,
+            )
+
+        finally:
+            # Cascade cleanup to children of this child.
+            children = await registry.list_children(child_ctx.agent_id)
+            for child in children:
+                if child.status == "running":
+                    await registry.cancel_agent(child.agent_id)
+            await registry.unregister(child_ctx.agent_id)
+            registry.release()
+
+            # Notify parent via message queue.
+            status = handle.status if handle else "unknown"
+            await registry.send_to_parent(
+                child_ctx.agent_id,
+                f"[Agent {child_ctx.agent_id[:8]} finished: {status}]",
+            )
+
+    async def await_lifecycle_managers(self, timeout: float = 3.0) -> None:
+        """Wait for background lifecycle managers to complete cleanup.
+
+        Called from ``ToolUseLoop.run()`` finally block to ensure
+        deterministic cleanup before the event loop tears down.
+        """
+        pending = [t for t in self._lifecycle_tasks if not t.done()]
+        if pending:
+            _done, still_pending = await asyncio.wait(
+                pending, timeout=timeout, return_when=asyncio.ALL_COMPLETED,
+            )
+            for task in still_pending:
+                task.cancel()
+        self._lifecycle_tasks.clear()
+
+
+__all__ = [
+    "AgentError",
+    "CHECK_AGENTS_SCHEMA",
+    "SPAWN_AGENT_SCHEMA",
+    "STEER_AGENT_SCHEMA",
+    "SpawnAgentTool",
+]

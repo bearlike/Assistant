@@ -7,86 +7,101 @@
   "pages": [
     {
       "title": "Overview & Repo Map",
-      "purpose": "Single entry point: repo goals, module boundaries (packages/, apps/, meeseeks_ha_conversation/), and top-level folder ownership."
+      "purpose": "Single entry point: repo goals, module boundaries (packages/, apps/, meeseeks_ha_conversation/), and top-level folder ownership. Highlights the shared-host model (single stack across sessions, no per-session sandbox) and the architectural future for opt-in sandbox mode."
     },
     {
       "title": "Core Runtime & Orchestration (meeseeks_core)",
-      "purpose": "How the shared core runtime and orchestration engine work: SessionRuntime as the facade, Orchestrator as the session driver, ToolUseLoop as the execution engine.",
+      "purpose": "How the shared core runtime and orchestration engine work: SessionRuntime as the facade, Orchestrator as the session driver, ToolUseLoop as the execution engine. Covers the single-async-loop architecture where the LLM drives all tool calls via native bind_tools.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Session Runtime, Store & Event Log",
-      "purpose": "SessionRuntime facade, RunRegistry (thread tracking with stdlib queue.Queue/threading.Event for cross-thread steering), SessionStore (JSONL transcripts, tags, archives, attachments), and event log behavior. Polling is API-only; CLI runs in-process.",
+      "purpose": "SessionRuntime facade, RunRegistry (thread tracking with stdlib queue.Queue/threading.Event for cross-thread steering), SessionStore (JSONL transcripts, tags, archives, attachments, session_dir() for attachment paths), and event log behavior. Polling is API-only; CLI runs in-process.",
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
       "title": "Tool-Use Loop Execution Engine",
-      "purpose": "ToolUseLoop.run() as the single async execution engine: message construction (system prompt with project instructions, context, attachments), LLM invocation via bind_tools, tool dispatch with asyncio.gather, depth-aware sub-agent prompts, user steering (message_queue drain and interrupt_step check), and cancellation.",
+      "purpose": "ToolUseLoop.run() as the single async execution engine: message construction (_build_messages with system prompt, project instructions, context, attachments, tool guidance, skill catalog, depth guidance), LLM invocation via bind_tools, tool dispatch with concurrency-safe partitioning (_partition_tool_calls batches concurrent-safe tools vs exclusive tools), per-tool timeout (asyncio.wait_for with configurable ToolSpec.timeout), non-blocking spawn for root agent (returns immediately with agent_id), check_agents/steer_agent management tools (root-only), user steering (message_queue drain and interrupt_step check), step budget tracking with graduated enforcement (NL warnings, not kill), forced synthesis with pending children at step limit, and cancellation.",
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
       "title": "Agent Hypervisor & Sub-Agent Lifecycle",
-      "purpose": "AgentHypervisor control plane (admission via Semaphore, registration, step tracking, cancellation, structured cleanup). AgentContext propagation (root vs child, depth control, event_logger inheritance). SpawnAgentTool with filter_specs() for tool scoping (allowlist/denylist, filter-before-binding pattern).",
+      "purpose": "AgentHypervisor as a dual-layer autonomous system: reflexes (code-level step tracking, stall detection via background _watchdog, budget enforcement via NL warning injection) and brain (root LLM sees global agent tree via render_agent_tree(), uses check_agents and steer_agent tools). 6-state lifecycle (submitted → running → completed/failed/cancelled/rejected per A2A v1.0). AgentResult as structured Communication Units (content, status, steps_used, summary, warnings, artifacts). Non-blocking spawn for root (epoll model — react to notifications, don't poll) vs blocking spawn for sub-agents. Bidirectional messaging (parent→child via send_message/steer_agent, child→parent via _run_child_lifecycle on completion). AgentHandle (per-agent runtime state with progress_note, result, message_queue). 3-phase graceful cleanup (cancel → wait → force-mark). SpawnAgentTool with filter_specs() for tool scoping.",
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
       "title": "LLM Abstraction & Model Routing",
-      "purpose": "ChatModel protocol, build_chat_model(), LiteLLM multi-provider gateway, provider-qualified model names, per-role model selection (plan/tool/default), and reasoning-effort configuration.",
+      "purpose": "ChatModel protocol, build_chat_model(), LiteLLM multi-provider gateway, provider-qualified model names, per-role model selection (plan/tool/default), reasoning-effort configuration (reasoning_effort field with model allowlist), and specs_to_langchain_tools() for converting ToolSpecs to LLM-bindable schemas.",
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
       "title": "Context Builder, Summaries & Compaction",
-      "purpose": "ContextBuilder.build() pipeline: transcript loading, event filtering, recent event selection, LLM-based context selection, attachment file reading (text files from disk with size caps), token budget tracking, and auto-compaction triggers. ContextSnapshot fields including attachment_texts.",
+      "purpose": "ContextBuilder.build() pipeline: transcript loading, event filtering, recent event selection, LLM-based context selection, attachment file reading (text files from disk with size caps), token budget tracking, and auto-compaction triggers. ContextSnapshot fields including attachment_texts. Two-mode context compaction (CompactionMode.FULL summarizes everything, CompactionMode.PARTIAL keeps recent events verbatim) with structured summaries (<analysis> scratchpad + <summary> sections). Post-compact file restoration re-injects recently referenced files within token budgets. Auto-compact defaults to PARTIAL mode. Compaction resilience: hypervisor state survives because agent tree is in system prompt (rebuilt each step), check_agents reads live state, child results stored on AgentHandle.",
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
       "title": "Permissions, Hooks & Tool Execution Gates",
-      "purpose": "PermissionPolicy (allow/deny/ask rules, fnmatch on tool_id and operation), approval callbacks (auto_approve, config-driven, interactive), HookManager pipeline (pre/post tool use, pre-compact, permission request), and agent lifecycle hooks (on_agent_start, on_agent_stop).",
+      "purpose": "PermissionPolicy (allow/deny/ask rules, fnmatch on tool_id and operation), approval callbacks (auto_approve, config-driven, interactive). HookManager with error isolation (all hooks wrapped in try/except — failing hook logs warning but doesn't block execution). Lifecycle hooks: on_session_start, on_session_end, on_compact. External command hooks via HooksConfig with fnmatch-based tool matcher filtering. Pre/post tool use hooks. Agent lifecycle hooks (on_agent_start, on_agent_stop).",
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
       "title": "Data Models, Event Types & Payload Schemas",
-      "purpose": "ActionStep, PlanStep, TaskQueue, OrchestrationState, EventRecord, and typed payload schemas (UserPayload, AssistantPayload, ToolResultPayload, ActionPlanPayload, CompletionPayload, PermissionPayload, SubAgentPayload). Event type discrimination and JSONL serialization.",
+      "purpose": "ActionStep (tool_id/operation/tool_input), PlanStep, TaskQueue, OrchestrationState, EventRecord, ToolResult (content/success/error/truncated), and typed payload schemas (UserPayload, AssistantPayload, ToolResultPayload with kind discriminator, ActionPlanPayload, CompletionPayload, PermissionPayload, SubAgentPayload with lifecycle state, AgentMessagePayload). Event type discrimination and JSONL serialization. Structured tool results with kind field ('shell', 'diff', 'file', 'dir') for frontend routing.",
+      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+    },
+    {
+      "title": "Skills System",
+      "purpose": "SkillRegistry discovers SKILL.md files from ~/.claude/skills/ and .claude/skills/ following the Agent Skills open standard (agentskills.io). discover_skills() walks subtree (max depth 5) with recursive discovery in subdirectories. SkillSpec (name, description, body, allowed_tools, auto_invoke). Skill catalog injected into system prompt for LLM auto-invocation via activate_skill tool. User /skill-name invocations detected in Orchestrator and rendered into skill_instructions passed to ToolUseLoop. Skills can scope tools via allowed-tools (reuses filter_specs()) and preprocess shell commands via !`cmd` syntax. render_catalog() lists auto-invocable skills.",
       "parent": "Core Runtime & Orchestration (meeseeks_core)"
     },
     {
       "title": "Tool Layer (meeseeks_tools)",
-      "purpose": "Tool layer boundaries and integration patterns: how local tools and MCP tools are registered, discovered, and executed.",
+      "purpose": "Tool layer boundaries and integration patterns: how local tools and MCP tools are registered, discovered, and executed. AbstractTool base class with get_state/set_state/run dispatch. MockSpeaker result container. Tool results use kind-discriminated dicts (kind: 'shell'|'diff'|'file'|'dir') for structured frontend rendering.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Tool Registry & Spec System",
-      "purpose": "ToolRegistry, ToolSpec (tool_id, kind, metadata, factory), filter_specs() for allowlist/denylist filtering (shared by Orchestrator and SpawnAgentTool), specs_to_langchain_tools conversion, and tool disabling with reasons.",
+      "purpose": "ToolRegistry, ToolSpec (tool_id, kind, metadata with schema/capabilities/reflect, factory for lazy instantiation), filter_specs() for allowlist/denylist filtering (shared by Orchestrator, SpawnAgentTool, and skills), specs_to_langchain_tools() conversion, and tool disabling with reasons. Conditional tool registration pattern: _edit_tool_spec_and_manifest() reads AgentConfig.edit_tool and returns matching ToolSpec + manifest entry for both _default_registry() and _built_in_manifest_entries() — single conditional, two consumers. Capabilities metadata (e.g. 'file_write') enables intent-based tool filtering in planning.",
       "parent": "Tool Layer (meeseeks_tools)"
     },
     {
-      "title": "Local Tools (Aider Adapters)",
-      "purpose": "Edit-block tool (SEARCH/REPLACE format validation, diff generation), file read/list tools, shell tool, and approval gating for set operations.",
+      "title": "Configurable Edit Tool Mechanism",
+      "purpose": "Two edit tool mechanisms selectable via AgentConfig.edit_tool config: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks with fuzzy matching, multi-file per call) and 'structured_patch' (per-file exact string replacement with file_path/old_string/new_string, strict match, ambiguity rejection). Shared utilities in edit_common.py (resolve_and_validate_path, read_file_contents, build_unified_diff, format_diff_result). Both tools output the same {'kind': 'diff', 'title': ..., 'text': ..., 'files': [...]} result format for frontend DiffCard compatibility. End-to-end consistency: ToolSpec bundles schema + prompt_path + factory, so config switch atomically changes what the LLM sees (tool schema via bind_tools), how it's instructed (prompt file via _render_tool_guidance), and what executes (tool class via factory).",
+      "parent": "Tool Layer (meeseeks_tools)"
+    },
+    {
+      "title": "Local Tools (File Edit, Shell, Read)",
+      "purpose": "AiderEditBlockTool (SEARCH/REPLACE format with aider_bridge parsing, fuzzy matching, diff generation), FileEditTool (per-file exact string replacement, strict matching, ambiguity rejection), shared edit_common.py utilities (path resolution, before-state reading, unified diff computation via difflib, canonical result formatting). AiderShellTool (command execution with structured {kind: 'shell'} results including exit_code, stdout, stderr, duration_ms). AiderReadFileTool and AiderListDirTool (read-only tools with {kind: 'file'}/{kind: 'dir'} results). All tools use resolve_safe_path() to prevent directory traversal. Approval gating for set operations.",
       "parent": "Tool Layer (meeseeks_tools)"
     },
     {
       "title": "MCP Tool Discovery & Schema Validation",
-      "purpose": "MCP config (configs/mcp.json), server discovery, schema normalization, per-server failure isolation, _coerce_mcp_tool_input validation, and manifest caching.",
+      "purpose": "MCP config (configs/mcp.json global, .mcp.json project-scoped), server discovery with project CWD propagation, schema normalization, per-server failure isolation, _coerce_mcp_tool_input validation, and manifest caching. MCPConnectionPool (persistent MCP connections with memoization, automatic reconnection after 3 consecutive errors, per-request 60s timeout, config change detection). MCPToolRunner uses pool as primary path with legacy one-shot client as fallback.",
       "parent": "Tool Layer (meeseeks_tools)"
     },
     {
       "title": "REST API (meeseeks_api)",
-      "purpose": "Flask-restx API: route structure, authentication (X-API-Key), CORS, how handlers bind to SessionRuntime, NotificationStore, ShareStore, and the tool registry.",
+      "purpose": "Flask-restx API: route structure, authentication (X-API-Key from docker.env MASTER_API_TOKEN), CORS, how handlers bind to SessionRuntime, NotificationStore, ShareStore, and the tool registry. Config API endpoints for reading/patching app.json at runtime.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "API Endpoints, Polling & Steering",
-      "purpose": "Session CRUD, async query execution (start_async + 202), event polling (/events?after=), user steering (/message for mid-session injection, /interrupt for step interruption), agent tree (/agents from sub_agent events), attachments, share tokens, export, notifications, and the legacy sync /query endpoint. Includes allowed_tools passthrough from context.mcp_tools.",
+      "purpose": "Session CRUD, async query execution (start_async + 202), event polling (/events?after=), SSE streaming (/stream), user steering (/message for mid-session injection, /interrupt for step interruption), agent tree (/agents from sub_agent events with lifecycle state and step budget), attachments, share tokens, export, notifications, config API (GET/PATCH /config), and the legacy sync /query endpoint. Includes allowed_tools passthrough from context.mcp_tools through SessionRuntime → Orchestrator → ToolUseLoop.",
       "parent": "REST API (meeseeks_api)"
     },
     {
       "title": "Web Console (meeseeks_console)",
-      "purpose": "React + Vite frontend: connects to the REST API for all orchestration. Session management, event polling (1s interval), conversation timeline (turn grouping from events), execution trace and log viewer, unified diff viewer, MCP tool picker, mid-session steering (sendMessage/interruptStep), sub-agent count indicator, and mock data fallback.",
+      "purpose": "React 18 + Vite + Tailwind CSS frontend: connects to the REST API for all orchestration. Session management with polling (1s interval). Conversation timeline (buildTimeline turn grouping from events with per-turn DiffFile[] extraction via parseStructuredResult + extractUnifiedDiffs). Workspace panel with Diff and Logs tabs. MCP tool/skill/project pickers with TTL cache (60s). Mid-session steering (sendMessage/interruptStep). Sub-agent activity indicator with task descriptions. Mock data fallback. CSS design tokens (HSL variables for dark/light themes, 8-slot agent color cycling). No state management libraries, no UI component libraries — hooks + useState for state.",
       "parent": "Overview & Repo Map"
     },
     {
+      "title": "Console UI Components",
+      "purpose": "Tool card component hierarchy: LogEventCard (base with expand/collapse, accent border, icon/title/badge header — used by permissions, agents, completions, reflections), TerminalCard (specialized always-dark shell card with window chrome, $ prompt, stdout/stderr, CopyButton), DiffCard (GitHub-style inline diff with two-column line number gutter via diff2html parse, file type icons via file-icon-vectors CDN, collapsed preview with expand footer, always-dark styling matching TerminalCard). Shared primitives: CopyButton (clipboard with icon-swap feedback), DiffStats (+N/-M display), Badge, StatusBadge, Popover (direction-aware dropdowns), MarkdownContent (ReactMarkdown + remarkGfm + rehypeHighlight — exported from MessageBubble, used in both chat and IRC-style trace messages). IRC-style agent messages in trace logs with markdown rendering. buildLogs() and parseStructuredResult() for kind-discriminated tool result routing.",
+      "parent": "Web Console (meeseeks_console)"
+    },
+    {
       "title": "Terminal CLI (meeseeks_cli)",
-      "purpose": "CLI flow: run_cli entry point, Rich-based rendering (plan checklist, tool result cards, response panel), AgentDisplayManager + Rich Live for agent tree display during execution, DialogFactory (Textual-based interactive prompts), in-process SessionRuntime usage (sync, no polling), slash commands, and session management.",
+      "purpose": "CLI flow: run_cli entry point, Rich-based rendering (plan checklist, tool result cards, response panel), AgentDisplayManager + Rich Live for agent tree display during execution (collapsible tree, spinner, elapsed time, keybindings), DialogFactory (Textual-based interactive prompts), in-process SessionRuntime usage (sync, no polling), slash commands, and session management. Approval styles: inline (plain prompt), textual (TUI dialog), aider (diff-style).",
       "parent": "Overview & Repo Map"
     },
     {
@@ -96,38 +111,38 @@
     },
     {
       "title": "Configuration & Runtime Settings",
-      "purpose": "AppConfig hierarchy (RuntimeConfig, LLMConfig, ContextConfig, AgentConfig, APIConfig, CLIConfig, PermissionsConfig, etc.), configs/app.json and configs/mcp.json resolution, environment variable layering, and per-component config knobs.",
+      "purpose": "AppConfig hierarchy (RuntimeConfig with result_export_dir, LLMConfig with reasoning_effort/reasoning_effort_models, ContextConfig, TokenBudgetConfig, ReflectionConfig, LangfuseConfig, HomeAssistantConfig, PermissionsConfig, CLIConfig with approval_style, ChatConfig, APIConfig, AgentConfig with edit_tool/max_depth/max_concurrent/max_iters/sub_agent_max_steps/default_denied_tools/allowed_models, HooksConfig, ProjectConfig). Configs/app.json and configs/mcp.json resolution with MEESEEKS_HOME discovery chain (CWD/configs/ → $MEESEEKS_HOME/ → ~/.meeseeks/). Environment variable layering. Conditional component enabling via evaluate() + ComponentStatus pattern (HomeAssistant, Langfuse). Field validators with normalization. ConfigDict(extra='forbid') for strict validation.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "CI/CD, Docker & Docs Pipeline",
-      "purpose": "GitHub Actions workflows (lint, coverage, docker-buildx for base/api/console images, docs generation), Dockerfile structure (base, api, console with multi-stage node+nginx build), docker-compose stacks (standalone console, full API+console), and mkdocs build pipeline.",
+      "purpose": "GitHub Actions workflows: console.yml (lint + test + build on console changes), docker-buildx.yml (multi-arch builds for base/api/console to ghcr.io on release/* branches), lint.yml (Python ruff + mypy), coverage.yml (pytest + codecov), docs.yml (mkdocs), uv-lock-refresh.yml (weekly dependency updates). Dockerfile structure: base (Python 3.11 + system packages + Node.js + uv), api (multi-stage on base with Gunicorn), console (multi-stage node:20-slim → nginx:alpine). Docker Compose with host networking, env_file, post-init script mechanism (docker/entrypoint-api.sh sources init.d scripts), volume mounts for configs and project dirs. pull_policy: always on images — use --pull never for local builds.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Testing Patterns & Quality Gates",
-      "purpose": "Integration-first test patterns: fake tools with ToolSpec interface, AsyncMock for model.ainvoke, full-turn harness tests, event stream assertions, permission and schema coercion coverage. Mock targets (meeseeks_core.tool_registry.get_config_value for filter_specs). Pre-commit hooks (ruff, mypy).",
+      "purpose": "Integration-first test patterns: fake tools with ToolSpec interface, AsyncMock for model.ainvoke, full-turn harness tests, event stream assertions, permission and schema coercion coverage. 575+ tests across core, tools, and integration. Mock targets (meeseeks_core.tool_registry.get_config_value for filter_specs, meeseeks_core.config.get_config_value for component status). Pre-commit hooks (ruff check, mypy, console-lint). Test patterns: asyncio.run() in sync tests (not pytest-asyncio plugin), git tests in temp dirs must set user.name/email for CI.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Tracing, Logging & Diagnostics",
-      "purpose": "Loguru-based logging with get_logger(), session_log_context for per-session log capture, Langfuse tracing (session-scoped traces, trace names: meeseeks-tool-use, meeseeks-task-master, meeseeks-context), and error propagation paths through ToolUseLoop._safe_execute.",
+      "purpose": "Loguru-based logging with get_logger(), session_log_context for per-session log capture. Langfuse tracing (session-scoped traces, trace names: meeseeks-tool-use, meeseeks-task-master, meeseeks-context). Session investigation methodology: MongoDB transcript (authoritative event log) → Langfuse traces (LLM conversation chain with full system prompts and tool bindings) → API config (app.json, docker.env) → Docker environment. Error propagation through ToolUseLoop._safe_execute with per-tool timeout and structured AgentError.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Building a New Client",
-      "purpose": "Step-by-step walkthrough for extending Meeseeks with a new interface: initialize core services (registry, permissions, SessionRuntime), resolve sessions, handle slash commands, choose sync vs async execution, consume session events, and the project instructions loading mechanism (CLAUDE.md/AGENTS.md with meeseeks:noload marker).",
+      "purpose": "Step-by-step walkthrough for extending Meeseeks with a new interface: initialize core services (load_registry with conditional edit tool, permissions, SessionRuntime), resolve sessions, handle slash commands and skill invocations, choose sync vs async execution, consume session events (including kind-discriminated tool results for frontend rendering), project instructions loading mechanism (CLAUDE.md/AGENTS.md with hierarchical discovery from user/project/rules/local levels, meeseeks:noload marker, subtree discovery for nested instructions and skills).",
       "parent": "Overview & Repo Map"
     }
   ],
   "page_notes": [
     {
       "title": "Overview & Repo Map",
-      "notes": "Mermaid: module map with subgraphs by top-level folder (packages/, apps/, meeseeks_ha_conversation/). Show Console -> API -> Runtime -> Core flow."
+      "notes": "Mermaid: module map with subgraphs by top-level folder (packages/, apps/, meeseeks_ha_conversation/). Show Console -> API -> Runtime -> Core flow. Include the shared-host model note."
     },
     {
       "title": "Core Runtime & Orchestration (meeseeks_core)",
-      "notes": "Mermaid: runtime facade flow (SessionRuntime -> Orchestrator -> ToolUseLoop) showing how CLI (sync), API (async), and Console (via API) reach the same engine."
+      "notes": "Mermaid: runtime facade flow (SessionRuntime -> Orchestrator -> ToolUseLoop) showing how CLI (sync), API (async), and Console (via API) reach the same engine. Include skills loading path."
     },
     {
       "title": "Session Runtime, Store & Event Log",
@@ -135,59 +150,71 @@
     },
     {
       "title": "Tool-Use Loop Execution Engine",
-      "notes": "Mermaid: ToolUseLoop step cycle (build messages with context/attachments -> LLM invoke -> tool dispatch via asyncio.gather -> collect results -> check steering queue/interrupt -> repeat or done). Show spawn_agent as recursive call."
+      "notes": "Mermaid: ToolUseLoop step cycle (_build_messages with all 11 sections -> LLM invoke -> _partition_tool_calls -> concurrent batch execution -> collect results -> step budget check -> check steering queue/interrupt -> repeat or done). Show non-blocking spawn returning immediately with agent_id, and check_agents/steer_agent as root-only management tools."
     },
     {
       "title": "Agent Hypervisor & Sub-Agent Lifecycle",
-      "notes": "Mermaid: agent tree showing AgentContext.root() -> child() propagation with depth tracking, AgentHypervisor (Semaphore admission, register/unregister, mark_done), SpawnAgentTool calling filter_specs() then creating child ToolUseLoop."
+      "notes": "Mermaid: dual-layer diagram. Top: root LLM with check_agents/steer_agent tools seeing render_agent_tree(). Bottom: code-level reflexes (update_step on every tool call, _watchdog background task). Show 6-state lifecycle (submitted → running → terminal states). Show _run_child_lifecycle manager for non-blocking spawn with send_to_parent notification."
     },
     {
       "title": "LLM Abstraction & Model Routing",
-      "notes": "Mermaid: class diagram for ChatModel protocol and build_chat_model, showing LiteLLM provider routing."
+      "notes": "Mermaid: class diagram for ChatModel protocol and build_chat_model, showing LiteLLM provider routing. Include reasoning_effort configuration path."
     },
     {
       "title": "Context Builder, Summaries & Compaction",
-      "notes": "Mermaid: data flow from transcript -> event filtering -> recent_events + selected_events + attachment_texts -> ContextSnapshot -> system prompt injection. Show compaction trigger path."
+      "notes": "Mermaid: data flow from transcript -> event filtering -> recent_events + selected_events + attachment_texts -> ContextSnapshot -> system prompt injection. Show two compaction modes (FULL vs PARTIAL) as a decision branch. Include post-compact file restoration step."
     },
     {
       "title": "Permissions, Hooks & Tool Execution Gates",
-      "notes": "Mermaid: sequence of tool call -> HookManager.run_pre_tool_use -> PermissionPolicy.decide -> approval_callback (if ASK) -> execute -> HookManager.run_post_tool_use. Side track for agent lifecycle hooks."
+      "notes": "Mermaid: sequence of tool call -> HookManager.run_pre_tool_use -> PermissionPolicy.decide -> approval_callback (if ASK) -> execute -> HookManager.run_post_tool_use. Show error isolation wrapper. Side track for lifecycle hooks (on_session_start, on_session_end, on_compact) and external command hooks."
     },
     {
       "title": "Data Models, Event Types & Payload Schemas",
-      "notes": "Mermaid: class diagram for ActionStep, TaskQueue, OrchestrationState, EventRecord with discriminated union of payload types (UserPayload, ToolResultPayload, SubAgentPayload, etc)."
+      "notes": "Mermaid: class diagram for ActionStep, TaskQueue, OrchestrationState, EventRecord with discriminated union of payload types. Include the kind field on tool results (shell/diff/file/dir) and how it drives frontend component routing."
+    },
+    {
+      "title": "Skills System",
+      "notes": "Mermaid: flow from SKILL.md discovery (walk ~/.claude/skills/ and .claude/skills/) -> SkillRegistry -> skill catalog in system prompt -> LLM calls activate_skill -> skill body injected as instructions + optional tool scoping via filter_specs(). Show user /skill invocation path through Orchestrator."
     },
     {
       "title": "Tool Layer (meeseeks_tools)",
-      "notes": "Mermaid: ToolRegistry -> ToolSpec -> AbstractTool hierarchy, branching to local tool implementations and MCP tool adapters."
+      "notes": "Mermaid: ToolRegistry -> ToolSpec -> AbstractTool hierarchy, branching to local tool implementations (edit tools, shell, file read/list) and MCP tool adapters (MCPToolRunner + MCPConnectionPool)."
     },
     {
       "title": "Tool Registry & Spec System",
-      "notes": "Mermaid: class diagram with ToolRegistry (register, list_specs, list_specs_for_mode), ToolSpec, filter_specs(allowed, denied), and specs_to_langchain_tools conversion."
+      "notes": "Mermaid: class diagram with ToolRegistry (register, list_specs, list_specs_for_mode), ToolSpec (with metadata.schema, metadata.capabilities, factory), _edit_tool_spec_and_manifest() conditional helper, filter_specs(allowed, denied), and specs_to_langchain_tools conversion."
     },
     {
-      "title": "Local Tools (Aider Adapters)",
-      "notes": "Mermaid: sequence for edit-block tool: input validation (SEARCH/REPLACE format) -> diff generation -> tool_result event. Show approval gate for set operations."
+      "title": "Configurable Edit Tool Mechanism",
+      "notes": "Mermaid: config-driven tool selection flow. AgentConfig.edit_tool -> _edit_tool_spec_and_manifest() -> ToolSpec{schema, prompt_path, factory} -> three parallel outputs: bind_tools(schema) to LLM, _render_tool_guidance(prompt_path) to system message, factory() to tool instance. Show edit_common.py as shared dependency of both AiderEditBlockTool and FileEditTool. Show format_diff_result() producing the canonical {kind: 'diff'} output consumed by frontend DiffCard."
+    },
+    {
+      "title": "Local Tools (File Edit, Shell, Read)",
+      "notes": "Mermaid: sequence for both edit tools: input parsing -> resolve_safe_path -> read_file_contents (before state) -> apply edit -> write file -> build_unified_diff -> format_diff_result. Show the branching: AiderEditBlockTool goes through aider_bridge for SEARCH/REPLACE parsing, FileEditTool does direct str.count/str.replace. Highlight shared edit_common.py functions."
     },
     {
       "title": "MCP Tool Discovery & Schema Validation",
-      "notes": "Mermaid: flow from configs/mcp.json -> server discovery -> schema normalization per server -> _coerce_mcp_tool_input validation at execution time."
+      "notes": "Mermaid: flow from configs/mcp.json + .mcp.json (project-scoped) -> MCPConnectionPool (memoized connections, 3-error reconnection) -> server discovery -> schema normalization -> _coerce_mcp_tool_input validation at execution time. Show fallback to legacy one-shot client."
     },
     {
       "title": "REST API (meeseeks_api)",
-      "notes": "Mermaid: request flow from Flask route handlers -> _require_api_key -> SessionRuntime/NotificationStore/ShareStore -> response. Show CORS after_request hook."
+      "notes": "Mermaid: request flow from Flask route handlers -> _require_api_key -> SessionRuntime/NotificationStore/ShareStore -> response. Show CORS after_request hook. Include config API path."
     },
     {
       "title": "API Endpoints, Polling & Steering",
-      "notes": "Mermaid: sequence showing POST /query -> start_async(allowed_tools) -> 202, then GET /events?after= polling loop, plus POST /message and POST /interrupt steering paths."
+      "notes": "Mermaid: sequence showing POST /query -> start_async(allowed_tools) -> 202, then GET /events?after= polling loop and GET /stream SSE, plus POST /message and POST /interrupt steering paths. Include GET/PATCH /config for runtime config."
     },
     {
       "title": "Web Console (meeseeks_console)",
-      "notes": "Mermaid: component hierarchy (App -> HomeView/SessionDetailView -> ConversationTimeline + WorkspacePanel + InputBar) with data flow through hooks (useSessions, useSessionEvents, useSessionQuery) to the API client layer."
+      "notes": "Mermaid: component hierarchy (App -> HomeView/SessionDetailView -> ConversationTimeline + WorkspacePanel + InputBar) with data flow through hooks (useSessions, useSessionEvents, useMcpTools, useSkills, useProjects, useConfig) to the API client layer with 60s TTL cache."
+    },
+    {
+      "title": "Console UI Components",
+      "notes": "Mermaid: component inheritance diagram. LogEventCard as base (permissions, agents, completions, reflections). TerminalCard as specialized sibling (always-dark, window chrome). DiffCard as specialized sibling (always-dark, line number gutter, file icons, diff2html parsing). Show shared primitives: CopyButton, DiffStats, Badge, MarkdownContent. Show data flow: EventRecord -> buildLogs(parseStructuredResult) -> type routing -> component."
     },
     {
       "title": "Terminal CLI (meeseeks_cli)",
-      "notes": "Mermaid: sync flow CLI -> SessionRuntime.run_sync -> Orchestrator -> ToolUseLoop -> response rendering. Include AgentDisplayManager lifecycle hook bridge to Rich Live panel."
+      "notes": "Mermaid: sync flow CLI -> SessionRuntime.run_sync -> Orchestrator -> ToolUseLoop -> response rendering. Include AgentDisplayManager lifecycle hook bridge to Rich Live panel. Show approval_style switching (inline/textual/aider)."
     },
     {
       "title": "Home Assistant Integration (meeseeks_ha_conversation)",
@@ -195,23 +222,23 @@
     },
     {
       "title": "Configuration & Runtime Settings",
-      "notes": "Mermaid: config resolution (configs/app.json -> AppConfig with sub-configs, configs/mcp.json -> MCP registry). Include AgentConfig fields (max_depth, max_concurrent, allowed_models, default_denied_tools, sub_agent_max_steps)."
+      "notes": "Mermaid: config resolution (configs/app.json -> AppConfig with sub-configs, configs/mcp.json -> MCP registry, MEESEEKS_HOME discovery chain). Include AgentConfig fields (edit_tool, max_depth, max_concurrent, allowed_models, default_denied_tools, max_iters, sub_agent_max_steps). Show evaluate() pattern for conditional components."
     },
     {
       "title": "CI/CD, Docker & Docs Pipeline",
-      "notes": "Mermaid: pipeline flow (push/PR -> lint + mypy + pytest -> coverage -> Docker buildx for base/api/console images -> GHCR push). Separate track for mkdocs build + deploy."
+      "notes": "Mermaid: pipeline flow (push/PR -> lint + mypy + pytest -> coverage -> Docker buildx for base/api/console images -> GHCR push). Separate track for mkdocs build + deploy. Include docker-compose with post-init scripts and pull_policy note."
     },
     {
       "title": "Testing Patterns & Quality Gates",
-      "notes": "Mermaid: test harness structure showing fake tools + AsyncMock LLM boundary -> ToolUseLoop.run() -> assert event stream and TaskQueue output. Note filter_specs mock target location."
+      "notes": "Mermaid: test harness structure showing fake tools + AsyncMock LLM boundary -> ToolUseLoop.run() -> assert event stream and TaskQueue output. Note filter_specs mock target location. Include 575+ test count and pre-commit hooks."
     },
     {
       "title": "Tracing, Logging & Diagnostics",
-      "notes": "Mermaid: trace flow from ToolUseLoop -> Langfuse handler -> traces (meeseeks-tool-use, meeseeks-task-master, meeseeks-context). Show error path through _safe_execute -> ToolCallResult(success=False)."
+      "notes": "Mermaid: trace flow from ToolUseLoop -> Langfuse handler -> traces (meeseeks-tool-use, meeseeks-task-master, meeseeks-context). Show error path through _safe_execute -> ToolCallResult(success=False). Include the 4-layer investigation methodology: MongoDB → Langfuse → Config → Docker."
     },
     {
       "title": "Building a New Client",
-      "notes": "Mermaid: extension flow diagram showing new client -> load_registry + SessionRuntime + permissions -> resolve_session -> run_sync or start_async + poll events. Include project instructions loading (CLAUDE.md with noload marker)."
+      "notes": "Mermaid: extension flow diagram showing new client -> load_registry(conditional edit tool) + SessionRuntime + permissions -> resolve_session -> run_sync or start_async + poll events. Include project instructions loading (hierarchical CLAUDE.md discovery with noload marker, subtree skills discovery)."
     }
   ]
 }

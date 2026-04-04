@@ -345,7 +345,7 @@ def test_manifest_builds_mcp_factory(tmp_path, monkeypatch):
     )
 
     class DummyMCPToolRunner:
-        def __init__(self, server_name: str, tool_name: str):
+        def __init__(self, server_name: str, tool_name: str, *, cwd: str | None = None):
             self.server_name = server_name
             self.tool_name = tool_name
 

@@ -30,5 +30,6 @@ This page summarizes the orchestration loop, core components, and operational fe
 
 ## Extensibility points
 - Add tools by implementing `AbstractTool` or by registering MCP servers with schemas.
+- **Configurable file edit tool:** Set `agent.edit_tool` in config to `"search_replace_block"` (Aider-style) or `"structured_patch"` (per-file exact match). The tool schema, LLM prompt instructions, and backend implementation all switch together — they're bundled in the same `ToolSpec` registration.
 - Add hooks through `HookManager` for pre/post events and compaction transforms.
 - Add new interfaces by reusing `SessionRuntime` and the event transcript model.

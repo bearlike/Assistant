@@ -1,5 +1,6 @@
 import { DiffFile, EventRecord, TimelineEntry, TurnMeta } from "../types";
 import { extractUnifiedDiffs, mergeDiffFiles } from "./diff";
+import { parseStructuredResult } from "./logs";
 export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   let turnIndex = 0;
@@ -29,7 +30,11 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
     if (event.type === "tool_result") {
       const result = event.payload?.result;
       if (typeof result === "string") {
-        diffFiles.push(...extractUnifiedDiffs(result));
+        const parsed = parseStructuredResult(result);
+        const diffSource = parsed.kind === "diff" ? parsed.text : parsed.kind === "raw" ? parsed.text : "";
+        if (diffSource) {
+          diffFiles.push(...extractUnifiedDiffs(diffSource));
+        }
       }
     }
     if (event.type === "assistant") {
@@ -76,7 +81,11 @@ export function getActiveTurn(events: EventRecord[]): TurnMeta | null {
     if (event.type === "tool_result") {
       const result = event.payload?.result;
       if (typeof result === "string") {
-        diffFiles.push(...extractUnifiedDiffs(result));
+        const parsed = parseStructuredResult(result);
+        const diffSource = parsed.kind === "diff" ? parsed.text : parsed.kind === "raw" ? parsed.text : "";
+        if (diffSource) {
+          diffFiles.push(...extractUnifiedDiffs(diffSource));
+        }
       }
     }
     if (event.type === "assistant") {

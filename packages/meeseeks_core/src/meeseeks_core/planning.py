@@ -272,7 +272,7 @@ class Planner:
             inferred.add("web_read")
         if "aider_read_file" in tool_id or "aider_list_dir" in tool_id:
             inferred.add("file_read")
-        if "aider_edit_block" in tool_id:
+        if "edit" in tool_id and ("file" in tool_id or "aider" in tool_id or "block" in tool_id):
             inferred.add("file_write")
         if "shell" in tool_id:
             inferred.add("shell_exec")

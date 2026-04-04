@@ -51,14 +51,17 @@ def _run_command(command: str, cwd: str) -> tuple[int, str]:
         except Exception as exc:
             return 1, str(exc)
 
-    completed = subprocess.run(
-        command,
-        shell=True,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
-    return completed.returncode, (completed.stdout or "") + (completed.stderr or "")
+    try:
+        completed = subprocess.run(
+            command,
+            shell=True,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        return completed.returncode, (completed.stdout or "") + (completed.stderr or "")
+    except OSError as exc:
+        return 1, str(exc)
 
 
 class AiderShellTool(AbstractTool):

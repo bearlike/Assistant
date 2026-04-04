@@ -163,6 +163,100 @@ def _import_factory(module_path: str, class_name: str) -> Callable[[], ToolRunne
     return _factory
 
 
+_FILE_EDIT_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "file_path": {"type": "string", "description": "Path to the file to edit"},
+        "old_string": {"type": "string", "description": "Exact string to find in the file"},
+        "new_string": {"type": "string", "description": "Replacement string"},
+        "replace_all": {
+            "type": "boolean",
+            "description": "Replace all occurrences (default false)",
+        },
+    },
+    "required": ["file_path", "old_string", "new_string"],
+}
+
+_AIDER_EDIT_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "content": {"type": "string", "description": "SEARCH/REPLACE block content"},
+        "root": {"type": "string", "description": "Project root directory"},
+    },
+    "required": ["content"],
+}
+
+
+def _edit_tool_spec_and_manifest() -> tuple[ToolSpec, dict[str, object]]:
+    """Return the ToolSpec and manifest entry for the configured edit tool.
+
+    Single conditional consumed by both ``_default_registry()`` and
+    ``_built_in_manifest_entries()``.
+    """
+    mechanism = get_config_value("agent", "edit_tool", default="search_replace_block")
+    if mechanism == "structured_patch":
+        spec = ToolSpec(
+            tool_id="file_edit_tool",
+            name="File Edit",
+            description="Apply exact string replacement to a file.",
+            factory=_import_factory(
+                "meeseeks_tools.integration.file_edit_tool", "FileEditTool"
+            ),
+            prompt_path="tools/file-edit",
+            concurrency_safe=False,
+            metadata={
+                "reflect": True,
+                "capabilities": ["file_write"],
+                "schema": _FILE_EDIT_SCHEMA,
+            },
+        )
+        manifest: dict[str, object] = {
+            "tool_id": "file_edit_tool",
+            "name": "File Edit",
+            "description": spec.description,
+            "module": "meeseeks_tools.integration.file_edit_tool",
+            "class": "FileEditTool",
+            "kind": "local",
+            "enabled": True,
+            "prompt": "tools/file-edit",
+            "reflect": True,
+            "capabilities": ["file_write"],
+            "schema": _FILE_EDIT_SCHEMA,
+        }
+        return spec, manifest
+
+    # Default: Aider-style search/replace blocks
+    spec = ToolSpec(
+        tool_id="aider_edit_block_tool",
+        name="Aider Edit Blocks",
+        description="Apply Aider-style SEARCH/REPLACE blocks to files.",
+        factory=_import_factory(
+            "meeseeks_tools.integration.aider_edit_blocks", "AiderEditBlockTool"
+        ),
+        prompt_path="tools/aider-edit-blocks",
+        concurrency_safe=False,
+        metadata={
+            "reflect": True,
+            "capabilities": ["file_write"],
+            "schema": _AIDER_EDIT_SCHEMA,
+        },
+    )
+    manifest = {
+        "tool_id": "aider_edit_block_tool",
+        "name": "Aider Edit Blocks",
+        "description": spec.description,
+        "module": "meeseeks_tools.integration.aider_edit_blocks",
+        "class": "AiderEditBlockTool",
+        "kind": "local",
+        "enabled": True,
+        "prompt": "tools/aider-edit-blocks",
+        "reflect": True,
+        "capabilities": ["file_write"],
+        "schema": _AIDER_EDIT_SCHEMA,
+    }
+    return spec, manifest
+
+
 def _default_registry() -> ToolRegistry:
     """Create the built-in registry for local tools."""
     registry = ToolRegistry()
@@ -192,36 +286,8 @@ def _default_registry() -> ToolRegistry:
             metadata=ha_metadata,
         )
     )
-    registry.register(
-        ToolSpec(
-            tool_id="aider_edit_block_tool",
-            name="Aider Edit Blocks",
-            description="Apply Aider-style SEARCH/REPLACE blocks to files.",
-            factory=_import_factory(
-                "meeseeks_tools.integration.aider_edit_blocks",
-                "AiderEditBlockTool",
-            ),
-            prompt_path="tools/aider-edit-blocks",
-            concurrency_safe=False,
-            metadata={
-                "reflect": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "content": {
-                            "type": "string",
-                            "description": "SEARCH/REPLACE block content",
-                        },
-                        "root": {
-                            "type": "string",
-                            "description": "Project root directory",
-                        },
-                    },
-                    "required": ["content"],
-                },
-            },
-        )
-    )
+    edit_spec, _ = _edit_tool_spec_and_manifest()
+    registry.register(edit_spec)
     registry.register(
         ToolSpec(
             tool_id="aider_read_file_tool",
@@ -335,25 +401,7 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
                 "required": ["task"],
             },
         },
-        {
-            "tool_id": "aider_edit_block_tool",
-            "name": "Aider Edit Blocks",
-            "description": "Apply Aider-style SEARCH/REPLACE blocks to files.",
-            "module": "meeseeks_tools.integration.aider_edit_blocks",
-            "class": "AiderEditBlockTool",
-            "kind": "local",
-            "enabled": True,
-            "prompt": "tools/aider-edit-blocks",
-            "reflect": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string", "description": "SEARCH/REPLACE block content"},
-                    "root": {"type": "string", "description": "Project root directory"},
-                },
-                "required": ["content"],
-            },
-        },
+        _edit_tool_spec_and_manifest()[1],
         {
             "tool_id": "aider_read_file_tool",
             "name": "Aider Read File",
@@ -630,8 +678,9 @@ def load_registry(
             def _mcp_factory(
                 server_name: str = server_name,
                 tool_name: str = tool_name,
+                _cwd: str | None = cwd,
             ) -> ToolRunner:
-                return MCPToolRunner(server_name=server_name, tool_name=tool_name)
+                return MCPToolRunner(server_name=server_name, tool_name=tool_name, cwd=_cwd)
 
             factory = _mcp_factory
 

@@ -21,7 +21,7 @@ services:
 
   api:
     image: ghcr.io/bearlike/meeseeks-api:latest
-    pull_policy: always
+    pull_policy: build
     build:
       context: .
       dockerfile: docker/Dockerfile.api
@@ -35,7 +35,7 @@ services:
     volumes:
       - ./configs:/app/configs:ro
       - api-data:/app/data
-      # Project directories — add your mounts in docker-compose.override.yml
+      # Project directories and init scripts — add in docker-compose.override.yml
       # (see docker-compose.override.example.yml for the template)
     environment:
       - MEESEEKS_HOME=/app/data

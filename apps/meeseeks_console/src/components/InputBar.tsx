@@ -13,10 +13,12 @@ import { QueryMode, SessionContext } from '../types';
 import { useMcpTools } from '../hooks/useMcpTools';
 import { useSkills } from '../hooks/useSkills';
 import { useProjects } from '../hooks/useProjects';
+import { useModels } from '../hooks/useModels';
 import { useContainerCompact } from '../hooks/useContainerCompact';
 import { McpSelector, McpOption, McpStatus } from './McpSelector';
 import { SkillSelector } from './SkillSelector';
 import { ProjectSelector } from './ProjectSelector';
+import { ModelSelector } from './ModelSelector';
 import { Popover } from './Popover';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 type McpToolOption = McpOption & {
@@ -52,8 +54,10 @@ export function InputBar({
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSkillOpen, setIsSkillOpen] = useState(false);
   const [isProjectOpen, setIsProjectOpen] = useState(false);
+  const [isModelOpen, setIsModelOpen] = useState(false);
   const [activeSkill, setActiveSkill] = useState<string | null>(sessionContext?.skill ?? null);
   const [activeProject, setActiveProject] = useState<string | null>(sessionContext?.project ?? null);
+  const [activeModel, setActiveModel] = useState<string | null>(sessionContext?.model ?? null);
   const pendingMcpToolsRef = useRef<string[] | null>(sessionContext?.mcp_tools ?? null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>('act');
@@ -71,6 +75,13 @@ export function InputBar({
     refresh: refreshSkills
   } = useSkills(activeProject);
   const {
+    models: availableModels,
+    defaultModel,
+    loading: modelsLoading,
+    error: modelsError,
+    refresh: refreshModels,
+  } = useModels();
+  const {
     projects: availableProjects,
     loading: projectsLoading,
     error: projectsError,
@@ -82,6 +93,7 @@ export function InputBar({
   const mcpRef = useRef<HTMLDivElement>(null);
   const skillRef = useRef<HTMLDivElement>(null);
   const projectRef = useRef<HTMLDivElement>(null);
+  const modelRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -100,6 +112,9 @@ export function InputBar({
       if (projectRef.current && !projectRef.current.contains(event.target as Node)) {
         setIsProjectOpen(false);
       }
+      if (modelRef.current && !modelRef.current.contains(event.target as Node)) {
+        setIsModelOpen(false);
+      }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -108,9 +123,10 @@ export function InputBar({
   useEffect(() => {
     setActiveProject(sessionContext?.project ?? null);
     setActiveSkill(sessionContext?.skill ?? null);
+    setActiveModel(sessionContext?.model ?? null);
     pendingMcpToolsRef.current = sessionContext?.mcp_tools ?? null;
     setMcps([]);
-  }, [sessionContext?.project, sessionContext?.skill, sessionContext?.mcp_tools]);
+  }, [sessionContext?.project, sessionContext?.skill, sessionContext?.model, sessionContext?.mcp_tools]);
   useEffect(() => {
     setMcps((prev) => {
       if (mcpTools.length === 0) {
@@ -217,10 +233,12 @@ export function InputBar({
     if (!onSubmit || !inputValue.trim() || isSubmitting) {
       return;
     }
+    const modelToSend = activeModel || defaultModel || undefined;
     const context: SessionContext = {
       mcp_tools: mcps.filter((m) => m.active).map((m) => m.id),
       ...(activeSkill ? { skill: activeSkill } : {}),
-      ...(activeProject ? { project: activeProject } : {})
+      ...(activeProject ? { project: activeProject } : {}),
+      ...(modelToSend ? { model: modelToSend } : {})
     };
     void onSubmit(inputValue.trim(), context, queryMode, attachedFiles);
     setInputValue('');
@@ -279,7 +297,7 @@ export function InputBar({
           aria-hidden="true" />
 
         <div className="relative group">
-          <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-1 shadow-lg transition-all focus-within:ring-1 focus-within:ring-[hsl(var(--ring))]/30">
+          <div ref={containerRef} className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-1 shadow-lg transition-all focus-within:ring-1 focus-within:ring-[hsl(var(--ring))]/30">
             {attachedFiles.length > 0 &&
             <div className="px-4 pt-3 pb-0 flex items-center gap-2">
                 <div className="bg-[hsl(var(--accent))] rounded px-2 py-1 text-xs text-[hsl(var(--foreground))] flex items-center gap-2">
@@ -317,7 +335,7 @@ export function InputBar({
             </div>
 
             <div className="flex items-center justify-between px-2 pb-1">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0 flex-nowrap">
                 <div className="relative" ref={menuRef}>
                   <button
                     onClick={() => {
@@ -343,10 +361,12 @@ export function InputBar({
                   loading={mcpLoading}
                   error={mcpError}
                   direction={popupDirection}
+                  compact={compact}
                   onToggleOpen={() => {
                     setIsMcpOpen(!isMcpOpen);
                     setIsPlusMenuOpen(false);
                     setIsSkillOpen(false);
+                    setIsModelOpen(false);
                   }}
                   onToggle={toggleMcp}
                   onRefresh={refreshMcp} />
@@ -359,11 +379,13 @@ export function InputBar({
                   loading={skillsLoading}
                   error={skillsError}
                   direction={popupDirection}
+                  compact={compact}
                   onToggleOpen={() => {
                     setIsSkillOpen(!isSkillOpen);
                     setIsMcpOpen(false);
                     setIsPlusMenuOpen(false);
                     setIsProjectOpen(false);
+                    setIsModelOpen(false);
                   }}
                   onSelect={(name) => {
                     setActiveSkill(name);
@@ -379,11 +401,13 @@ export function InputBar({
                   loading={projectsLoading}
                   error={projectsError}
                   direction={popupDirection}
+                  compact={compact}
                   onToggleOpen={() => {
                     setIsProjectOpen(!isProjectOpen);
                     setIsMcpOpen(false);
                     setIsPlusMenuOpen(false);
                     setIsSkillOpen(false);
+                    setIsModelOpen(false);
                   }}
                   onSelect={(name) => {
                     setActiveProject(name);
@@ -391,9 +415,31 @@ export function InputBar({
                   }}
                   onRefresh={refreshProjects} />
 
+                <ModelSelector
+                  ref={modelRef}
+                  models={availableModels}
+                  activeModel={activeModel}
+                  isOpen={isModelOpen}
+                  loading={modelsLoading}
+                  error={modelsError}
+                  direction={popupDirection}
+                  compact={compact}
+                  onToggleOpen={() => {
+                    setIsModelOpen(!isModelOpen);
+                    setIsMcpOpen(false);
+                    setIsPlusMenuOpen(false);
+                    setIsSkillOpen(false);
+                    setIsProjectOpen(false);
+                  }}
+                  onSelect={(name) => {
+                    setActiveModel(name);
+                    setIsModelOpen(false);
+                  }}
+                  onRefresh={refreshModels} />
+
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 <button
                   aria-label="Voice input"
                   className="p-2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-full transition-colors">
@@ -479,7 +525,7 @@ export function InputBar({
           </div>
 
           <div className="flex items-center justify-between px-1 pb-1">
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 min-w-0 flex-nowrap">
               <div className="relative" ref={menuRef}>
                 <button
                   onClick={() => {
@@ -509,6 +555,7 @@ export function InputBar({
                   setIsMcpOpen(!isMcpOpen);
                   setIsPlusMenuOpen(false);
                   setIsSkillOpen(false);
+                  setIsModelOpen(false);
                 }}
                 onToggle={toggleMcp}
                 onRefresh={refreshMcp} />
@@ -527,6 +574,7 @@ export function InputBar({
                   setIsMcpOpen(false);
                   setIsPlusMenuOpen(false);
                   setIsProjectOpen(false);
+                  setIsModelOpen(false);
                 }}
                 onSelect={(name) => {
                   setActiveSkill(name);
@@ -548,15 +596,38 @@ export function InputBar({
                   setIsMcpOpen(false);
                   setIsPlusMenuOpen(false);
                   setIsSkillOpen(false);
+                  setIsModelOpen(false);
                 }}
                 onSelect={(name) => {
                   setActiveProject(name);
                   setIsProjectOpen(false);
                 }}
                 onRefresh={refreshProjects} />
+
+              <ModelSelector
+                ref={modelRef}
+                models={availableModels}
+                activeModel={activeModel}
+                isOpen={isModelOpen}
+                loading={modelsLoading}
+                error={modelsError}
+                direction={popupDirection}
+                compact={compact}
+                onToggleOpen={() => {
+                  setIsModelOpen(!isModelOpen);
+                  setIsMcpOpen(false);
+                  setIsPlusMenuOpen(false);
+                  setIsSkillOpen(false);
+                  setIsProjectOpen(false);
+                }}
+                onSelect={(name) => {
+                  setActiveModel(name);
+                  setIsModelOpen(false);
+                }}
+                onRefresh={refreshModels} />
             </div>
 
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 flex-shrink-0">
               <button
                 aria-label="Voice input"
                 className="p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-full transition-colors">

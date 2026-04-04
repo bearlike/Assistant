@@ -1,7 +1,8 @@
-import { X, Maximize2 } from 'lucide-react';
+import { X, Maximize2, Minimize2 } from 'lucide-react';
 import { DiffView } from './DiffView';
 import { LogsView } from './LogsView';
 import { EventRecord } from '../types';
+import { cn } from '../utils/cn';
 interface WorkspacePanelProps {
   onClose: () => void;
   activeTab: 'diff' | 'logs';
@@ -9,6 +10,9 @@ interface WorkspacePanelProps {
   events: EventRecord[];
   diffContent?: string;
   filename?: string;
+  onContinue?: () => void;
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
 }
 export function WorkspacePanel({
   onClose,
@@ -16,10 +20,16 @@ export function WorkspacePanel({
   onTabChange,
   events,
   diffContent,
-  filename
+  filename,
+  onContinue,
+  isMaximized,
+  onToggleMaximize
 }: WorkspacePanelProps) {
   return (
-    <div className="flex flex-col h-full border-l border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]">
+    <div className={cn(
+      "flex flex-col h-full bg-[hsl(var(--background))]",
+      !isMaximized && "border-l border-[hsl(var(--border-strong))]"
+    )}>
       <div className="flex items-center justify-between px-4 h-10 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]">
         <div className="flex gap-6 h-full">
           <button
@@ -36,13 +46,15 @@ export function WorkspacePanel({
           </button>
         </div>
         <div className="flex items-center gap-3 text-[hsl(var(--muted-foreground))]">
-          <button className="hover:text-[hsl(var(--foreground))] transition-colors">
-            <Maximize2 className="w-4 h-4" />
-          </button>
+          {onToggleMaximize && (
+            <button onClick={onToggleMaximize} aria-label={isMaximized ? "Minimize panel" : "Maximize panel"} className="hover:text-[hsl(var(--foreground))] transition-colors">
+              {isMaximized ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+          )}
           <button
             onClick={onClose}
+            aria-label="Close panel"
             className="hover:text-[hsl(var(--foreground))] transition-colors">
-
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -51,7 +63,7 @@ export function WorkspacePanel({
         {activeTab === 'diff' ?
         <DiffView diffContent={diffContent} filename={filename} /> :
 
-        <LogsView events={events} />
+        <LogsView events={events} onContinue={onContinue} />
         }
       </div>
     </div>);

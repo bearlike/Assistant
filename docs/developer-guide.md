@@ -27,7 +27,7 @@ The orchestrator loads project instructions from the working directory and injec
 ## Core abstractions and interfaces
 - `AbstractTool` (`meeseeks_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
 - `ToolRunner` protocol (`meeseeks_core.tool_registry`): interface for tool runners with `run(ActionStep)`.
-- `ToolSpec` / `ToolRegistry` (`meeseeks_core.tool_registry`): register tools with `tool_id`, metadata, and a factory.
+- `ToolSpec` / `ToolRegistry` (`meeseeks_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config — either `aider_edit_block_tool` or `file_edit_tool`.
 - `ActionStep`, `Plan`, `TaskQueue` (`meeseeks_core.classes`): planning and tool-execution payloads.
 - `PermissionPolicy` (`meeseeks_core.permissions`): allow/deny/ask rules for tool execution.
 - `HookManager` (`meeseeks_core.hooks`): pre/post hooks and compaction transforms.

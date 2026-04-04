@@ -10,8 +10,10 @@ vi.mock("../api/client", () => ({
   fetchEvents: vi.fn(),
   listTools: vi.fn(),
   listSkills: vi.fn(),
+  listModels: vi.fn(),
   listProjects: vi.fn(),
   invalidateCache: vi.fn(),
+  peekCache: vi.fn().mockReturnValue(undefined),
   archiveSession: vi.fn(),
   unarchiveSession: vi.fn(),
   listNotifications: vi.fn(),
@@ -21,7 +23,10 @@ vi.mock("../api/client", () => ({
   createShare: vi.fn(),
   exportSession: vi.fn(),
   resolveShare: vi.fn(),
-  listAgents: vi.fn()
+  listAgents: vi.fn(),
+  getConfigSchema: vi.fn(),
+  getConfig: vi.fn(),
+  patchConfig: vi.fn()
 }));
 const listSessions = vi.mocked(client.listSessions);
 const createSession = vi.mocked(client.createSession);
@@ -29,6 +34,7 @@ const postQuery = vi.mocked(client.postQuery);
 const fetchEvents = vi.mocked(client.fetchEvents);
 const listTools = vi.mocked(client.listTools);
 const listSkills = vi.mocked(client.listSkills);
+const listModels = vi.mocked(client.listModels);
 const listProjects = vi.mocked(client.listProjects);
 const archiveSession = vi.mocked(client.archiveSession);
 const unarchiveSession = vi.mocked(client.unarchiveSession);
@@ -43,6 +49,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   listTools.mockResolvedValue([]);
   listSkills.mockResolvedValue([]);
+  listModels.mockResolvedValue({ models: [], default: "" });
   listProjects.mockResolvedValue([]);
   fetchEvents.mockResolvedValue({
     events: [],
@@ -66,6 +73,9 @@ beforeEach(() => {
     events: [],
     summary: null
   });
+  (client as Record<string, unknown>).getConfigSchema = vi.fn().mockResolvedValue({ type: "object", properties: {} });
+  (client as Record<string, unknown>).getConfig = vi.fn().mockResolvedValue({});
+  (client as Record<string, unknown>).patchConfig = vi.fn().mockResolvedValue({});
   window.history.pushState({}, "", "/");
 });
 test("loads sessions from the API", async () => {

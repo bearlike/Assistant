@@ -1,6 +1,6 @@
 [project]
 name = "meeseeks-workspace"
-version = "0.0.8"
+version = "0.0.9"
 description = "Workspace package for the Meeseeks monorepo."
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
@@ -10,17 +10,17 @@ authors = [
 license = { text = "MIT" }
 dependencies = [
   "aniso8601>=10.0.1",
-  "meeseeks-core>=0.0.8",
+  "meeseeks-core>=0.0.9",
 ]
 
 [project.scripts]
 meeseeks = "meeseeks_cli.cli_master:main"
 
 [project.optional-dependencies]
-cli = ["meeseeks-cli>=0.0.8"]
-api = ["meeseeks-api>=0.0.8"]
-ha = ["meeseeks-ha-conversation>=0.0.8"]
-tools = ["meeseeks-tools>=0.0.8"]
+cli = ["meeseeks-cli>=0.0.9"]
+api = ["meeseeks-api>=0.0.9"]
+ha = ["meeseeks-ha-conversation>=0.0.9"]
+tools = ["meeseeks-tools>=0.0.9"]
 
 [dependency-groups]
 dev = [

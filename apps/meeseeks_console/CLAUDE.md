@@ -79,6 +79,34 @@ Before adding any dependency, verify:
 | `rehype-highlight` | Syntax highlighting | One-line rehype plugin integration (~50 KB gz, 37 languages). Rejected: `react-syntax-highlighter` (75-495 KB, not tree-shakeable, 138 open issues), Shiki (async init, complex setup), `prism-react-renderer` (low maintenance). |
 | `react-resizable-panels` v4 | Draggable split pane | Zero deps, ~7.7 KB gz, built-in ARIA/keyboard accessibility, by Brian Vaughn (React core team). Rejected: `allotment` (heavier, 82 issues), custom impl (loses a11y). **v4 API:** exports are `Group`, `Panel`, `Separator` (not `PanelGroup`/`PanelResizeHandle`). Prop `orientation` (not `direction`). Numeric sizes = **pixels**; use strings for percentages (`"40%"`, not `40`). |
 
+## Tool Card Components — DRY/KISS Rules
+
+Tool-call events render in `LogsView` as cards. The component hierarchy is intentional — follow it:
+
+```
+LogEventCard (base: expand/collapse, accent border, icon/title/badge header)
+├── Used by: renderPermission, renderAgent, renderAgentResult, renderCompletion, renderShell fallback, renderReflection
+└── Compose this for new tool types unless the visual structure is fundamentally different
+
+TerminalCard (specialized: always-dark bg, window chrome, $ prompt, stdout/stderr)
+└── Used by: renderShell when structured shell data is present
+
+CopyButton (shared: copy-to-clipboard with icon-swap feedback)
+└── Used by: TerminalCard, MessageBubble, ConversationTimeline
+```
+
+**Rules when adding new tool card types:**
+
+1. **Compose `LogEventCard` first.** It handles expand/collapse, accent borders, and the standard header layout. Only create a specialized component when the visual structure is genuinely different (like TerminalCard's dark background and window chrome).
+
+2. **Never duplicate behavioral components inline.** If you need a copy button, import `CopyButton` from `components/CopyButton.tsx`. If you need a badge, use the `Badge` function in `LogsView`. Do not redefine these patterns inline.
+
+3. **Styling goes in `className`, behavior goes in the component.** Shared components like `CopyButton` accept `className` for visual customization and `children` for additional content (labels, etc.). They own the behavioral logic (clipboard API, state feedback, event handling).
+
+4. **Keep tool-specific helpers colocated.** Functions like `formatDuration()`, `shortenCwd()` in `TerminalCard` are used only by that component — keep them in the same file. Only extract to `utils/` when a second consumer appears.
+
+5. **Parse structured tool data in `buildLogs()`, not in components.** The `utils/logs.ts` parser extracts typed fields from event payloads. Components receive clean props, never raw JSON.
+
 ## CSS / Component Pitfalls — Lessons Learned
 
 ### Never nest duplicate width constraints
@@ -104,6 +132,20 @@ When rendering InputBar in detail mode, pass `sessionContext={session.context}` 
 
 ### Data ordering must be explicit
 Never rely on storage enumeration order for user-facing lists. UUIDs sort randomly; filesystem `readdir`/`os.listdir` order is undefined. Sort by `created_at` (or the appropriate field) at the data source — not in the UI layer — so all consumers get correct order (DRY). The backend `session_runtime.list_sessions()` sorts descending by `created_at`.
+
+## Live Deployment & API Access
+
+The production console runs at `https://meeseeks.hurricane.home` (self-signed cert).
+
+- **API credentials live in `/home/kk/Projects/Personal-Assistant/docker.env`** — NOT in `app.json` or `~/.meeseeks/app.json`.
+- **Auth header:** `X-Api-Key: <MASTER_API_TOKEN>` (not `Authorization: Bearer`).
+- **Ports:** API on `API_PORT` (default 5125), console on `CONSOLE_PORT` (default 3001).
+- **Curl pattern:** Always use `-sk` (silent + skip cert verification) for the self-signed cert:
+  ```bash
+  curl -sk "https://meeseeks.hurricane.home/api/sessions/<ID>/events" \
+    -H "X-Api-Key: $(grep MASTER_API_TOKEN /home/kk/Projects/Personal-Assistant/docker.env | cut -d= -f2)"
+  ```
+- **Playwright cannot access this site** due to `ERR_CERT_AUTHORITY_INVALID` — use curl for API inspection instead.
 
 ## Testing
 - Tests use Vitest + React Testing Library
