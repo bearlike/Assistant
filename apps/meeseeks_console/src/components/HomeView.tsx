@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Search, X, Archive, RotateCcw, Loader2 } from 'lucide-react';
+import { AlertCircle, Search, X, Archive, RotateCcw, Loader2 } from 'lucide-react';
 import { SessionItem } from './SessionItem';
 import { InputBar } from './InputBar';
 import { TypewriterGreeting } from './TypewriterGreeting';
@@ -25,6 +25,7 @@ interface HomeViewProps {
   onArchive: (sessionId: string) => void;
   onUnarchive: (sessionId: string) => void;
   isCreating?: boolean;
+  onRetry?: () => void;
 }
 export function HomeView({
   sessions,
@@ -39,7 +40,8 @@ export function HomeView({
   onLoadArchived,
   onArchive,
   onUnarchive,
-  isCreating = false
+  isCreating = false,
+  onRetry
 }: HomeViewProps) {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -67,6 +69,7 @@ export function HomeView({
   const listError = activeTab === 'archive' ? archivedError : error;
   const listLoading = activeTab === 'archive' ? archivedLoading : loading;
   const scopedSessions = activeTab === 'archive' ? archivedSessions : sessions;
+  const apiUnavailable = !listLoading && !!listError && scopedSessions.length === 0;
   const now = useMemo(() => new Date(), []);
   const recentSessions = scopedSessions.filter((session) => {
     if (!session.created_at) return true;
@@ -91,7 +94,7 @@ export function HomeView({
         <TypewriterGreeting paused={animPaused} />
 
         <div className="w-full max-w-3xl">
-          {(listError || actionError) &&
+          {(actionError || (listError && !apiUnavailable)) &&
           <div className="mb-4">
               <Alert variant="destructive">
                 <AlertTitle>Session error</AlertTitle>
@@ -117,6 +120,24 @@ export function HomeView({
       {/* Scrollable Bottom Section */}
       <div className="flex-1 overflow-y-auto w-full">
         <div className="max-w-3xl mx-auto px-4 pb-20">
+          {apiUnavailable ?
+          <div className="flex flex-col items-center justify-center py-24 text-center">
+              <AlertCircle className="w-10 h-10 text-red-500 mb-4" />
+              <h2 className="text-lg font-semibold text-[hsl(var(--foreground))] mb-2">
+                Unable to connect to API
+              </h2>
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 max-w-md">
+                {listError}
+              </p>
+              {onRetry &&
+              <button
+                  onClick={onRetry}
+                  className="px-4 py-2 text-sm rounded-lg transition-colors bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]">
+                  Try Again
+                </button>
+              }
+            </div> :
+          <>
           <div className="sticky top-0 z-10 pt-2 pb-4 mb-2 flex items-center justify-between border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] shadow-[0_4px_12px_hsl(var(--background))]">
             <div className="flex gap-8">
               <button
@@ -173,6 +194,8 @@ export function HomeView({
               onUnarchive={onUnarchive} />
 
             </div>
+          }
+          </>
           }
         </div>
       </div>

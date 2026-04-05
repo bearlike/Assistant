@@ -115,11 +115,21 @@ def build_chat_model(
     openai_api_base: str | None = None,
     api_key: str | None = None,
 ) -> ChatModel:
-    """Build a ChatLiteLLM model with reasoning-effort compatibility."""
+    """Build a ChatLiteLLM model with reasoning-effort compatibility.
+
+    ``openai_api_base`` and ``api_key`` default to ``llm.api_base`` and
+    ``llm.api_key`` from config when ``None``. Pass them explicitly only
+    to override the configured values (e.g. tests, multi-tenant routing).
+    """
     try:
         from langchain_litellm import ChatLiteLLM
     except ImportError as exc:  # pragma: no cover - dependency guard
         raise ImportError("langchain-litellm is required to build ChatLiteLLM") from exc
+
+    if openai_api_base is None:
+        openai_api_base = str(get_config_value("llm", "api_base", default="") or "")
+    if api_key is None:
+        api_key = str(get_config_value("llm", "api_key", default="") or "")
 
     reasoning_effort = resolve_reasoning_effort(model_name)
 
@@ -132,6 +142,12 @@ def build_chat_model(
 
     kwargs: dict[str, Any] = {
         "model": _resolve_litellm_model(model_name, openai_api_base),
+        # Disable LiteLLM's built-in retries — the ToolUseLoop manages
+        # retries itself with per-attempt timeouts and visible retry events.
+        "request_timeout": float(
+            get_config_value("llm", "request_timeout", default=60.0) or 60.0
+        ),
+        "max_retries": 0,
     }
     if openai_api_base:
         kwargs["api_base"] = openai_api_base
@@ -148,7 +164,13 @@ def specs_to_langchain_tools(specs: list[object]) -> list[dict[str, Any]]:
 
     Each spec must have ``tool_id``, ``description``, and ``metadata["schema"]``.
     Specs without a schema are silently skipped.
+
+    Delegates to LangChain's :func:`convert_to_openai_tool` (Anthropic-format
+    input) so that schema normalisation is handled by the library rather than
+    hand-rolled here.
     """
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
     tools: list[dict[str, Any]] = []
     for spec in specs:
         if not getattr(spec, "enabled", True):
@@ -157,15 +179,15 @@ def specs_to_langchain_tools(specs: list[object]) -> list[dict[str, Any]]:
         schema = metadata.get("schema")
         if not isinstance(schema, dict):
             continue
+        # Anthropic-format dict: LangChain maps input_schema → parameters.
         tools.append(
-            {
-                "type": "function",
-                "function": {
+            convert_to_openai_tool(
+                {
                     "name": getattr(spec, "tool_id", ""),
                     "description": getattr(spec, "description", ""),
-                    "parameters": schema,
-                },
-            }
+                    "input_schema": schema,
+                }
+            )
         )
     return tools
 

@@ -98,6 +98,35 @@ class AgentMessagePayload(TypedDict):
     depth: int
 
 
+class PlanProposedPayload(TypedDict):
+    """Payload emitted when the LLM calls ``exit_plan_mode``."""
+
+    plan_path: str
+    revision: int
+    content: str
+    summary: NotRequired[str]
+
+
+class PlanApprovedPayload(TypedDict):
+    """Payload emitted when the user approves a proposed plan."""
+
+    plan_path: str
+    revision: int
+
+
+class PlanRejectedPayload(TypedDict):
+    """Payload emitted when the user rejects a proposed plan."""
+
+    plan_path: str
+    revision: int
+
+
+class RecoveryPayload(TypedDict):
+    """Payload emitted when the user triggers retry/continue after a failure."""
+
+    action: Literal["retry", "continue"]
+
+
 EventPayload = (
     ActionPlanPayload
     | PermissionPayload
@@ -107,6 +136,10 @@ EventPayload = (
     | CompletionPayload
     | SubAgentPayload
     | AgentMessagePayload
+    | PlanProposedPayload
+    | PlanApprovedPayload
+    | PlanRejectedPayload
+    | RecoveryPayload
     | dict[str, JsonValue]
 )
 

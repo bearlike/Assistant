@@ -239,11 +239,7 @@ class ContextBuilder:
         candidates_text = "\n".join(lines).strip()
         if not candidates_text:
             return events
-        model = build_chat_model(
-            model_name=selector_model,
-            openai_api_base=get_config_value("llm", "api_base"),
-            api_key=get_config_value("llm", "api_key"),
-        )
+        model = build_chat_model(model_name=selector_model)
         handler = build_langfuse_handler(
             user_id="meeseeks-context",
             session_id=f"context-{os.getpid()}-{os.urandom(4).hex()}",

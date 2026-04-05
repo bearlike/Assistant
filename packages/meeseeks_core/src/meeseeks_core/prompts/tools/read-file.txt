@@ -1,0 +1,11 @@
+Read File tool
+
+Use this tool to read local files. Output includes line numbers for reference.
+
+Tool inputs (JSON):
+- path: file path to read (required).
+- root: optional project root (defaults to current working directory).
+- offset: optional start line (0-based). Use for large files to read a specific section.
+- limit: optional max lines to read. Defaults to 2000.
+
+For large files, use offset and limit to read specific sections rather than reading the entire file multiple times.

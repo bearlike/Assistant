@@ -51,6 +51,7 @@ class AgentContext:
     should_cancel: Callable[[], bool] | None
     event_logger: Callable[[Event], None] | None
     registry: AgentHypervisor
+    fallback_models: tuple[str, ...] = ()
     message_queue: queue.Queue[str] | None = None
     interrupt_step: threading.Event | None = None
 
@@ -79,6 +80,7 @@ class AgentContext:
             depth=next_depth,
             max_depth=self.max_depth,
             model_name=model_name or self.model_name,
+            fallback_models=self.fallback_models,
             should_cancel=self.should_cancel,
             event_logger=self.event_logger,
             registry=self.registry,
@@ -94,6 +96,7 @@ class AgentContext:
         *,
         model_name: str,
         max_depth: int = 5,
+        fallback_models: tuple[str, ...] = (),
         should_cancel: Callable[[], bool] | None = None,
         event_logger: Callable[[Event], None] | None = None,
         registry: AgentHypervisor | None = None,
@@ -108,6 +111,7 @@ class AgentContext:
             depth=0,
             max_depth=max_depth,
             model_name=model_name,
+            fallback_models=fallback_models,
             should_cancel=should_cancel,
             event_logger=event_logger,
             registry=reg,

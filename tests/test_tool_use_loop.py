@@ -18,6 +18,7 @@ from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 from meeseeks_core.tool_use_loop import (
     _ANSI_ESCAPE_RE,
     ToolUseLoop,
+    _CachedFileRead,
     _coerce_mcp_tool_input,
     _infer_operation,
 )
@@ -89,6 +90,7 @@ def _make_agent_context(
     model_name: str = "test-model",
     should_cancel=None,
     max_depth: int = 5,
+    event_logger=None,
 ) -> AgentContext:
     """Create a root AgentContext for tests."""
     return AgentContext.root(
@@ -96,6 +98,7 @@ def _make_agent_context(
         max_depth=max_depth,
         should_cancel=should_cancel,
         registry=AgentHypervisor(max_concurrent=100),
+        event_logger=event_logger,
     )
 
 
@@ -125,7 +128,7 @@ class TestInferOperation:
         assert _infer_operation("aider_edit_block_tool") == "set"
 
     def test_read_is_get(self):
-        assert _infer_operation("aider_read_file_tool") == "get"
+        assert _infer_operation("read_file") == "get"
 
     def test_list_is_get(self):
         assert _infer_operation("aider_list_dir_tool") == "get"
@@ -269,17 +272,21 @@ class TestToolUseLoopToolCall:
         assert fake_model.ainvoke.call_count == 2
 
 
-class TestToolUseLoopMaxSteps:
-    """Test that max_steps terminates the loop."""
+class TestToolUseLoopNaturalCompletion:
+    """Test that the loop runs until the model naturally completes."""
 
-    def test_max_steps_reached(self):
+    def test_multi_turn_then_completion(self):
+        """Model calls tools 3 times, then returns text — natural completion."""
         spec = _make_spec("aider_shell_tool", "Run shell")
         registry = _make_registry(spec)
 
         fake_model = MagicMock()
-        fake_model.ainvoke = AsyncMock(
-            return_value=_tool_call_response("aider_shell_tool", {"command": "ls"}, "call_loop")
-        )
+        fake_model.ainvoke = AsyncMock(side_effect=[
+            _tool_call_response("aider_shell_tool", {"command": "ls"}, "c1"),
+            _tool_call_response("aider_shell_tool", {"command": "cat"}, "c2"),
+            _tool_call_response("aider_shell_tool", {"command": "wc"}, "c3"),
+            _text_response("Done. Found 3 files."),
+        ])
         bound = MagicMock()
         bound.ainvoke = fake_model.ainvoke
 
@@ -302,12 +309,68 @@ class TestToolUseLoopMaxSteps:
                 hook_manager=_make_hook_manager(),
             )
             tq, state = asyncio.run(
-                loop.run("keep looping", tool_specs=[spec], context=_make_context(), max_steps=3)
+                loop.run("list files", tool_specs=[spec], context=_make_context())
             )
 
         assert state.done is True
-        assert state.done_reason == "max_steps_reached"
+        assert state.done_reason == "completed"
         assert len(tq.action_steps) == 3
+        assert fake_model.ainvoke.call_count == 4
+
+    def test_no_step_count_in_messages(self):
+        """After tool execution, no step-count SystemMessage is injected."""
+        spec = _make_spec("aider_shell_tool", "Run shell")
+        registry = _make_registry(spec)
+
+        messages_seen: list = []
+
+        fake_model = MagicMock()
+        def _capture_invoke(msgs, **kwargs):
+            messages_seen.extend(msgs)
+            if len(messages_seen) < 10:
+                return _tool_call_response("aider_shell_tool", {"command": "x"}, "c1")
+            return _text_response("done")
+
+        fake_model.ainvoke = AsyncMock(side_effect=_capture_invoke)
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        mock_tool = MagicMock()
+        mock_speaker = MagicMock()
+        mock_speaker.content = "ok"
+        mock_tool.run.return_value = mock_speaker
+
+        with (
+            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            asyncio.run(
+                loop.run("do work", tool_specs=[spec], context=_make_context())
+            )
+
+        # No message should contain step counting patterns.
+        for msg in messages_seen:
+            if isinstance(msg, SystemMessage):
+                content = msg.content
+                assert "Step " not in content, f"Step count found in: {content}"
+                assert "remaining]" not in content, f"Step count found in: {content}"
+                assert "Plan budget:" not in content, f"Budget nudge found in: {content}"
+
+    def test_run_has_no_max_steps_parameter(self):
+        """Verify run() signature does not accept max_steps."""
+        import inspect
+        sig = inspect.signature(ToolUseLoop.run)
+        assert "max_steps" not in sig.parameters
+        assert "max_turns" not in sig.parameters
 
 
 class TestToolUseLoopPermissionDenied:
@@ -708,3 +771,561 @@ class TestDepthGuidance:
         )
         guidance = loop._build_depth_guidance()
         assert "DELEGATION BOUNDARY" in guidance or "deep in the agent tree" in guidance
+
+
+# ---------------------------------------------------------------------------
+# Empty-content sanitization (Fix A — port of Claude Code's
+# ensureNonEmptyAssistantContent + NO_CONTENT_MESSAGE).
+# ---------------------------------------------------------------------------
+
+
+class TestThinkingOnlyContentPlaceholder:
+    """Verify pure-thinking content is replaced with ``(no content)`` block."""
+
+    def test_thinking_only_response_produces_placeholder(self):
+        """Stripping thinking leaves empty ⇒ insert ``(no content)`` text block.
+
+        Mirrors Claude Code's ``ensureNonEmptyAssistantContent`` to stop the
+        model from hallucinating framework-style meta-text on subsequent
+        turns. The placeholder is filtered out of ``agent_message`` events.
+        """
+        spec = _make_spec("shell_tool", "Run shell commands")
+        registry = _make_registry(spec)
+
+        thinking_only = AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "pondering...", "signature": "sig"}
+            ],
+            tool_calls=[
+                {"name": "shell_tool", "args": {"input": "x"}, "id": "call_x"}
+            ],
+        )
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(
+            side_effect=[thinking_only, _text_response("done")]
+        )
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        mock_tool = MagicMock()
+        mock_speaker = MagicMock()
+        mock_speaker.content = "ok"
+        mock_tool.run.return_value = mock_speaker
+
+        emitted_events: list[dict] = []
+
+        with (
+            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+            ctx = _make_agent_context(event_logger=emitted_events.append)
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            asyncio.run(
+                loop.run("do it", tool_specs=[spec], context=_make_context())
+            )
+
+        # Placeholder must NOT leak out as an agent_message event (mirrors
+        # Claude Code's src/utils/messages.ts:717 display filter).
+        agent_messages = [e for e in emitted_events if e["type"] == "agent_message"]
+        for event in agent_messages:
+            assert event["payload"]["text"] != "(no content)"
+            assert "sanitised" not in event["payload"]["text"].lower()
+
+    def test_string_empty_content_with_tool_calls_gets_placeholder(self):
+        """Proxy returns thinking-only as ``content=""`` (string, not list).
+
+        This is the ACTUAL production case: the LiteLLM proxy strips
+        thinking blocks itself and returns a bare empty string. The
+        sanitisation must catch this branch too, otherwise the model
+        sees ``""`` in history and hallucinations framework meta-text.
+        """
+        spec = _make_spec("shell_tool", "Run shell commands")
+        registry = _make_registry(spec)
+
+        # Simulate proxy response: content="" (string) with tool_calls.
+        string_empty = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "shell_tool", "args": {"input": "x"}, "id": "call_y"}
+            ],
+        )
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(
+            side_effect=[string_empty, _text_response("done")]
+        )
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        mock_tool = MagicMock()
+        mock_speaker = MagicMock()
+        mock_speaker.content = "ok"
+        mock_tool.run.return_value = mock_speaker
+
+        emitted_events: list[dict] = []
+
+        with (
+            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+            ctx = _make_agent_context(event_logger=emitted_events.append)
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            asyncio.run(
+                loop.run("do it", tool_specs=[spec], context=_make_context())
+            )
+
+        # The empty-string content must have been replaced so no
+        # hallucination-triggering empty turns leak into the history.
+        agent_messages = [e for e in emitted_events if e["type"] == "agent_message"]
+        for event in agent_messages:
+            assert event["payload"]["text"] != ""
+            assert event["payload"]["text"] != "(no content)"
+            assert "sanitised" not in event["payload"]["text"].lower()
+
+    def test_extract_text_content_filters_placeholder(self):
+        """``_extract_text_content`` returns ``""`` when content is the placeholder."""
+        placeholder_list = [{"type": "text", "text": "(no content)"}]
+        assert ToolUseLoop._extract_text_content(placeholder_list) == ""
+        assert ToolUseLoop._extract_text_content("(no content)") == ""
+        # Sanity: real text still passes through.
+        assert ToolUseLoop._extract_text_content(
+            [{"type": "text", "text": "hello"}]
+        ) == "hello"
+
+
+# ---------------------------------------------------------------------------
+# LLM call timeout ceiling (Fix B)
+# ---------------------------------------------------------------------------
+
+
+class TestLlmCallTimeoutCeiling:
+    """``await model.ainvoke`` is bounded by ``agent.llm_call_timeout``."""
+
+    def test_ainvoke_timeout_raises_runtime_error(self):
+        """A hung ``ainvoke`` is cancelled after the configured ceiling."""
+        spec = _make_spec()
+        registry = _make_registry(spec)
+
+        async def _hang(*_args, **_kwargs):
+            await asyncio.sleep(30)  # Would block forever without wait_for.
+            return _text_response("never")
+
+        fake_model = MagicMock()
+        fake_model.ainvoke = _hang
+        bound = MagicMock()
+        bound.ainvoke = _hang
+
+        with (
+            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch(
+                "meeseeks_core.tool_use_loop.get_config_value",
+                side_effect=lambda *keys, default=None: (
+                    0.05 if keys == ("agent", "llm_call_timeout")
+                    else 1 if keys == ("agent", "llm_call_retries")
+                    else default
+                ),
+            ),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            import pytest
+
+            with pytest.raises(RuntimeError, match="LLM call failed on all models"):
+                asyncio.run(
+                    loop.run("hang", tool_specs=[spec], context=_make_context())
+                )
+
+
+# ---------------------------------------------------------------------------
+# File-read dedup cache
+# ---------------------------------------------------------------------------
+
+
+class TestFileReadDedupCache:
+    """Verify read_file dedup cache prevents redundant reads."""
+
+    def _make_loop(self) -> ToolUseLoop:
+        """Create a minimal ToolUseLoop for cache testing."""
+        spec = _make_spec()
+        registry = _make_registry(spec)
+        with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = MagicMock()
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+        return loop
+
+    def test_cache_miss_returns_none(self, tmp_path):
+        """First read of a file returns None (cache miss)."""
+        target = tmp_path / "test.txt"
+        target.write_text("hello\n")
+
+        loop = self._make_loop()
+        step = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": str(target)},
+        )
+        assert loop._check_file_read_cache(step) is None
+
+    def test_cache_hit_returns_stub(self, tmp_path):
+        """Second read of an unchanged file returns the dedup stub."""
+        target = tmp_path / "test.txt"
+        target.write_text("hello\n")
+
+        loop = self._make_loop()
+        step = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": str(target)},
+        )
+        # Populate cache.
+        loop._populate_file_read_cache(step)
+        # Now check — should return the stub.
+        result = loop._check_file_read_cache(step)
+        assert result is not None
+        assert "unchanged since last read" in result
+
+    def test_cache_invalidated_by_mtime_change(self, tmp_path):
+        """Modified file (mtime change) is not served from cache."""
+        import os
+        import time
+
+        target = tmp_path / "test.txt"
+        target.write_text("hello\n")
+
+        loop = self._make_loop()
+        step = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": str(target)},
+        )
+        loop._populate_file_read_cache(step)
+
+        # Modify the file — bump mtime.
+        time.sleep(0.05)
+        target.write_text("changed\n")
+        os.utime(str(target), None)
+
+        result = loop._check_file_read_cache(step)
+        assert result is None
+
+    def test_cache_miss_on_different_offset(self, tmp_path):
+        """Different offset means different read — no cache hit."""
+        target = tmp_path / "test.txt"
+        target.write_text("line1\nline2\nline3\n")
+
+        loop = self._make_loop()
+        step1 = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": str(target), "offset": 0},
+        )
+        step2 = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": str(target), "offset": 1},
+        )
+        loop._populate_file_read_cache(step1)
+        assert loop._check_file_read_cache(step2) is None
+
+    def test_cache_miss_on_different_limit(self, tmp_path):
+        """Different limit means different read — no cache hit."""
+        target = tmp_path / "test.txt"
+        target.write_text("line1\nline2\nline3\n")
+
+        loop = self._make_loop()
+        step1 = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": str(target), "limit": 10},
+        )
+        step2 = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": str(target), "limit": 20},
+        )
+        loop._populate_file_read_cache(step1)
+        assert loop._check_file_read_cache(step2) is None
+
+    def test_cache_with_root_path(self, tmp_path):
+        """Cache works with root + relative path."""
+        target = tmp_path / "sub" / "test.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("hello\n")
+
+        loop = self._make_loop()
+        step = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": "sub/test.txt", "root": str(tmp_path)},
+        )
+        loop._populate_file_read_cache(step)
+        result = loop._check_file_read_cache(step)
+        assert result is not None
+        assert "unchanged" in result
+
+    def test_edit_invalidates_cache(self, tmp_path):
+        """file_edit_tool execution clears the cache for the edited file."""
+        import os
+
+        target = tmp_path / "test.txt"
+        target.write_text("hello\n")
+        norm = os.path.normpath(str(target))
+
+        loop = self._make_loop()
+        read_step = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": str(target)},
+        )
+        loop._populate_file_read_cache(read_step)
+        assert norm in loop._file_read_cache
+
+        # Simulate edit tool action step — directly call invalidation logic.
+        edit_step = ActionStep(
+            tool_id="file_edit_tool",
+            operation="set",
+            tool_input={"file_path": str(target)},
+        )
+        edit_args = edit_step.tool_input if isinstance(edit_step.tool_input, dict) else {}
+        edited_path = str(edit_args.get("file_path", "") or edit_args.get("path", ""))
+        if edited_path:
+            loop._file_read_cache.pop(os.path.normpath(edited_path), None)
+
+        assert norm not in loop._file_read_cache
+
+    def test_empty_path_returns_none(self):
+        """Empty path skips cache logic entirely."""
+        loop = self._make_loop()
+        step = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": ""},
+        )
+        assert loop._check_file_read_cache(step) is None
+
+    def test_nonexistent_file_returns_none(self, tmp_path):
+        """Missing file (no mtime) returns None."""
+        loop = self._make_loop()
+        step = ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": str(tmp_path / "missing.txt")},
+        )
+        # Populate with a fake entry.
+        import os
+        fake_path = os.path.normpath(str(tmp_path / "missing.txt"))
+        loop._file_read_cache[fake_path] = _CachedFileRead(
+            path=fake_path, offset=0, limit=None, mtime=0.0,
+        )
+        # mtime check should fail since file doesn't exist.
+        assert loop._check_file_read_cache(step) is None
+
+    def test_cached_file_read_dataclass(self):
+        """_CachedFileRead stores all fields correctly."""
+        entry = _CachedFileRead(
+            path="/tmp/test.txt", offset=5, limit=10, mtime=12345.0,
+        )
+        assert entry.path == "/tmp/test.txt"
+        assert entry.offset == 5
+        assert entry.limit == 10
+        assert entry.mtime == 12345.0
+
+
+# ---------------------------------------------------------------------------
+# Budget warning survives natural-completion refactor
+# ---------------------------------------------------------------------------
+
+
+class TestBudgetWarningStillFires:
+    """Session-level budget_exhausted() warning is still injected."""
+
+    def test_budget_warning_injected(self):
+        spec = _make_spec("aider_shell_tool", "Run shell")
+        registry = _make_registry(spec)
+
+        messages_seen: list = []
+
+        def _capture_invoke(msgs, **kwargs):
+            messages_seen.extend(msgs)
+            if len([m for m in messages_seen if hasattr(m, "tool_calls") and m.tool_calls]) >= 1:
+                return _text_response("Done with budget warning.")
+            return _tool_call_response("aider_shell_tool", {"command": "x"}, "c1")
+
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(side_effect=_capture_invoke)
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        mock_tool = MagicMock()
+        mock_speaker = MagicMock()
+        mock_speaker.content = "ok"
+        mock_tool.run.return_value = mock_speaker
+
+        with (
+            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            # Create context with exhausted budget.
+            ctx = _make_agent_context()
+            ctx.registry._session_step_budget = 1
+            ctx.registry._total_steps = 100  # Already exhausted
+
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            tq, state = asyncio.run(
+                loop.run("do work", tool_specs=[spec], context=_make_context())
+            )
+
+        assert state.done is True
+        budget_warnings = [
+            m for m in messages_seen
+            if isinstance(m, SystemMessage) and "BUDGET WARNING" in m.content
+        ]
+        assert len(budget_warnings) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Model fallback cascade
+# ---------------------------------------------------------------------------
+
+
+class TestModelFallback:
+    """Test model fallback cascade on retryable failure."""
+
+    def test_fallback_on_primary_failure(self):
+        """Primary model fails -> fallback model succeeds."""
+        async def _test():
+            ctx = _make_agent_context(model_name="primary-model")
+            object.__setattr__(ctx, "fallback_models", ("fallback-model",))
+
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=_make_registry(_make_spec()),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+            primary_error = RuntimeError("primary down")
+            fallback_response = _text_response("fallback worked")
+
+            call_count = 0
+            async def _side_effect(messages, **kw):
+                nonlocal call_count
+                call_count += 1
+                if call_count <= 2:  # primary gets 2 retries
+                    raise primary_error
+                return fallback_response
+
+            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+                mock_model = MagicMock()
+                mock_model.bind_tools.return_value.ainvoke = AsyncMock(side_effect=_side_effect)
+                mock_build.return_value = mock_model
+
+                tq, state = await loop.run(
+                    "test query",
+                    tool_specs=[_make_spec()],
+                    context=_make_context(),
+                )
+
+            assert state.done
+            assert "fallback worked" in (tq.task_result or "")
+            assert call_count == 3
+
+        asyncio.run(_test())
+
+    def test_no_fallback_on_non_retryable_error(self):
+        """Non-retryable error fails immediately, no fallback."""
+        async def _test():
+            ctx = _make_agent_context(model_name="primary-model")
+            object.__setattr__(ctx, "fallback_models", ("fallback-model",))
+
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=_make_registry(_make_spec()),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+            bad_request = ValueError("bad request")
+            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build, \
+                 patch("meeseeks_core.tool_use_loop._classify_llm_error", return_value=(False, 0)):
+                mock_model = MagicMock()
+                mock_model.bind_tools.return_value.ainvoke = AsyncMock(side_effect=bad_request)
+                mock_build.return_value = mock_model
+
+                try:
+                    await loop.run(
+                        "test query",
+                        tool_specs=[_make_spec()],
+                        context=_make_context(),
+                    )
+                    assert False, "Should have raised"
+                except RuntimeError as exc:
+                    assert "bad request" in str(exc)
+                    assert mock_model.bind_tools.return_value.ainvoke.call_count == 1
+
+        asyncio.run(_test())
+
+    def test_no_fallback_when_not_configured(self):
+        """Without fallback_models, behaves like before."""
+        async def _test():
+            ctx = _make_agent_context(model_name="only-model")
+
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=_make_registry(_make_spec()),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+                mock_model = MagicMock()
+                mock_model.bind_tools.return_value.ainvoke = AsyncMock(
+                    side_effect=RuntimeError("down")
+                )
+                mock_build.return_value = mock_model
+
+                try:
+                    await loop.run(
+                        "test query",
+                        tool_specs=[_make_spec()],
+                        context=_make_context(),
+                    )
+                    assert False, "Should have raised"
+                except RuntimeError as exc:
+                    assert "down" in str(exc)
+
+        asyncio.run(_test())

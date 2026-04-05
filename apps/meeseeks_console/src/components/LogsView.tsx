@@ -8,10 +8,13 @@ import {
   ShieldX,
   Terminal,
   MessageSquare,
+  RotateCcw,
+  Play,
 } from 'lucide-react';
 import { SummaryBlock } from './SummaryBlock';
 import { MarkdownContent } from './MessageBubble';
 import { LogEventCard, AccentColor } from './LogEventCard';
+import { ModelLabel } from './ModelLabel';
 import { TerminalCard } from './TerminalCard';
 import { DiffCard } from './DiffCard';
 import { ScrollToBottom } from './ScrollToBottom';
@@ -35,15 +38,8 @@ function Badge({ children, color }: { children: React.ReactNode; color: string }
   );
 }
 
-function ModelTag({ model }: { model?: string }) {
-  if (!model) return null;
-  const short = model.includes('/') ? (model.split('/').pop() ?? model) : model;
-  return (
-    <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded whitespace-nowrap">
-      {short}
-    </span>
-  );
-}
+const MODEL_TAG_CLASS =
+  'text-[10px] font-mono text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded whitespace-nowrap';
 
 /** Hash agent ID to one of 8 cycling colors (Claude Code sub-agent palette). */
 function agentColorIndex(agentId: string): number {
@@ -135,7 +131,7 @@ function renderAgent(log: LogEntry) {
     <LogEventCard
       key={log.id}
       icon={<Bot className={`w-4 h-4 ${agentTextColor}`} />}
-      title={<span className="flex items-center gap-2"><span className="font-mono">{displayId}</span><ModelTag model={log.model} /></span>}
+      title={<span className="flex items-center gap-2"><span className="font-mono">{displayId}</span><ModelLabel modelId={log.model} className={MODEL_TAG_CLASS} /></span>}
       badge={<Badge color={accent}>{badgeWithSteps}</Badge>}
       timestamp={log.timestamp}
       accent={accent}
@@ -219,7 +215,11 @@ function renderAgentResult(log: LogEntry) {
   );
 }
 
-function renderCompletion(log: LogEntry, onContinue?: () => void) {
+function renderCompletion(
+  log: LogEntry,
+  onRetry?: () => void,
+  onContinue?: () => void,
+) {
   const reason = (log.doneReason || '').toLowerCase();
   const accent: AccentColor =
     reason === 'completed' ? 'emerald' :
@@ -238,7 +238,8 @@ function renderCompletion(log: LogEntry, onContinue?: () => void) {
     reason === 'max_steps_reached' ? 'Task interrupted — step limit reached' :
     `Run ${reason || 'ended'}`;
 
-  const showContinue = reason === 'max_steps_reached' && !!onContinue;
+  const isRecoverable = reason === 'error' || reason === 'max_steps_reached';
+  const showRecovery = isRecoverable && !!onRetry && !!onContinue;
 
   return (
     <LogEventCard
@@ -248,18 +249,30 @@ function renderCompletion(log: LogEntry, onContinue?: () => void) {
       badge={log.doneReason && log.doneReason !== reason ? <Badge color={accent}>{log.doneReason}</Badge> : undefined}
       timestamp={log.timestamp}
       accent={accent}
-      defaultExpanded={!!log.error || showContinue}
+      defaultExpanded={!!log.error || showRecovery}
     >
       {log.error && (
         <p className="text-xs text-red-500 font-mono">{log.error}</p>
       )}
-      {showContinue && (
-        <button
-          onClick={onContinue}
-          className="mt-2 px-3 py-1.5 text-xs font-medium rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
-        >
-          Continue from here
-        </button>
+      {showRecovery && (
+        <div className="mt-2 flex gap-2">
+          <button
+            onClick={onRetry}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"
+            title="Re-run the last user query from where it was submitted"
+          >
+            <RotateCcw className="w-3 h-3" />
+            Retry
+          </button>
+          <button
+            onClick={onContinue}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
+            title="Resume the session and let the agent recover from where it left off"
+          >
+            <Play className="w-3 h-3" />
+            Continue
+          </button>
+        </div>
       )}
     </LogEventCard>
   );
@@ -277,6 +290,8 @@ function renderShell(log: LogEntry) {
         stdout={log.shellStdout}
         stderr={log.shellStderr}
         durationMs={log.shellDurationMs}
+        model={log.model}
+        agentId={log.agentId}
       />
     );
   }
@@ -288,7 +303,7 @@ function renderShell(log: LogEntry) {
     <LogEventCard
       key={log.id}
       icon={<Terminal className="w-4 h-4 text-[hsl(var(--muted-foreground))]" />}
-      title={<span className="flex items-center gap-2">{log.title || 'tool'}<ModelTag model={log.model} /></span>}
+      title={<span className="flex items-center gap-2">{log.title || 'tool'}<ModelLabel modelId={log.model} className={MODEL_TAG_CLASS} />{log.agentId && <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">{log.agentId.slice(0, 6)}</span>}</span>}
       badge={hasError ? <Badge color="red">Error</Badge> : undefined}
       timestamp={log.timestamp}
       accent={hasError ? 'red' : toolAccent(toolName)}
@@ -371,7 +386,15 @@ function renderAgentMessage(log: LogEntry) {
   );
 }
 
-export function LogsView({ events, onContinue }: { events: EventRecord[]; onContinue?: () => void }) {
+export function LogsView({
+  events,
+  onRetry,
+  onContinue,
+}: {
+  events: EventRecord[];
+  onRetry?: () => void;
+  onContinue?: () => void;
+}) {
   const logs = buildLogs(events);
   const summaryData = extractSummaryTesting(events);
   const hasSummary =
@@ -443,7 +466,7 @@ export function LogsView({ events, onContinue }: { events: EventRecord[]; onCont
           if (log.type === 'permission') return renderPermission(log);
           if (log.type === 'agent') return renderAgent(log);
           if (log.type === 'agent_result') return renderAgentResult(log);
-          if (log.type === 'completion') return renderCompletion(log, onContinue);
+          if (log.type === 'completion') return renderCompletion(log, onRetry, onContinue);
           if (log.type === 'diff') return renderDiff(log);
           if (log.type === 'shell') return renderShell(log);
           if (log.type === 'agent_message') return renderAgentMessage(log);

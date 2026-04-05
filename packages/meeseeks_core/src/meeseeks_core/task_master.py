@@ -81,6 +81,7 @@ def generate_action_plan(
 def orchestrate_session(
     user_query: str,
     model_name: str | None = None,
+    fallback_models: tuple[str, ...] | None = None,
     max_iters: int = 3,
     initial_plan: Plan | None = None,
     return_state: bool = False,
@@ -102,6 +103,7 @@ def orchestrate_session(
     """Run the orchestration loop."""
     return Orchestrator(
         model_name=model_name,
+        fallback_models=fallback_models,
         session_store=session_store,
         tool_registry=tool_registry,
         permission_policy=permission_policy,

@@ -5,9 +5,11 @@ import { CopyButton } from './CopyButton';
 import { ScrollToBottom } from './ScrollToBottom';
 import { DiffFile, EventRecord, TimelineEntry, TurnMeta } from '../types';
 import { FileList } from './FileList';
+import { PlanCard } from './PlanCard';
 import { SummaryBlock } from './SummaryBlock';
+import { RetryFromHereButton } from './RetryFromHereButton';
 import { useAutoScroll } from '../hooks/useAutoScroll';
-import { formatModelName } from '../utils/model';
+import { ModelLabel } from './ModelLabel';
 interface ConversationTimelineProps {
   timeline: TimelineEntry[];
   onShowTrace: (turn: TurnMeta) => void;
@@ -15,6 +17,8 @@ interface ConversationTimelineProps {
   activeTurnId?: string | null;
   isRunning?: boolean;
   onShowActiveTrace?: () => void;
+  onApprovePlan?: (approved: boolean) => void;
+  onRetryFrom?: (fromTs: string) => void;
   events?: EventRecord[];
   model?: string;
   systemBlock?: {
@@ -34,10 +38,17 @@ export function ConversationTimeline({
   activeTurnId,
   isRunning = false,
   onShowActiveTrace,
+  onApprovePlan,
+  onRetryFrom,
   events = [],
   model,
   systemBlock
 }: ConversationTimelineProps) {
+  const awaitingPlanApproval = useMemo(() => {
+    if (timeline.length === 0) return false;
+    const last = timeline[timeline.length - 1];
+    return last.role === 'plan' && last.plan?.status === 'pending';
+  }, [timeline]);
   const activeAgents = useMemo(() => {
     const agents = new Map<string, { detail: string; model: string }>();
     for (const event of events) {
@@ -59,10 +70,12 @@ export function ConversationTimeline({
   const { scrollRef, isAtBottom, scrollToBottom, onScroll } = useAutoScroll(timeline.length);
   return (
     <div className="relative flex-1 overflow-hidden">
-    <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto p-6 space-y-10">
+    <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto p-6 pb-24 space-y-10">
       {timeline.map((entry) =>
       <div key={entry.id} className="flex flex-col gap-2">
-          {entry.role === 'user' ?
+          {entry.role === 'plan' ?
+        entry.plan && <PlanCard plan={entry.plan} onApprove={onApprovePlan} /> :
+          entry.role === 'user' ?
         <div className="flex justify-end">
               <div className="inline-flex flex-col items-end max-w-[85%]">
                 <MessageBubble role={entry.role} content={entry.content} />
@@ -77,10 +90,10 @@ export function ConversationTimeline({
               <div className="inline-flex flex-col text-xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-lg overflow-hidden max-w-[320px]">
                       <div className="flex items-center justify-between gap-3 px-3 py-1.5">
                         <div className="flex items-center gap-2 min-w-0">
-                          {isRunning &&
+                          {isRunning && !awaitingPlanApproval &&
                     <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
                           }
-                          <span className="whitespace-nowrap">{isRunning ? 'Running...' : 'Trace available'}</span>
+                          <span className="whitespace-nowrap">{awaitingPlanApproval ? 'Awaiting your approval' : isRunning ? 'Running...' : 'Trace available'}</span>
                           {isRunning && activeAgents.size > 0 &&
                             <span className="whitespace-nowrap opacity-70">{activeAgents.size} agent{activeAgents.size !== 1 ? 's' : ''}</span>
                           }
@@ -99,7 +112,7 @@ export function ConversationTimeline({
                           {[...activeAgents.entries()].map(([id, a]) => (
                             <div key={id} className="flex items-center gap-1.5 text-[10px] text-[hsl(var(--muted-foreground))]">
                               <span className="font-mono shrink-0">{id}</span>
-                              {a.model && <span className="opacity-50 shrink-0">{formatModelName(a.model)}</span>}
+                              <ModelLabel modelId={a.model} className="opacity-50 shrink-0" />
                               <span className="truncate opacity-70">{a.detail}</span>
                             </div>
                           ))}
@@ -113,16 +126,21 @@ export function ConversationTimeline({
 
         <MessageBubble
           role={entry.role}
-          content={entry.content}>
+          content={entry.content}
+          actions={(() => {
+            const fromTs = entry.turn?.events[0]?.ts;
+            return !isRunning && fromTs && onRetryFrom ? (
+              <RetryFromHereButton
+                onConfirm={() => onRetryFrom(fromTs)}
+                className="group inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+              />
+            ) : undefined;
+          })()}>
 
               {entry.role === 'assistant' && entry.turn &&
           <div className="mt-5 pt-4 border-t border-[hsl(var(--border))] space-y-4">
                   <div className="flex items-center gap-4 text-xs text-[hsl(var(--muted-foreground))]">
-                    {model &&
-              <span className="font-mono opacity-70">
-                        {formatModelName(model)}
-                      </span>
-              }
+                    <ModelLabel modelId={model} className="font-mono opacity-70" />
                     {entry.turn.duration &&
               <span className="font-mono opacity-70">
                         {entry.turn.duration}

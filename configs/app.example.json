@@ -83,5 +83,31 @@
     "on_session_start": [],
     "on_session_end": []
   },
+  "channels": {
+    "nextcloud-talk": {
+      "enabled": false,
+      "bot_secret": "shared-hmac-secret-from-occ-talk-bot-install",
+      "nextcloud_url": "http://localhost:8180",
+      "nextcloud_host_header": "",
+      "allowed_backends": [],
+      "trigger_keyword": "@Meeseeks"
+    },
+    "email": {
+      "enabled": false,
+      "imap_host": "imap.example.com",
+      "imap_port": 993,
+      "imap_ssl": true,
+      "smtp_host": "smtp.example.com",
+      "smtp_port": 587,
+      "smtp_starttls": true,
+      "username": "meeseeks@example.com",
+      "password": "app-password-here",
+      "from_address": "Meeseeks <meeseeks@example.com>",
+      "mailbox": "INBOX",
+      "poll_interval_seconds": 30,
+      "allowed_senders": ["user@example.com"],
+      "allowed_recipients": ["meeseeks@example.com"]
+    }
+  },
   "projects": {}
 }

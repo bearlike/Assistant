@@ -16,7 +16,14 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 _APP_CONFIG_PATH_OVERRIDE: Path | None = None
 _MCP_CONFIG_PATH_OVERRIDE: Path | None = None
@@ -196,6 +203,22 @@ class LLMConfig(BaseModel):
         description=("Model ID used by individual tools. Falls back to default_model when empty."),
         examples=["anthropic/claude-sonnet-4-6"],
     )
+    title_model: str = Field(
+        "",
+        description=(
+            "Model ID for session-title generation. Falls back to default_model when empty."
+        ),
+        examples=["anthropic/claude-haiku-4-5-20251001"],
+    )
+    fallback_models: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ordered list of fallback model IDs. On retryable LLM failure, "
+            "the system tries each in order after exhausting retries on "
+            "the primary model. Empty = no fallback."
+        ),
+        examples=[["gpt-5.4", "gemini-2.5-pro"]],
+    )
     reasoning_effort: str = Field(
         "",
         description=(
@@ -274,7 +297,12 @@ class LLMConfig(BaseModel):
         except ValueError as exc:
             return ConfigCheck(name="llm", enabled=True, ok=False, reason=str(exc))
         missing: list[str] = []
-        for model_name in {self.default_model, self.action_plan_model, self.tool_model}:
+        for model_name in {
+            self.default_model,
+            self.action_plan_model,
+            self.tool_model,
+            self.title_model,
+        }:
             if model_name and model_name not in models:
                 missing.append(model_name)
         if missing:
@@ -633,12 +661,29 @@ class APIConfig(BaseModel):
 class HookEntry(BaseModel):
     """A single hook configuration entry."""
 
-    type: str = Field("command", description="Hook type. Currently only 'command' is supported.")
-    command: str = Field("", description="Shell command to execute when the hook fires.")
+    type: str = Field(
+        "command", description="Hook type: 'command' (shell) or 'http' (POST to URL)."
+    )
+    command: str = Field("", description="Shell command to execute (type=command).")
+    url: str = Field("", description="Target URL for HTTP POST (type=http).")
+    headers: dict[str, str] = Field(
+        default_factory=dict, description="Extra HTTP headers (type=http)."
+    )
     matcher: str | None = Field(
         None, description="Optional fnmatch pattern to limit which tool IDs trigger this hook."
     )
-    timeout: int = Field(30, description="Maximum seconds to wait for the hook command to finish.")
+    timeout: int = Field(30, description="Maximum seconds to wait for the hook to finish.")
+
+    @model_validator(mode="after")
+    def _validate_type_fields(self) -> HookEntry:
+        if self.type == "http" and not self.url:
+            msg = "HookEntry type='http' requires a non-empty 'url'."
+            raise ValueError(msg)
+        # Allow default empty HookEntry() for schema generation.
+        if self.type == "command" and not self.command and self.url:
+            msg = "HookEntry type='command' but only 'url' is set; use type='http'."
+            raise ValueError(msg)
+        return self
 
 
 class HooksConfig(BaseModel):
@@ -706,10 +751,37 @@ class AgentConfig(BaseModel):
     )
     max_iters: int = Field(
         30,
-        description="Maximum orchestration iterations for root agent (max_steps = max_iters * 3).",
+        description=(
+            "Deprecated. The tool-use loop now runs until natural completion "
+            "(model returns text without tool calls). This field is retained "
+            "for API backward compatibility but is not enforced."
+        ),
     )
     sub_agent_max_steps: int = Field(
-        10, description="Default maximum tool-use steps per sub-agent before forced termination."
+        10,
+        description=(
+            "Deprecated. Sub-agents now run until natural completion. "
+            "This field is retained for API backward compatibility but "
+            "is not enforced. Safety is provided by session_step_budget, "
+            "stall detection, and LLM timeouts."
+        ),
+    )
+    llm_call_timeout: float = Field(
+        60.0,
+        description=(
+            "Ceiling in seconds for a single model.ainvoke() call. "
+            "Covers extended-thinking models. On timeout, the call is "
+            "retried up to llm_call_retries times before cascading to "
+            "fallback models."
+        ),
+    )
+    llm_call_retries: int = Field(
+        2,
+        description=(
+            "Maximum retry attempts for the primary model before "
+            "cascading to fallback_models. Each fallback model gets "
+            "one attempt."
+        ),
     )
     default_denied_tools: list[str] = Field(
         default_factory=list,
@@ -723,6 +795,39 @@ class AgentConfig(BaseModel):
             "string replacement)."
         ),
         examples=["search_replace_block", "structured_patch"],
+    )
+    plan_mode_shell_allowlist: list[str] = Field(
+        default_factory=lambda: [
+            # Filesystem inspection
+            "ls", "pwd", "cat", "head", "tail", "wc", "file", "stat", "tree",
+            # Searching
+            "find", "grep", "rg", "ag", "ack",
+            # Environment / process / system introspection
+            "echo", "which", "whereis", "env", "printenv", "ps", "uname", "date",
+            # Disk usage
+            "du", "df",
+            # Git read-only subcommands (prefix-matched; all flags/args allowed)
+            "git status", "git log", "git diff", "git show", "git blame",
+            "git branch", "git tag", "git remote", "git config --get",
+            "git rev-parse", "git ls-files", "git describe", "git reflog",
+        ],
+        description=(
+            "Shell command prefixes allowed during plan mode. Each entry "
+            "matches a command at a word boundary (e.g. 'git log' matches "
+            "'git log --oneline' but not 'git logger'). Commands containing "
+            "pipes, redirects, variable expansion, command substitution, or "
+            "chaining (|, >, <, &, ;, $, backtick) are always rejected. "
+            "Set to an empty list to disable shell in plan mode entirely."
+        ),
+    )
+    plan_mode_allow_mcp: bool = Field(
+        True,
+        description=(
+            "Allow ALL user-enabled MCP tools (tools with kind='mcp') during "
+            "plan mode. Matches Claude Code's permissive default and trusts "
+            "the user's mcp.json configuration. Set to false to block MCP "
+            "tools in plan mode regardless of their read-only status."
+        ),
     )
 
     @field_validator("edit_tool", mode="before")
@@ -776,10 +881,20 @@ class AgentConfig(BaseModel):
             return 10
         return max(parsed, 1)
 
-    @field_validator("allowed_models", "default_denied_tools", mode="before")
+    @field_validator(
+        "allowed_models",
+        "default_denied_tools",
+        "plan_mode_shell_allowlist",
+        mode="before",
+    )
     @classmethod
     def _normalize_string_lists(cls, value: Any) -> list[str]:
         return _coerce_list(value)
+
+    @field_validator("plan_mode_allow_mcp", mode="before")
+    @classmethod
+    def _normalize_plan_mode_allow_mcp(cls, value: Any) -> bool:
+        return _coerce_bool(value, default=True)
 
 
 class MongoDBConfig(BaseModel):
@@ -833,11 +948,12 @@ class StorageConfig(BaseModel):
     def _normalize_driver(cls, value: Any) -> str:
         env = os.environ.get("MEESEEKS_STORAGE_DRIVER")
         if env:
-            return env.strip().lower()
+            value = env
         raw = str(value).strip().lower() if value else "json"
         if raw not in {"json", "mongodb"}:
-            _logger.warning("Unknown storage driver %r, falling back to 'json'.", raw)
-            return "json"
+            raise ValueError(
+                f"Unknown storage driver {raw!r}. Expected 'json' or 'mongodb'."
+            )
         return raw
 
 
@@ -953,7 +1069,11 @@ class AppConfig(BaseModel):
     )
     hooks: HooksConfig = Field(
         default_factory=_hooks_config_default,
-        description="External shell hooks fired during the session lifecycle.",
+        description="External hooks fired during the session lifecycle (command or http).",
+    )
+    channels: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Chat platform channel adapters (nextcloud-talk, slack, etc.).",
     )
     projects: dict[str, ProjectConfig] = Field(
         default_factory=_projects_config_default,

@@ -107,6 +107,40 @@ class TestMCPConnectionPool:
 
         assert not asyncio.run(_run())
 
+    def test_refresh_prunes_servers_absent_in_new_config(self):
+        """Switching project scope must drop servers from the previous config.
+
+        Regression guard for the bleed where /api/tools?project=B was
+        returning project-A's MCP tools because connect_all only adds
+        entries, never prunes. With refresh_if_config_changed, servers
+        missing from the new config must be disconnected and removed.
+        """
+        async def _run():
+            async def mc(name, cfg):
+                return ServerState(
+                    name=name,
+                    config=cfg,
+                    connected=True,
+                    tools=[MagicMock(name=f"tool_{name}")],
+                )
+
+            with patch.object(self.pool, "_connect_single", side_effect=mc):
+                # Project A: servers {x, y}
+                await self.pool.connect_all(
+                    {"servers": {"x": {"v": "1"}, "y": {"v": "1"}}}
+                )
+                assert set(self.pool._servers.keys()) == {"x", "y"}
+                # Switch to project B: only server {z}
+                await self.pool.refresh_if_config_changed(
+                    {"servers": {"z": {"v": "1"}}}
+                )
+
+        asyncio.run(_run())
+        assert set(self.pool._servers.keys()) == {"z"}
+        # get_all_tool_details() surfaces only the current scope's server
+        details = self.pool.get_all_tool_details()
+        assert set(details.keys()) == {"z"}
+
     def test_shutdown_disconnects_all(self):
         self.pool._servers["a"] = ServerState(
             name="a", config={}, connected=True,

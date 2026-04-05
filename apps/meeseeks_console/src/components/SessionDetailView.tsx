@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { WorkspacePanel } from "./WorkspacePanel";
@@ -10,11 +10,17 @@ import { DiffFile, SessionSummary, TurnMeta } from "../types";
 import { buildTimeline, getActiveTurn } from "../utils/timeline";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { extractSummaryTesting } from "../utils/logs";
+import { approvePlan, recoverSession } from "../api/client";
+import { RotateCcw, Play } from "lucide-react";
 interface SessionDetailViewProps {
   session: SessionSummary;
+  onTitleUpdate?: (sessionId: string, title: string) => void;
+  onSessionChange?: () => void;
 }
 export function SessionDetailView({
-  session
+  session,
+  onTitleUpdate,
+  onSessionChange,
 }: SessionDetailViewProps) {
   const isMobile = useIsMobile();
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
@@ -26,7 +32,8 @@ export function SessionDetailView({
     events,
     running,
     error: eventsError,
-    resume
+    resume,
+    reset: resetEvents,
   } = useSessionEvents(session.session_id);
   const {
     send,
@@ -61,6 +68,20 @@ export function SessionDetailView({
     setIsMaximized(false);
     setActiveTab("logs");
   }, [session.session_id]);
+  useEffect(() => {
+    if (!onTitleUpdate) return;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev.type === "title_update") {
+        const payload = ev.payload as { title?: string } | undefined;
+        const title = payload?.title;
+        if (typeof title === "string" && title && title !== session.title) {
+          onTitleUpdate(session.session_id, title);
+        }
+        break;
+      }
+    }
+  }, [events, onTitleUpdate, session.session_id, session.title]);
   const handleShowTrace = (turn: TurnMeta) => {
     setSelectedTurnId(turn.id);
     setActiveTab("logs");
@@ -96,6 +117,59 @@ export function SessionDetailView({
       setSelectedFile(selectedTurn.files[0]);
     }
   }, [selectedTurn, selectedFile]);
+  const handleApprovePlan = useCallback(
+    async (approved: boolean) => {
+      try {
+        await approvePlan(session.session_id, approved);
+      } catch (err) {
+        console.error("Failed to submit plan decision", err);
+      }
+    },
+    [session.session_id],
+  );
+  const triggerRecover = async (action: "retry" | "continue") => {
+    if (running || !session.session_id) return;
+    await recoverSession(session.session_id, action);
+    // Full reset: clear stale events + lastTsRef so the next poll
+    // fetches the authoritative transcript from scratch. The backend
+    // deletes old events on retry (time-travel) and stale recovery
+    // attempts on continue (stitch), so a merge-based resume would
+    // show orphaned events until hard-refresh.
+    resetEvents();
+    // Re-fetch session list so the NavBar's StatusBadge updates from
+    // "failed" to "running" without requiring a hard refresh.
+    onSessionChange?.();
+  };
+  const handleRetryFrom = async (fromTs: string) => {
+    if (running || !session.session_id) return;
+    await recoverSession(session.session_id, "retry", fromTs);
+    resetEvents();
+    onSessionChange?.();
+  };
+
+  // Surface the last recoverable failure inline in the conversation so users
+  // never have to open the Logs panel to retry. Walks backwards to find the
+  // most recent completion event; recoverable iff the run is idle and the
+  // reason is ``error`` or ``max_steps_reached``.
+  const lastRecoverableFailure = useMemo(() => {
+    if (running || submitting) return null;
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const ev = events[i];
+      if (ev.type !== "completion") continue;
+      const payload = (ev.payload ?? {}) as {
+        done_reason?: string | null;
+        error?: string;
+        last_error?: string;
+      };
+      const reason = (payload.done_reason ?? "").toLowerCase();
+      if (reason !== "error" && reason !== "max_steps_reached") return null;
+      return {
+        reason,
+        error: payload.error ?? payload.last_error ?? "",
+      };
+    }
+    return null;
+  }, [events, running, submitting]);
   const conversationPanel = (
     <>
       {errorMessage && <div className="px-6 pt-4">
@@ -112,6 +186,8 @@ export function SessionDetailView({
         activeTurnId={activeTurnId}
         isRunning={running || submitting}
         onShowActiveTrace={handleShowLiveTrace}
+        onApprovePlan={handleApprovePlan}
+        onRetryFrom={handleRetryFrom}
         events={events}
         model={session.context?.model}
         systemBlock={summaryData.summary.length || summaryData.testing.length ? {
@@ -121,14 +197,55 @@ export function SessionDetailView({
           }
         } : undefined} />
 
-      <InputBar mode="detail" sessionContext={session.context} onSubmit={async (query, newContext, mode, attachments) => {
-        const mergedContext = { ...session.context, ...newContext };
-        await send(query, mergedContext, mode, attachments);
-        resume();
-      }} onStop={async () => {
-        await stop();
-        resume();
-      }} isRunning={running} isSubmitting={submitting} error={queryError} />
+      {lastRecoverableFailure && (
+        <div className="px-6 py-3 border-t border-[hsl(var(--border))]">
+          <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-red-500">
+                  {lastRecoverableFailure.reason === "error"
+                    ? "Run failed"
+                    : "Task interrupted — step limit reached"}
+                </p>
+                {lastRecoverableFailure.error && (
+                  <p className="mt-1 text-xs font-mono text-red-500/80 break-words">
+                    {lastRecoverableFailure.error}
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button
+                  onClick={() => triggerRecover("retry")}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"
+                  title="Re-run the last user query"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  Retry
+                </button>
+                <button
+                  onClick={() => triggerRecover("continue")}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
+                  title="Resume the session and let the agent recover"
+                >
+                  <Play className="w-3 h-3" />
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="relative z-10">
+        <InputBar mode="detail" sessionContext={session.context} onSubmit={async (query, newContext, mode, attachments) => {
+          const mergedContext = { ...session.context, ...newContext };
+          await send(query, mergedContext, mode, attachments);
+          resume();
+        }} onStop={async () => {
+          await stop();
+          resume();
+        }} isRunning={running} isSubmitting={submitting} error={queryError} />
+      </div>
     </>
   );
 
@@ -139,7 +256,8 @@ export function SessionDetailView({
     events: selectedTurn ? selectedTurn.events : events,
     diffContent: selectedFile?.diff,
     filename: selectedFile?.path || selectedFile?.name,
-    onContinue: !running ? async () => { await send("Continue the task from where you left off.", session.context ?? {}, undefined, []); resume(); } : undefined,
+    onRetry: !running ? () => triggerRecover("retry") : undefined,
+    onContinue: !running ? () => triggerRecover("continue") : undefined,
   };
 
   if (isWorkspaceOpen && effectiveMaximized) {

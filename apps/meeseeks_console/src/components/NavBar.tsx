@@ -15,11 +15,12 @@ import {
 import { NotificationItem, SessionSummary } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { formatSessionTime } from '../utils/time';
-import { formatModelName } from '../utils/model';
+import { ModelLabel } from './ModelLabel';
 import { NotificationPanel } from './NotificationPanel';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { cn } from '../utils/cn';
 import { LangfuseIcon } from './LangfuseIcon';
+import { EditableTitle } from './EditableTitle';
 export interface NavBarProps {
   mode: 'home' | 'detail';
   session?: SessionSummary;
@@ -31,6 +32,8 @@ export interface NavBarProps {
   onClearNotifications?: () => void;
   onArchiveSession?: (sessionId: string) => void;
   onUnarchiveSession?: (sessionId: string) => void;
+  onUpdateSessionTitle?: (sessionId: string, title: string) => Promise<void>;
+  onRegenerateTitle?: (sessionId: string) => Promise<string>;
   onShareSession?: (sessionId: string) => void;
   onExportSession?: (sessionId: string) => void;
   onSettingsClick?: () => void;
@@ -48,6 +51,8 @@ export function NavBar({
   onClearNotifications,
   onArchiveSession,
   onUnarchiveSession,
+  onUpdateSessionTitle,
+  onRegenerateTitle,
   onShareSession,
   onExportSession,
   onSettingsClick,
@@ -232,7 +237,11 @@ export function NavBar({
     <header className="sticky top-0 z-50 w-full h-12 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]/95 backdrop-blur flex items-center justify-between px-4">
       {mode === 'home' ?
       <>
-          <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Go to home"
+            className="flex items-center gap-2 rounded px-1 -mx-1 py-0.5 hover:opacity-70 transition-opacity">
             <div className="w-5 h-5 rounded-full border border-[hsl(var(--border))] flex items-center justify-center">
               <div className="w-2.5 h-2.5 rounded-full bg-[hsl(var(--foreground))]" />
             </div>
@@ -240,7 +249,7 @@ export function NavBar({
               Meeseeks
             </span>
             <VersionBadge />
-          </div>
+          </button>
 
           <div className="flex items-center gap-1.5">
             <button
@@ -276,10 +285,18 @@ export function NavBar({
               <ArrowLeft className="w-4 h-4" />
             </button>
 
-            <div className="flex flex-col min-w-0">
-              <h2 className="text-sm font-medium text-[hsl(var(--foreground))] truncate">
-                {session?.title}
-              </h2>
+            <div className="group flex flex-col min-w-0 flex-1">
+              {onUpdateSessionTitle && session?.session_id ?
+                <EditableTitle
+                  value={session?.title ?? ''}
+                  onSave={(next) => onUpdateSessionTitle(session.session_id, next)}
+                  onRegenerate={onRegenerateTitle ? () => onRegenerateTitle(session.session_id) : undefined}
+                  className="text-sm font-medium text-[hsl(var(--foreground))]" /> :
+
+                <h2 className="text-sm font-medium text-[hsl(var(--foreground))] truncate">
+                  {session?.title}
+                </h2>
+              }
               <span className="text-xs text-[hsl(var(--muted-foreground))] hidden md:block">
                 {formatSessionTime(session?.created_at)}
               </span>
@@ -290,11 +307,10 @@ export function NavBar({
             doneReason={session?.done_reason}
             compact={isMobile} />
 
-            {session?.context?.model &&
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono leading-none bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border border-[hsl(var(--border))] shrink-0 hidden lg:inline-flex">
-                {formatModelName(session.context.model)}
-              </span>
-            }
+            <ModelLabel
+              modelId={session?.context?.model}
+              className="hidden lg:inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono leading-none bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border border-[hsl(var(--border))] shrink-0" />
+
           </div>
 
           {/* Right group: actions — shrink-0, responsive visibility */}

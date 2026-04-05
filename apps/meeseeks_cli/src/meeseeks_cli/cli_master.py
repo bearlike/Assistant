@@ -159,17 +159,13 @@ def _resolve_display_model(model_name: str | None) -> str:
 
 
 def _resolve_query_mode(query: str, state: CliState) -> str:
-    lowered = query.strip().lower()
-    plan_triggers = [
-        "make a plan",
-        "create a plan",
-        "draft a plan",
-        "plan the",
-        "plan for",
-        "planning",
-    ]
-    if any(trigger in lowered for trigger in plan_triggers):
-        return "plan"
+    """Resolve the orchestration mode from explicit CLI state.
+
+    Keyword heuristics were removed — users opt into plan mode via
+    ``/mode plan``. The ``query`` parameter is retained for API stability
+    but deliberately unused.
+    """
+    del query  # Intentionally unused — mode is driven only by state.mode.
     return state.mode if state.mode in {"plan", "act"} else "act"
 
 
@@ -403,10 +399,14 @@ def run_cli(args: argparse.Namespace) -> int:
     store = create_session_store(root_dir=args.session_dir)
     runtime = SessionRuntime(session_store=store)
     session_id = _resolve_session_id(runtime, args.session, args.tag, args.fork)
+    fallback_models = (
+        tuple(args.fallback_models.split(",")) if args.fallback_models else None
+    )
     state = CliState(
         session_id=session_id,
         show_plan=args.show_plan,
         model_name=args.model,
+        fallback_models=fallback_models,
         auto_approve_all=args.auto_approve,
     )
     tool_registry = load_registry()
@@ -560,37 +560,7 @@ def _run_query(
     initial_plan = None
     mode = _resolve_query_mode(query, state)
 
-    # In plan mode with interactive prompt, allow plan iteration.
-    if mode == "plan" and prompt_func is not None:
-        plan = generate_action_plan(
-            user_query=query,
-            model_name=state.model_name,
-            session_summary=store.load_summary(state.session_id),
-            mode="plan",
-        )
-        _render_plan_with_registry(console, plan)
-        state.last_plan = plan
-        while True:
-            choice = (prompt_func("[E]xecute  [R]evise  [D]one > ") or "d").strip().lower()
-            if choice.startswith("e"):
-                initial_plan = plan
-                mode = "act"
-                break
-            elif choice.startswith("r"):
-                feedback = prompt_func("Feedback > ")
-                plan = generate_action_plan(
-                    user_query=query,
-                    model_name=state.model_name,
-                    session_summary=store.load_summary(state.session_id),
-                    mode="plan",
-                    feedback=feedback,
-                )
-                _render_plan_with_registry(console, plan)
-                state.last_plan = plan
-            else:
-                console.print("Plan saved.", style="dim")
-                return
-    elif state.show_plan and mode != "plan":
+    if state.show_plan and mode != "plan":
         initial_plan = generate_action_plan(
             user_query=query,
             model_name=state.model_name,
@@ -640,6 +610,7 @@ def _run_query(
                 task_queue = runtime.run_sync(
                     user_query=query,
                     model_name=state.model_name,
+                    fallback_models=state.fallback_models,
                     max_iters=args.max_iters,
                     initial_plan=initial_plan,
                     session_id=state.session_id,
@@ -655,6 +626,7 @@ def _run_query(
         task_queue = runtime.run_sync(
             user_query=query,
             model_name=state.model_name,
+            fallback_models=state.fallback_models,
             max_iters=args.max_iters,
             initial_plan=initial_plan,
             session_id=state.session_id,
@@ -665,6 +637,64 @@ def _run_query(
             skill_instructions=skill_instructions,
             session_step_budget=budget,
         )
+
+    # Handle episodic plan approval — the run terminated because the model
+    # proposed a plan and is waiting for user approval/rejection.
+    _pending, _revision, _plan_path = runtime._has_pending_plan_proposal(
+        state.session_id,
+    )
+    if _pending and mode == "plan":
+        # Render the proposed plan from the plan file.
+        try:
+            with open(_plan_path, encoding="utf-8") as _pf:
+                _plan_content = _pf.read()
+        except OSError:
+            _plan_content = "(could not read plan file)"
+        console.print(
+            Panel(
+                render_markdown(_plan_content),
+                title=f":clipboard: Proposed Plan (revision {_revision})",
+                border_style="cyan",
+            )
+        )
+        if prompt_func is not None:
+            _choice = (
+                prompt_func("[A]pprove  [R]eject  > ") or "r"
+            ).strip().lower()
+            _approved = _choice.startswith("a") or _choice in {"y", "yes"}
+        else:
+            # Non-interactive (--query mode): auto-reject, user cannot interact.
+            _approved = False
+
+        if _approved:
+            runtime.approve_plan(state.session_id)
+            console.print(":white_check_mark: Plan approved.", style="green")
+            state.mode = "act"
+            # Start a follow-up act-mode run to execute the approved plan.
+            task_queue = runtime.run_sync(
+                user_query=(
+                    "[system] The user approved your plan. Proceed with "
+                    "implementation using the full toolset."
+                ),
+                session_id=state.session_id,
+                model_name=state.model_name,
+                fallback_models=state.fallback_models,
+                max_iters=args.max_iters,
+                tool_registry=tool_registry,
+                approval_callback=approval_callback,
+                hook_manager=hook_manager,
+                mode="act",
+                skill_instructions=skill_instructions,
+                session_step_budget=budget,
+            )
+        else:
+            runtime.reject_plan(state.session_id)
+            console.print(
+                ":pencil: Plan rejected. Type your refinement guidance "
+                "at the next prompt and I will revise.",
+                style="yellow",
+            )
+            return  # Return to REPL input
 
     _render_results_with_registry(
         console,
@@ -681,6 +711,43 @@ def _run_query(
                 border_style="bold green",
             )
         )
+
+    # Surface recovery hint when the run ended in a recoverable failure so
+    # users can type ``/retry`` or ``/continue`` at the next prompt.
+    _maybe_print_recovery_hint(console, store, state.session_id)
+
+
+def _maybe_print_recovery_hint(
+    console: Console, store: SessionStoreBase, session_id: str
+) -> None:
+    """Inspect the last completion event; print ``/retry`` / ``/continue`` hint."""
+    transcript = store.load_transcript(session_id)
+    for event in reversed(transcript):
+        if event.get("type") != "completion":
+            continue
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            return
+        reason = str(payload.get("done_reason") or "").lower()
+        if reason not in ("error", "max_steps_reached"):
+            return
+        label = (
+            "Run failed"
+            if reason == "error"
+            else "Task interrupted — step limit reached"
+        )
+        error_text = payload.get("error") or payload.get("last_error") or ""
+        detail = f"\n  {error_text}" if error_text else ""
+        console.print(
+            Panel(
+                f"{label}.{detail}\n\n"
+                "Type /retry to re-run your last query, or /continue to "
+                "let the agent recover from where it left off.",
+                title="Recovery",
+                border_style="red",
+            )
+        )
+        return
 
 
 def _maybe_warn_missing_configs(
@@ -752,6 +819,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Meeseeks terminal CLI")
     parser.add_argument("--query", help="Run a single query and exit")
     parser.add_argument("--model", help="Override model name")
+    parser.add_argument(
+        "--fallback-models",
+        help="Comma-separated fallback model IDs (e.g. gpt-5.4,gemini-2.5-pro)",
+    )
     parser.add_argument("--max-iters", type=int, default=3)
     parser.add_argument("--show-plan", action="store_true", default=True)
     parser.add_argument("--no-plan", action="store_false", dest="show_plan")

@@ -27,8 +27,14 @@ Scope: this file applies to the `apps/meeseeks_api/` package. It captures runtim
   - `GET /api/notifications` list notifications
   - `POST /api/notifications/dismiss` dismiss notifications
   - `POST /api/notifications/clear` clear notifications
-- Auth: requires `X-API-KEY` header. Token defaults to `api.master_token` from `configs/app.json` (default: `msk-strong-password`). Also accepts `api_key` query parameter for SSE endpoints (EventSource does not support custom headers).
+- Channel webhook endpoints (HMAC auth, not API key):
+  - `POST /api/webhooks/<platform>` receive inbound message from a chat platform (e.g. `nextcloud-talk`). Delegates to the appropriate `ChannelAdapter` for verification and parsing. Creates/continues sessions using existing session tags.
+- Auth: requires `X-API-KEY` header (except webhook endpoints which use platform-specific HMAC verification). Token defaults to `api.master_token` from `configs/app.json` (default: `msk-strong-password`). Also accepts `api_key` query parameter for SSE endpoints (EventSource does not support custom headers).
 - CORS: `after_request` hook sets `Access-Control-Allow-Origin: *` for cross-origin console access.
+- Hooks: `HookManager.load_from_config(_config.hooks)` at startup; `hook_manager` passed to all `start_async()` call sites. Supports `type: "command"` and `type: "http"` hooks.
+- Channel adapters: `init_channels(app, runtime, _hook_manager, _config)` registers the webhook Blueprint and instantiates adapters from `config.channels`. Completion callback appended to `hook_manager.on_session_end`. Channel sessions are standard sessions (MongoDB-backed, visible in console). Session tags: `nextcloud-talk:room:<token>`, `email:thread:<channel_id>:<root-msg-id>`. Shared `_process_inbound()` pipeline used by both webhook endpoint and email IMAP poller. Email adapter: `EmailAdapter` (IMAP parse, SMTP send, markdown→HTML via mistune) + `EmailPoller` (daemon thread, configurable `poll_interval_seconds`). Email access control: `allowed_senders` allowlist + `@Meeseeks` mention required in multi-party threads, no mention for 1-to-1.
+- Channel slash commands: decorator-based `@command` registry in `channels/routes.py`. `/help`, `/usage`, `/new`, `/switch-project <name>`. Adding a command = one decorator + one function; `/help` auto-generates from the registry. Commands run without LLM invocation.
+- Client-aware system prompt: each `ChannelAdapter` provides a `system_context` property (brief string) injected via `skill_instructions` parameter to `start_async`. The LLM knows which chat interface the conversation flows through.
 - Orchestration: uses `meeseeks_core.session_runtime.SessionRuntime` to run sync/async sessions. Passes `allowed_tools` from `context.mcp_tools` to scope tool binding per query.
 - Core commands: `/compact`, `/status`, `/terminate` (shared runtime).
 - Sessions: supports `session_id`, `session_tag`, and `fork_from` (tag or id). Tags are resolved via `SessionStore`.
@@ -37,7 +43,8 @@ Scope: this file applies to the `apps/meeseeks_api/` package. It captures runtim
 ## Hidden dependencies / assumptions
 - Uses core logging (`meeseeks_core.common.get_logger`); log level controlled by `runtime.log_level`.
 - Relies on core LLM config (`llm.api_base`, `llm.api_key`, `llm.default_model`, `llm.action_plan_model`).
-- No rate limiting or auth hardening beyond the header token.
+- No rate limiting or auth hardening beyond the header token (webhook endpoints use HMAC instead).
+- Channel system module-level globals (`_runtime`, `_hook_manager`, `_registry`, `_dedup`) in `channels/routes.py` are set by `init_channels()` at startup.
 
 ## Pitfalls / gotchas
 - `api.master_token` default is insecure; production should override it in `configs/app.json`.

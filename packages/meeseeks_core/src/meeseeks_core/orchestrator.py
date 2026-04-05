@@ -15,6 +15,7 @@ from meeseeks_core.compaction import should_compact, summarize_events
 from meeseeks_core.components import langfuse_session_context
 from meeseeks_core.config import get_config_value
 from meeseeks_core.context import ContextBuilder
+from meeseeks_core.exit_plan_mode import ensure_plan_dir, plan_file_for
 from meeseeks_core.hooks import HookManager, default_hook_manager
 from meeseeks_core.hypervisor import AgentHypervisor
 from meeseeks_core.permissions import (
@@ -31,6 +32,34 @@ from meeseeks_core.tool_use_loop import ToolUseLoop
 
 logging = get_logger(name="core.orchestrator")
 
+# Longest error blurb to embed in a synthetic closure event. Keeps the
+# transcript readable and the downstream ``recent_events`` bullet from
+# ballooning the system prompt.
+_CLOSURE_ERROR_MAX_LEN = 500
+
+
+def _format_assistant_closure(
+    done_reason: str | None, last_error: str | None
+) -> str:
+    """Return a short human-readable closure marker for a terminal run.
+
+    Emitted when a run ends without a real ``task_result`` so every user
+    turn has exactly one materialised assistant event in the transcript.
+    Frontend ``buildTimeline`` relies on this to finalise turn metadata,
+    and the LLM's ``recent_events`` bullet list gains a narrative
+    closure for recovery runs.
+    """
+    if done_reason == "error":
+        err = (last_error or "unknown error").strip()
+        if len(err) > _CLOSURE_ERROR_MAX_LEN:
+            err = err[:_CLOSURE_ERROR_MAX_LEN] + "…"
+        return f"(Run interrupted by error: {err})"
+    if done_reason == "max_steps_reached":
+        return "(Run stopped: step limit reached before final answer)"
+    if done_reason == "canceled":
+        return "(Run canceled by user)"
+    return f"(Run ended: {done_reason or 'unknown'})"
+
 
 class Orchestrator:
     """Unified tool-use orchestration loop."""
@@ -39,6 +68,7 @@ class Orchestrator:
         self,
         *,
         model_name: str | None = None,
+        fallback_models: tuple[str, ...] | None = None,
         session_store: SessionStoreBase | None = None,
         tool_registry: ToolRegistry | None = None,
         permission_policy: PermissionPolicy | None = None,
@@ -54,6 +84,9 @@ class Orchestrator:
             model_name
             or get_config_value("llm", "action_plan_model")
             or get_config_value("llm", "default_model", default="gpt-5.2")
+        )
+        self._fallback_models = fallback_models if fallback_models is not None else tuple(
+            get_config_value("llm", "fallback_models", default=[]) or []
         )
         self._session_store = session_store or create_session_store()
         self._tool_registry = tool_registry or load_registry(cwd=cwd)
@@ -118,7 +151,7 @@ class Orchestrator:
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration with Langfuse session context set."""
         state = OrchestrationState(goal=user_query, session_id=session_id)
-        resolved_mode = self._resolve_mode(user_query, mode)
+        resolved_mode = self._resolve_mode(mode)
         state.summary = self._session_store.load_summary(session_id)
         state.tool_results = state.tool_results or []
         state.open_questions = state.open_questions or []
@@ -130,7 +163,6 @@ class Orchestrator:
             self._session_store.append_event(
                 session_id, {"type": "user", "payload": {"text": user_query}}
             )
-
             if self._should_update_summary(user_query):
                 state.summary = self._update_summary_with_memory(
                     session_id,
@@ -155,7 +187,11 @@ class Orchestrator:
                 user_query=user_query,
                 model_name=self._model_name,
             )
-            tool_specs = self._tool_registry.list_specs_for_mode(resolved_mode)
+            # Always pass the FULL tool spec set to the loop; plan-mode
+            # filtering (read-only + configured edit tool + exit_plan_mode)
+            # happens inside ``ToolUseLoop._bind_model`` so tools can be
+            # re-bound after plan approval without reconstructing specs.
+            tool_specs = self._tool_registry.list_specs()
             if allowed_tools:
                 # allowed_tools from frontend scopes MCP tools; built-in tools must stay.
                 builtin_ids = [s.tool_id for s in tool_specs if s.kind != "mcp"]
@@ -170,74 +206,84 @@ class Orchestrator:
                 if _ts is not None:
                     tool_specs = _ts
 
+            # Unified path: always enter the tool-use loop. Plan mode is
+            # enforced inside the loop via tool filtering + path-scoped
+            # permission checks + the ``exit_plan_mode`` approval gate.
             if resolved_mode == "plan":
-                # Plan-only mode: generate plan, return without executing.
-                plan = initial_plan or self._planner.generate(
-                    user_query,
-                    self._model_name,
-                    context=context,
-                    tool_specs=self._tool_registry.list_specs(),
-                    mode="plan",
-                    project_instructions=self._project_instructions,
-                )
-                state.plan = plan.steps
-                state.done = True
-                state.done_reason = "planned"
-                self._append_action_plan(session_id, plan.steps)
-                task_queue = TaskQueue(plan_steps=plan.steps, action_steps=[])
-            else:
-                # Act mode: run the async tool-use loop via the agent hypervisor.
-                max_depth = int(get_config_value("agent", "max_depth", default=5))
-                max_concurrent = int(get_config_value("agent", "max_concurrent", default=20))
-                registry = AgentHypervisor(
-                    max_concurrent=max_concurrent,
-                    session_step_budget=self._session_step_budget,
-                )
-                root_ctx = AgentContext.root(
-                    model_name=self._model_name,
-                    max_depth=max_depth,
-                    should_cancel=should_cancel,
-                    event_logger=lambda event: self._session_store.append_event(session_id, event),
-                    registry=registry,
-                    message_queue=message_queue,
-                    interrupt_step=interrupt_step,
-                )
-                loop = ToolUseLoop(
-                    agent_context=root_ctx,
-                    tool_registry=self._tool_registry,
-                    permission_policy=self._permission_policy,
-                    approval_callback=self._approval_callback,
-                    hook_manager=self._hook_manager,
-                    project_instructions=self._project_instructions,
-                    skill_instructions=skill_instructions,
-                    skill_registry=self._skill_registry,
-                    cwd=self._cwd,
-                )
-                max_steps = max(1, max_iters) * 3
-                try:
-                    task_queue, state = asyncio.run(
-                        loop.run(
-                            user_query,
-                            tool_specs=tool_specs,
-                            context=context,
-                            max_steps=max_steps,
-                            plan=initial_plan,
-                        )
-                    )
-                finally:
-                    # Belt-and-suspenders: ensure all agents cleaned up.
-                    try:
-                        asyncio.run(registry.cleanup(timeout=5.0))
-                    except Exception:
-                        pass
-                state.session_id = session_id
+                # Ensure the session's scoped plan directory exists before
+                # the model starts so the edit tool can write to plan.md.
+                ensure_plan_dir(session_id)
+                state.plan_path = plan_file_for(session_id)
 
-            # Emit assistant response event.
-            if task_queue.task_result and resolved_mode != "plan":
+            max_depth = int(get_config_value("agent", "max_depth", default=5))
+            max_concurrent = int(get_config_value("agent", "max_concurrent", default=20))
+            registry = AgentHypervisor(
+                max_concurrent=max_concurrent,
+                session_step_budget=self._session_step_budget,
+            )
+            root_ctx = AgentContext.root(
+                model_name=self._model_name,
+                max_depth=max_depth,
+                fallback_models=self._fallback_models,
+                should_cancel=should_cancel,
+                event_logger=lambda event: self._session_store.append_event(session_id, event),
+                registry=registry,
+                message_queue=message_queue,
+                interrupt_step=interrupt_step,
+            )
+            loop = ToolUseLoop(
+                agent_context=root_ctx,
+                tool_registry=self._tool_registry,
+                permission_policy=self._permission_policy,
+                approval_callback=self._approval_callback,
+                hook_manager=self._hook_manager,
+                project_instructions=self._project_instructions,
+                skill_instructions=skill_instructions,
+                skill_registry=self._skill_registry,
+                cwd=self._cwd,
+                session_id=session_id,
+            )
+            try:
+                task_queue, state = asyncio.run(
+                    loop.run(
+                        user_query,
+                        tool_specs=tool_specs,
+                        context=context,
+                        plan=initial_plan,
+                        mode=resolved_mode,
+                    )
+                )
+            finally:
+                # Belt-and-suspenders: ensure all agents cleaned up.
+                try:
+                    asyncio.run(registry.cleanup(timeout=5.0))
+                except Exception:
+                    pass
+            state.session_id = session_id
+            if resolved_mode == "plan":
+                state.plan_path = plan_file_for(session_id)
+
+            # Emit assistant response event. Every user turn must have
+            # exactly one materialised assistant event in the transcript
+            # — if ``task_result`` is empty (e.g. ``max_steps_reached``
+            # with no synthesis), write a synthetic closure marker so the
+            # UI timeline finalises the turn and the LLM's
+            # ``recent_events`` gains narrative closure.
+            if task_queue.task_result:
                 self._session_store.append_event(
                     session_id,
                     {"type": "assistant", "payload": {"text": task_queue.task_result}},
                 )
+            else:
+                closure = _format_assistant_closure(
+                    state.done_reason, task_queue.last_error
+                )
+                self._session_store.append_event(
+                    session_id,
+                    {"type": "assistant", "payload": {"text": closure}},
+                )
+
+            self._maybe_generate_title(session_id)
 
             if not state.done:  # pragma: no cover - defensive guard
                 state.done = True
@@ -269,6 +315,20 @@ class Orchestrator:
             task_queue.last_error = str(exc)
             state.done = True
             state.done_reason = "error"
+            # Closure marker so the failed turn is always materialised in
+            # the UI timeline and the LLM's ``recent_events`` carries
+            # narrative closure into the next recovery run.
+            self._session_store.append_event(
+                session_id,
+                {
+                    "type": "assistant",
+                    "payload": {
+                        "text": _format_assistant_closure(
+                            state.done_reason, str(exc)
+                        )
+                    },
+                },
+            )
             self._session_store.append_event(
                 session_id,
                 {
@@ -289,6 +349,42 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Session helpers (kept from original)
     # ------------------------------------------------------------------
+
+    def _maybe_generate_title(self, session_id: str) -> None:
+        """Kick off title generation in a daemon thread (non-blocking).
+
+        Runs only once per session (guarded by ``load_title`` absence). The
+        caller returns immediately; the title appears via a ``title_update``
+        event whenever the LLM call finishes. Failures are logged, never
+        raised — the first-user-message fallback remains as safety net.
+        """
+        if self._session_store.load_title(session_id) is not None:
+            return
+        threading.Thread(
+            target=self._run_title_generation,
+            args=(session_id,),
+            name=f"title-gen-{session_id[:8]}",
+            daemon=True,
+        ).start()
+
+    def _run_title_generation(self, session_id: str) -> None:
+        """Worker body for background title generation."""
+        try:
+            from meeseeks_core.title_generator import generate_session_title
+
+            events = self._session_store.load_transcript(session_id)
+            title = asyncio.run(generate_session_title(events))
+            if not title:
+                return
+            self._session_store.save_title(session_id, title)
+            self._session_store.append_event(
+                session_id,
+                {"type": "title_update", "payload": {"title": title}},
+            )
+        except Exception as exc:
+            logging.warning(
+                "Title generation failed: {}: {}", type(exc).__name__, exc
+            )
 
     def _maybe_auto_compact(self, session_id: str) -> str | None:
         events = self._session_store.load_transcript(session_id)
@@ -380,20 +476,16 @@ class Orchestrator:
         return instructions, scoped_specs
 
     @staticmethod
-    def _resolve_mode(user_query: str, mode: str | None) -> str:
+    def _resolve_mode(mode: str | None) -> str:
+        """Resolve the orchestration mode.
+
+        Only the explicit ``mode`` parameter is honoured — keyword heuristics
+        on the user query have been removed because they produced fragile,
+        surprising behaviour (accidentally entering plan mode on innocent
+        phrasing). Clients must pass ``mode="plan"`` explicitly to opt in.
+        """
         if mode in {"plan", "act"}:
             return mode
-        lowered = user_query.strip().lower()
-        plan_triggers = [
-            "make a plan",
-            "create a plan",
-            "draft a plan",
-            "plan the",
-            "plan for",
-            "planning",
-        ]
-        if any(trigger in lowered for trigger in plan_triggers):
-            return "plan"
         return "act"
 
 

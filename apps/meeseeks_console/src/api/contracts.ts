@@ -70,6 +70,11 @@ export type ApiClient = {
   ) => Promise<{ events: EventRecord[]; running: boolean }>;
   archiveSession: (sessionId: string) => Promise<void>;
   unarchiveSession: (sessionId: string) => Promise<void>;
+  updateSessionTitle: (
+    sessionId: string,
+    title: string
+  ) => Promise<{ session_id: string; title: string }>;
+  regenerateTitle: (sessionId: string) => Promise<{ session_id: string; title: string }>;
   uploadAttachments: (
     sessionId: string,
     files: File[]
@@ -79,6 +84,13 @@ export type ApiClient = {
   resolveShare: (token: string) => Promise<SessionExport>;
   sendMessage: (sessionId: string, text: string) => Promise<void>;
   interruptStep: (sessionId: string) => Promise<void>;
+  approvePlan: (sessionId: string, approved: boolean) => Promise<void>;
+  recoverSession: (
+    sessionId: string,
+    action: "retry" | "continue",
+    fromTs?: string
+  ) => Promise<void>;
+  fetchPlanMarkdown: (sessionId: string) => Promise<string>;
   listTools: (project?: string) => Promise<ToolSummary[]>;
   listSkills: (project?: string) => Promise<SkillSummary[]>;
   streamEvents: (

@@ -161,6 +161,53 @@ def _cmd_terminate(context: CommandContext, args: list[str]) -> bool:
     return True
 
 
+def _run_recovery(context: CommandContext, action: str) -> bool:
+    """Shared implementation for ``/retry`` and ``/continue``.
+
+    Resolves the recovery query text via :meth:`SessionRuntime.resolve_recovery_query`
+    (which also appends the ``recovery`` audit event), then runs the
+    resolved query synchronously through ``run_sync`` — the same path
+    used by ``/compact``.
+    """
+    try:
+        query = context.runtime.resolve_recovery_query(
+            context.state.session_id, action
+        )
+    except (ValueError, RuntimeError) as exc:
+        context.console.print(f"Cannot {action}: {exc}", style="yellow")
+        return True
+    label = "Retrying last query" if action == "retry" else "Continuing"
+    context.console.print(f"{label}...", style="cyan")
+    task_queue = context.runtime.run_sync(
+        user_query=query,
+        session_id=context.state.session_id,
+        model_name=context.state.model_name,
+        tool_registry=context.tool_registry,
+        mode=context.state.mode,
+    )
+    if task_queue.task_result:
+        context.console.print(Panel(task_queue.task_result, title="Response"))
+    elif task_queue.last_error:
+        context.console.print(
+            f"{action.title()} failed: {task_queue.last_error}", style="red"
+        )
+    return True
+
+
+@REGISTRY.command("/retry", "Re-run the last user query after a failed run")
+def _cmd_retry(context: CommandContext, args: list[str]) -> bool:
+    del args
+    return _run_recovery(context, "retry")
+
+
+@REGISTRY.command(
+    "/continue", "Resume after a failed run with a recovery prompt"
+)
+def _cmd_continue(context: CommandContext, args: list[str]) -> bool:
+    del args
+    return _run_recovery(context, "continue")
+
+
 @REGISTRY.command("/tag", "Tag this session: /tag NAME")
 def _cmd_tag(context: CommandContext, args: list[str]) -> bool:
     if not args:

@@ -99,15 +99,24 @@ def test_mcp_discovery_schema_and_runtime_failure(monkeypatch, tmp_path):
     class SchemaModelJson:
         def model_json_schema(self):
             return {
-                "required": "bad",
-                "properties": {"query": "bad"},
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "repo": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}},
+                        ],
+                    },
+                },
             }
 
     class SchemaLegacy:
         def schema(self):
             return {
                 "required": ["query"],
-                "properties": "bad",
+                "properties": {"query": {"type": "string"}},
             }
 
     class SchemaNonDict:
@@ -170,7 +179,11 @@ def test_mcp_discovery_schema_and_runtime_failure(monkeypatch, tmp_path):
         }
     )
     schema = discovered["good"][0]["schema"]
-    assert schema["required"] == []
+    # Verify that the full JSON Schema is preserved — type: "object" and
+    # anyOf must survive for OpenAI-compatible providers.
+    assert schema["type"] == "object"
+    assert schema["required"] == ["query"]
+    assert "anyOf" in schema["properties"]["repo"]
     assert "bad" in failures
 
     runner = MCPToolRunner(server_name="good", tool_name="tool_a")

@@ -76,6 +76,67 @@ def test_build_chat_model_passes_api_key(monkeypatch):
     assert captured["api_key"] == "key"
 
 
+def test_build_chat_model_defaults_api_base_and_key_from_config(monkeypatch):
+    """Resolve llm.api_base and llm.api_key from config when caller omits them."""
+    set_config_override(
+        {
+            "llm": {
+                "api_base": "https://proxy.example/v1",
+                "api_key": "sk-from-config",
+                "reasoning_effort": "",
+                "reasoning_effort_models": [],
+            }
+        }
+    )
+    captured: dict[str, object] = {}
+
+    class DummyChatLiteLLM:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    module = types.ModuleType("langchain_litellm")
+    module.ChatLiteLLM = DummyChatLiteLLM
+    monkeypatch.setitem(sys.modules, "langchain_litellm", module)
+
+    build_chat_model(model_name="gpt-4o")
+    # Config-resolved values are used when caller passes nothing.
+    assert captured["api_base"] == "https://proxy.example/v1"
+    assert captured["api_key"] == "sk-from-config"
+    # And the model is prefixed because api_base is set.
+    assert captured["model"] == "openai/gpt-4o"
+
+
+def test_build_chat_model_explicit_kwargs_override_config(monkeypatch):
+    """Explicit kwargs win over config-resolved defaults."""
+    set_config_override(
+        {
+            "llm": {
+                "api_base": "https://should-be-ignored.example/v1",
+                "api_key": "sk-should-be-ignored",
+                "reasoning_effort": "",
+                "reasoning_effort_models": [],
+            }
+        }
+    )
+    captured: dict[str, object] = {}
+
+    class DummyChatLiteLLM:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    module = types.ModuleType("langchain_litellm")
+    module.ChatLiteLLM = DummyChatLiteLLM
+    monkeypatch.setitem(sys.modules, "langchain_litellm", module)
+
+    build_chat_model(
+        model_name="gpt-4o",
+        openai_api_base="https://override.example/v1",
+        api_key="sk-override",
+    )
+    assert captured["api_base"] == "https://override.example/v1"
+    assert captured["api_key"] == "sk-override"
+
+
 def test_parse_model_list_config_list():
     """Parse model allowlists from list values."""
     assert llm_module._normalize_model_list(["Foo", "bar"]) == [

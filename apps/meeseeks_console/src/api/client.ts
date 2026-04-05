@@ -18,6 +18,7 @@ import {
   mockFetchEvents,
   mockArchiveSession,
   mockUnarchiveSession,
+  mockUpdateSessionTitle,
   mockUploadAttachments,
   mockCreateShare,
   mockExportSession,
@@ -49,12 +50,17 @@ const mockClient: ApiClient = {
   fetchEvents: mockFetchEvents,
   archiveSession: mockArchiveSession,
   unarchiveSession: mockUnarchiveSession,
+  updateSessionTitle: mockUpdateSessionTitle,
+  regenerateTitle: async (sessionId: string) => ({ session_id: sessionId, title: "AI Generated Title" }),
   uploadAttachments: mockUploadAttachments,
   createShare: mockCreateShare,
   exportSession: mockExportSession,
   resolveShare: mockResolveShare,
   sendMessage: async () => { /* no-op mock */ },
   interruptStep: async () => { /* no-op mock */ },
+  approvePlan: async () => { /* no-op mock */ },
+  recoverSession: async (_s?: string, _a?: string, _t?: string) => { /* no-op mock */ },
+  fetchPlanMarkdown: async () => "",
   streamEvents: () => () => { /* no-op mock */ },
   listTools: (_project?: string) => mockListTools(),
   listSkills: (_project?: string) => mockListSkills(),
@@ -215,6 +221,29 @@ export async function unarchiveSession(sessionId: string): Promise<void> {
   );
 }
 
+export async function updateSessionTitle(
+sessionId: string,
+title: string)
+: Promise<{session_id: string;title: string;}> {
+  const result = await withFallback(
+    () => realClient.updateSessionTitle(sessionId, title),
+    () => mockClient.updateSessionTitle(sessionId, title)
+  );
+  invalidateCache('sessions');
+  return result;
+}
+
+export async function regenerateTitle(
+  sessionId: string
+): Promise<{ session_id: string; title: string }> {
+  const result = await withFallback(
+    () => realClient.regenerateTitle(sessionId),
+    () => mockClient.regenerateTitle(sessionId)
+  );
+  invalidateCache('sessions');
+  return result;
+}
+
 export async function uploadAttachments(
 sessionId: string,
 files: File[])
@@ -326,6 +355,31 @@ export async function interruptStep(sessionId: string): Promise<void> {
   return withFallback(
     () => realClient.interruptStep(sessionId),
     () => mockClient.interruptStep(sessionId)
+  );
+}
+
+export async function approvePlan(sessionId: string, approved: boolean): Promise<void> {
+  return withFallback(
+    () => realClient.approvePlan(sessionId, approved),
+    () => mockClient.approvePlan(sessionId, approved)
+  );
+}
+
+export async function recoverSession(
+  sessionId: string,
+  action: "retry" | "continue",
+  fromTs?: string
+): Promise<void> {
+  return withFallback(
+    () => realClient.recoverSession(sessionId, action, fromTs),
+    () => mockClient.recoverSession(sessionId, action, fromTs)
+  );
+}
+
+export async function fetchPlanMarkdown(sessionId: string): Promise<string> {
+  return withFallback(
+    () => realClient.fetchPlanMarkdown(sessionId),
+    () => mockClient.fetchPlanMarkdown(sessionId)
   );
 }
 

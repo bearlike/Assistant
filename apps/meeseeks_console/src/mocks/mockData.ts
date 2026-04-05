@@ -611,6 +611,18 @@ export async function mockUnarchiveSession(sessionId: string): Promise<void> {
   }
 }
 
+export async function mockUpdateSessionTitle(
+  sessionId: string,
+  title: string
+): Promise<{ session_id: string; title: string }> {
+  await delay(50);
+  const active = sessions.find((s) => s.session_id === sessionId);
+  if (active) active.title = title;
+  const archived = archivedSessions.find((s) => s.session_id === sessionId);
+  if (archived) archived.title = title;
+  return { session_id: sessionId, title };
+}
+
 export async function mockListTools(): Promise<ToolSummary[]> {
   await delay(100);
   return mcpTools;

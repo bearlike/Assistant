@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import fnmatch
+import json
+import os
 import subprocess
+import threading
+import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -154,14 +158,26 @@ class HookManager:
     def load_from_config(cls, hooks_config: HooksConfig) -> HookManager:
         """Create a HookManager with hooks loaded from config."""
         manager = cls()
+        pre_map = {"command": _make_command_hook, "http": _make_http_hook}
+        post_map = {"command": _make_post_tool_hook, "http": _make_http_post_tool_hook}
+        start_map = {"command": _make_session_hook, "http": _make_http_session_hook}
+        end_map = {"command": _make_session_end_hook, "http": _make_http_session_end_hook}
         for entry in hooks_config.pre_tool_use:
-            manager.pre_tool_use.append(_make_command_hook(entry))
+            manager.pre_tool_use.append(
+                pre_map.get(entry.type, _make_command_hook)(entry)
+            )
         for entry in hooks_config.post_tool_use:
-            manager.post_tool_use.append(_make_post_tool_hook(entry))
+            manager.post_tool_use.append(
+                post_map.get(entry.type, _make_post_tool_hook)(entry)
+            )
         for entry in hooks_config.on_session_start:
-            manager.on_session_start.append(_make_session_hook(entry))
+            manager.on_session_start.append(
+                start_map.get(entry.type, _make_session_hook)(entry)
+            )
         for entry in hooks_config.on_session_end:
-            manager.on_session_end.append(_make_session_end_hook(entry))
+            manager.on_session_end.append(
+                end_map.get(entry.type, _make_session_end_hook)(entry)
+            )
         return manager
 
 
@@ -174,13 +190,20 @@ def _matches(matcher: str | None, tool_id: str) -> bool:
 
 def _hook_env(action_step: ActionStep, result_content: str | None = None) -> dict[str, str]:
     """Build env vars to pass to command hooks."""
-    import os
-
     env = dict(os.environ)
     env["MEESEEKS_TOOL_ID"] = action_step.tool_id or ""
     env["MEESEEKS_OPERATION"] = action_step.operation or ""
     if result_content is not None:
         env["MEESEEKS_TOOL_RESULT"] = result_content[:2000]
+    return env
+
+
+def _session_env(session_id: str, error: str | None = None) -> dict[str, str]:
+    """Build env vars for session lifecycle command hooks."""
+    env = dict(os.environ)
+    env["MEESEEKS_SESSION_ID"] = session_id
+    if error is not None:
+        env["MEESEEKS_ERROR"] = error
     return env
 
 
@@ -226,6 +249,7 @@ def _make_session_hook(entry: HookEntry) -> Callable[[str], None]:
             subprocess.run(
                 entry.command, shell=True, timeout=entry.timeout,
                 capture_output=True, text=True,
+                env=_session_env(session_id),
             )
         except (subprocess.TimeoutExpired, OSError):
             logger.warning("Session hook timed out or failed: %s", entry.command)
@@ -239,9 +263,81 @@ def _make_session_end_hook(entry: HookEntry) -> Callable[[str, str | None], None
             subprocess.run(
                 entry.command, shell=True, timeout=entry.timeout,
                 capture_output=True, text=True,
+                env=_session_env(session_id, error),
             )
         except (subprocess.TimeoutExpired, OSError):
             logger.warning("Session end hook timed out or failed: %s", entry.command)
+    return hook
+
+
+# ---------------------------------------------------------------------------
+# HTTP hook factories (fire-and-forget POST to external URLs)
+# ---------------------------------------------------------------------------
+
+def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> None:
+    """POST JSON payload to a URL. Called from a daemon thread."""
+    try:
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            url, data=data, method="POST",
+            headers={"Content-Type": "application/json", **headers},
+        )
+        urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
+    except Exception:
+        logger.warning("HTTP hook POST failed: %s", url, exc_info=True)
+
+
+def _fire_http(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> None:
+    """Launch a daemon thread to POST JSON without blocking."""
+    threading.Thread(target=_post_json, args=(url, payload, headers, timeout), daemon=True).start()
+
+
+def _make_http_hook(entry: HookEntry) -> Callable[[ActionStep], ActionStep]:
+    """Create a pre-tool-use HTTP hook from a config entry."""
+    def hook(action_step: ActionStep) -> ActionStep:
+        if not _matches(entry.matcher, action_step.tool_id):
+            return action_step
+        payload = {"event": "pre_tool_use", "tool_id": action_step.tool_id,
+                   "operation": action_step.operation}
+        _fire_http(entry.url, payload, entry.headers, entry.timeout)
+        return action_step
+    return hook
+
+
+def _make_http_post_tool_hook(
+    entry: HookEntry,
+) -> Callable[[ActionStep, MockSpeaker], MockSpeaker]:
+    """Create a post-tool-use HTTP hook from a config entry."""
+    def hook(action_step: ActionStep, result: MockSpeaker) -> MockSpeaker:
+        if not _matches(entry.matcher, action_step.tool_id):
+            return result
+        content = getattr(result, "content", None)
+        payload: dict[str, Any] = {
+            "event": "post_tool_use", "tool_id": action_step.tool_id,
+            "operation": action_step.operation,
+        }
+        if content is not None:
+            payload["result_preview"] = str(content)[:2000]
+        _fire_http(entry.url, payload, entry.headers, entry.timeout)
+        return result
+    return hook
+
+
+def _make_http_session_hook(entry: HookEntry) -> Callable[[str], None]:
+    """Create a session start HTTP hook from a config entry."""
+    def hook(session_id: str) -> None:
+        _fire_http(entry.url, {"event": "session_start", "session_id": session_id},
+                   entry.headers, entry.timeout)
+    return hook
+
+
+def _make_http_session_end_hook(entry: HookEntry) -> Callable[[str, str | None], None]:
+    """Create a session end HTTP hook from a config entry."""
+    def hook(session_id: str, error: str | None = None) -> None:
+        payload: dict[str, Any] = {"event": "session_end", "session_id": session_id}
+        if error is not None:
+            payload["error"] = error
+        _fire_http(entry.url, payload, entry.headers, entry.timeout)
     return hook
 
 

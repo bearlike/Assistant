@@ -31,6 +31,7 @@ uv run meeseeks-api
 - `POST /api/sessions/{session_id}/share` create share link
 - `POST /api/sessions/{session_id}/export` export session payload
 - `GET /api/share/{token}` fetch shared session data
+- `POST /api/webhooks/<platform>` inbound webhook for chat platform adapters (HMAC auth)
 
 [Link to GitHub Repository](https://github.com/bearlike/Assistant)
 

@@ -410,11 +410,13 @@ class TestSpawnAgentResult:
 class TestSpawnAgentSchema:
     """Ref: [DeepMind-Delegation §4.1] Contract-first decomposition with acceptance criteria."""
 
-    def test_schema_includes_max_steps(self):
+    def test_schema_includes_max_steps_deprecated(self):
+        """max_steps field is retained in schema for backward compatibility."""
         from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
         props = SPAWN_AGENT_SCHEMA["function"]["parameters"]["properties"]
         assert "max_steps" in props
         assert props["max_steps"]["type"] == "integer"
+        assert "deprecated" in props["max_steps"]["description"].lower()
 
     def test_schema_includes_acceptance_criteria(self):
         from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA

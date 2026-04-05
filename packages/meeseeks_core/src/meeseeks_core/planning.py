@@ -170,11 +170,7 @@ class Planner:
             version=get_version(),
             release=get_config_value("runtime", "envmode", default="Not Specified"),
         )
-        model = build_chat_model(
-            model_name=model_name,
-            openai_api_base=get_config_value("llm", "api_base"),
-            api_key=get_config_value("llm", "api_key"),
-        )
+        model = build_chat_model(model_name=model_name)
         parser = PydanticOutputParser(pydantic_object=Plan)
         component_status = self._resolve_component_status()
         if tool_specs is not None:

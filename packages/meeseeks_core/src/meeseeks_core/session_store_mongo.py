@@ -51,8 +51,21 @@ class MongoSessionStore(SessionStoreBase):
         if database is None:
             database = get_config_value("storage", "mongodb", "database", default="meeseeks")
 
-        self._client: MongoClient = MongoClient(uri, maxPoolSize=10, minPoolSize=2)
+        self._client: MongoClient = MongoClient(
+            uri, maxPoolSize=10, minPoolSize=2, serverSelectionTimeoutMS=5000
+        )
         self._db: Database = self._client[database]
+
+        # Fail fast: verify MongoDB is reachable before continuing.
+        try:
+            self._client.admin.command("ping")
+        except Exception as exc:
+            raise ConnectionError(
+                f"MongoDB is unreachable at the configured URI. "
+                f"Check MEESEEKS_MONGODB_URI and ensure MongoDB is running. "
+                f"Error: {exc}"
+            ) from exc
+
         self._ensure_indexes()
 
     # -- helpers ------------------------------------------------------------
@@ -81,6 +94,8 @@ class MongoSessionStore(SessionStoreBase):
                 "archived_at": None,
                 "summary": None,
                 "summary_updated_at": None,
+                "title": None,
+                "title_updated_at": None,
             }
         )
         # Create local directory for attachments.
@@ -107,6 +122,13 @@ class MongoSessionStore(SessionStoreBase):
         )
         return list(cursor)
 
+    def truncate_after(self, session_id: str, cutoff_ts: str) -> int:
+        """Delete all events with ``ts > cutoff_ts``."""
+        result = self._col("events").delete_many(
+            {"session_id": session_id, "ts": {"$gt": cutoff_ts}}
+        )
+        return result.deleted_count
+
     def save_summary(self, session_id: str, summary: str) -> None:
         """Upsert the summary field on the session document."""
         self._col("sessions").update_one(
@@ -126,6 +148,27 @@ class MongoSessionStore(SessionStoreBase):
         if doc is None:
             return None
         return doc.get("summary")
+
+    def save_title(self, session_id: str, title: str) -> None:
+        """Upsert the title field on the session document."""
+        self._col("sessions").update_one(
+            {"_id": session_id},
+            {
+                "$set": {
+                    "title": title,
+                    "title_updated_at": _utc_now(),
+                }
+            },
+            upsert=True,
+        )
+
+    def load_title(self, session_id: str) -> str | None:
+        """Load the title field from the session document."""
+        doc = self._col("sessions").find_one({"_id": session_id}, {"title": 1})
+        if doc is None:
+            return None
+        title = doc.get("title")
+        return title if isinstance(title, str) and title else None
 
     def list_sessions(self) -> list[str]:
         """Return sorted session IDs from the sessions collection."""

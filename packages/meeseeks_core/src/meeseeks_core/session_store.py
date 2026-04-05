@@ -69,6 +69,14 @@ class SessionStoreBase(abc.ABC):
         """Load a previously saved summary, if present."""
 
     @abc.abstractmethod
+    def save_title(self, session_id: str, title: str) -> None:
+        """Persist a display title for a session."""
+
+    @abc.abstractmethod
+    def load_title(self, session_id: str) -> str | None:
+        """Load a previously saved title, if present."""
+
+    @abc.abstractmethod
     def list_sessions(self) -> list[str]:
         """List all session IDs."""
 
@@ -100,17 +108,28 @@ class SessionStoreBase(abc.ABC):
     def is_archived(self, session_id: str) -> bool:
         """Return True if a session is archived."""
 
+    @abc.abstractmethod
+    def truncate_after(self, session_id: str, cutoff_ts: str) -> int:
+        """Delete all events with ``ts > cutoff_ts``.
+
+        Returns the number of deleted events. Used by the recovery
+        pipeline to clean up a failed run before re-driving.
+        """
+
     # -- concrete template methods ------------------------------------------
 
     def fork_session(self, source_session_id: str) -> str:
-        """Create a new session by copying events and summary from another."""
+        """Create a new session by copying events, summary, and title from another."""
         events = self.load_transcript(source_session_id)
         summary = self.load_summary(source_session_id)
+        title = self.load_title(source_session_id)
         new_session_id = self.create_session()
         for event in events:
             self.append_event(new_session_id, event)
         if summary:
             self.save_summary(new_session_id, summary)
+        if title:
+            self.save_title(new_session_id, title)
         return new_session_id
 
     def load_recent_events(
@@ -173,6 +192,11 @@ class SessionPaths:
     def summary_path(self) -> str:
         """Path to the summary JSON file."""
         return os.path.join(self.session_dir, "summary.json")
+
+    @property
+    def title_path(self) -> str:
+        """Path to the title JSON file."""
+        return os.path.join(self.session_dir, "title.json")
 
 
 class SessionStore(SessionStoreBase):
@@ -242,6 +266,20 @@ class SessionStore(SessionStoreBase):
                     logging.warning("Skipping malformed transcript line.")
         return events
 
+    def truncate_after(self, session_id: str, cutoff_ts: str) -> int:
+        """Rewrite the transcript keeping only events with ``ts <= cutoff_ts``."""
+        paths = self._paths(session_id)
+        if not os.path.exists(paths.transcript_path):
+            return 0
+        events = self.load_transcript(session_id)
+        kept = [e for e in events if e.get("ts", "") <= cutoff_ts]
+        removed = len(events) - len(kept)
+        if removed:
+            with open(paths.transcript_path, "w", encoding="utf-8") as handle:
+                for event in kept:
+                    handle.write(json.dumps(event) + "\n")
+        return removed
+
     def save_summary(self, session_id: str, summary: str) -> None:
         """Persist a summary for a session."""
         paths = self._paths(session_id)
@@ -257,6 +295,23 @@ class SessionStore(SessionStoreBase):
         with open(paths.summary_path, encoding="utf-8") as handle:
             data = json.load(handle)
         return data.get("summary")
+
+    def save_title(self, session_id: str, title: str) -> None:
+        """Persist a display title for a session."""
+        paths = self._paths(session_id)
+        os.makedirs(paths.session_dir, exist_ok=True)
+        with open(paths.title_path, "w", encoding="utf-8") as handle:
+            json.dump({"title": title, "updated_at": _utc_now()}, handle, indent=2)
+
+    def load_title(self, session_id: str) -> str | None:
+        """Load a previously saved title, if present."""
+        paths = self._paths(session_id)
+        if not os.path.exists(paths.title_path):
+            return None
+        with open(paths.title_path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        title = data.get("title")
+        return title if isinstance(title, str) and title else None
 
     def list_sessions(self) -> list[str]:
         """List all session IDs present in the root directory."""
@@ -322,7 +377,14 @@ def create_session_store(root_dir: str | None = None) -> SessionStoreBase:
     if driver == "mongodb":
         from meeseeks_core.session_store_mongo import MongoSessionStore
 
-        return MongoSessionStore(root_dir=root_dir)
+        try:
+            return MongoSessionStore(root_dir=root_dir)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Storage driver is 'mongodb' but MongoDB is not available. "
+                f"Check MEESEEKS_MONGODB_URI and ensure MongoDB is running. "
+                f"Error: {exc}"
+            ) from exc
     return SessionStore(root_dir=root_dir)
 
 

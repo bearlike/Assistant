@@ -67,7 +67,7 @@
 │   ├── HomeView.tsx
 │   ├── InputBar.tsx
 │   ├── LogsView.tsx
-│   ├── McpSelector.tsx
+│   ├── ConfigMenu.tsx
 │   ├── MessageBubble.tsx
 │   ├── NotificationPanel.tsx
 │   ├── SessionDetailView.tsx
@@ -315,12 +315,12 @@ Each assistant message includes:
 
 ---
 
-### 4.8 McpSelector
+### 4.8 ConfigMenu
 
-**File:** `components/McpSelector.tsx`  
-**Purpose:** Dropdown to toggle MCP tool groups on/off
+**File:** `components/ConfigMenu.tsx`
+**Purpose:** Hierarchical drill-in menu consolidating Project, Model, Skills, and MCP (Integrations) selection behind a single "Configure" button in `InputBar`.
 
-Uses `forwardRef` for click-outside detection. Options are grouped by server name. Each option shows name, tool count badge, and active indicator (green/grey circle).
+Uses `forwardRef` for click-outside detection. Single popover with internal `view` state (`'root' | 'project' | 'model' | 'skills' | 'mcps'`) that resets to `'root'` when the menu closes. The root view shows four category rows with inline current selection (e.g. `Project · webapp ›`); tapping drills into that category's focused list with a back arrow. Trigger button shows a numeric badge summarizing active non-default selections. Exports `McpOption` and `McpStatus` types consumed by `InputBar` for grouping logic.
 
 ---
 

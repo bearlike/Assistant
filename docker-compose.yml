@@ -30,11 +30,19 @@ services:
     network_mode: host
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file: docker.env
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
     depends_on:
       - mongo
     volumes:
       - ./configs:/app/configs:ro
       - api-data:/app/data
+      # Plan-mode scratch dirs live at /tmp/meeseeks/plans/<session_id>/.
+      # ``/tmp`` is inside the container's writable layer and would be wiped
+      # on every rebuild; the named volume keeps plan markdown + revision
+      # files across restarts. Survives ``docker compose down``; cleared
+      # only by ``docker compose down -v`` or ``docker volume rm``.
+      - plans-data:/tmp/meeseeks/plans
       # Project directories and init scripts — add in docker-compose.override.yml
       # (see docker-compose.override.example.yml for the template)
     environment:
@@ -48,7 +56,10 @@ services:
       dockerfile: docker/Dockerfile.console
     network_mode: host
     env_file: docker.env
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
 
 volumes:
   api-data:
   mongo-data:
+  plans-data:

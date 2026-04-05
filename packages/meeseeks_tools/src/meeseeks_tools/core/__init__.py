@@ -7,10 +7,19 @@ import os
 from pathlib import Path
 
 from meeseeks_core.config import get_config_value
+from meeseeks_core.exit_plan_mode import PLAN_DIR_ROOT
 
 
 def _get_allowed_roots() -> list[Path]:
-    """Return resolved paths for all configured project directories + CWD."""
+    """Return resolved paths for all configured project directories + CWD.
+
+    Also includes :data:`meeseeks_core.exit_plan_mode.PLAN_DIR_ROOT` so the
+    edit and file tools can write/read the per-session plan scratch file
+    at ``/tmp/meeseeks/plans/<session_id>/plan.md`` during plan mode.
+    Per-session containment is enforced by ``is_inside_plan_dir()`` at the
+    upper (permission) guard in ``tool_use_loop._plan_mode_permission``,
+    so widening the root list here does not relax session isolation.
+    """
     roots: list[Path] = [Path(os.getcwd()).resolve()]
     projects: dict = get_config_value("projects", default={})
     for cfg in projects.values():
@@ -19,6 +28,9 @@ def _get_allowed_roots() -> list[Path]:
             p = Path(raw).expanduser().resolve()
             if p not in roots:
                 roots.append(p)
+    plan_root = Path(PLAN_DIR_ROOT).resolve()
+    if plan_root not in roots:
+        roots.append(plan_root)
     return roots
 
 

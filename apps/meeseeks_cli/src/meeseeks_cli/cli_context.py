@@ -18,6 +18,7 @@ class CliState:
     session_id: str
     show_plan: bool = True
     model_name: str | None = None
+    fallback_models: tuple[str, ...] | None = None
     auto_approve_all: bool = False
     mode: str = "act"
     last_plan: Plan | None = field(default=None, repr=False)

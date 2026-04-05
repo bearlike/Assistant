@@ -95,8 +95,9 @@ SPAWN_AGENT_SCHEMA: dict[str, object] = {
                 "max_steps": {
                     "type": "integer",
                     "description": (
-                        "Maximum tool steps for this sub-agent "
-                        "(default: from config)."
+                        "Deprecated. Sub-agents run until natural completion. "
+                        "This field is retained for prompt compatibility but "
+                        "is not enforced."
                     ),
                 },
                 "acceptance_criteria": {
@@ -215,6 +216,10 @@ class SpawnAgentTool:
         self._hook_manager = hook_manager
         self._project_instructions = project_instructions
         self._cwd = cwd
+        # Plan-mode context — set by ToolUseLoop.run() so children
+        # inherit the session's plan path and mode.
+        self.session_id: str | None = None
+        self.parent_mode: str = "act"
         # Track lifecycle manager tasks for deterministic cleanup.
         self._lifecycle_tasks: list[asyncio.Task[None]] = []
 
@@ -284,18 +289,20 @@ class SpawnAgentTool:
                 hook_manager=self._hook_manager,
                 project_instructions=self._project_instructions,
                 cwd=self._cwd,
+                session_id=self.session_id,
             )
-            config_max = int(
-                get_config_value("agent", "sub_agent_max_steps", default=10)
-            )
-            # Ref: [AgentCgroup §4.2] Per-spawn resource budget with hard ceiling
-            requested = int(args.get("max_steps", config_max))
-            max_steps = min(requested, config_max * 5)  # Hard ceiling: 5x config
             # Ref: [A2A v1.0] Transition to "running" when execution begins
             handle.status = "running"
-            # Populate asyncio_task so cancel_agent() and 3-phase cleanup work
+            # Populate asyncio_task so cancel_agent() and 3-phase cleanup work.
+            # No step limit — the child runs until natural completion
+            # (text response without tool calls), cancellation, or error.
+            # Safety: session budget, stall detection, LLM timeouts.
             child_task = asyncio.create_task(
-                child_loop.run(task_desc, tool_specs=child_specs, max_steps=max_steps)
+                child_loop.run(
+                    task_desc,
+                    tool_specs=child_specs,
+                    mode=self.parent_mode,
+                )
             )
             handle.asyncio_task = child_task
 
@@ -473,18 +480,22 @@ class SpawnAgentTool:
         parent_id = self._agent_context.agent_id
 
         if wait:
-            deadline = asyncio.get_event_loop().time() + timeout
-            while asyncio.get_event_loop().time() < deadline:
-                running = await registry.collect_running(parent_id)
-                if not running:
-                    break
-                completed = await registry.collect_completed(parent_id)
-                if completed:
-                    break
-                await asyncio.sleep(1.0)
+            running = await registry.collect_running(parent_id)
+            if running:
+                waiters = [asyncio.create_task(h.done_event.wait()) for h in running]
+                try:
+                    _done, pending = await asyncio.wait(
+                        waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED,
+                    )
+                except asyncio.TimeoutError:
+                    pending = set(waiters)
+                for t in pending:
+                    t.cancel()
 
         # Build response.
-        tree = await registry.render_agent_tree()
+        tree = await registry.render_agent_tree(
+            exclude_agent_id=self._agent_context.agent_id,
+        )
         completed = await registry.collect_completed(parent_id)
         running = await registry.collect_running(parent_id)
 
@@ -540,21 +551,25 @@ class SpawnAgentTool:
                 )
 
         if action == "cancel":
-            ok = await registry.cancel_agent(agent_id)
-            status = "cancelled" if ok else "not running"
+            reason = await registry.cancel_agent(agent_id)
+            if reason is None:
+                return MockSpeaker(
+                    content=f"Agent {agent_id[:8]} cancelled.",
+                )
             return MockSpeaker(
-                content=f"Agent {agent_id[:8]} {status}.",
+                content=f"Agent {agent_id[:8]} cannot cancel: {reason}",
             )
         if action == "message":
             if not message:
                 return MockSpeaker(
                     content="ERROR: 'message' is required when action='message'.",
                 )
-            ok = await registry.send_message(
+            reason = await registry.send_message(
                 agent_id, f"[From parent] {message}",
             )
-            status = "sent" if ok else "failed (agent not running)"
-            return MockSpeaker(content=f"Message {status}.")
+            if reason is None:
+                return MockSpeaker(content="Message sent.")
+            return MockSpeaker(content=f"Message failed: {reason}")
 
         return MockSpeaker(
             content=f"ERROR: Unknown action '{action}'. Use 'message' or 'cancel'.",

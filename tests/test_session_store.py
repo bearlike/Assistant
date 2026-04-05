@@ -4,8 +4,11 @@ import os
 import shutil
 from unittest.mock import patch
 
+import pytest
 from meeseeks_core.compaction import should_compact, summarize_events
+from meeseeks_core.config import StorageConfig
 from meeseeks_core.session_store import SessionStore, SessionStoreBase, create_session_store
+from pydantic import ValidationError
 
 
 def test_session_store_roundtrip(tmp_path):
@@ -122,12 +125,62 @@ def test_base_class_template_fork(tmp_path):
     session_id = store.create_session()
     store.append_event(session_id, {"type": "user", "payload": {"text": "hello"}})
     store.save_summary(session_id, "summary text")
+    store.save_title(session_id, "my title")
 
     forked_id = store.fork_session(session_id)
     assert forked_id != session_id
     events = store.load_transcript(forked_id)
     assert len(events) == 1
     assert store.load_summary(forked_id) == "summary text"
+    assert store.load_title(forked_id) == "my title"
+
+
+def test_session_store_title_roundtrip(tmp_path):
+    """Persist and reload session titles."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    assert store.load_title(session_id) is None
+    store.save_title(session_id, "a concise title")
+    assert store.load_title(session_id) == "a concise title"
+    # Overwrite semantics
+    store.save_title(session_id, "edited title")
+    assert store.load_title(session_id) == "edited title"
+
+
+def test_session_store_load_title_missing(tmp_path):
+    """Return None when no title was ever saved."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    assert store.load_title(session_id) is None
+
+
+def test_session_store_load_title_empty_string(tmp_path):
+    """Treat an empty stored title as absent."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.save_title(session_id, "")
+    assert store.load_title(session_id) is None
+
+
+def test_unknown_storage_driver_raises():
+    """Unknown storage driver should raise, not silently fall back to json."""
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("MEESEEKS_STORAGE_DRIVER", None)
+        with pytest.raises(ValidationError, match="Unknown storage driver"):
+            StorageConfig(driver="postgres")
+
+
+def test_create_session_store_mongodb_unreachable(tmp_path):
+    """Factory raises RuntimeError when MongoDB is unreachable."""
+    with (
+        patch("meeseeks_core.session_store.get_config_value", return_value="mongodb"),
+        patch(
+            "meeseeks_core.session_store_mongo.MongoClient",
+            side_effect=Exception("connection refused"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="not available"):
+            create_session_store(root_dir=str(tmp_path))
 
 
 def test_compaction_helpers():

@@ -144,6 +144,31 @@ export function createRealClient(config: ApiConfig): ApiClient {
       await handleJson(response);
     },
 
+    async updateSessionTitle(
+      sessionId: string,
+      title: string
+    ): Promise<{ session_id: string; title: string }> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/title`),
+        {
+          method: "PATCH",
+          headers: headers(apiKey),
+          body: JSON.stringify({ title })
+        }
+      );
+      return handleJson<{ session_id: string; title: string }>(response);
+    },
+
+    async regenerateTitle(
+      sessionId: string
+    ): Promise<{ session_id: string; title: string }> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/title`),
+        { method: "POST", headers: headers(apiKey) }
+      );
+      return handleJson<{ session_id: string; title: string }>(response);
+    },
+
     async uploadAttachments(
       sessionId: string,
       files: File[]
@@ -210,6 +235,48 @@ export function createRealClient(config: ApiConfig): ApiClient {
         }
       );
       await handleJson(response);
+    },
+
+    async approvePlan(sessionId: string, approved: boolean): Promise<void> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/plan/approve`),
+        {
+          method: "POST",
+          headers: headers(apiKey),
+          body: JSON.stringify({ approved })
+        }
+      );
+      await handleJson(response);
+    },
+
+    async recoverSession(
+      sessionId: string,
+      action: "retry" | "continue",
+      fromTs?: string
+    ): Promise<void> {
+      const body: Record<string, string> = { action };
+      if (fromTs) body.from_ts = fromTs;
+      const response = await fetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/recover`),
+        {
+          method: "POST",
+          headers: headers(apiKey),
+          body: JSON.stringify(body)
+        }
+      );
+      await handleJson(response);
+    },
+
+    async fetchPlanMarkdown(sessionId: string): Promise<string> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/plan.md`),
+        { headers: headers(apiKey) }
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Failed to fetch plan (${response.status})`);
+      }
+      return response.text();
     },
 
     async listTools(project?: string): Promise<ToolSummary[]> {

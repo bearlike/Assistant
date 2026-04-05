@@ -52,6 +52,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         -e apps/meeseeks_api \
         gunicorn
 
+# Pre-create plan-mode scratch directory with correct ownership.
+# Named volumes copy permissions from the image on first mount, so
+# ``plans-data:/tmp/meeseeks/plans`` inherits meeseeks ownership
+# instead of root:root. The entrypoint also fixes ownership at
+# runtime for volumes that already exist (see entrypoint-api.sh).
+RUN mkdir -p /tmp/meeseeks/plans && chown -R 1000:1000 /tmp/meeseeks
+
 ENV MASTER_API_TOKEN='msk-strong-password' \
     API_PORT=5125
 

@@ -36,6 +36,7 @@ export type SessionContext = {
   skill?: string;
   project?: string;
   model?: string;
+  mode?: QueryMode;
   attachments?: AttachmentPayload[];
 };
 
@@ -80,12 +81,22 @@ export type TurnMeta = {
   duration?: string;
   files: DiffFile[];
 };
+export type PlanStatus = "pending" | "approved" | "rejected";
+export type PlanMeta = {
+  revision: number;
+  status: PlanStatus;
+  planPath?: string;
+  planContent: string;
+  planSummary?: string;
+  timestamp?: string;
+};
 export type TimelineEntry = {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "plan";
   content: string;
   turnId: string;
   turn?: TurnMeta;
+  plan?: PlanMeta;
 };
 export type ParsedDiffFile = {
   name: string;

@@ -159,6 +159,8 @@ class OrchestrationState(BaseModel):
     done: bool = False
     done_reason: str | None = None
     summary: str | None = None
+    plan_approved: bool = False
+    plan_path: str | None = None
 
 
 class AbstractTool(abc.ABC):
@@ -193,11 +195,7 @@ class AbstractTool(abc.ABC):
         )
         self.model = None
         if self.use_llm:
-            self.model = build_chat_model(
-                model_name=self.model_name,
-                openai_api_base=get_config_value("llm", "api_base"),
-                api_key=get_config_value("llm", "api_key"),
-            )
+            self.model = build_chat_model(model_name=self.model_name)
         root_cache_dir = get_config_value("runtime", "cache_dir", default=".cache")
         if not root_cache_dir:
             raise ValueError("runtime.cache_dir is not set.")

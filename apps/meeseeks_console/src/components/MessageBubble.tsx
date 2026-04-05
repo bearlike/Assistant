@@ -8,10 +8,11 @@ import { CopyButton } from './CopyButton';
 interface MessageBubbleProps {
   role: 'user' | 'system' | 'ai' | 'assistant';
   content?: string;
+  actions?: React.ReactNode;
   children?: React.ReactNode;
 }
 const USER_COLLAPSE_THRESHOLD = 300;
-export function MessageBubble({ role, content, children }: MessageBubbleProps) {
+export function MessageBubble({ role, content, actions, children }: MessageBubbleProps) {
   const [expanded, setExpanded] = useState(false);
   const markdown = content ? <MarkdownContent content={content} /> : null;
   if (role === 'user') {
@@ -61,12 +62,15 @@ export function MessageBubble({ role, content, children }: MessageBubbleProps) {
         <div className="text-[hsl(var(--foreground))] text-sm">{markdown}</div>
         }
         {content && (
-          <CopyButton
-            text={content}
-            className="group mt-2 inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
-          >
-            <span className="hidden text-[10px] group-hover:inline-block">Copy</span>
-          </CopyButton>
+          <div className="mt-2 inline-flex items-center gap-3">
+            <CopyButton
+              text={content}
+              className="group inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+            >
+              <span className="hidden text-[10px] group-hover:inline-block">Copy</span>
+            </CopyButton>
+            {actions}
+          </div>
         )}
         {children}
       </div>);

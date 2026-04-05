@@ -5,7 +5,7 @@ This page summarizes the code layout, core interfaces, and the minimal steps nee
 ## Monorepo layout
 - `packages/meeseeks_core/`: orchestration loop, session runtime, schemas, session storage, compaction, tool registry.
 - `packages/meeseeks_tools/`: tool implementations and integration glue.
-- `packages/meeseeks_tools/src/meeseeks_tools/vendor/aider`: vendored Aider utilities used by local file + shell tools.
+- `packages/meeseeks_tools/src/meeseeks_tools/vendor/aider`: vendored Aider utilities used by local file and shell tools.
 - `apps/meeseeks_api/`: Flask API that exposes the assistant over HTTP.
 - `apps/meeseeks_console/`: Web console for task orchestration (React + Vite).
 - `apps/meeseeks_cli/`: terminal CLI for interactive sessions.
@@ -27,10 +27,11 @@ The orchestrator loads project instructions from the working directory and injec
 ## Core abstractions and interfaces
 - `AbstractTool` (`meeseeks_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
 - `ToolRunner` protocol (`meeseeks_core.tool_registry`): interface for tool runners with `run(ActionStep)`.
-- `ToolSpec` / `ToolRegistry` (`meeseeks_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config — either `aider_edit_block_tool` or `file_edit_tool`.
+- `ToolSpec` / `ToolRegistry` (`meeseeks_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config — either `aider_edit_block_tool` or `file_edit_tool`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
 - `ActionStep`, `Plan`, `TaskQueue` (`meeseeks_core.classes`): planning and tool-execution payloads.
 - `PermissionPolicy` (`meeseeks_core.permissions`): allow/deny/ask rules for tool execution.
-- `HookManager` (`meeseeks_core.hooks`): pre/post hooks and compaction transforms.
+- `HookManager` (`meeseeks_core.hooks`): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports `"command"` (shell) and `"http"` (fire-and-forget POST) hook types via `HooksConfig`.
+- `ChannelAdapter` protocol (`meeseeks_api.channels.base`): abstraction for chat platform integrations (verify_request, parse_inbound, send_response, system_context). Shared `_process_inbound()` pipeline in `routes.py`. Adapters: Nextcloud Talk (webhook-driven) and Email (IMAP poll-driven with markdown→HTML replies).
 - `SessionStore` / `SessionRuntime` (`meeseeks_core.session_store`, `meeseeks_core.session_runtime`): transcripts and the shared runtime facade.
 - `ChatModel` protocol (`meeseeks_core.llm`): interface for LLM backends via `build_chat_model`.
 
@@ -113,3 +114,62 @@ registry.register(
     )
 )
 ```
+
+## Built-in `read_file` tool
+
+The `read_file` tool (`tool_id: "read_file"`) is a native built-in for reading local files with line-based windowing and a dedup cache that prevents redundant reads from bloating the LLM's context.
+
+**Implementation:** `packages/meeseeks_tools/src/meeseeks_tools/integration/aider_file_tools.py` (`ReadFileTool` class)
+**Registration:** `packages/meeseeks_core/src/meeseeks_core/tool_registry.py`
+**Prompt:** `packages/meeseeks_core/src/meeseeks_core/prompts/tools/read-file.txt`
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `path` | string | yes | — | File path to read (relative to `root`) |
+| `root` | string | no | CWD | Project root for path resolution |
+| `offset` | integer | no | `0` | 0-based start line |
+| `limit` | integer | no | `2000` | Maximum lines to return |
+
+### Output format
+
+Returns a JSON payload with line-numbered content:
+
+```json
+{
+  "kind": "file",
+  "path": "src/main.py",
+  "text": "1\timport os\n2\timport sys\n3\t\n4\tdef main():\n5\t    pass",
+  "total_lines": 5
+}
+```
+
+- **Line numbers** are 1-based, tab-separated (matches `cat -n` format).
+- **`total_lines`** reflects the full file, not the windowed portion — so the model knows whether it has seen everything.
+- When the file exceeds the limit, a truncation hint is appended: `... (truncated — use offset/limit to read more)`.
+
+### Dedup cache
+
+The `ToolUseLoop` maintains a per-run `_file_read_cache` that prevents the same file from being re-read when it hasn't changed.
+
+**How it works:**
+
+1. On the first `read_file` call for a path, the tool executes normally and the cache records: `{path, offset, limit, mtime}`.
+2. On a subsequent `read_file` call with the same path, offset, and limit, the cache checks `os.path.getmtime()`. If the mtime matches, the tool returns a stub instead of the full content:
+
+   > *"File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading."*
+
+3. When the `file_edit_tool` edits a file, the cache entry for that path is invalidated — the next read returns fresh content.
+
+**Why this matters:** In observed sessions, GPT 5.4 re-read `backend.py` 8 times across 70 steps, adding 64KB of identical content to the message array. The dedup cache reduces this to one full read + seven 30-token stubs — a ~99% reduction in redundant context.
+
+**Cache location:** `ToolUseLoop._file_read_cache` (`tool_use_loop.py`). The cache is per-run (created with the loop, discarded when the run ends). No cross-run persistence is needed — compaction handles session continuity.
+
+### System prompt guidance
+
+The system prompt (`prompts/system.txt`) includes:
+
+> *Tool outputs from earlier steps persist in this conversation. Reference previous results instead of re-reading files or re-running commands you have already executed.*
+
+This complements the dedup cache. The prompt guides the model to avoid redundant calls; the cache catches them programmatically when the model doesn't follow the guidance.

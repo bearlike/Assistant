@@ -1185,6 +1185,15 @@ wheels = [
 ]
 
 [[package]]
+name = "imapclient"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/58/79/8138f8c91e791f49cf4c2269b1eaaaddb93013d162e92ddc249b84d38105/imapclient-3.1.0.tar.gz", hash = "sha256:b0413a516ffcc4b4d69f2c611c0e95da57968edf5a5c78ac82d1bf882305facc", size = 199675, upload-time = "2026-01-17T18:50:12.186Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/a8/a0f86ed51f792d9e6afcc062db2766033be7d1028d1fd5deaf38b075430a/imapclient-3.1.0-py2.py3-none-any.whl", hash = "sha256:34c192ffe82936e940a998ac89c474296942cd7c4f6c208f0fccfcd972946038", size = 182536, upload-time = "2026-01-17T18:49:09.105Z" },
+]
+
+[[package]]
 name = "importlib-metadata"
 version = "8.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1902,14 +1911,16 @@ wheels = [
 
 [[package]]
 name = "meeseeks-api"
-version = "0.0.8"
+version = "0.0.9"
 source = { editable = "apps/meeseeks_api" }
 dependencies = [
     { name = "flask" },
     { name = "flask-restx" },
     { name = "gunicorn" },
+    { name = "imapclient" },
     { name = "meeseeks-core" },
     { name = "meeseeks-tools" },
+    { name = "mistune" },
 ]
 
 [package.metadata]
@@ -1917,13 +1928,15 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0.3,<4.0.0" },
     { name = "flask-restx", specifier = ">=1.3.0,<2.0.0" },
     { name = "gunicorn", specifier = ">=22.0.0" },
-    { name = "meeseeks-core", specifier = ">=0.0.8" },
-    { name = "meeseeks-tools", specifier = ">=0.0.8" },
+    { name = "imapclient", specifier = ">=3.0,<4.0" },
+    { name = "meeseeks-core", specifier = ">=0.0.9" },
+    { name = "meeseeks-tools", specifier = ">=0.0.9" },
+    { name = "mistune", specifier = ">=3.0,<4.0" },
 ]
 
 [[package]]
 name = "meeseeks-cli"
-version = "0.0.8"
+version = "0.0.9"
 source = { editable = "apps/meeseeks_cli" }
 dependencies = [
     { name = "meeseeks-core" },
@@ -1935,8 +1948,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "meeseeks-core", specifier = ">=0.0.8" },
-    { name = "meeseeks-tools", specifier = ">=0.0.8" },
+    { name = "meeseeks-core", specifier = ">=0.0.9" },
+    { name = "meeseeks-tools", specifier = ">=0.0.9" },
     { name = "prompt-toolkit", specifier = ">=3.0.47,<4.0.0" },
     { name = "rich", specifier = ">=14.2.0,<15.0.0" },
     { name = "textual", specifier = ">=7.5.0,<9.0.0" },
@@ -1944,7 +1957,7 @@ requires-dist = [
 
 [[package]]
 name = "meeseeks-core"
-version = "0.0.8"
+version = "0.0.9"
 source = { editable = "packages/meeseeks_core" }
 dependencies = [
     { name = "jinja2" },
@@ -1979,7 +1992,7 @@ requires-dist = [
 
 [[package]]
 name = "meeseeks-ha-conversation"
-version = "0.0.8"
+version = "0.0.9"
 source = { editable = "meeseeks_ha_conversation" }
 dependencies = [
     { name = "aiohttp" },
@@ -1998,7 +2011,7 @@ provides-extras = ["homeassistant"]
 
 [[package]]
 name = "meeseeks-tools"
-version = "0.0.8"
+version = "0.0.9"
 source = { editable = "packages/meeseeks_tools" }
 dependencies = [
     { name = "langchain-core" },
@@ -2031,7 +2044,7 @@ requires-dist = [
 
 [[package]]
 name = "meeseeks-workspace"
-version = "0.0.8"
+version = "0.0.9"
 source = { editable = "." }
 dependencies = [
     { name = "aniso8601" },
@@ -2133,6 +2146,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ab/f7/2933f1a1fb0e0f077d5d6a92c6c7f8a54e6128241f116dff4df8b6050bbf/mike-2.1.3.tar.gz", hash = "sha256:abd79b8ea483fb0275b7972825d3082e5ae67a41820f8d8a0dc7a3f49944e810", size = 38119, upload-time = "2024-08-13T05:02:14.167Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/1a/31b7cd6e4e7a02df4e076162e9783620777592bea9e4bb036389389af99d/mike-2.1.3-py3-none-any.whl", hash = "sha256:d90c64077e84f06272437b464735130d380703a76a5738b152932884c60c062a", size = 33754, upload-time = "2024-08-13T05:02:12.515Z" },
+]
+
+[[package]]
+name = "mistune"
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/55/d01f0c4b45ade6536c51170b9043db8b2ec6ddf4a35c7ea3f5f559ac935b/mistune-3.2.0.tar.gz", hash = "sha256:708487c8a8cdd99c9d90eb3ed4c3ed961246ff78ac82f03418f5183ab70e398a", size = 95467, upload-time = "2025-12-23T11:36:34.994Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/f7/4a5e785ec9fbd65146a27b6b70b6cdc161a66f2024e4b04ac06a67f5578b/mistune-3.2.0-py3-none-any.whl", hash = "sha256:febdc629a3c78616b94393c6580551e0e34cc289987ec6c35ed3f4be42d0eee1", size = 53598, upload-time = "2025-12-23T11:36:33.211Z" },
 ]
 
 [[package]]

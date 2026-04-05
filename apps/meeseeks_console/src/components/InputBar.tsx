@@ -7,7 +7,9 @@ import {
   Paperclip,
   Check,
   Square,
-  Loader2 } from
+  Loader2,
+  Maximize2,
+  Minimize2 } from
 'lucide-react';
 import { QueryMode, SessionContext } from '../types';
 import { useMcpTools } from '../hooks/useMcpTools';
@@ -15,10 +17,7 @@ import { useSkills } from '../hooks/useSkills';
 import { useProjects } from '../hooks/useProjects';
 import { useModels } from '../hooks/useModels';
 import { useContainerCompact } from '../hooks/useContainerCompact';
-import { McpSelector, McpOption, McpStatus } from './McpSelector';
-import { SkillSelector } from './SkillSelector';
-import { ProjectSelector } from './ProjectSelector';
-import { ModelSelector } from './ModelSelector';
+import { ConfigMenu, McpOption, McpStatus } from './ConfigMenu';
 import { Popover } from './Popover';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 type McpToolOption = McpOption & {
@@ -51,16 +50,14 @@ export function InputBar({
   onFocusChange
 }: InputBarProps) {
   const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
-  const [isMcpOpen, setIsMcpOpen] = useState(false);
-  const [isSkillOpen, setIsSkillOpen] = useState(false);
-  const [isProjectOpen, setIsProjectOpen] = useState(false);
-  const [isModelOpen, setIsModelOpen] = useState(false);
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const [activeSkill, setActiveSkill] = useState<string | null>(sessionContext?.skill ?? null);
   const [activeProject, setActiveProject] = useState<string | null>(sessionContext?.project ?? null);
   const [activeModel, setActiveModel] = useState<string | null>(sessionContext?.model ?? null);
   const pendingMcpToolsRef = useRef<string[] | null>(sessionContext?.mcp_tools ?? null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
-  const [queryMode, setQueryMode] = useState<QueryMode>('act');
+  const [queryMode, setQueryMode] = useState<QueryMode>(sessionContext?.mode ?? 'act');
   const popupDirection = mode === 'home' ? 'down' : 'up';
   const {
     tools: mcpTools,
@@ -90,43 +87,58 @@ export function InputBar({
   const [mcps, setMcps] = useState<McpToolOption[]>([]);
   const [inputValue, setInputValue] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
-  const mcpRef = useRef<HTMLDivElement>(null);
-  const skillRef = useRef<HTMLDivElement>(null);
-  const projectRef = useRef<HTMLDivElement>(null);
-  const modelRef = useRef<HTMLDivElement>(null);
+  const configRef = useRef<HTMLDivElement>(null);
+  const overlayMenuRef = useRef<HTMLDivElement>(null);
+  const overlayConfigRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fullScreenTextareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const compact = useContainerCompact(containerRef);
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const inPlus =
+        (menuRef.current?.contains(target) ?? false) ||
+        (overlayMenuRef.current?.contains(target) ?? false);
+      if (!inPlus) {
         setIsPlusMenuOpen(false);
       }
-      if (mcpRef.current && !mcpRef.current.contains(event.target as Node)) {
-        setIsMcpOpen(false);
-      }
-      if (skillRef.current && !skillRef.current.contains(event.target as Node)) {
-        setIsSkillOpen(false);
-      }
-      if (projectRef.current && !projectRef.current.contains(event.target as Node)) {
-        setIsProjectOpen(false);
-      }
-      if (modelRef.current && !modelRef.current.contains(event.target as Node)) {
-        setIsModelOpen(false);
+      const inConfig =
+        (configRef.current?.contains(target) ?? false) ||
+        (overlayConfigRef.current?.contains(target) ?? false);
+      if (!inConfig) {
+        setIsConfigOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+  // Reset transient popovers when full-screen toggles
+  useEffect(() => {
+    setIsPlusMenuOpen(false);
+    setIsConfigOpen(false);
+  }, [isFullScreen]);
+  // Escape closes full-screen overlay
+  useEffect(() => {
+    if (!isFullScreen) return;
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsFullScreen(false);
+      }
+    }
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isFullScreen]);
   // Sync local state from session context when navigating between sessions
   useEffect(() => {
     setActiveProject(sessionContext?.project ?? null);
     setActiveSkill(sessionContext?.skill ?? null);
     setActiveModel(sessionContext?.model ?? null);
+    setQueryMode(sessionContext?.mode ?? 'act');
     pendingMcpToolsRef.current = sessionContext?.mcp_tools ?? null;
     setMcps([]);
-  }, [sessionContext?.project, sessionContext?.skill, sessionContext?.model, sessionContext?.mcp_tools]);
+  }, [sessionContext?.project, sessionContext?.skill, sessionContext?.model, sessionContext?.mode, sessionContext?.mcp_tools]);
   useEffect(() => {
     setMcps((prev) => {
       if (mcpTools.length === 0) {
@@ -159,7 +171,13 @@ export function InputBar({
         };
       });
     });
-  }, [mcpTools]);
+    // Depend on sessionContext.mcp_tools too: when the user switches to a
+    // different session that shares the same project, useMcpTools returns
+    // the cached tool list with stable identity, so mcpTools alone would
+    // not re-trigger this rebuild. The session-intent change (new mcp_tools
+    // array from props) is the reliable signal to re-run and consume the
+    // pendingMcpToolsRef set by the sync useEffect above.
+  }, [mcpTools, sessionContext?.mcp_tools]);
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -229,6 +247,12 @@ export function InputBar({
       });
     });
   };
+  const handleResetAll = () => {
+    setActiveProject(null);
+    setActiveSkill(null);
+    setActiveModel(null);
+    setMcps((prev) => prev.map((m) => (m.enabled ? { ...m, active: false } : m)));
+  };
   const handleSubmit = () => {
     if (!onSubmit || !inputValue.trim() || isSubmitting) {
       return;
@@ -246,6 +270,7 @@ export function InputBar({
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
+    setIsFullScreen(false);
   };
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -253,8 +278,8 @@ export function InputBar({
       handleSubmit();
     }
   };
-  const PlusMenu = () =>
-  <Popover direction={popupDirection} width="w-48" maxHeight="">
+  const PlusMenu = ({ direction }: { direction: 'up' | 'down' }) =>
+  <Popover direction={direction} width="w-48" maxHeight="">
       <div className="px-3 pt-2 pb-1">
         <span className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
           Built-in
@@ -285,8 +310,140 @@ export function InputBar({
       </button>
     </Popover>;
 
+  const closeOverlayIfBackdrop = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) {
+      setIsFullScreen(false);
+    }
+  };
+  const renderConfigMenu = (
+    ref: React.RefObject<HTMLDivElement>,
+    direction: 'up' | 'down',
+  ) => (
+    <ConfigMenu
+      ref={ref}
+      mcpOptions={groupedOptions}
+      skills={availableSkills}
+      projects={availableProjects}
+      models={availableModels}
+      defaultModel={defaultModel}
+      activeProject={activeProject}
+      activeSkill={activeSkill}
+      activeModel={activeModel}
+      mcpLoading={mcpLoading}
+      mcpError={mcpError}
+      skillsLoading={skillsLoading}
+      skillsError={skillsError}
+      projectsLoading={projectsLoading}
+      projectsError={projectsError}
+      modelsLoading={modelsLoading}
+      modelsError={modelsError}
+      onRefreshMcp={refreshMcp}
+      onRefreshSkills={refreshSkills}
+      onRefreshProjects={refreshProjects}
+      onRefreshModels={refreshModels}
+      onToggleMcp={toggleMcp}
+      onSelectProject={setActiveProject}
+      onSelectSkill={setActiveSkill}
+      onSelectModel={setActiveModel}
+      onResetAll={handleResetAll}
+      isOpen={isConfigOpen}
+      onToggleOpen={() => {
+        setIsConfigOpen(!isConfigOpen);
+        setIsPlusMenuOpen(false);
+      }}
+      direction={direction}
+      compact={compact}
+    />
+  );
+
+  const fullScreenOverlay = isFullScreen && (
+    <div
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
+      onMouseDown={closeOverlayIfBackdrop}
+      data-testid="inputbar-fullscreen">
+      <div className="w-full max-w-3xl h-[85vh] max-h-[85vh] bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl shadow-2xl flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-[hsl(var(--border))]">
+          <span className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+            Compose prompt
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsFullScreen(false)}
+            aria-label="Minimize editor"
+            className="p-1 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] transition-colors">
+            <Minimize2 className="w-4 h-4" />
+          </button>
+        </div>
+        {attachedFiles.length > 0 &&
+        <div className="px-4 pt-3 pb-0">
+            <div className="bg-[hsl(var(--accent))] rounded px-2 py-1 text-xs text-[hsl(var(--foreground))] inline-flex items-center gap-2 w-fit">
+              <Paperclip className="w-3 h-3" />
+              <span className="truncate max-w-[240px]">{attachedFiles[0].name}</span>
+              {attachedFiles.length > 1 &&
+              <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
+                  +{attachedFiles.length - 1}
+                </span>
+              }
+              <button
+                onClick={() => setAttachedFiles([])}
+                className="hover:opacity-70">
+                ×
+              </button>
+            </div>
+          </div>
+        }
+        <div className="flex-1 px-4 py-3 overflow-hidden">
+          <textarea
+            ref={fullScreenTextareaRef}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Write your prompt..."
+            aria-label="Task description (expanded)"
+            disabled={isSubmitting}
+            autoFocus
+            className="w-full h-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-base resize-none" />
+        </div>
+        <div className="flex items-center justify-between px-3 py-2 border-t border-[hsl(var(--border))]">
+          <div className="flex items-center gap-2 min-w-0 flex-nowrap">
+            <div className="relative" ref={overlayMenuRef}>
+              <button
+                onClick={() => {
+                  setIsPlusMenuOpen(!isPlusMenuOpen);
+                  setIsConfigOpen(false);
+                }}
+                className={`p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
+                <Plus className="w-4 h-4" />
+              </button>
+              {isPlusMenuOpen && <PlusMenu direction="up" />}
+            </div>
+            {queryMode === 'plan' &&
+            <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
+                Plan
+              </span>
+            }
+            {renderConfigMenu(overlayConfigRef, 'up')}
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={handleSubmit}
+              aria-label="Send query"
+              disabled={isSubmitting || !inputValue.trim()}
+              className={`p-2 rounded-full transition-colors ${isSubmitting || !inputValue.trim() ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90'}`}>
+              {isSubmitting ?
+              <Loader2 className="w-4 h-4 animate-spin" /> :
+              <ArrowUp className="w-4 h-4" />
+              }
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   if (mode === 'home') {
     return (
+      <>
       <div className="w-full mb-0 relative" data-testid="inputbar-home">
         <input
           ref={fileInputRef}
@@ -318,7 +475,7 @@ export function InputBar({
               </div>
             }
 
-            <div className="px-4 py-3">
+            <div className="relative px-4 py-3">
               <textarea
                 ref={textareaRef}
                 value={inputValue}
@@ -330,8 +487,14 @@ export function InputBar({
                 aria-label="Task description"
                 disabled={isSubmitting}
                 rows={1}
-                className="w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-base resize-none min-h-[24px] max-h-[200px]" />
-
+                className="w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-base resize-none min-h-[24px] max-h-[200px] pr-7" />
+              <button
+                type="button"
+                onClick={() => setIsFullScreen(true)}
+                aria-label="Expand editor"
+                className="absolute top-2 right-2 p-1 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] opacity-60 hover:opacity-100 transition-opacity">
+                <Maximize2 className="w-3.5 h-3.5" />
+              </button>
             </div>
 
             <div className="flex items-center justify-between px-2 pb-1">
@@ -340,13 +503,13 @@ export function InputBar({
                   <button
                     onClick={() => {
                       setIsPlusMenuOpen(!isPlusMenuOpen);
-                      setIsMcpOpen(false);
+                      setIsConfigOpen(false);
                     }}
                     className={`p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
 
                     <Plus className="w-4 h-4" />
                   </button>
-                  {isPlusMenuOpen && <PlusMenu />}
+                  {isPlusMenuOpen && <PlusMenu direction={popupDirection} />}
                 </div>
                 {queryMode === 'plan' &&
                 <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
@@ -354,89 +517,7 @@ export function InputBar({
                   </span>
                 }
 
-                <McpSelector
-                  ref={mcpRef}
-                  options={groupedOptions}
-                  isOpen={isMcpOpen}
-                  loading={mcpLoading}
-                  error={mcpError}
-                  direction={popupDirection}
-                  compact={compact}
-                  onToggleOpen={() => {
-                    setIsMcpOpen(!isMcpOpen);
-                    setIsPlusMenuOpen(false);
-                    setIsSkillOpen(false);
-                    setIsModelOpen(false);
-                  }}
-                  onToggle={toggleMcp}
-                  onRefresh={refreshMcp} />
-
-                <SkillSelector
-                  ref={skillRef}
-                  skills={availableSkills}
-                  activeSkill={activeSkill}
-                  isOpen={isSkillOpen}
-                  loading={skillsLoading}
-                  error={skillsError}
-                  direction={popupDirection}
-                  compact={compact}
-                  onToggleOpen={() => {
-                    setIsSkillOpen(!isSkillOpen);
-                    setIsMcpOpen(false);
-                    setIsPlusMenuOpen(false);
-                    setIsProjectOpen(false);
-                    setIsModelOpen(false);
-                  }}
-                  onSelect={(name) => {
-                    setActiveSkill(name);
-                    setIsSkillOpen(false);
-                  }}
-                  onRefresh={refreshSkills} />
-
-                <ProjectSelector
-                  ref={projectRef}
-                  projects={availableProjects}
-                  activeProject={activeProject}
-                  isOpen={isProjectOpen}
-                  loading={projectsLoading}
-                  error={projectsError}
-                  direction={popupDirection}
-                  compact={compact}
-                  onToggleOpen={() => {
-                    setIsProjectOpen(!isProjectOpen);
-                    setIsMcpOpen(false);
-                    setIsPlusMenuOpen(false);
-                    setIsSkillOpen(false);
-                    setIsModelOpen(false);
-                  }}
-                  onSelect={(name) => {
-                    setActiveProject(name);
-                    setIsProjectOpen(false);
-                  }}
-                  onRefresh={refreshProjects} />
-
-                <ModelSelector
-                  ref={modelRef}
-                  models={availableModels}
-                  activeModel={activeModel}
-                  isOpen={isModelOpen}
-                  loading={modelsLoading}
-                  error={modelsError}
-                  direction={popupDirection}
-                  compact={compact}
-                  onToggleOpen={() => {
-                    setIsModelOpen(!isModelOpen);
-                    setIsMcpOpen(false);
-                    setIsPlusMenuOpen(false);
-                    setIsSkillOpen(false);
-                    setIsProjectOpen(false);
-                  }}
-                  onSelect={(name) => {
-                    setActiveModel(name);
-                    setIsModelOpen(false);
-                  }}
-                  onRefresh={refreshModels} />
-
+                {renderConfigMenu(configRef, popupDirection)}
               </div>
 
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -462,7 +543,9 @@ export function InputBar({
             </div>
           </div>
         </div>
-      </div>);
+      </div>
+      {fullScreenOverlay}
+      </>);
 
   }
   const detailPlaceholder = isRunning
@@ -470,8 +553,9 @@ export function InputBar({
     : (compact ? "Ask anything..." : "Request changes or ask a question");
 
   return (
+    <>
     <div
-      className="border-t border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] p-4"
+      className="border-t border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] p-4 shadow-[0_-4px_12px_rgba(0,0,0,0.12)]"
       data-testid="inputbar-detail">
 
       <input
@@ -511,7 +595,7 @@ export function InputBar({
             </div>
           }
 
-          <div className="px-3 py-2">
+          <div className="relative px-3 py-2">
             <textarea
               ref={textareaRef}
               value={inputValue}
@@ -521,7 +605,14 @@ export function InputBar({
               aria-label="Session query"
               disabled={isSubmitting}
               rows={1}
-              className="w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-sm resize-none min-h-[24px] max-h-[200px]" />
+              className="w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-sm resize-none min-h-[24px] max-h-[200px] pr-7" />
+            <button
+              type="button"
+              onClick={() => setIsFullScreen(true)}
+              aria-label="Expand editor"
+              className="absolute top-1 right-1 p-1 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] opacity-60 hover:opacity-100 transition-opacity">
+              <Maximize2 className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           <div className="flex items-center justify-between px-1 pb-1">
@@ -530,12 +621,12 @@ export function InputBar({
                 <button
                   onClick={() => {
                     setIsPlusMenuOpen(!isPlusMenuOpen);
-                    setIsMcpOpen(false);
+                    setIsConfigOpen(false);
                   }}
                   className={`p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
                   <Plus className="w-4 h-4" />
                 </button>
-                {isPlusMenuOpen && <PlusMenu />}
+                {isPlusMenuOpen && <PlusMenu direction={popupDirection} />}
               </div>
               {queryMode === 'plan' &&
               <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
@@ -543,88 +634,7 @@ export function InputBar({
                 </span>
               }
 
-              <McpSelector
-                ref={mcpRef}
-                options={groupedOptions}
-                isOpen={isMcpOpen}
-                loading={mcpLoading}
-                error={mcpError}
-                direction={popupDirection}
-                compact={compact}
-                onToggleOpen={() => {
-                  setIsMcpOpen(!isMcpOpen);
-                  setIsPlusMenuOpen(false);
-                  setIsSkillOpen(false);
-                  setIsModelOpen(false);
-                }}
-                onToggle={toggleMcp}
-                onRefresh={refreshMcp} />
-
-              <SkillSelector
-                ref={skillRef}
-                skills={availableSkills}
-                activeSkill={activeSkill}
-                isOpen={isSkillOpen}
-                loading={skillsLoading}
-                error={skillsError}
-                direction={popupDirection}
-                compact={compact}
-                onToggleOpen={() => {
-                  setIsSkillOpen(!isSkillOpen);
-                  setIsMcpOpen(false);
-                  setIsPlusMenuOpen(false);
-                  setIsProjectOpen(false);
-                  setIsModelOpen(false);
-                }}
-                onSelect={(name) => {
-                  setActiveSkill(name);
-                  setIsSkillOpen(false);
-                }}
-                onRefresh={refreshSkills} />
-
-              <ProjectSelector
-                ref={projectRef}
-                projects={availableProjects}
-                activeProject={activeProject}
-                isOpen={isProjectOpen}
-                loading={projectsLoading}
-                error={projectsError}
-                direction={popupDirection}
-                compact={compact}
-                onToggleOpen={() => {
-                  setIsProjectOpen(!isProjectOpen);
-                  setIsMcpOpen(false);
-                  setIsPlusMenuOpen(false);
-                  setIsSkillOpen(false);
-                  setIsModelOpen(false);
-                }}
-                onSelect={(name) => {
-                  setActiveProject(name);
-                  setIsProjectOpen(false);
-                }}
-                onRefresh={refreshProjects} />
-
-              <ModelSelector
-                ref={modelRef}
-                models={availableModels}
-                activeModel={activeModel}
-                isOpen={isModelOpen}
-                loading={modelsLoading}
-                error={modelsError}
-                direction={popupDirection}
-                compact={compact}
-                onToggleOpen={() => {
-                  setIsModelOpen(!isModelOpen);
-                  setIsMcpOpen(false);
-                  setIsPlusMenuOpen(false);
-                  setIsSkillOpen(false);
-                  setIsProjectOpen(false);
-                }}
-                onSelect={(name) => {
-                  setActiveModel(name);
-                  setIsModelOpen(false);
-                }}
-                onRefresh={refreshModels} />
+              {renderConfigMenu(configRef, popupDirection)}
             </div>
 
             <div className="flex items-center gap-1 flex-shrink-0">
@@ -655,6 +665,8 @@ export function InputBar({
           </div>
         </div>
       </div>
-    </div>);
+    </div>
+    {fullScreenOverlay}
+    </>);
 
 }

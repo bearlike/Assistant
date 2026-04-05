@@ -18,6 +18,11 @@ export type ParsedResult =
   | { kind: "file"; path: string; text: string }
   | { kind: "raw"; text: string };
 
+/** Heuristic: text contains unified diff markers (--- a/... and +++ b/...). */
+function looksLikeUnifiedDiff(text: string): boolean {
+  return /^---\s+\S/m.test(text) && /^\+\+\+\s+\S/m.test(text);
+}
+
 export function parseStructuredResult(result: unknown): ParsedResult {
   if (typeof result !== "string")
     return { kind: "raw", text: String(result ?? "") };
@@ -28,6 +33,10 @@ export function parseStructuredResult(result: unknown): ParsedResult {
     }
   } catch {
     /* not JSON */
+  }
+  // Detect unified diffs in raw text (e.g. from MCP file-write tools).
+  if (looksLikeUnifiedDiff(result)) {
+    return { kind: "diff", text: result, title: "File Change" };
   }
   return { kind: "raw", text: result };
 }
@@ -124,7 +133,9 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         "";
       const success = payload.success !== false;
       const eventAgentId = typeof payload.agent_id === "string" ? payload.agent_id : undefined;
-      const eventModel = eventAgentId ? agentModelMap.get(eventAgentId) : undefined;
+      const eventModel = typeof payload.model === "string"
+        ? payload.model
+        : eventAgentId ? agentModelMap.get(eventAgentId) : undefined;
 
       // Parse AgentResult JSON from spawn_agent tool results
       if (toolId === "spawn_agent" && typeof result === "string") {
@@ -268,6 +279,8 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
       });
       previousSteps = steps;
     }
+    // plan_proposed/plan_approved/plan_rejected events are rendered inline
+    // in ConversationTimeline as PlanCard entries, not as log rows.
     if (event.type === "step_reflection") {
       logs.push({
         id: `reflect-${idx++}`,

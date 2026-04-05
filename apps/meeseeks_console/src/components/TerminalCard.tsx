@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { CheckCircle2, XCircle, ChevronRight } from 'lucide-react';
 import { CopyButton } from './CopyButton';
+import { ModelLabel } from './ModelLabel';
 
 interface TerminalCardProps {
   command: string;
@@ -10,6 +11,8 @@ interface TerminalCardProps {
   stderr?: string;
   durationMs?: number;
   defaultExpanded?: boolean;
+  model?: string;
+  agentId?: string;
 }
 
 function formatDuration(ms: number): string {
@@ -49,6 +52,8 @@ export function TerminalCard({
   stderr,
   durationMs,
   defaultExpanded = false,
+  model,
+  agentId,
 }: TerminalCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const isError = exitCode !== undefined && exitCode !== 0;
@@ -83,6 +88,14 @@ export function TerminalCard({
           </span>
         )}
         {!cwd && <span className="flex-1" />}
+
+        {/* Model + Agent badges */}
+        {model && <ModelLabel modelId={model} className="text-[10px] text-white/50" />}
+        {agentId && (
+          <span className="text-[10px] font-mono text-white/40 px-1 rounded bg-white/10">
+            {agentId.slice(0, 6)}
+          </span>
+        )}
 
         {/* Duration */}
         {durationMs !== undefined && (

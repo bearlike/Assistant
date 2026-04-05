@@ -8,6 +8,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Literal
 
 from meeseeks_core.classes import Plan, TaskQueue
 from meeseeks_core.session_store import SessionStoreBase, create_session_store
@@ -15,6 +16,21 @@ from meeseeks_core.task_master import orchestrate_session
 from meeseeks_core.types import EventRecord
 
 CORE_COMMANDS = {"/compact", "/terminate", "/status"}
+
+RecoveryAction = Literal["retry", "continue"]
+
+
+def _build_continue_recovery_query(original_user_text: str) -> str:
+    """Build the ``continue`` recovery prompt.
+
+    The original task is already in conversation context (directly or via
+    compaction summary). Repeating it verbatim wastes tokens.
+    """
+    return (
+        "You were previously interrupted by an error. "
+        "Review the conversation context and continue from where "
+        "you left off without repeating completed work."
+    )
 
 
 def _utc_now() -> str:
@@ -197,7 +213,8 @@ class SessionRuntime:
         if events is None:
             events = self._session_store.load_transcript(session_id)
         created_at = events[0]["ts"] if events else None
-        title = None
+        stored_title = self._session_store.load_title(session_id)
+        title = stored_title
         status = "idle"
         done_reason = None
         context: dict[str, object] | None = None
@@ -207,11 +224,14 @@ class SessionRuntime:
                 payload = event.get("payload")
                 if isinstance(payload, dict):
                     context = payload
-            if title is None and event.get("type") == "user":
+            if event.get("type") == "user":
                 has_user_event = True
-                payload = event.get("payload", {})
-                if isinstance(payload, dict):
-                    title = payload.get("text")
+                if title is None:
+                    payload = event.get("payload", {})
+                    if isinstance(payload, dict):
+                        raw = payload.get("text")
+                        if isinstance(raw, str):
+                            title = raw[:120]
             if event.get("type") == "completion":
                 payload = event.get("payload", {})
                 if isinstance(payload, dict):
@@ -223,6 +243,8 @@ class SessionRuntime:
                         status = "failed"
                     elif done_reason == "max_steps_reached":
                         status = "incomplete"
+                    elif done_reason == "awaiting_approval":
+                        status = "awaiting_approval"
         running = self.is_running(session_id)
         if running:
             status = "running"
@@ -321,6 +343,7 @@ class SessionRuntime:
         user_query: str,
         session_id: str,
         model_name: str | None = None,
+        fallback_models: tuple[str, ...] | None = None,
         max_iters: int = 3,
         initial_plan: Plan | None = None,
         tool_registry=None,
@@ -340,6 +363,7 @@ class SessionRuntime:
         return orchestrate_session(
             user_query=user_query,
             model_name=model_name,
+            fallback_models=fallback_models,
             max_iters=max_iters,
             initial_plan=initial_plan,
             session_id=session_id,
@@ -366,6 +390,145 @@ class SessionRuntime:
         """Return True if session has an active run."""
         return self._run_registry.is_running(session_id)
 
+    def resolve_recovery_query(
+        self,
+        session_id: str,
+        action: RecoveryAction,
+        *,
+        from_ts: str | None = None,
+    ) -> str:
+        """Resolve the user query text for a retry/continue recovery action.
+
+        Appends a ``recovery`` audit event to the transcript and returns the
+        query text the caller should pass to :meth:`start_async`. The
+        orchestrator automatically picks up prior events via
+        :class:`ContextBuilder`, so the caller does not need to trim the
+        transcript.
+
+        Raises :class:`ValueError` when ``action`` is unrecognised, there is
+        no prior user message to recover from, or (for ``retry``) the last
+        user message is empty.
+        Raises :class:`RuntimeError` if a run is already active for the
+        session — cancel it first.
+        """
+        if action not in ("retry", "continue"):
+            raise ValueError(
+                f"unknown recovery action: {action!r}; "
+                "expected 'retry' or 'continue'"
+            )
+        if self.is_running(session_id):
+            raise RuntimeError(
+                f"session {session_id} is running; cancel before recovering"
+            )
+        events = self._session_store.load_transcript(session_id)
+
+        # Find the target user event.  When *from_ts* is given (only
+        # meaningful for "retry"), locate the user event at that exact
+        # timestamp so the caller can retry from any turn — not just the
+        # last one.  Otherwise fall back to the most recent user event.
+        if from_ts and action == "retry":
+            last_user = next(
+                (
+                    e
+                    for e in events
+                    if e.get("type") == "user" and e.get("ts") == from_ts
+                ),
+                None,
+            )
+            if last_user is None:
+                raise ValueError(
+                    f"no user event at ts={from_ts!r}"
+                )
+        else:
+            last_user = next(
+                (e for e in reversed(events) if e.get("type") == "user"),
+                None,
+            )
+        if last_user is None:
+            raise ValueError(
+                "no prior user message to recover from — start with "
+                "a fresh query instead"
+            )
+        user_payload = last_user.get("payload") or {}
+        original_text = (
+            user_payload.get("text", "")
+            if isinstance(user_payload, dict)
+            else ""
+        )
+        # The FIRST user event's text anchors the "continue" prompt
+        # (defence-in-depth for long multi-turn sessions where the
+        # ContextBuilder may have FIFO-evicted the original task).
+        first_user = next(
+            (e for e in events if e.get("type") == "user"), None
+        )
+        first_user_text = (
+            (first_user.get("payload") or {}).get("text", "")
+            if first_user and isinstance(first_user.get("payload"), dict)
+            else original_text
+        )
+
+        if action == "retry":
+            # ----------------------------------------------------------
+            # Retry = time-travel: delete the failed turn so the session
+            # looks like it ended right before that user message was
+            # sent. ``Orchestrator.run`` re-appends the user event +
+            # runs a fresh attempt. Prior successful turns stay intact.
+            # ----------------------------------------------------------
+            if not original_text:
+                raise ValueError(
+                    "last user message has empty text; cannot retry"
+                )
+            last_user_ts = last_user.get("ts", "")
+            if last_user_ts:
+                # Delete the user event itself + everything after it
+                # (tool_results, completion, recovery events, …). Use
+                # ``ts >= last_user_ts`` semantics by truncating after
+                # the timestamp just BEFORE the user event.
+                #
+                # Find the event immediately before the last user.
+                prev_ts = ""
+                for ev in events:
+                    if ev is last_user:
+                        break
+                    prev_ts = ev.get("ts", "")
+                if prev_ts:
+                    self._session_store.truncate_after(
+                        session_id, prev_ts
+                    )
+                else:
+                    # The user event is the first event — nuke everything
+                    # by truncating after an impossibly-early timestamp.
+                    self._session_store.truncate_after(
+                        session_id, "0000-00-00T00:00:00+00:00"
+                    )
+            query_text = original_text
+        else:
+            # ----------------------------------------------------------
+            # Continue = stitch: keep the failed run's traces, delete
+            # only prior recovery attempts (events after the LAST
+            # completion), then start a new continuation turn.
+            # ----------------------------------------------------------
+            last_completion_ts = ""
+            for ev in events:
+                if ev.get("type") == "completion":
+                    last_completion_ts = ev.get("ts", "")
+            if last_completion_ts:
+                self._session_store.truncate_after(
+                    session_id, last_completion_ts
+                )
+            query_text = _build_continue_recovery_query(
+                first_user_text or original_text
+            )
+            # Audit marker so the transcript records when the user
+            # triggered a continue. Not appended for retry (the failed
+            # turn is deleted entirely — no trace left to annotate).
+            self._session_store.append_event(
+                session_id,
+                {"type": "recovery", "payload": {"action": action}},
+            )
+
+        return query_text
+
     def enqueue_message(self, session_id: str, text: str) -> bool:
         """Enqueue a steering message for the root agent of a running session.
 
@@ -388,3 +551,77 @@ class SessionRuntime:
             handle.interrupt_step.set()
             return True
         return False
+
+    def _has_pending_plan_proposal(self, session_id: str) -> tuple[bool, int, str]:
+        """Check if the session has an unresolved plan_proposed event.
+
+        Returns ``(has_pending, revision, plan_path)`` where *revision* is the
+        latest unresolved ``plan_proposed`` revision number, or 0 if none.
+        """
+        events = self._session_store.load_transcript(session_id)
+        proposed_revisions: set[int] = set()
+        resolved_revisions: set[int] = set()
+        plan_path = ""
+        for event in events:
+            etype = event.get("type")
+            payload = event.get("payload") or {}
+            if not isinstance(payload, dict):
+                continue
+            rev = payload.get("revision", 0)
+            if etype == "plan_proposed":
+                proposed_revisions.add(rev)
+                plan_path = payload.get("plan_path", "")
+            elif etype in ("plan_approved", "plan_rejected"):
+                resolved_revisions.add(rev)
+        pending = proposed_revisions - resolved_revisions
+        if pending:
+            return True, max(pending), plan_path
+        return False, 0, ""
+
+    def approve_plan(self, session_id: str) -> bool:
+        """Approve a pending plan proposal episodically.
+
+        Emits a ``plan_approved`` event to the transcript. Does NOT start
+        a new run — the caller (API endpoint) is responsible for starting
+        the act-mode run via ``start_async``.
+
+        Returns False if no pending plan proposal exists or a run is
+        already active.
+        """
+        if self.is_running(session_id):
+            return False
+        has_pending, revision, plan_path = self._has_pending_plan_proposal(session_id)
+        if not has_pending:
+            return False
+        self._session_store.append_event(
+            session_id,
+            {
+                "type": "plan_approved",
+                "payload": {"plan_path": plan_path, "revision": revision},
+            },
+        )
+        return True
+
+    def reject_plan(self, session_id: str) -> bool:
+        """Reject a pending plan proposal.
+
+        Emits a ``plan_rejected`` event. The session stays dormant —
+        the user can type refinement guidance as a new message, which
+        starts a fresh plan-mode run.
+
+        Returns False if no pending plan proposal exists or a run is
+        already active.
+        """
+        if self.is_running(session_id):
+            return False
+        has_pending, revision, plan_path = self._has_pending_plan_proposal(session_id)
+        if not has_pending:
+            return False
+        self._session_store.append_event(
+            session_id,
+            {
+                "type": "plan_rejected",
+                "payload": {"plan_path": plan_path, "revision": revision},
+            },
+        )
+        return True

@@ -181,6 +181,12 @@ async def compact_conversation(
 
     response = await llm.ainvoke(messages)
     raw_summary = response.content if hasattr(response, "content") else str(response)
+    # Reasoning models return a list of content blocks; extract text.
+    if isinstance(raw_summary, list):
+        raw_summary = next(
+            (b["text"] for b in raw_summary if isinstance(b, dict) and b.get("type") == "text"),
+            "",
+        )
 
     # Extract clean summary
     summary = _extract_summary(raw_summary)

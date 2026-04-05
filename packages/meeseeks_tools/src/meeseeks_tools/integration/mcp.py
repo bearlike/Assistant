@@ -151,6 +151,13 @@ def save_mcp_config(config: dict[str, Any], path: str | None = None) -> None:
 
 
 def _schema_from_args_schema(args_schema: Any) -> dict[str, Any] | None:
+    """Extract a JSON Schema dict from an MCP tool's args_schema.
+
+    Returns the schema as-is, stripping only Pydantic internals (``$defs``,
+    ``definitions``) that reference resolved types.  All standard JSON Schema
+    keywords (``type``, ``anyOf``, ``properties``, etc.) are preserved so that
+    downstream LLM providers receive valid schemas.
+    """
     if args_schema is None:
         return None
     if isinstance(args_schema, dict):
@@ -163,22 +170,8 @@ def _schema_from_args_schema(args_schema: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(schema, dict):
         return None
-    required = schema.get("required", [])
-    if not isinstance(required, list):
-        required = []
-    properties = schema.get("properties", {})
-    if not isinstance(properties, dict):
-        properties = {}
-    payload: dict[str, Any] = {"required": required, "properties": {}}
-    for name, prop in properties.items():
-        if not isinstance(prop, dict):
-            continue
-        payload["properties"][name] = {
-            key: value
-            for key, value in prop.items()
-            if key in {"type", "description", "enum", "items"}
-        }
-    return payload
+    # Strip Pydantic internals that only make sense alongside $ref.
+    return {k: v for k, v in schema.items() if k not in ("$defs", "definitions")}
 
 
 def _tool_schema_payload(tool: Any) -> dict[str, Any] | None:

@@ -60,7 +60,14 @@ class ToolSpec:
     timeout: float = 120.0  # Per-tool execution timeout in seconds
 
     def is_plan_safe(self) -> bool:
-        """Return True if the tool is safe to use in plan mode."""
+        """Return True if the tool is safe to use in plan mode.
+
+        A tool is plan-safe when it does not mutate state — i.e., its
+        ``read_only`` field is True. The legacy ``plan_safe`` metadata key
+        is still honoured as a fallback for external tool manifests.
+        """
+        if self.read_only:
+            return True
         return bool(self.metadata.get("plan_safe"))
 
 
@@ -290,24 +297,28 @@ def _default_registry() -> ToolRegistry:
     registry.register(edit_spec)
     registry.register(
         ToolSpec(
-            tool_id="aider_read_file_tool",
-            name="Aider Read File",
-            description="Read local files using Aider helpers.",
+            tool_id="read_file",
+            name="Read File",
+            description="Read local files.",
             factory=_import_factory(
                 "meeseeks_tools.integration.aider_file_tools",
-                "AiderReadFileTool",
+                "ReadFileTool",
             ),
-            prompt_path="tools/aider-read-file",
+            prompt_path="tools/read-file",
+            read_only=True,
             metadata={
-                "plan_safe": True,
                 "schema": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "File path to read"},
                         "root": {"type": "string", "description": "Project root"},
-                        "max_bytes": {
+                        "offset": {
                             "type": "integer",
-                            "description": "Truncation limit in bytes",
+                            "description": "Line to start from (0-based). For large files.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max lines to read. Defaults to 2000.",
                         },
                     },
                     "required": ["path"],
@@ -325,8 +336,8 @@ def _default_registry() -> ToolRegistry:
                 "AiderListDirTool",
             ),
             prompt_path="tools/aider-list-dir",
+            read_only=True,
             metadata={
-                "plan_safe": True,
                 "schema": {
                     "type": "object",
                     "properties": {
@@ -403,21 +414,28 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
         },
         _edit_tool_spec_and_manifest()[1],
         {
-            "tool_id": "aider_read_file_tool",
-            "name": "Aider Read File",
-            "description": "Read local files using Aider helpers.",
+            "tool_id": "read_file",
+            "name": "Read File",
+            "description": "Read local files.",
             "module": "meeseeks_tools.integration.aider_file_tools",
-            "class": "AiderReadFileTool",
+            "class": "ReadFileTool",
             "kind": "local",
             "enabled": True,
-            "prompt": "tools/aider-read-file",
-            "plan_safe": True,
+            "prompt": "tools/read-file",
+            "read_only": True,
             "schema": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File path to read"},
                     "root": {"type": "string", "description": "Project root"},
-                    "max_bytes": {"type": "integer", "description": "Truncation limit in bytes"},
+                    "offset": {
+                        "type": "integer",
+                        "description": "Line to start from (0-based). For large files.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max lines to read. Defaults to 2000.",
+                    },
                 },
                 "required": ["path"],
             },
@@ -431,7 +449,7 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "kind": "local",
             "enabled": True,
             "prompt": "tools/aider-list-dir",
-            "plan_safe": True,
+            "read_only": True,
             "schema": {
                 "type": "object",
                 "properties": {
@@ -510,7 +528,12 @@ def _try_pool_discovery(
 
         config = _normalize_mcp_config(_load_mcp_config(mcp_config_path, cwd=cwd))
         pool = get_mcp_pool()
-        asyncio.run(pool.connect_all(config))
+        # refresh_if_config_changed diffs against the pool's previous config
+        # and disconnects servers that are no longer present — essential when
+        # the same long-lived pool serves multiple project scopes in the API
+        # process. connect_all is additive-only and would let a previous
+        # project's MCP servers bleed into the current project's tool list.
+        asyncio.run(pool.refresh_if_config_changed(config))
         details = pool.get_all_tool_details()
         # If pool connected but discovered zero tools across all servers,
         # treat that as a failure and fall through to the legacy path.
@@ -692,6 +715,7 @@ def load_registry(
             enabled=tool.get("enabled", True),
             kind=kind,
             prompt_path=prompt_path,
+            read_only=bool(tool.get("read_only", False)),
             metadata={
                 key: value
                 for key, value in tool.items()
@@ -705,6 +729,7 @@ def load_registry(
                     "enabled",
                     "kind",
                     "prompt",
+                    "read_only",
                 }
             },
         )

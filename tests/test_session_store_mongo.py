@@ -103,15 +103,32 @@ def test_archive_roundtrip(mongo_store):
 
 
 def test_fork_session(mongo_store):
-    """Fork copies events and summary to a new session."""
+    """Fork copies events, summary, and title to a new session."""
     session_id = mongo_store.create_session()
     mongo_store.append_event(session_id, {"type": "user", "payload": {"text": "hello"}})
     mongo_store.save_summary(session_id, "test summary")
+    mongo_store.save_title(session_id, "my title")
 
     forked_id = mongo_store.fork_session(session_id)
     assert forked_id != session_id
     assert len(mongo_store.load_transcript(forked_id)) == 1
     assert mongo_store.load_summary(forked_id) == "test summary"
+    assert mongo_store.load_title(forked_id) == "my title"
+
+
+def test_title_roundtrip(mongo_store):
+    """Mongo driver persists and reloads titles."""
+    session_id = mongo_store.create_session()
+    assert mongo_store.load_title(session_id) is None
+    mongo_store.save_title(session_id, "concise title")
+    assert mongo_store.load_title(session_id) == "concise title"
+    mongo_store.save_title(session_id, "edited")
+    assert mongo_store.load_title(session_id) == "edited"
+
+
+def test_title_missing(mongo_store):
+    """load_title returns None for nonexistent sessions."""
+    assert mongo_store.load_title("nonexistent") is None
 
 
 def test_session_dir(mongo_store, tmp_path):

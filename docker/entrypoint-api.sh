@@ -11,6 +11,16 @@
 
 set -u
 
+# Named Docker volumes mount as root:root even when the container runs as
+# a non-root user.  Fix ownership of writable directories that need it.
+# The meeseeks user has passwordless sudo (see Dockerfile.base).
+for _dir in /tmp/meeseeks /app/data; do
+    if [ -d "$_dir" ] && [ ! -w "$_dir" ]; then
+        printf '[entrypoint] Fixing ownership on %s\n' "$_dir"
+        sudo chown -R "$(id -u):$(id -g)" "$_dir"
+    fi
+done
+
 INIT_DIR="${INIT_DIR:-/app/docker/init.d}"
 
 if [ -d "$INIT_DIR" ]; then

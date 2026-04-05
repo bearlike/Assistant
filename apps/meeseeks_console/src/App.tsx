@@ -100,7 +100,10 @@ export function App() {
     refresh,
     refreshArchived,
     archive,
-    unarchive
+    unarchive,
+    updateTitle,
+    regenerateTitle,
+    applyTitle
   } = useSessions();
   const activeSession =
   sessions.find((session) => session.session_id === activeSessionId) ||
@@ -229,6 +232,8 @@ export function App() {
       onClearNotifications={clearNotifications}
       onArchiveSession={archive}
       onUnarchiveSession={unarchive}
+      onUpdateSessionTitle={updateTitle}
+      onRegenerateTitle={regenerateTitle}
       onShareSession={handleShareSession}
       onExportSession={handleExportSession}
       onSettingsClick={handleSettingsClick}
@@ -252,13 +257,14 @@ export function App() {
           onLoadArchived={refreshArchived}
           onArchive={archive}
           onUnarchive={unarchive}
-          isCreating={creating} />
+          isCreating={creating}
+          onRetry={refresh} />
 
         </div> :
 
       <>
           {activeSession ?
-        <SessionDetailView session={activeSession} /> :
+        <SessionDetailView session={activeSession} onTitleUpdate={applyTitle} onSessionChange={refresh} /> :
 
         <div className="flex-1 overflow-y-auto p-6">
               {loading ?

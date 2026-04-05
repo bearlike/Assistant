@@ -250,7 +250,7 @@ class TestAgentHypervisor:
             )
             await reg.register(handle)
             result = await reg.cancel_agent("a1")
-            assert result is True
+            assert result is None  # None = success
             # Let the event loop process the cancellation.
             await asyncio.sleep(0)
             assert task.cancelled()
@@ -362,7 +362,7 @@ class TestHypervisorMessagePassing:
                             status="running", message_queue=q)
             await reg.register(h)
             result = await reg.send_message("a1", "wrap up now")
-            assert result is True
+            assert result is None  # None = success
             assert q.get_nowait() == "wrap up now"
         asyncio.run(_test())
 
@@ -376,7 +376,7 @@ class TestHypervisorMessagePassing:
                             status="completed", message_queue=q)
             await reg.register(h)
             result = await reg.send_message("a1", "hello")
-            assert result is False
+            assert result is not None  # str = failure reason
             assert q.empty()
         asyncio.run(_test())
 
@@ -384,7 +384,7 @@ class TestHypervisorMessagePassing:
         async def _test():
             reg = AgentHypervisor()
             result = await reg.send_message("nonexistent", "hello")
-            assert result is False
+            assert result is not None  # str = failure reason
         asyncio.run(_test())
 
 
@@ -428,6 +428,41 @@ class TestHypervisorGlobalEye:
             tree = await reg.render_agent_tree()
             assert "Budget:" in tree
             assert "1/100" in tree
+        asyncio.run(_test())
+
+    def test_tree_excludes_specified_agent(self):
+        """Excluding the calling agent's own ID prevents self-steering."""
+        async def _test():
+            reg = AgentHypervisor()
+            root = AgentHandle(agent_id="root1234", parent_id=None, depth=0,
+                               model_name="m", task_description="Root task",
+                               status="running")
+            child = AgentHandle(agent_id="child567", parent_id="root1234", depth=1,
+                                model_name="m", task_description="Child task",
+                                status="submitted")
+            await reg.register(root)
+            await reg.register(child)
+
+            # Exclude root — only child visible
+            tree = await reg.render_agent_tree(exclude_agent_id="root1234")
+            assert "root1234" not in tree
+            assert "child567" in tree
+
+            # Default (no exclusion) shows all
+            tree_all = await reg.render_agent_tree()
+            assert "root1234" in tree_all
+            assert "child567" in tree_all
+        asyncio.run(_test())
+
+    def test_tree_exclude_only_agent_returns_empty(self):
+        """If the only registered agent is excluded, return empty string."""
+        async def _test():
+            reg = AgentHypervisor()
+            h = AgentHandle(agent_id="solo1234", parent_id=None, depth=0,
+                            model_name="m", task_description="t", status="running")
+            await reg.register(h)
+            tree = await reg.render_agent_tree(exclude_agent_id="solo1234")
+            assert tree == ""
         asyncio.run(_test())
 
 
@@ -498,3 +533,34 @@ class TestAgentStatusExpansion:
             assert got is not None
             assert got.status == "rejected"
         asyncio.run(_test())
+
+
+class TestDoneEvent:
+    """Event-driven wait: done_event is set when agent reaches terminal state."""
+
+    def test_mark_done_sets_done_event(self):
+        hyper = AgentHypervisor(max_concurrent=10)
+        handle = AgentHandle(
+            agent_id="evt_test", parent_id=None, depth=0,
+            model_name="test", task_description="test",
+        )
+        asyncio.run(hyper.register(handle))
+        assert not handle.done_event.is_set()
+        asyncio.run(hyper.mark_done("evt_test", "completed"))
+        assert handle.done_event.is_set()
+
+    def test_cancel_agent_sets_done_event(self):
+        hyper = AgentHypervisor(max_concurrent=10)
+        handle = AgentHandle(
+            agent_id="cancel_evt", parent_id=None, depth=0,
+            model_name="test", task_description="test",
+        )
+
+        async def _run():
+            await hyper.register(handle)
+            handle.asyncio_task = asyncio.create_task(asyncio.sleep(999))
+            cancelled = await hyper.cancel_agent("cancel_evt")
+            assert cancelled is None  # None = success
+            assert handle.done_event.is_set()
+
+        asyncio.run(_run())

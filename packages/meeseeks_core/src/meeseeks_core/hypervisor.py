@@ -110,6 +110,8 @@ class AgentHandle:
     result: AgentResult | None = None
     # Ref: [DeepMind-Delegation §4.5] Auto-updated progress for monitoring
     progress_note: str | None = None
+    # Signaled when agent reaches a terminal state (completed/failed/cancelled).
+    done_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class AgentHypervisor:
@@ -219,6 +221,7 @@ class AgentHypervisor:
                 handle.status = status
                 handle.error = error
                 handle.stopped_at = time.monotonic()
+                handle.done_event.set()
 
     # ------------------------------------------------------------------
     # Queries
@@ -297,8 +300,10 @@ class AgentHypervisor:
     # Bidirectional messaging  (Ref: [DeepMind-Delegation §4.4], [AgentCgroup §4.2])
     # ------------------------------------------------------------------
 
-    async def send_message(self, agent_id: str, message: str) -> bool:
+    async def send_message(self, agent_id: str, message: str) -> str | None:
         """Send a steering message to a running agent.
+
+        Returns ``None`` on success, or a diagnostic string on failure.
 
         Ref: [DeepMind-Delegation §4.4] Adaptive coordination — the hypervisor
         injects NL feedback (budget warnings, stall nudges) into the agent's
@@ -307,27 +312,43 @@ class AgentHypervisor:
         """
         async with self._lock:
             handle = self._agents.get(agent_id)
-            if handle and handle.status == "running" and handle.message_queue:
-                handle.message_queue.put_nowait(message)
-                return True
-        return False
+            if not handle:
+                return "agent not in registry"
+            if handle.status != "running":
+                return f"agent status is '{handle.status}'"
+            if not handle.message_queue:
+                return "no message queue"
+            handle.message_queue.put_nowait(message)
+            return None
 
     # ------------------------------------------------------------------
     # Global eye  (Ref: [DeepMind-Delegation §4.5])
     # ------------------------------------------------------------------
 
-    async def render_agent_tree(self) -> str:
+    async def render_agent_tree(
+        self, *, exclude_agent_id: str | None = None,
+    ) -> str:
         """Render a concise text summary of the agent tree for the root's system prompt.
 
         Ref: [DeepMind-Delegation §4.5] Structural transparency — the root
         agent (the hypervisor's "brain") gets a live view of all agents so
         it can reason about the delegation state and intervene if needed.
+
+        Args:
+            exclude_agent_id: If provided, omit this agent from the rendered
+                tree.  Used so the calling agent does not see itself listed.
         """
         async with self._lock:
             if not self._agents:
                 return ""
+            visible = [
+                h for h in self._agents.values()
+                if h.agent_id != exclude_agent_id
+            ]
+            if not visible:
+                return ""
             counts: dict[str, int] = {}
-            for h in self._agents.values():
+            for h in visible:
                 counts[h.status] = counts.get(h.status, 0) + 1
             status_parts = [f"{v} {k}" for k, v in sorted(counts.items())]
             budget_str = ""
@@ -335,7 +356,7 @@ class AgentHypervisor:
                 budget_str = f" | Budget: {self._total_steps}/{self._session_step_budget} steps"
             header = f"Agents: {', '.join(status_parts)}{budget_str}"
             lines = [header]
-            for h in sorted(self._agents.values(), key=lambda x: (x.depth, x.agent_id)):
+            for h in sorted(visible, key=lambda x: (x.depth, x.agent_id)):
                 indent = "  " * h.depth
                 step_info = f"{h.steps_completed} steps"
                 if h.last_tool_id:
@@ -388,35 +409,48 @@ class AgentHypervisor:
                 and h.status in ("submitted", "running")
             ]
 
-    async def send_to_parent(self, child_agent_id: str, message: str) -> bool:
+    async def send_to_parent(self, child_agent_id: str, message: str) -> str | None:
         """Route a message from a child agent to its parent's queue.
+
+        Returns ``None`` on success, or a diagnostic string on failure.
 
         Ref: [DeepMind-Delegation §4.4] Bidirectional message passing —
         enables lifecycle manager to notify parent on child completion.
         """
         async with self._lock:
             child = self._agents.get(child_agent_id)
-            if child and child.parent_id:
-                parent = self._agents.get(child.parent_id)
-                if parent and parent.message_queue:
-                    parent.message_queue.put_nowait(message)
-                    return True
-        return False
+            if not child or not child.parent_id:
+                return "child not in registry or no parent"
+            parent = self._agents.get(child.parent_id)
+            if not parent:
+                return "parent not in registry"
+            if not parent.message_queue:
+                return "parent has no message queue"
+            parent.message_queue.put_nowait(message)
+            return None
 
     # ------------------------------------------------------------------
     # Cancellation
     # ------------------------------------------------------------------
 
-    async def cancel_agent(self, agent_id: str) -> bool:
-        """Cancel a running agent by cancelling its asyncio task."""
+    async def cancel_agent(self, agent_id: str) -> str | None:
+        """Cancel a running agent by cancelling its asyncio task.
+
+        Returns ``None`` on success, or a diagnostic string on failure.
+        """
         async with self._lock:
             handle = self._agents.get(agent_id)
-            if handle and handle.asyncio_task and not handle.asyncio_task.done():
-                handle.asyncio_task.cancel()
-                handle.status = "cancelled"
-                handle.stopped_at = time.monotonic()
-                return True
-            return False
+            if not handle:
+                return "agent not in registry"
+            if not handle.asyncio_task:
+                return "no asyncio task"
+            if handle.asyncio_task.done():
+                return f"task already done (status: {handle.status})"
+            handle.asyncio_task.cancel()
+            handle.status = "cancelled"
+            handle.stopped_at = time.monotonic()
+            handle.done_event.set()
+            return None
 
     # ------------------------------------------------------------------
     # Cleanup

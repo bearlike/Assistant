@@ -42,6 +42,7 @@ Core endpoints:
 - `POST /api/sessions/{session_id}/share` create share link
 - `POST /api/sessions/{session_id}/export` export session payload
 - `GET /api/share/{token}` fetch shared session data
+- `POST /api/webhooks/<platform>` inbound webhook for chat platforms (HMAC auth, not API key). See [Nextcloud Talk](clients-nextcloud-talk.md) and [Email](clients-email.md) for setup. Slash commands: `/help`, `/usage`, `/new`, `/switch-project`.
 
 ## Run the Console
 ```bash

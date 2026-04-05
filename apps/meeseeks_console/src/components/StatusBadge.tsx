@@ -28,6 +28,10 @@ const PAD_STD = "px-2.5 py-1";
 function resolveStatus(status: string, doneReason?: string | null): StatusConfig {
   const reason = String(doneReason || '').toLowerCase();
 
+  // Running takes absolute precedence — a live run overrides any prior done_reason.
+  if (status === 'running')
+    return { icon: PlayCircle, label: 'Running', style: `${PILL} border-blue-500/30 bg-blue-500/10 text-blue-600`, padding: PAD_STD };
+
   if (reason === 'blocked')
     return { icon: AlertCircle, label: 'Blocked', style: `${PILL} border-amber-500/30 bg-amber-500/10 text-amber-600`, padding: PAD_STD };
   if (reason === 'canceled')
@@ -37,8 +41,6 @@ function resolveStatus(status: string, doneReason?: string | null): StatusConfig
   if (reason === 'incomplete' || reason === 'max_iterations_reached' || reason === 'max_steps_reached')
     return { icon: AlertCircle, label: 'Incomplete', style: `${PILL} border-amber-500/30 bg-amber-500/10 text-amber-600`, padding: PAD_STD };
 
-  if (status === 'running')
-    return { icon: PlayCircle, label: 'Running', style: `${PILL} border-blue-500/30 bg-blue-500/10 text-blue-600`, padding: PAD_STD };
   if (status === 'completed' || status === 'merged')
     return { icon: CheckCircle2, label: 'Completed', style: `${PILL} border-emerald-500/30 bg-emerald-500/10 text-emerald-600`, padding: PAD_STD };
   if (status === 'incomplete')

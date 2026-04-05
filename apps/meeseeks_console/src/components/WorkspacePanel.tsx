@@ -10,6 +10,7 @@ interface WorkspacePanelProps {
   events: EventRecord[];
   diffContent?: string;
   filename?: string;
+  onRetry?: () => void;
   onContinue?: () => void;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
@@ -21,6 +22,7 @@ export function WorkspacePanel({
   events,
   diffContent,
   filename,
+  onRetry,
   onContinue,
   isMaximized,
   onToggleMaximize
@@ -63,7 +65,7 @@ export function WorkspacePanel({
         {activeTab === 'diff' ?
         <DiffView diffContent={diffContent} filename={filename} /> :
 
-        <LogsView events={events} onContinue={onContinue} />
+        <LogsView events={events} onRetry={onRetry} onContinue={onContinue} />
         }
       </div>
     </div>);

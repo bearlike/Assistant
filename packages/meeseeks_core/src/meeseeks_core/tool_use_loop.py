@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import platform as _platform
 import queue as _queue_mod
 import re
@@ -29,6 +30,15 @@ from meeseeks_core.common import get_git_context, get_logger, get_mock_speaker, 
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
 from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.context import ContextSnapshot, render_event_lines
+from meeseeks_core.exit_plan_mode import (
+    EXIT_PLAN_MODE_SCHEMA,
+    SHELL_TOOL_IDS,
+    ExitPlanModeTool,
+    ensure_plan_dir,
+    is_inside_plan_dir,
+    is_shell_command_plan_safe,
+    plan_file_for,
+)
 from meeseeks_core.hooks import HookManager
 from meeseeks_core.hypervisor import AgentHandle
 from meeseeks_core.llm import build_chat_model, specs_to_langchain_tools
@@ -38,7 +48,70 @@ from meeseeks_core.types import Event
 
 logging = get_logger(name="core.tool_use_loop")
 
+# ---------------------------------------------------------------------------
+# LLM error classification  (Ref: Codex ContextWindowExceeded skip,
+# Claude Code error-classified retry, OpenCode per-provider retry)
+# ---------------------------------------------------------------------------
+
+
+def _classify_llm_error(exc: Exception) -> tuple[bool, float]:
+    """Classify an LLM error. Returns ``(should_retry, delay_seconds)``.
+
+    Non-retryable errors (context overflow, auth, bad request) fail
+    immediately. Rate-limit errors respect the server's Retry-After header.
+    Transient errors get a minimal flat delay.
+    """
+    if isinstance(exc, asyncio.TimeoutError):
+        return True, 0.5
+    try:
+        import litellm.exceptions as litellm_exc  # noqa: I001 — lazy to avoid heavy import at module level
+    except ImportError:
+        return True, 0.5  # litellm unavailable — default retryable
+    if isinstance(exc, litellm_exc.ContextWindowExceededError):
+        return False, 0
+    if isinstance(
+        exc, litellm_exc.AuthenticationError | litellm_exc.PermissionDeniedError,
+    ):
+        return False, 0
+    if isinstance(exc, litellm_exc.BadRequestError):
+        return False, 0
+    if isinstance(exc, litellm_exc.RateLimitError):
+        return True, min(_extract_retry_after(exc) or 2.0, 30.0)
+    if isinstance(exc, litellm_exc.Timeout):
+        return True, 0.5
+    if isinstance(
+        exc,
+        litellm_exc.InternalServerError | litellm_exc.ServiceUnavailableError,
+    ):
+        return True, 1.0
+    if isinstance(exc, litellm_exc.APIConnectionError):
+        return True, 0.5
+    return True, 0.5  # unknown — retryable, minimal delay
+
+
+def _extract_retry_after(exc: Exception) -> float | None:
+    """Extract Retry-After seconds from a ``RateLimitError``'s httpx response."""
+    response = getattr(exc, "response", None)
+    if response is not None:
+        val = getattr(response, "headers", {}).get("retry-after")
+        if val:
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+# Matches Claude Code's ``NO_CONTENT_MESSAGE`` (src/constants/messages.ts).
+# Empty-string assistant content replayed in history causes extended-thinking
+# models (e.g. ``claude-opus-4-6``) to hallucinate framework-style placeholder
+# text. Following Claude Code's ``ensureNonEmptyAssistantContent``
+# (src/utils/messages.ts), substitute a neutral text block instead of ``""``.
+# The placeholder is filtered out of ``agent_message`` events so it never
+# reaches the UI.
+_NO_CONTENT_PLACEHOLDER = "(no content)"
 
 # Maps tool_id patterns to the AbstractTool operation ("get" or "set").
 _OPERATION_SET_KEYWORDS = frozenset(
@@ -94,6 +167,16 @@ class ToolBatch:
     concurrent: bool
 
 
+@dataclass
+class _CachedFileRead:
+    """Tracks a file read for dedup detection."""
+
+    path: str  # normalized absolute path
+    offset: int
+    limit: int | None
+    mtime: float  # os.path.getmtime at read time
+
+
 class ToolUseLoop:
     """Async tool-use conversation loop.
 
@@ -114,6 +197,7 @@ class ToolUseLoop:
         skill_instructions: str | None = None,
         skill_registry: Any = None,
         cwd: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Initialize the tool-use loop.
 
@@ -127,6 +211,7 @@ class ToolUseLoop:
             skill_instructions: Pre-rendered skill body (from user /skill invocation).
             skill_registry: SkillRegistry for auto-invocation catalog + activate_skill handling.
             cwd: Working directory for this agent (project root).
+            session_id: Session identifier — used for plan-mode path scoping.
         """
         self._ctx = agent_context
         self._tool_registry = tool_registry
@@ -137,6 +222,15 @@ class ToolUseLoop:
         self._skill_instructions = skill_instructions
         self._skill_registry = skill_registry
         self._cwd = cwd
+        self._session_id = session_id
+
+        # Dedup cache for read_file: prevents redundant reads when the
+        # same file + range hasn't changed on disk (mtime check).
+        self._file_read_cache: dict[str, _CachedFileRead] = {}
+
+        # Plan-mode state (mutable across the loop's lifetime).
+        self._current_mode: str = "act"
+        self._full_tool_specs: list[ToolSpec] = []
 
         # Create SpawnAgentTool when this agent can spawn children.
         self._spawn_agent_tool: Any = None
@@ -155,6 +249,17 @@ class ToolUseLoop:
                 cwd=cwd,
             )
 
+        # Create ExitPlanModeTool for root agents with a session id.
+        # The handler is dormant until a tool call references
+        # ``exit_plan_mode`` (only possible when the schema is bound in
+        # plan mode).
+        self._exit_plan_mode_tool: ExitPlanModeTool | None = None
+        if agent_context.depth == 0 and session_id is not None:
+            self._exit_plan_mode_tool = ExitPlanModeTool(
+                session_id=session_id,
+                event_logger=agent_context.event_logger,
+            )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -165,11 +270,24 @@ class ToolUseLoop:
         *,
         tool_specs: list[ToolSpec],
         context: ContextSnapshot | None = None,
-        max_steps: int = 10,
         plan: Plan | None = None,
+        mode: str = "act",
     ) -> tuple[TaskQueue, OrchestrationState]:
         """Run the async tool-use loop and return TaskQueue + OrchestrationState."""
         state = OrchestrationState(goal=user_query)
+        # Plan-mode is enforced via: (1) filtered tool schema at bind time,
+        # (2) path-scoped permission check on edits, (3) the exit_plan_mode
+        # approval gate. The loop flips ``_current_mode`` to ``"act"`` after
+        # the user approves a plan and re-binds tools.
+        self._current_mode = mode if mode in {"plan", "act"} else "act"
+        self._full_tool_specs = list(tool_specs)
+        if self._current_mode == "plan" and self._session_id is not None:
+            state.plan_path = plan_file_for(self._session_id)
+            ensure_plan_dir(self._session_id)
+        # Propagate plan context so children inherit session and mode.
+        if self._spawn_agent_tool is not None:
+            self._spawn_agent_tool.session_id = self._session_id
+            self._spawn_agent_tool.parent_mode = self._current_mode
         executed_steps: list[ActionStep] = []
         tool_outputs: list[str] = []
         last_error: str | None = None
@@ -184,6 +302,7 @@ class ToolUseLoop:
             task_description=user_query[:200],
         )
         await self._ctx.registry.register(handle)
+        handle.status = "running"
 
         # Ref: [AgentCgroup §4.2] Background watchdog for stall detection.
         # Code-level reflex — zero token cost. Root only.
@@ -195,14 +314,18 @@ class ToolUseLoop:
             # Ref: [DeepMind-Delegation §4.5] Global eye for root agent
             agent_tree = ""
             if self._ctx.depth == 0:
-                agent_tree = await self._ctx.registry.render_agent_tree()
+                agent_tree = await self._ctx.registry.render_agent_tree(
+                    exclude_agent_id=self._ctx.agent_id,
+                )
             messages = self._build_messages(
                 user_query,
                 context,
                 plan,
                 agent_tree=agent_tree,
             )
-            tool_schemas = specs_to_langchain_tools(tool_specs)
+            tool_schemas = self._build_tool_schemas_for_mode(
+                tool_specs, self._current_mode,
+            )
             model = self._bind_model(tool_schemas)
 
             langfuse_handler = build_langfuse_handler(
@@ -219,8 +342,8 @@ class ToolUseLoop:
                 if isinstance(metadata, dict) and metadata:
                     invoke_config["metadata"] = metadata
 
-            steps_run = 0
-            for _ in range(max_steps):
+            turns = 0
+            while not state.done:
                 # Check cancellation.
                 if self._ctx.should_cancel is not None and self._ctx.should_cancel():
                     state.done = True
@@ -247,7 +370,7 @@ class ToolUseLoop:
                     if span is not None:
                         try:
                             span.update_trace(
-                                input={"step": steps_run, "message_count": len(messages)}
+                                input={"turn": turns, "message_count": len(messages)}
                             )
                         except Exception:
                             pass
@@ -262,9 +385,123 @@ class ToolUseLoop:
                             )
                         )
 
-                    response: AIMessage = await model.ainvoke(
-                        messages, config=invoke_config or None
+                    llm_timeout = float(
+                        get_config_value(
+                            "agent", "llm_call_timeout", default=60.0,
+                        )
                     )
+                    llm_max_retries = int(
+                        get_config_value(
+                            "agent", "llm_call_retries", default=2,
+                        )
+                    )
+                    # Heartbeat events so clients (console/CLI) can distinguish
+                    # "waiting on LLM" from a silent hang.
+                    self._emit_event({
+                        "type": "llm_call_start",
+                        "payload": {
+                            "agent_id": self._ctx.agent_id,
+                            "depth": self._ctx.depth,
+                            "step": turns,
+                        },
+                    })
+                    response: AIMessage | None = None
+                    last_exc: Exception | None = None
+                    non_retryable = False
+                    models_to_try = [self._ctx.model_name, *self._ctx.fallback_models]
+                    active_model = model  # Already bound primary
+
+                    for model_idx, try_model_name in enumerate(models_to_try):
+                        is_fallback = model_idx > 0
+                        if is_fallback:
+                            if non_retryable:
+                                break  # Don't cascade non-retryable errors
+                            active_model = build_chat_model(
+                                model_name=try_model_name,
+                            ).bind_tools(tool_schemas)
+                            self._emit_event({
+                                "type": "llm_retry",
+                                "payload": {
+                                    "agent_id": self._ctx.agent_id,
+                                    "depth": self._ctx.depth,
+                                    "step": turns,
+                                    "attempt": 0,
+                                    "max_attempts": 1,
+                                    "error": str(last_exc)[:200],
+                                    "fallback_to": try_model_name,
+                                },
+                            })
+                            logging.warning(
+                                "Falling back to %s (%s)",
+                                try_model_name,
+                                str(last_exc)[:100],
+                            )
+
+                        retries = llm_max_retries if not is_fallback else 1
+                        for attempt in range(1, retries + 1):
+                            try:
+                                response = await asyncio.wait_for(
+                                    active_model.ainvoke(
+                                        messages, config=invoke_config or None
+                                    ),
+                                    timeout=llm_timeout,
+                                )
+                                break
+                            except (asyncio.TimeoutError, Exception) as exc:
+                                last_exc = exc
+                                should_retry, delay = _classify_llm_error(exc)
+                                if not should_retry:
+                                    non_retryable = True
+                                    break  # Don't cascade non-retryable errors
+                                if attempt == retries:
+                                    break  # Next model or final failure
+                                self._emit_event({
+                                    "type": "llm_retry",
+                                    "payload": {
+                                        "agent_id": self._ctx.agent_id,
+                                        "depth": self._ctx.depth,
+                                        "step": turns,
+                                        "attempt": attempt,
+                                        "max_attempts": retries,
+                                        "error": str(exc)[:200],
+                                        "delay": delay,
+                                        "retryable": should_retry,
+                                    },
+                                })
+                                logging.warning(
+                                    "LLM call attempt {}/{} failed ({}), "
+                                    "retrying in {:.1f}s",
+                                    attempt, retries,
+                                    str(exc)[:100], delay,
+                                )
+                                if delay > 0:
+                                    await asyncio.sleep(delay)
+                        if response is not None:
+                            break  # Success
+
+                    if response is None:
+                        self._emit_event({
+                            "type": "llm_call_end",
+                            "payload": {
+                                "agent_id": self._ctx.agent_id,
+                                "depth": self._ctx.depth,
+                                "step": turns,
+                            },
+                        })
+                        raise RuntimeError(
+                            f"LLM call failed on all models "
+                            f"({', '.join(models_to_try)}): "
+                            f"{last_exc}"
+                        ) from last_exc
+                    self._emit_event({
+                        "type": "llm_call_end",
+                        "payload": {
+                            "agent_id": self._ctx.agent_id,
+                            "depth": self._ctx.depth,
+                            "step": turns,
+                        },
+                    })
+                    assert response is not None  # guaranteed by loop or raise
                     # Strip thinking blocks from the response before appending
                     # to the conversation history.  Anthropic requires a
                     # ``signature`` field on thinking blocks when replayed,
@@ -276,8 +513,32 @@ class ToolUseLoop:
                             for block in raw
                             if not (isinstance(block, dict) and block.get("type") == "thinking")
                         ]
+                        # Claude Code's ``ensureNonEmptyAssistantContent``
+                        # (src/utils/messages.ts:4933): never leave
+                        # empty-string content. Empty assistant turns in
+                        # history cause extended-thinking models to
+                        # hallucinate framework-style placeholders.
+                        if not sanitized:
+                            sanitized = [
+                                {"type": "text", "text": _NO_CONTENT_PLACEHOLDER}
+                            ]
                         response = AIMessage(
-                            content=sanitized or "",
+                            content=sanitized,
+                            tool_calls=response.tool_calls,
+                            additional_kwargs=response.additional_kwargs,
+                            id=response.id,
+                        )
+                    elif (
+                        response.tool_calls
+                        and (not raw or not str(raw).strip())
+                    ):
+                        # The proxy (LiteLLM) strips thinking blocks itself
+                        # and returns ``content=""`` (a STRING, not a list).
+                        # Without this branch, the empty string survives
+                        # sanitisation and gets replayed in history, causing
+                        # the model to hallucinate placeholder meta-text.
+                        response = AIMessage(
+                            content=_NO_CONTENT_PLACEHOLDER,
                             tool_calls=response.tool_calls,
                             additional_kwargs=response.additional_kwargs,
                             id=response.id,
@@ -340,18 +601,29 @@ class ToolUseLoop:
                         action_step.result = mock(content=result.content)
                         executed_steps.append(action_step)
 
+                    # Episodic plan-mode: exit_plan_mode signals the loop to
+                    # terminate so the thread exits cleanly. Approval/rejection
+                    # happens out-of-band via SessionRuntime.
+                    if (
+                        self._exit_plan_mode_tool is not None
+                        and self._exit_plan_mode_tool.should_terminate_run()
+                    ):
+                        state.done = True
+                        state.done_reason = "awaiting_approval"
+                        break
+
                     # Update registry step count.
                     await self._ctx.registry.update_step(
                         self._ctx.agent_id,
                         results[-1].tool_id if results else "",
                     )
-                    steps_run += 1
+                    turns += 1
 
                     # Ref: [DeepMind-Delegation §4.5] Auto-update progress
                     # for parent monitoring. Zero token cost — direct write.
                     if self._ctx.depth > 0 and results:
                         last = results[-1]
-                        note = f"step {steps_run}: {last.tool_id}"
+                        note = f"turn {turns}: {last.tool_id}"
                         snippet = last.content[:100] if last.content else ""
                         if last.success:
                             note += f" -> {snippet}"
@@ -363,38 +635,28 @@ class ToolUseLoop:
                         if handle:
                             handle.progress_note = note
 
-                    # Inject step progress so the model can self-regulate.
-                    remaining_steps = max_steps - steps_run
+                    # Inject failure feedback so the model can adapt.
                     failures = [r for r in results if not r.success]
-                    progress_parts = [
-                        f"[Step {steps_run}/{max_steps}"
-                        f" — {remaining_steps} step{'s' if remaining_steps != 1 else ''}"
-                        " remaining]",
-                    ]
                     if failures:
-                        progress_parts.append(
-                            f"{len(failures)}/{len(results)} tool call(s)"
+                        messages.append(SystemMessage(
+                            content=f"{len(failures)}/{len(results)} tool call(s)"
                             " failed this step — adapt your approach."
-                        )
-                    if remaining_steps <= 2 and remaining_steps > 0:
-                        progress_parts.append(
-                            "Approaching step limit: wrap up and synthesize your findings soon."
-                        )
-                    messages.append(SystemMessage(content=" ".join(progress_parts)))
+                        ))
 
                     if span is not None:
                         try:
                             span.update_trace(
                                 output={
                                     "tool_calls": len(response.tool_calls),
-                                    "steps_run": steps_run,
+                                    "turns": turns,
                                 }
                             )
                         except Exception:
                             pass
 
-            # When the step budget is exhausted without a text response,
-            # give the LLM one final turn WITHOUT tools to force synthesis.
+            # Safety net: currently unreachable (all loop exits set
+            # state.done=True), but retained as defensive code for future
+            # exit paths that may break without setting state.done.
             if not state.done and final_response is None and messages:
                 # Ref: [DeepMind-Delegation §4.5] Inject child results at synthesis.
                 # Root may have non-blocking children still running — give them
@@ -437,20 +699,22 @@ class ToolUseLoop:
                     messages.append(
                         SystemMessage(
                             content=(
-                                "STEP LIMIT REACHED. You MUST now provide your final "
-                                "answer based on all the information gathered so far. "
+                                "You MUST now provide your final answer based on "
+                                "all the information gathered so far. "
                                 "Do NOT call any more tools. Respond with text only."
                             )
                         )
                     )
                     # Invoke without tool bindings to prevent further tool calls.
-                    unbound = build_chat_model(
-                        model_name=self._ctx.model_name,
-                        openai_api_base=get_config_value("llm", "api_base"),
-                        api_key=get_config_value("llm", "api_key"),
+                    unbound = build_chat_model(model_name=self._ctx.model_name)
+                    synthesis_timeout = float(
+                        get_config_value("agent", "llm_call_timeout", default=60.0)
                     )
-                    synthesis: AIMessage = await unbound.ainvoke(
-                        messages, config=invoke_config or None
+                    synthesis: AIMessage = await asyncio.wait_for(
+                        unbound.ainvoke(
+                            messages, config=invoke_config or None
+                        ),
+                        timeout=synthesis_timeout,
                     )
                     final_response = self._extract_text_content(
                         getattr(synthesis, "content", "")
@@ -465,13 +729,12 @@ class ToolUseLoop:
                     successful = [o for o in tool_outputs if o and not o.startswith("ERROR")]
                     if successful:
                         final_response = (
-                            "Step limit reached before full synthesis. "
                             "Partial results:\n\n" + "\n\n".join(successful[-5:])
                         )
 
             if not state.done:
                 state.done = True
-                state.done_reason = "max_steps_reached" if steps_run >= max_steps else "completed"
+                state.done_reason = "completed"
 
             # Build TaskQueue for compatibility with CLI / API consumers.
             plan_steps = list(plan.steps) if plan and plan.steps else []
@@ -650,6 +913,42 @@ class ToolUseLoop:
         # Depth-aware sub-agent guidance.
         system_parts.append(self._build_depth_guidance())
 
+        # Plan-mode reminder — injected when the loop was started in plan
+        # mode. Rendered with the session-scoped plan path and the shell
+        # command allowlist so the model knows exactly what it may write
+        # and which shell commands it is permitted to run.
+        if self._current_mode == "plan" and self._session_id is not None:
+            if self._ctx.depth == 0:
+                # Root hypervisor: automata prompt + plan path for review.
+                try:
+                    hyper_template = get_system_prompt("plan_hypervisor")
+                except OSError:
+                    hyper_template = ""
+                if hyper_template:
+                    plan_path = plan_file_for(self._session_id)
+                    system_parts.append(
+                        f"{hyper_template}\n\nPlan file: {plan_path}"
+                    )
+            else:
+                # Plan sub-agent: full plan-mode prompt with placeholders.
+                try:
+                    template = get_system_prompt("plan_mode_reminder")
+                except OSError:
+                    template = ""
+                if template:
+                    plan_path = plan_file_for(self._session_id)
+                    shell_allowlist = self._plan_mode_shell_allowlist()
+                    if shell_allowlist:
+                        bullets = "\n".join(f"    - `{entry}`" for entry in shell_allowlist)
+                    else:
+                        bullets = "    - (none — shell is disabled in plan mode)"
+                    rendered = (
+                        template
+                        .replace("{plan_path}", plan_path)
+                        .replace("{shell_allowlist_bullets}", bullets)
+                    )
+                    system_parts.append(rendered)
+
         system_prompt = "\n\n".join(p for p in system_parts if p)
         return [SystemMessage(content=system_prompt), HumanMessage(content=user_query)]
 
@@ -671,22 +970,40 @@ class ToolUseLoop:
         is_leaf = not self._ctx.can_spawn
 
         if is_root:
-            # Ref: [CoA §3.2] Root = manager/hypervisor. Direct execution first.
+            # Ref: [CoA §3.2] Root = manager/hypervisor.
             # Ref: [DeepMind-Delegation §4.4] Non-blocking delegation protocol.
-            lines = [
-                f"# Agent role: Root hypervisor (depth {depth}/{max_depth})",
-                "",
-                "## Default: Direct execution",
-                "- Handle tasks directly using your tools. Most tasks do NOT need sub-agents.",
-                "- Simple operations (write a file, run a command, search, read)"
-                " — do them yourself.",
-                "- Sequential tasks (write then run then read) — do them yourself, in order.",
-                "- Only spawn sub-agents for genuinely parallel, independent work.",
-                "",
-                "## When to spawn (rare)",
-                "- Multiple independent tasks that benefit from running concurrently.",
-                "- Each sub-task must be self-contained with clear acceptance_criteria.",
-                "- Scope sub-agents with allowed_tools/denied_tools and max_steps.",
+            plan_mode = self._current_mode == "plan"
+            if plan_mode:
+                lines = [
+                    f"# Agent role: Root hypervisor — plan mode (depth {depth}/{max_depth})",
+                    "",
+                    "## Goal: produce an approved plan via a sub-agent",
+                    "- A plan sub-agent explores the codebase and drafts the plan file.",
+                    "- You orchestrate: spawn it, monitor progress, propose the result.",
+                    "- exit_plan_mode submits the plan for user approval.",
+                    "- The plan is complete only when the user approves it.",
+                    "- If the sub-agent fails, spawn a new one"
+                    " — you cannot write the plan yourself.",
+                ]
+            else:
+                lines = [
+                    f"# Agent role: Root hypervisor (depth {depth}/{max_depth})",
+                    "",
+                    "## Default: Direct execution",
+                    "- Handle tasks directly using your tools. Most tasks do NOT need sub-agents.",
+                    "- Simple operations (write a file, run a command, search, read)"
+                    " — do them yourself.",
+                    "- Sequential tasks (write then run then read) — do them yourself, in order.",
+                    "- Only spawn sub-agents for genuinely parallel, independent work.",
+                    "",
+                    "## When to spawn (rare)",
+                    "- Multiple independent tasks that benefit from running concurrently.",
+                    "- Each sub-task must be self-contained with clear acceptance_criteria.",
+                    "- Scope sub-agents with allowed_tools/denied_tools.",
+                ]
+            # Shared root sections: delegation protocol, safety, synthesis,
+            # system awareness, when to stop — apply in both plan and act mode.
+            lines.extend([
                 "",
                 "## Async delegation protocol (when you spawn)",
                 "- spawn_agent returns immediately with {agent_id, status: 'submitted'}.",
@@ -715,7 +1032,7 @@ class ToolUseLoop:
                 "- If the same operation fails twice, do not retry it a third time.",
                 "- If a sub-agent fails, do not spawn another sub-agent for the same task.",
                 "- Report what failed, why, and what you tried — then let the user decide.",
-            ]
+            ])
         elif is_leaf:
             # Ref: [DeepMind-Delegation §4.7] Liability firebreak at leaf
             lines = [
@@ -726,6 +1043,8 @@ class ToolUseLoop:
                 "- Complete your assigned task directly using available tools.",
                 "- Do NOT attempt to delegate — you cannot spawn sub-agents.",
                 "- When done, provide a clear, structured summary of what you accomplished.",
+                "- Your text response (without tool calls) signals task completion"
+                " and ends your execution.",
                 "",
                 "## Failure handling",
                 "- If you cannot complete the task, say so explicitly with the reason.",
@@ -746,6 +1065,8 @@ class ToolUseLoop:
                 "- Prefer direct tool use. Only spawn child agents for independent parallel work.",
                 "- Verify child agent results before incorporating them.",
                 "- Return a structured summary when your task is complete.",
+                "- Your text response (without tool calls) signals task completion"
+                " and ends your execution.",
                 "",
                 "## Failure handling",
                 "- If you cannot complete the task, say so explicitly with the reason.",
@@ -841,16 +1162,79 @@ class ToolUseLoop:
     # Model binding
     # ------------------------------------------------------------------
 
+    def _configured_edit_tool_id(self) -> str:
+        """Return the tool_id for the edit tool selected in ``agent.edit_tool``.
+
+        Maps the config value to the registered ``tool_id`` so plan-mode
+        filtering and path-scope permission checks can identify the single
+        edit tool the model may use.
+        """
+        mechanism = get_config_value("agent", "edit_tool", default="search_replace_block")
+        if mechanism == "structured_patch":
+            return "file_edit_tool"
+        return "aider_edit_block_tool"
+
+    def _plan_mode_shell_allowlist(self) -> list[str]:
+        """Return the configured shell command prefix allowlist for plan mode.
+
+        Read from ``agent.plan_mode_shell_allowlist``. An empty list means
+        the shell tool is disabled in plan mode.
+        """
+        raw = get_config_value("agent", "plan_mode_shell_allowlist", default=[])
+        if isinstance(raw, list):
+            return [str(item).strip() for item in raw if str(item).strip()]
+        if isinstance(raw, str):
+            return [entry.strip() for entry in raw.split(",") if entry.strip()]
+        return []
+
+    def _plan_mode_allow_mcp(self) -> bool:
+        """Return True when MCP tools are permitted in plan mode.
+
+        Read from ``agent.plan_mode_allow_mcp``. Defaults to True (matches
+        Claude Code's permissive behaviour for user-configured MCP servers).
+        """
+        raw = get_config_value("agent", "plan_mode_allow_mcp", default=True)
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, str):
+            return raw.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(raw)
+
+    def _build_tool_schemas_for_mode(
+        self, specs: list[ToolSpec], mode: str,
+    ) -> list[dict[str, Any]]:
+        """Return langchain tool schemas appropriate for ``mode``.
+
+        In plan mode the schema is filtered to: read-only tools + the
+        configured edit tool (path-scoped at the permission layer) + the
+        shell tool (command-allowlisted at the permission layer, iff the
+        allowlist is non-empty) + MCP tools (iff
+        ``agent.plan_mode_allow_mcp`` is True). In act mode all specs pass
+        through.
+        """
+        if mode != "plan":
+            return specs_to_langchain_tools(specs)
+        edit_tool_id = self._configured_edit_tool_id()
+        shell_enabled = bool(self._plan_mode_shell_allowlist())
+        allow_mcp = self._plan_mode_allow_mcp()
+        filtered = [
+            spec for spec in specs
+            if spec.read_only
+            or (spec.tool_id == edit_tool_id and self._ctx.depth > 0)
+            or (shell_enabled and spec.tool_id in SHELL_TOOL_IDS)
+            or (allow_mcp and spec.kind == "mcp")
+        ]
+        return specs_to_langchain_tools(filtered)
+
     def _bind_model(self, tool_schemas: list[dict[str, Any]]) -> Any:
         """Build a chat model and bind tool schemas."""
-        model = build_chat_model(
-            model_name=self._ctx.model_name,
-            openai_api_base=get_config_value("llm", "api_base"),
-            api_key=get_config_value("llm", "api_key"),
-        )
-        # Inject spawn_agent schema if this agent can spawn children.
-        # (Wired in Phase 2 when self._spawn_agent_tool is set.)
-        if self._spawn_agent_tool is not None:
+        model = build_chat_model(model_name=self._ctx.model_name)
+        plan_mode = self._current_mode == "plan"
+        # In plan mode, the root (depth=0) gets agent management tools so it
+        # can spawn and monitor the plan sub-agent. Non-root plan agents get
+        # no agent tools — they explore and draft only.
+        plan_root = plan_mode and self._ctx.depth == 0
+        if (not plan_mode or plan_root) and self._spawn_agent_tool is not None:
             from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
 
             tool_schemas = [*tool_schemas, SPAWN_AGENT_SCHEMA]
@@ -864,10 +1248,18 @@ class ToolUseLoop:
 
                 tool_schemas = [*tool_schemas, CHECK_AGENTS_SCHEMA, STEER_AGENT_SCHEMA]
         # Inject activate_skill schema when auto-invocable skills exist.
-        if self._skill_registry is not None and self._skill_registry.list_auto_invocable():
+        if (
+            not plan_mode
+            and self._skill_registry is not None
+            and self._skill_registry.list_auto_invocable()
+        ):
             from meeseeks_core.skills import ACTIVATE_SKILL_SCHEMA
 
             tool_schemas = [*tool_schemas, ACTIVATE_SKILL_SCHEMA]
+        # Inject exit_plan_mode schema only when plan mode is active and the
+        # root-scoped handler exists.
+        if plan_mode and self._exit_plan_mode_tool is not None:
+            tool_schemas = [*tool_schemas, EXIT_PLAN_MODE_SCHEMA]
         if tool_schemas:
             return model.bind_tools(tool_schemas)
         return model
@@ -902,16 +1294,33 @@ class ToolUseLoop:
 
         # Permission check.
         if not self._check_permission(action_step):
-            self._emit_tool_result_event(action_step, None, error="Permission denied")
+            # If the permission branch wrote a detailed error to
+            # ``action_step.result`` (e.g., plan-mode path scoping), use
+            # that as the tool-result content so the model can self-correct.
+            denial_content = getattr(action_step.result, "content", None) or "Permission denied"
+            self._emit_tool_result_event(action_step, None, error=str(denial_content))
             return ToolCallResult(
                 tool_call_id=tool_call_id,
                 tool_id=tool_id,
-                content="Permission denied",
+                content=str(denial_content),
                 success=False,
             )
 
         # Pre-tool hook.
         action_step = self._hook_manager.run_pre_tool_use(action_step)
+
+        # File read dedup: return a stub if this file was already read
+        # with the same params and hasn't changed on disk.
+        if tool_id == "read_file":
+            dedup_stub = self._check_file_read_cache(action_step)
+            if dedup_stub is not None:
+                self._emit_tool_result_event(action_step, dedup_stub)
+                return ToolCallResult(
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content=dedup_stub,
+                    success=True,
+                )
 
         # Execute — internal tools (spawn_agent, activate_skill) first, then registry.
         if tool_id == "spawn_agent" and self._spawn_agent_tool is not None:
@@ -952,6 +1361,18 @@ class ToolUseLoop:
                 )
         elif tool_id == "activate_skill" and self._skill_registry is not None:
             result = self._handle_activate_skill(action_step)
+        elif tool_id == "exit_plan_mode" and self._exit_plan_mode_tool is not None:
+            try:
+                result = await self._exit_plan_mode_tool.handle(action_step)
+            except Exception as exc:
+                logging.error("exit_plan_mode failed: {}", exc)
+                self._emit_tool_result_event(action_step, None, error=str(exc))
+                return ToolCallResult(
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content=f"ERROR: {exc}",
+                    success=False,
+                )
         else:
             tool = self._tool_registry.get(tool_id)
             if tool is None:
@@ -1035,6 +1456,18 @@ class ToolUseLoop:
         if max_chars and len(content_str) > max_chars:
             content_str = content_str[:max_chars] + "\n[truncated]"
 
+        # Populate file read cache after successful read.
+        if tool_id == "read_file":
+            self._populate_file_read_cache(action_step)
+
+        # Invalidate file read cache when a file is edited.
+        if tool_id in ("file_edit_tool", "aider_edit_block_tool"):
+            edit_args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
+            edited_path = str(edit_args.get("file_path", "") or edit_args.get("path", ""))
+            if edited_path:
+                norm = os.path.normpath(edited_path)
+                self._file_read_cache.pop(norm, None)
+
         self._emit_tool_result_event(action_step, event_str, result_file=result_file)
         return ToolCallResult(
             tool_call_id=tool_call_id,
@@ -1066,11 +1499,88 @@ class ToolUseLoop:
         )
 
     # ------------------------------------------------------------------
+    # File-read dedup cache
+    # ------------------------------------------------------------------
+
+    def _check_file_read_cache(self, action_step: ActionStep) -> str | None:
+        """Return a stub if this file was already read with the same params, else ``None``."""
+        args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
+        path = str(args.get("path", ""))
+        if not path:
+            return None
+        root = str(args.get("root") or "")
+        offset = int(args.get("offset", 0) or 0)
+        limit = args.get("limit")
+        if limit is not None:
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError):
+                limit = None
+
+        try:
+            joined = os.path.join(root, path) if root else path
+            full_path = os.path.normpath(joined)
+        except (TypeError, ValueError):
+            return None
+
+        cached = self._file_read_cache.get(full_path)
+        if cached is None:
+            return None
+        if cached.offset != offset or cached.limit != limit:
+            return None
+
+        # Check mtime — file may have been edited externally.
+        try:
+            current_mtime = os.path.getmtime(full_path)
+        except OSError:
+            return None
+        if current_mtime != cached.mtime:
+            del self._file_read_cache[full_path]
+            return None
+
+        return (
+            "File unchanged since last read. The content from the earlier "
+            "Read tool_result in this conversation is still current — "
+            "refer to that instead of re-reading."
+        )
+
+    def _populate_file_read_cache(self, action_step: ActionStep) -> None:
+        """Record a successful file read for future dedup."""
+        args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
+        path = str(args.get("path", ""))
+        if not path:
+            return
+        root = str(args.get("root") or "")
+        offset = int(args.get("offset", 0) or 0)
+        limit = args.get("limit")
+        if limit is not None:
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError):
+                limit = None
+        try:
+            joined = os.path.join(root, path) if root else path
+            full_path = os.path.normpath(joined)
+            mtime = os.path.getmtime(full_path)
+        except (TypeError, ValueError, OSError):
+            return
+        self._file_read_cache[full_path] = _CachedFileRead(
+            path=full_path, offset=offset, limit=limit, mtime=mtime,
+        )
+
+    # ------------------------------------------------------------------
     # Permission
     # ------------------------------------------------------------------
 
     def _check_permission(self, action_step: ActionStep) -> bool:
         """Check permission for an action step. Returns True if allowed."""
+        # Plan-mode gating is authoritative: read-only tools, the scoped
+        # edit tool, and exit_plan_mode are allowed; everything else is
+        # denied. The normal approval policy is bypassed so that plan-mode
+        # exploration does not get blocked by ASK rules.
+        if self._current_mode == "plan":
+            return self._plan_mode_permission(action_step)
+
         decision = self._permission_policy.decide(action_step)
         decision = self._hook_manager.run_permission_request(action_step, decision)
         if decision == PermissionDecision.ASK:
@@ -1092,6 +1602,136 @@ class ToolUseLoop:
             action_step.result = mock(content=f"Permission denied for {action_step.tool_id}.")
             return False
         return True
+
+    def _plan_mode_permission(self, action_step: ActionStep) -> bool:
+        """Plan-mode permission branch: allow read-only + path-scoped edits.
+
+        Returns True if the action is allowed in plan mode (and normal
+        policy checks should also run), or False to deny outright. The
+        denial path sets an actionable error on ``action_step.result`` and
+        emits a permission event so the model and user see the refusal.
+        """
+        tool_id = action_step.tool_id
+        # Always allow the exit_plan_mode internal tool.
+        if tool_id == "exit_plan_mode":
+            return True
+        # Root (depth=0) can use agent management tools to spawn and
+        # monitor the plan sub-agent.  Non-root plan agents cannot.
+        _AGENT_MGMT_TOOLS = {"spawn_agent", "check_agents", "steer_agent"}
+        if tool_id in _AGENT_MGMT_TOOLS and self._ctx.depth == 0:
+            return True
+        spec = self._tool_registry.get_spec(tool_id)
+        # Read-only tools are unrestricted in plan mode.
+        if spec is not None and spec.read_only:
+            return True
+        # The configured edit tool is allowed ONLY when its target path
+        # resolves inside the session's plan directory.
+        edit_tool_id = self._configured_edit_tool_id()
+        if tool_id == edit_tool_id and self._session_id is not None:
+            args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
+            candidate = str(args.get("file_path", "") or "")
+            if candidate and is_inside_plan_dir(candidate, self._session_id):
+                return True
+            attempted = candidate or "<missing file_path>"
+            plan_path = plan_file_for(self._session_id)
+            msg = (
+                f"Plan mode: edits restricted to {plan_path}. You attempted "
+                f"to write {attempted}. Write only to the plan file, then "
+                "call exit_plan_mode."
+            )
+            mock = get_mock_speaker()
+            action_step.result = mock(content=msg)
+            self._emit_event(
+                {
+                    "type": "permission",
+                    "payload": {
+                        "tool_id": tool_id,
+                        "operation": action_step.operation,
+                        "tool_input": action_step.tool_input,
+                        "decision": "deny",
+                    },
+                }
+            )
+            return False
+        # Shell tool: permitted only when the command matches an allowlisted
+        # prefix AND contains no shell metacharacters. The denial message
+        # includes the allowlist so the model can self-correct in one turn.
+        shell_allowlist = self._plan_mode_shell_allowlist()
+        if tool_id in SHELL_TOOL_IDS and shell_allowlist:
+            args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
+            command = str(args.get("command", "") or "").strip()
+            if is_shell_command_plan_safe(command, shell_allowlist):
+                return True
+            allowed_preview = ", ".join(shell_allowlist)
+            attempted = command or "<missing command>"
+            plan_hint = ""
+            if self._session_id is not None:
+                if self._ctx.depth == 0:
+                    plan_hint = (
+                        " You cannot write the plan directly."
+                        " Spawn a sub-agent to draft it."
+                    )
+                else:
+                    plan_hint = (
+                        f" To write the plan, use your edit tool on "
+                        f"{plan_file_for(self._session_id)}."
+                    )
+            msg = (
+                f"Plan mode: shell command blocked. You attempted: `{attempted}`. "
+                f"Allowed prefixes: {allowed_preview}. No pipes, redirects, "
+                f"`&&`/`;`, `$VAR` expansion, or backticks.{plan_hint}"
+            )
+            mock = get_mock_speaker()
+            action_step.result = mock(content=msg)
+            self._emit_event(
+                {
+                    "type": "permission",
+                    "payload": {
+                        "tool_id": tool_id,
+                        "operation": action_step.operation,
+                        "tool_input": action_step.tool_input,
+                        "decision": "deny",
+                    },
+                }
+            )
+            return False
+        # User-enabled MCP tools: blanket allow under the config flag. Matches
+        # Claude Code's permissive behaviour and trusts the user's mcp.json.
+        if self._plan_mode_allow_mcp() and spec is not None and spec.kind == "mcp":
+            return True
+        # Everything else (agent tools for non-root, shell when allowlist
+        # empty, MCP when flag is False, hallucinated tool names) is denied.
+        plan_hint = ""
+        if self._session_id is not None:
+            if self._ctx.depth == 0:
+                plan_hint = (
+                    " You cannot write the plan directly."
+                    " Spawn a sub-agent to draft it."
+                )
+            else:
+                plan_hint = (
+                    f" Plan file: {plan_file_for(self._session_id)}."
+                )
+        mock = get_mock_speaker()
+        action_step.result = mock(
+            content=(
+                f"Plan mode: tool '{tool_id}' is unavailable. Use read-only "
+                "tools to explore and your edit tool to draft the plan, "
+                f"then call exit_plan_mode.{plan_hint}"
+            )
+        )
+        self._emit_event(
+            {
+                "type": "permission",
+                "payload": {
+                    "tool_id": tool_id,
+                    "operation": action_step.operation,
+                    "tool_input": action_step.tool_input,
+                    "decision": "deny",
+                },
+            }
+        )
+        return False
 
     # ------------------------------------------------------------------
     # Event emission
@@ -1123,9 +1763,10 @@ class ToolUseLoop:
             payload["error"] = error
         if result_file:
             payload["result_file"] = result_file
-        # Tag with agent_id for sub-agent tracking.
-        if self._ctx.depth > 0:
-            payload["agent_id"] = self._ctx.agent_id
+        # Always tag with agent_id and model so the console can display
+        # badges for all agents including the root.
+        payload["agent_id"] = self._ctx.agent_id
+        payload["model"] = self._ctx.model_name
         self._emit_event({"type": "tool_result", "payload": payload})
 
     def _emit_event(self, event: Event) -> None:
@@ -1136,12 +1777,19 @@ class ToolUseLoop:
     def _extract_text_content(content: object) -> str:
         """Extract plain text from an AIMessage content field."""
         if isinstance(content, list):
-            return "\n".join(
+            text = "\n".join(
                 block.get("text", "")
                 for block in content
                 if isinstance(block, dict) and block.get("type") == "text"
             ).strip()
-        return (str(content) if content else "").strip()
+        else:
+            text = (str(content) if content else "").strip()
+        # Drop the internal "(no content)" placeholder so it never surfaces
+        # in ``agent_message`` events. Matches Claude Code's display filter
+        # (src/utils/messages.ts:717).
+        if text == _NO_CONTENT_PLACEHOLDER:
+            return ""
+        return text
 
 
 # ------------------------------------------------------------------

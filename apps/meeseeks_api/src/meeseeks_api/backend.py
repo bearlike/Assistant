@@ -29,6 +29,7 @@ from meeseeks_core.config import (
     reset_config,
     start_preflight,
 )
+from meeseeks_core.exit_plan_mode import PLAN_DIR_ROOT, plan_file_for
 from meeseeks_core.notifications import NotificationStore
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.session_runtime import SessionRuntime, parse_core_command
@@ -151,6 +152,10 @@ _config = get_config()
 if _config.runtime.preflight_enabled:
     start_preflight(_config)
 
+# Load hooks from config so API sessions run with configured hooks
+from meeseeks_core.hooks import HookManager as _HookManager  # noqa: E402
+
+_hook_manager = _HookManager.load_from_config(_config.hooks)
 
 # Create Flask application
 app = Flask(__name__)
@@ -293,7 +298,15 @@ def _utc_now() -> str:
 
 
 def _build_context_payload(request_data: dict[str, object]) -> dict[str, object]:
-    """Merge context and attachments into a single payload."""
+    """Merge context and attachments into a single payload.
+
+    Also mirrors the top-level ``mode`` ("plan"/"act") into the context
+    payload so ``summarize_session`` can surface it as part of each
+    session's trailing state for the console to rehydrate its plan/act
+    toggle. The orchestrator still reads ``mode`` directly from the
+    top-level request — this is an additional persistence path, not a
+    behavioural change to the orchestration run.
+    """
     payload: dict[str, object] = {}
     context = request_data.get("context")
     if isinstance(context, dict):
@@ -301,6 +314,9 @@ def _build_context_payload(request_data: dict[str, object]) -> dict[str, object]
     attachments = request_data.get("attachments")
     if isinstance(attachments, list):
         payload["attachments"] = attachments
+    mode = _parse_mode(request_data.get("mode"))
+    if mode is not None:
+        payload["mode"] = mode
     return payload
 
 
@@ -381,6 +397,11 @@ def _resolve_skill_instructions(
 
 
 notification_service = NotificationService(notification_store, runtime.session_store)
+
+# Channel adapters (Nextcloud Talk, etc.) — no-ops if none configured
+from meeseeks_api.channels.routes import init_channels  # noqa: E402
+
+init_channels(app, runtime, _hook_manager, _config)
 
 
 @ns.route("/models")
@@ -530,6 +551,7 @@ class SessionQuery(Resource):
             user_query=user_query,
             model_name=model_name,
             approval_callback=auto_approve,
+            hook_manager=_hook_manager,
             mode=mode,
             allowed_tools=allowed_tools,
             skill_instructions=skill_instructions,
@@ -648,6 +670,183 @@ class SessionInterrupt(Resource):
         return {"session_id": session_id, "interrupted": True}, 202
 
 
+@ns.route("/sessions/<string:session_id>/recover")
+class SessionRecovery(Resource):
+    """Retry the last user query or continue after a failed run.
+
+    Body: ``{"action": "retry" | "continue"}``. The endpoint resolves the
+    appropriate query text (last user message for ``retry``; a synthetic
+    recovery prompt for ``continue``), appends a ``recovery`` audit event
+    to the transcript, and starts a fresh async run via the existing
+    ``start_async`` pathway — prior events are automatically rebuilt into
+    the system prompt by ``ContextBuilder``.
+
+    Guarded: returns 409 if a run is already active; 400 if ``action`` is
+    malformed or there is no prior user message to recover from.
+    """
+
+    @api.doc(security="apikey")
+    def post(self, session_id: str) -> tuple[dict, int]:
+        """Trigger a retry/continue recovery for a completed/failed session."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        body = request.get_json(silent=True) or {}
+        action = body.get("action")
+        if action not in ("retry", "continue"):
+            return {
+                "message": "'action' must be 'retry' or 'continue'"
+            }, 400
+        from_ts: str | None = body.get("from_ts")
+        if runtime.is_running(session_id):
+            return {"message": "Session is already running."}, 409
+        try:
+            user_query = runtime.resolve_recovery_query(
+                session_id, action, from_ts=from_ts
+            )
+        except ValueError as exc:
+            return {"message": str(exc)}, 400
+        except RuntimeError as exc:
+            return {"message": str(exc)}, 409
+
+        # Reuse the same dispatch shape as SessionQuery.post so recovered
+        # runs inherit the session's context and settings.
+        events = runtime.session_store.load_transcript(session_id)
+        last_context: dict[str, object] = {}
+        for event in reversed(events):
+            if event.get("type") == "context":
+                payload = event.get("payload")
+                if isinstance(payload, dict):
+                    last_context = dict(payload)
+                break
+        mode = _parse_mode(last_context.get("mode"))
+        allowed_tools = _extract_allowed_tools(last_context)
+        try:
+            project_cwd = _resolve_project_cwd({"context": last_context})
+        except ValueError as exc:
+            return {"message": str(exc)}, 400
+        model_name = str(last_context.get("model", "")) or None
+        budget = int(get_config_value("agent", "session_step_budget", default=0))
+        max_iters = int(get_config_value("agent", "max_iters", default=30))
+        started = runtime.start_async(
+            session_id=session_id,
+            user_query=user_query,
+            model_name=model_name,
+            approval_callback=auto_approve,
+            hook_manager=_hook_manager,
+            mode=mode,
+            allowed_tools=allowed_tools,
+            cwd=project_cwd,
+            max_iters=max_iters,
+            session_step_budget=budget,
+        )
+        if not started:
+            return {"message": "Session is already running."}, 409
+        notification_service.emit_started(session_id)
+        return {
+            "session_id": session_id,
+            "action": action,
+            "accepted": True,
+        }, 202
+
+
+@ns.route("/sessions/<string:session_id>/plan/approve")
+class SessionPlanApprove(Resource):
+    """Approve or reject a pending plan-mode proposal.
+
+    Episodic: the session is dormant (no active run) when this is called.
+    On approval, emits plan_approved and starts a fresh act-mode run.
+    On rejection, emits plan_rejected — session stays dormant until
+    the user sends refinement guidance via /query.
+    """
+
+    @api.doc(security="apikey")
+    def post(self, session_id: str) -> tuple[dict, int]:
+        """Signal plan approval or rejection (binary)."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        payload = request.get_json(silent=True) or {}
+        approved = payload.get("approved")
+        if not isinstance(approved, bool):
+            return {"message": "'approved' must be a boolean"}, 400
+        if approved:
+            ok = runtime.approve_plan(session_id)
+            if not ok:
+                return {
+                    "message": (
+                        "No pending plan proposal for this session, or "
+                        "a run is already active."
+                    ),
+                }, 404
+            # Start a new run in act mode with a synthetic continuation
+            started = runtime.start_async(
+                session_id=session_id,
+                user_query=(
+                    "[system] The user approved your plan. Proceed with "
+                    "implementation using the full toolset. The approved "
+                    "plan is in the conversation history."
+                ),
+                approval_callback=auto_approve,
+                hook_manager=_hook_manager,
+                mode="act",
+            )
+            if not started:
+                return {
+                    "session_id": session_id,
+                    "approved": True,
+                    "message": "Plan approved but could not start run.",
+                }, 500
+            return {"session_id": session_id, "approved": True}, 200
+        else:
+            ok = runtime.reject_plan(session_id)
+            if not ok:
+                return {
+                    "message": (
+                        "No pending plan proposal for this session, or "
+                        "a run is already active."
+                    ),
+                }, 404
+            return {"session_id": session_id, "approved": False}, 200
+
+
+@ns.route("/sessions/<string:session_id>/plan.md")
+class SessionPlanFile(Resource):
+    """Serve the current ``plan.md`` for a session from the scoped temp dir."""
+
+    @api.doc(security="apikey")
+    def get(self, session_id: str) -> tuple[dict, int] | Response:
+        """Return plan.md content, or 404 if absent."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        path = plan_file_for(session_id)
+        # Path-traversal defence: ensure the resolved path stays under the
+        # shared plan root even if ``session_id`` contains ``..`` or ``/``.
+        try:
+            resolved = os.path.realpath(path)
+            root = os.path.realpath(PLAN_DIR_ROOT)
+        except OSError:
+            return {"message": "Invalid session id."}, 400
+        if not resolved.startswith(root + os.sep):
+            return {"message": "Invalid session id."}, 400
+        if not os.path.exists(resolved):
+            return {"message": "Plan file not found."}, 404
+        try:
+            with open(resolved, encoding="utf-8") as handle:
+                content = handle.read()
+        except OSError as exc:
+            return {"message": f"Failed to read plan file: {exc}"}, 500
+        return Response(
+            content,
+            mimetype="text/markdown",
+            headers={
+                "Cache-Control": "no-cache",
+                "Access-Control-Allow-Origin": _CORS_ORIGIN,
+            },
+        )
+
+
 @ns.route("/sessions/<string:session_id>/agents")
 class SessionAgents(Resource):
     """Return agent tree information for a session."""
@@ -708,6 +907,52 @@ class SessionArchive(Resource):
             return {"message": "Session not found."}, 404
         runtime.session_store.unarchive_session(session_id)
         return {"session_id": session_id, "archived": False}, 200
+
+
+@ns.route("/sessions/<string:session_id>/title")
+class SessionTitle(Resource):
+    """Update the display title of a session."""
+
+    @api.doc(security="apikey")
+    def patch(self, session_id: str) -> tuple[dict, int]:
+        """Persist a user-edited title for a session."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        if session_id not in runtime.session_store.list_sessions():
+            return {"message": "Session not found."}, 404
+        payload = request.get_json(silent=True) or {}
+        raw = payload.get("title")
+        if not isinstance(raw, str):
+            return {"message": "title is required"}, 400
+        title = raw.strip()[:120]
+        if not title:
+            return {"message": "title cannot be empty"}, 400
+        runtime.session_store.save_title(session_id, title)
+        return {"session_id": session_id, "title": title}, 200
+
+    @api.doc(security="apikey")
+    def post(self, session_id: str) -> tuple[dict, int]:
+        """Regenerate session title using AI."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        if session_id not in runtime.session_store.list_sessions():
+            return {"message": "Session not found."}, 404
+        import asyncio
+
+        from meeseeks_core.title_generator import generate_session_title
+
+        events = runtime.session_store.load_transcript(session_id)
+        title = asyncio.run(generate_session_title(events))
+        if not title:
+            return {"message": "Could not generate a title."}, 422
+        runtime.session_store.save_title(session_id, title)
+        runtime.session_store.append_event(
+            session_id,
+            {"type": "title_update", "payload": {"title": title}},
+        )
+        return {"session_id": session_id, "title": title}, 200
 
 
 @ns.route("/sessions/<string:session_id>/attachments")
