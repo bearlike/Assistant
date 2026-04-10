@@ -52,6 +52,17 @@ events = runtime.load_events(session_id, after=None)
 - `SessionRuntime.list_sessions()` hides archived sessions by default. Use
   `list_sessions(include_archived=True)` to include them.
 
+## Channel adapter sessions
+
+Chat platform adapters (Nextcloud Talk, etc.) create standard sessions via the runtime. Thread-to-session mapping uses existing session tags:
+
+- **Tag format**: `"<platform>:<thread_id>"` (e.g. `"nextcloud-talk:100"`)
+- **Lookup**: `session_store.resolve_tag(tag)` returns the session ID or `None`
+- **Create**: `create_session()` + `tag_session(session_id, tag)`
+- Tags persist in MongoDB/JSON and survive API restarts
+
+Channel sessions are indistinguishable from console/CLI sessions in listings, event streams, and Langfuse traces. A `context` event with `source_platform` metadata is injected at creation so the LLM and completion callback know the session origin.
+
 ## Design goals
 - Keep the core orchestration engine centralized.
 - Make interface layers thin and easy to extend.

@@ -587,7 +587,7 @@
 <ul>
 <li><code>packages/meeseeks_core/</code>: orchestration loop, session runtime, schemas, session storage, compaction, tool registry.</li>
 <li><code>packages/meeseeks_tools/</code>: tool implementations and integration glue.</li>
-<li><code>packages/meeseeks_tools/src/meeseeks_tools/vendor/aider</code>: vendored Aider utilities used by local file + shell tools.</li>
+<li><code>packages/meeseeks_tools/src/meeseeks_tools/vendor/aider</code>: vendored Aider utilities used by local file and shell tools.</li>
 <li><code>apps/meeseeks_api/</code>: Flask API that exposes the assistant over HTTP.</li>
 <li><code>apps/meeseeks_console/</code>: Web console for task orchestration (React + Vite).</li>
 <li><code>apps/meeseeks_cli/</code>: terminal CLI for interactive sessions.</li>
@@ -610,10 +610,11 @@
 <ul>
 <li><code>AbstractTool</code> (<code>meeseeks_core.classes</code>): base class for local tools; implement <code>get_state</code> and <code>set_state</code> and return a <code>MockSpeaker</code>.</li>
 <li><code>ToolRunner</code> protocol (<code>meeseeks_core.tool_registry</code>): interface for tool runners with <code>run(ActionStep)</code>.</li>
-<li><code>ToolSpec</code> / <code>ToolRegistry</code> (<code>meeseeks_core.tool_registry</code>): register tools with <code>tool_id</code>, metadata, and a factory. The file edit tool is conditionally registered based on <code>agent.edit_tool</code> config — either <code>aider_edit_block_tool</code> or <code>file_edit_tool</code>.</li>
+<li><code>ToolSpec</code> / <code>ToolRegistry</code> (<code>meeseeks_core.tool_registry</code>): register tools with <code>tool_id</code>, metadata, and a factory. The file edit tool is conditionally registered based on <code>agent.edit_tool</code> config — either <code>aider_edit_block_tool</code> or <code>file_edit_tool</code>. The <code>read_file</code> tool is always registered as a native built-in (see <a href="#built-in-read_file-tool">Built-in <code>read_file</code> tool</a> below).</li>
 <li><code>ActionStep</code>, <code>Plan</code>, <code>TaskQueue</code> (<code>meeseeks_core.classes</code>): planning and tool-execution payloads.</li>
 <li><code>PermissionPolicy</code> (<code>meeseeks_core.permissions</code>): allow/deny/ask rules for tool execution.</li>
-<li><code>HookManager</code> (<code>meeseeks_core.hooks</code>): pre/post hooks and compaction transforms.</li>
+<li><code>HookManager</code> (<code>meeseeks_core.hooks</code>): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports <code>"command"</code> (shell) and <code>"http"</code> (fire-and-forget POST) hook types via <code>HooksConfig</code>.</li>
+<li><code>ChannelAdapter</code> protocol (<code>meeseeks_api.channels.base</code>): abstraction for chat platform integrations (verify_request, parse_inbound, send_response, system_context). Shared <code>_process_inbound()</code> pipeline in <code>routes.py</code>. Adapters: Nextcloud Talk (webhook-driven) and Email (IMAP poll-driven with markdown→HTML replies).</li>
 <li><code>SessionStore</code> / <code>SessionRuntime</code> (<code>meeseeks_core.session_store</code>, <code>meeseeks_core.session_runtime</code>): transcripts and the shared runtime facade.</li>
 <li><code>ChatModel</code> protocol (<code>meeseeks_core.llm</code>): interface for LLM backends via <code>build_chat_model</code>.</li>
 </ul>
@@ -695,6 +696,88 @@
     <span class="p">)</span>
 <span class="p">)</span>
 </code></pre></div>
+<h2 id="built-in-read_file-tool">Built-in <code>read_file</code> tool</h2>
+<p>The <code>read_file</code> tool (<code>tool_id: "read_file"</code>) is a native built-in for reading local files with line-based windowing and a dedup cache that prevents redundant reads from bloating the LLM's context.</p>
+<p><strong>Implementation:</strong> <code>packages/meeseeks_tools/src/meeseeks_tools/integration/aider_file_tools.py</code> (<code>ReadFileTool</code> class)
+<strong>Registration:</strong> <code>packages/meeseeks_core/src/meeseeks_core/tool_registry.py</code>
+<strong>Prompt:</strong> <code>packages/meeseeks_core/src/meeseeks_core/prompts/tools/read-file.txt</code></p>
+<h3 id="parameters">Parameters</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>path</code></td>
+<td>string</td>
+<td>yes</td>
+<td>—</td>
+<td>File path to read (relative to <code>root</code>)</td>
+</tr>
+<tr>
+<td><code>root</code></td>
+<td>string</td>
+<td>no</td>
+<td>CWD</td>
+<td>Project root for path resolution</td>
+</tr>
+<tr>
+<td><code>offset</code></td>
+<td>integer</td>
+<td>no</td>
+<td><code>0</code></td>
+<td>0-based start line</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td>no</td>
+<td><code>2000</code></td>
+<td>Maximum lines to return</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="output-format">Output format</h3>
+<p>Returns a JSON payload with line-numbered content:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;file&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;src/main.py&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1\timport os\n2\timport sys\n3\t\n4\tdef main():\n5\t    pass&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;total_lines&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span>
+<span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><strong>Line numbers</strong> are 1-based, tab-separated (matches <code>cat -n</code> format).</li>
+<li><strong><code>total_lines</code></strong> reflects the full file, not the windowed portion — so the model knows whether it has seen everything.</li>
+<li>When the file exceeds the limit, a truncation hint is appended: <code>... (truncated — use offset/limit to read more)</code>.</li>
+</ul>
+<h3 id="dedup-cache">Dedup cache</h3>
+<p>The <code>ToolUseLoop</code> maintains a per-run <code>_file_read_cache</code> that prevents the same file from being re-read when it hasn't changed.</p>
+<p><strong>How it works:</strong></p>
+<ol>
+<li>On the first <code>read_file</code> call for a path, the tool executes normally and the cache records: <code>{path, offset, limit, mtime}</code>.</li>
+<li>On a subsequent <code>read_file</code> call with the same path, offset, and limit, the cache checks <code>os.path.getmtime()</code>. If the mtime matches, the tool returns a stub instead of the full content:</li>
+</ol>
+<blockquote>
+<p><em>"File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading."</em></p>
+</blockquote>
+<ol>
+<li>When the <code>file_edit_tool</code> edits a file, the cache entry for that path is invalidated — the next read returns fresh content.</li>
+</ol>
+<p><strong>Why this matters:</strong> In observed sessions, GPT 5.4 re-read <code>backend.py</code> 8 times across 70 steps, adding 64KB of identical content to the message array. The dedup cache reduces this to one full read + seven 30-token stubs — a ~99% reduction in redundant context.</p>
+<p><strong>Cache location:</strong> <code>ToolUseLoop._file_read_cache</code> (<code>tool_use_loop.py</code>). The cache is per-run (created with the loop, discarded when the run ends). No cross-run persistence is needed — compaction handles session continuity.</p>
+<h3 id="system-prompt-guidance">System prompt guidance</h3>
+<p>The system prompt (<code>prompts/system.txt</code>) includes:</p>
+<blockquote>
+<p><em>Tool outputs from earlier steps persist in this conversation. Reference previous results instead of re-reading files or re-running commands you have already executed.</em></p>
+</blockquote>
+<p>This complements the dedup cache. The prompt guides the model to avoid redundant calls; the cache catches them programmatically when the model doesn't follow the guidance.</p>
   </div>
 </article>
                                 <div class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
@@ -904,6 +987,40 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3">
             Implementing a local tool
+        </a>
+        
+        
+
+        
+        <a href="#built-in-read_file-tool"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2">
+            Built-in read_file tool
+        </a>
+        
+        
+        <a href="#parameters"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            Parameters
+        </a>
+        
+        <a href="#output-format"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            Output format
+        </a>
+        
+        <a href="#dedup-cache"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            Dedup cache
+        </a>
+        
+        <a href="#system-prompt-guidance"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            System prompt guidance
         </a>
         
         

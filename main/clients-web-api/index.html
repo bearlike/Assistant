@@ -618,6 +618,7 @@
 <li><code>POST /api/sessions/{session_id}/share</code> create share link</li>
 <li><code>POST /api/sessions/{session_id}/export</code> export session payload</li>
 <li><code>GET /api/share/{token}</code> fetch shared session data</li>
+<li><code>POST /api/webhooks/&lt;platform&gt;</code> inbound webhook for chat platforms (HMAC auth, not API key). See <a href="../clients-nextcloud-talk/">Nextcloud Talk</a> and <a href="../clients-email/">Email</a> for setup. Slash commands: <code>/help</code>, <code>/usage</code>, <code>/new</code>, <code>/switch-project</code>.</li>
 </ul>
 <h2 id="run-the-console">Run the Console</h2>
 <div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>apps/meeseeks_console

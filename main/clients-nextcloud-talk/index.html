@@ -36,11 +36,11 @@
 
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>2026 04 04 navbar responsive design - bearlike/Assistant</title>
+    <title>Clients nextcloud talk - bearlike/Assistant</title>
     
 
 
-<title>2026 04 04 navbar responsive design</title>
+<title>Clients nextcloud talk</title>
 
 
 
@@ -50,18 +50,18 @@
 
 
 
-<link rel="canonical" href="https://thekrishna.in/Assistant/main/superpowers/specs/2026-04-04-navbar-responsive-design/">
+<link rel="canonical" href="https://thekrishna.in/Assistant/main/clients-nextcloud-talk/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
 
-<meta property="og:title" content="2026 04 04 navbar responsive design">
+<meta property="og:title" content="Clients nextcloud talk">
 
 
 
 
 
-<meta property="og:url" content="https://thekrishna.in/Assistant/main/superpowers/specs/2026-04-04-navbar-responsive-design/">
+<meta property="og:url" content="https://thekrishna.in/Assistant/main/clients-nextcloud-talk/">
 
 
 
@@ -70,7 +70,7 @@
 
 <!-- Twitter Card -->
 
-<meta name="twitter:title" content="2026 04 04 navbar responsive design">
+<meta name="twitter:title" content="Clients nextcloud talk">
 
 
 
@@ -81,17 +81,17 @@
 
 
 
-    <link rel="icon" href="../../../img/favicon.ico">
+    <link rel="icon" href="../img/favicon.ico">
 
-    <link href="../../../css/base.css" rel="stylesheet">
-    <link href="../../../css/geist.css" rel="stylesheet">
-
-    
-    <link href="../../../assets/_mkdocstrings.css" rel="stylesheet">
+    <link href="../css/base.css" rel="stylesheet">
+    <link href="../css/geist.css" rel="stylesheet">
 
     
+    <link href="../assets/_mkdocstrings.css" rel="stylesheet">
 
-    <script src="../../../js/callbacks.js"></script>
+    
+
+    <script src="../js/callbacks.js"></script>
 
     
 
@@ -508,12 +508,12 @@
         <h1
           class="scroll-m-20 text-4xl font-semibold tracking-tight sm:text-3xl xl:text-4xl"
         >
-          2026 04 04 navbar responsive design
+          Clients nextcloud talk
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
           
-<button onclick="fetch(`https://thekrishna.in/Assistant/superpowers/specs/2026-04-04-navbar-responsive-design.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))" 
+<button onclick="fetch(`https://thekrishna.in/Assistant/clients-nextcloud-talk.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))" 
         data-slot="button" 
         class="cursor-pointer inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md gap-1.5 px-3 has-[&>svg]:px-2.5 h-8 shadow-none md:h-7 md:text-[0.8rem]">
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -532,164 +532,185 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <h2 id="problem">Problem</h2>
-<p>The session detail NavBar has no responsive strategy. On mobile/portrait viewports, the title is unreadable, action labels waste space, metadata badges compete for room, and there's no overflow pattern for secondary actions. All 10 reported issues stem from the same root cause: the bar lets content squeeze instead of collapsing at defined breakpoints.</p>
-<h2 id="design">Design</h2>
-<h3 id="two-breakpoint-strategy">Two-breakpoint strategy</h3>
-<p>Uses standard Tailwind breakpoints <code>md</code> (768px) and <code>lg</code> (1024px).</p>
+    <p>The Nextcloud Talk integration allows users to interact with Meeseeks directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Meeseeks session visible in the web console and Langfuse traces.</p>
+<h2 id="how-it-works">How it works</h2>
+<ol>
+<li>A Nextcloud Talk bot is registered on the server pointing to the Meeseeks API webhook endpoint.</li>
+<li>When a user @mentions the bot, Nextcloud POSTs an ActivityStreams 2.0 webhook to <code>POST /api/webhooks/nextcloud-talk</code>.</li>
+<li>The adapter verifies the HMAC-SHA256 signature, parses the message, and creates or continues a session.</li>
+<li>Non-mentioned messages are silently ignored — the bot only responds when triggered.</li>
+<li>When the session completes, the final answer is sent back via the Nextcloud OCS Bot API with <code>replyTo</code> (creating a visual quote link).</li>
+</ol>
+<h3 id="session-model">Session model</h3>
+<ul>
+<li><strong>Room-scoped</strong>: All @mentions in the same room share one persistent session. Tag format: <code>nextcloud-talk:room:&lt;room_token&gt;</code>.</li>
+<li><strong>Thread-scoped</strong>: Messages with a <code>threadId</code> (explicit NC Talk thread) get their own session. Tag format: <code>nextcloud-talk:thread:&lt;room_token&gt;:&lt;thread_id&gt;</code>.</li>
+<li>Sessions are standard API sessions — stored in MongoDB/JSON, visible in the console, support forking/archiving/export.</li>
+</ul>
+<h2 id="slash-commands">Slash commands</h2>
+<p>Commands are available after the @mention keyword. They run without invoking the LLM.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
-<th>Element</th>
-<th>&lt; 768px (mobile)</th>
-<th>768-1023px (tablet)</th>
-<th>&gt;= 1024px (desktop)</th>
+<th>Command</th>
+<th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Title</td>
-<td>flex-1, no max-w</td>
-<td>flex-1, no max-w</td>
-<td>flex-1, no max-w</td>
+<td><code>/help</code></td>
+<td>Show available commands and usage</td>
 </tr>
 <tr>
-<td>Timestamp</td>
-<td>hidden</td>
-<td>visible</td>
-<td>visible</td>
+<td><code>/usage</code></td>
+<td>Show session token usage, context window utilization, and compaction status</td>
 </tr>
 <tr>
-<td>StatusBadge</td>
-<td>icon-only</td>
-<td>icon + text</td>
-<td>icon + text</td>
+<td><code>/new</code></td>
+<td>Start a fresh conversation (clears current session context)</td>
 </tr>
 <tr>
-<td>Model badge</td>
-<td>hidden</td>
-<td>hidden</td>
-<td>visible</td>
-</tr>
-<tr>
-<td>Archive btn</td>
-<td>in overflow</td>
-<td>icon-only</td>
-<td>icon + text</td>
-</tr>
-<tr>
-<td>Share btn</td>
-<td>in overflow</td>
-<td>icon-only</td>
-<td>icon + text</td>
-</tr>
-<tr>
-<td>Langfuse</td>
-<td>in overflow</td>
-<td>visible</td>
-<td>visible</td>
-</tr>
-<tr>
-<td>GitHub</td>
-<td>in overflow</td>
-<td>visible</td>
-<td>visible</td>
-</tr>
-<tr>
-<td>Theme toggle</td>
-<td>in overflow</td>
-<td>visible</td>
-<td>visible</td>
-</tr>
-<tr>
-<td>Notifications</td>
-<td>visible</td>
-<td>visible</td>
-<td>visible</td>
-</tr>
-<tr>
-<td>Overflow menu</td>
-<td>visible</td>
-<td>hidden</td>
-<td>hidden</td>
+<td><code>/switch-project &lt;name&gt;</code></td>
+<td>Switch the active project context for this session</td>
 </tr>
 </tbody>
 </table></div>
-<h3 id="mobile-layout-768px">Mobile layout (&lt; 768px)</h3>
-<div class="highlight"><pre><span></span><code>[&lt;-] [Title................] [Status-icon] [Bell] [...]
+<p>Examples:
+<div class="highlight"><pre><span></span><code>@Meeseeks /help
+@Meeseeks /usage
+@Meeseeks /new
+@Meeseeks /switch-project personal-assistant
+</code></pre></div></p>
+<p>The <code>/switch-project</code> command sets the working directory for subsequent LLM runs. If the project name is invalid or omitted, it lists available projects.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+<li>Nextcloud 27.1+ with Talk 17.1+ (for bots-v1 capability)</li>
+<li>Nextcloud 32+ with Talk 22+ (for thread support via <code>threadId</code>)</li>
+<li>The Meeseeks API server running and reachable from the Nextcloud instance</li>
+</ul>
+<h2 id="setup">Setup</h2>
+<h3 id="1-register-the-bot-in-nextcloud">1. Register the bot in Nextcloud</h3>
+<p>On the Nextcloud server (requires admin shell access):</p>
+<div class="highlight"><pre><span></span><code>occ<span class="w"> </span>talk:bot:install<span class="w"> </span><span class="s2">&quot;Meeseeks&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">&quot;&lt;shared-secret-at-least-40-chars&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">&quot;https://&lt;meeseeks-api-host&gt;/api/webhooks/nextcloud-talk&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--feature<span class="w"> </span>webhook<span class="w"> </span>--feature<span class="w"> </span>response<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">&quot;AI assistant powered by Meeseeks&quot;</span>
 </code></pre></div>
-<p>The kebab menu contains: Archive/Restore, Share (opens sub-actions), Langfuse, GitHub, Theme toggle.</p>
-<h3 id="tablet-layout-768-1023px">Tablet layout (768-1023px)</h3>
-<div class="highlight"><pre><span></span><code>[&lt;-] [Title..........] [3h ago] [Status] [Archive] [Share] [Langfuse] | [GH] [Theme] [Bell]
+<p>Note the shared secret — it must match the <code>bot_secret</code> in the Meeseeks config.</p>
+<h3 id="2-enable-the-bot-in-conversations">2. Enable the bot in conversations</h3>
+<p>Either via the admin CLI:</p>
+<div class="highlight"><pre><span></span><code>occ<span class="w"> </span>talk:bot:setup<span class="w"> </span>&lt;bot-id&gt;<span class="w"> </span>&lt;conversation-token&gt;
 </code></pre></div>
-<p>Archive and Share show icon-only (no text labels).</p>
-<h3 id="desktop-layout-1024px">Desktop layout (&gt;= 1024px)</h3>
-<div class="highlight"><pre><span></span><code>[&lt;-] [Title..........] [3h ago] [Status] [model-badge] [Archive label] [Share label] [Langfuse] | [GH] [Theme] [Bell]
-</code></pre></div>
-<p>Full current layout with text labels.</p>
-<h2 id="files-to-modify">Files to modify</h2>
-<h3 id="1-navbartsx-50-lines-changed">1. <code>NavBar.tsx</code> (~50 lines changed)</h3>
-<p><strong>Title area (left group):</strong>
-- Remove <code>max-w-[320px] md:max-w-[420px]</code> from the title container. Replace with <code>flex-1 min-w-0</code> so the title naturally fills available space and truncates.
-- Timestamp <code>&lt;span&gt;</code>: add <code>hidden md:inline</code> to hide below 768px.
-- Model badge <code>&lt;span&gt;</code>: add <code>hidden lg:inline-flex</code> to hide below 1024px.
-- StatusBadge: pass <code>compact={isMobile}</code> using the existing <code>useIsMobile</code> hook.</p>
-<p><strong>Right group (actions):</strong>
-- Archive and Share button text <code>&lt;span&gt;</code> elements: add <code>hidden lg:inline</code> to collapse to icon-only below 1024px.
-- Wrap the "desktop-only" actions (Archive, Share, Langfuse, divider, GitHub, Theme) in a container with <code>hidden md:flex items-center gap-1.5</code> — visible only at 768px+.
-- Add an overflow menu button (<code>EllipsisVertical</code> icon from lucide-react) with <code>md:hidden</code> — visible only below 768px.
-- Add <code>OverflowMenu</code> component following the existing <code>ShareMenu</code> pattern (absolute-positioned dropdown, same popover styles). Contains: Archive/Restore, Share (copy link + export), Langfuse link, GitHub link, Theme toggle — all as menu items.</p>
-<p><strong>Spacing fix:</strong>
-- Use consistent <code>gap-1.5</code> across all icon button groups (issue #8).</p>
-<h3 id="2-statusbadgetsx-10-lines-changed">2. <code>StatusBadge.tsx</code> (~10 lines changed)</h3>
-<p>Add optional <code>compact?: boolean</code> prop. When <code>true</code>, hide the text <code>&lt;span&gt;</code> inside each status variant — show only the icon. This is backward-compatible: SessionItem doesn't pass <code>compact</code>, so it renders as before.</p>
-<div class="highlight"><pre><span></span><code><span class="kd">interface</span><span class="w"> </span><span class="nx">StatusBadgeProps</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nx">status</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
-<span class="w">  </span><span class="nx">doneReason?</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
-<span class="w">  </span><span class="nx">compact?</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<p>Or via the Nextcloud Talk web UI (moderator role required): open the conversation settings and enable the bot under "Bots".</p>
+<h3 id="3-configure-meeseeks">3. Configure Meeseeks</h3>
+<p>Add the channel config to <code>configs/app.json</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;channels&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;nextcloud-talk&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;bot_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;shared-secret-from-step-1&gt;&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;nextcloud_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://cloud.example.com&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;allowed_backends&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;https://cloud.example.com&quot;</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">&quot;trigger_keyword&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;@Meeseeks&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;nextcloud_host_header&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>Each status block changes from:
-<div class="highlight"><pre><span></span><code><span class="p">&lt;</span><span class="nt">Icon</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="s">&quot;w-3.5 h-3.5&quot;</span><span class="w"> </span><span class="p">/&gt;</span>
-<span class="p">&lt;</span><span class="nt">span</span><span class="p">&gt;</span><span class="nx">Completed</span><span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;</span>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td>Set to <code>true</code> to activate the adapter</td>
+</tr>
+<tr>
+<td><code>bot_secret</code></td>
+<td>Shared HMAC secret from <code>occ talk:bot:install</code></td>
+</tr>
+<tr>
+<td><code>nextcloud_url</code></td>
+<td>Base URL of the Nextcloud instance (use internal URL if behind a CDN)</td>
+</tr>
+<tr>
+<td><code>allowed_backends</code></td>
+<td>Origin allowlist for the <code>X-Nextcloud-Talk-Backend</code> header (recommended)</td>
+</tr>
+<tr>
+<td><code>trigger_keyword</code></td>
+<td>Literal keyword that must appear in a message to trigger the bot (default: <code>@Meeseeks</code>)</td>
+</tr>
+<tr>
+<td><code>nextcloud_host_header</code></td>
+<td>Optional <code>Host</code> header override for outbound requests (useful when <code>nextcloud_url</code> is an internal address)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="4-restart-the-api-server">4. Restart the API server</h3>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>meeseeks-api
+<span class="c1"># or: docker compose restart api</span>
 </code></pre></div>
-to:
-<div class="highlight"><pre><span></span><code><span class="p">&lt;</span><span class="nt">Icon</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="s">&quot;w-3.5 h-3.5&quot;</span><span class="w"> </span><span class="p">/&gt;</span>
-<span class="p">{</span><span class="o">!</span><span class="nx">compact</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">&lt;</span><span class="nt">span</span><span class="p">&gt;</span><span class="nx">Completed</span><span class="p">&lt;/</span><span class="nt">span</span><span class="p">&gt;}</span>
-</code></pre></div></p>
-<p>When compact, also reduce horizontal padding from <code>px-2.5</code> to <code>px-1.5</code> and remove the <code>gap-1.5</code> (no text to space against).</p>
-<h3 id="3-useismobilets-no-changes-already-exists">3. <code>useIsMobile.ts</code> — no changes (already exists)</h3>
-<p>Reused in NavBar with <code>const isMobile = useIsMobile()</code> to pass <code>compact</code> to StatusBadge and control overflow menu state.</p>
-<h2 id="issues-addressed">Issues addressed</h2>
-<ol>
-<li><strong>Title truncation</strong> — removed hard max-width; title gets all remaining space</li>
-<li><strong>Text labels don't collapse</strong> — Archive/Share labels hidden below lg via <code>hidden lg:inline</code></li>
-<li><strong>StatusBadge always full-width</strong> — compact (icon-only) prop on mobile</li>
-<li><strong>Model badge too wide</strong> — hidden below lg</li>
-<li><strong>Timestamp wraps awkwardly</strong> — hidden below md</li>
-<li><strong>No overflow menu</strong> — kebab menu below md with all secondary actions</li>
-<li><strong>Notification bell cramped</strong> — always visible, adequate tap target (p-1.5 = 28px)</li>
-<li><strong>Inconsistent spacing</strong> — consistent <code>gap-1.5</code> across action groups</li>
-<li><strong>No breakpoint strategy</strong> — two clear breakpoints at md and lg</li>
-<li><strong>No title/actions width relationship</strong> — flex-1 title with shrink-0 actions</li>
-</ol>
-<h2 id="what-this-does-not-do">What this does NOT do</h2>
+<p>The startup logs should show:</p>
+<div class="highlight"><pre><span></span><code>Nextcloud Talk channel adapter registered
+Channel webhook routes registered (platforms: [&#39;nextcloud-talk&#39;])
+</code></pre></div>
+<h2 id="usage">Usage</h2>
+<p>In any Nextcloud Talk conversation where the bot is enabled:</p>
+<div class="highlight"><pre><span></span><code>@Meeseeks help me refactor the auth module
+</code></pre></div>
+<p>The bot responds with the orchestration result. Subsequent @mentions in the same room continue the conversation with full context. Use <code>/new</code> to reset.</p>
+<h2 id="architecture">Architecture</h2>
+<p>The adapter lives in <code>apps/meeseeks_api/src/meeseeks_api/channels/</code>:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>base.py</code></td>
+<td><code>ChannelAdapter</code> Protocol, <code>InboundMessage</code>, <code>ChannelRegistry</code>, <code>DeduplicationGuard</code></td>
+</tr>
+<tr>
+<td><code>nextcloud_talk.py</code></td>
+<td>HMAC verification, ActivityStreams parsing, OCS Bot API response, <code>system_context</code> for LLM awareness</td>
+</tr>
+<tr>
+<td><code>email_adapter.py</code></td>
+<td>Email adapter (IMAP polling + SMTP reply with markdown→HTML), <code>EmailPoller</code> daemon thread</td>
+</tr>
+<tr>
+<td><code>routes.py</code></td>
+<td>Flask Blueprint, shared <code>_process_inbound()</code> pipeline, <code>@command</code> registry, completion callback, <code>init_channels()</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Commands use a decorator-based registry — adding a new command is one <code>@command</code> decorator and one function. Help text auto-generates from the registry.</p>
+<p>The adapter provides a <code>system_context</code> property injected into the LLM system prompt, making the model aware it's communicating through Nextcloud Talk.</p>
+<p>Channel sessions are standard API sessions — they use existing <code>create_session()</code>, <code>tag_session()</code>, <code>start_async()</code>, and <code>enqueue_message()</code>. No custom session infrastructure.</p>
+<h2 id="limitations">Limitations</h2>
 <ul>
-<li>No animation on overflow menu open/close (KISS)</li>
-<li>No changes to HomeView NavBar (home mode is simpler, fewer items)</li>
-<li>No changes to NotificationPanel positioning</li>
-<li>No new dependencies (EllipsisVertical already in lucide-react)</li>
-<li>No changes to the Popover component</li>
+<li><strong>File attachments</strong>: the bot receives file metadata but cannot download file content (requires Nextcloud user auth, not bot auth). File sending is not supported by the NC Talk Bot API.</li>
+<li><strong>DM auto-respond</strong>: the bot requires @mention in all rooms (no automatic DM detection yet).</li>
+<li><strong>Emoji reactions for status</strong>: not yet implemented.</li>
 </ul>
-<h2 id="verification">Verification</h2>
+<h2 id="adding-other-chat-platforms">Adding other chat platforms</h2>
+<p>The <code>ChannelAdapter</code> protocol is designed to be extended. Email is the second adapter (see <a href="../clients-email/">Email</a>). To add Slack or Discord:</p>
 <ol>
-<li><code>npm run build</code> — no type errors</li>
-<li>Browser devtools responsive mode:</li>
-<li>390px (iPhone): Title readable, only Bell + kebab visible on right, kebab opens menu with all actions</li>
-<li>768px (iPad portrait): Labels collapse to icons, timestamp visible, no overflow menu</li>
-<li>1024px+ (desktop): Full layout with text labels</li>
-<li>Test overflow menu: Archive, Share, Langfuse, GitHub, Theme all functional from menu</li>
-<li>Test StatusBadge compact in NavBar vs normal in SessionItem (home view)</li>
+<li>Create <code>channels/slack.py</code> implementing <code>verify_request</code>, <code>parse_inbound</code>, <code>send_response</code>, and <code>system_context</code></li>
+<li>Add the platform config to <code>config.channels</code> in <code>app.json</code></li>
+<li>Register the adapter in <code>init_channels()</code> — the webhook route <code>POST /api/webhooks/slack</code> works automatically</li>
+<li>For non-webhook channels (like IMAP email), use a poller that calls <code>_process_inbound()</code> directly</li>
+<li>Optionally implement <code>requires_mention(message)</code> for per-message mention gating logic</li>
+<li>Add platform-specific commands if needed via the <code>@command</code> decorator in <code>routes.py</code></li>
 </ol>
   </div>
 </article>
@@ -713,13 +734,13 @@ to:
                 <div class="text-muted-foreground text-sm font-medium">Menu</div>
                 <div class="flex flex-col gap-3">
                     
-                    <a class="text-2xl font-medium" href="../../..">
+                    <a class="text-2xl font-medium" href="..">
                         
                         Home
                         
                     </a>
                     
-                    <a class="text-2xl font-medium" href="../../../core-orchestration/">
+                    <a class="text-2xl font-medium" href="../core-orchestration/">
                         
                         Core Orchestration
                         
@@ -737,13 +758,13 @@ to:
                     
                     <div class="flex flex-col gap-3">
                         
-                        <a class="text-2xl font-medium" href="../../../getting-started/">
+                        <a class="text-2xl font-medium" href="../getting-started/">
                             
                             Installation
                             
                         </a>
                         
-                        <a class="text-2xl font-medium" href="../../../llm-setup/">
+                        <a class="text-2xl font-medium" href="../llm-setup/">
                             
                             LLM Setup
                             
@@ -758,19 +779,19 @@ to:
                     
                     <div class="flex flex-col gap-3">
                         
-                        <a class="text-2xl font-medium" href="../../../clients-cli/">
+                        <a class="text-2xl font-medium" href="../clients-cli/">
                             
                             CLI
                             
                         </a>
                         
-                        <a class="text-2xl font-medium" href="../../../clients-web-api/">
+                        <a class="text-2xl font-medium" href="../clients-web-api/">
                             
                             Web + API
                             
                         </a>
                         
-                        <a class="text-2xl font-medium" href="../../../clients-home-assistant/">
+                        <a class="text-2xl font-medium" href="../clients-home-assistant/">
                             
                             Home Assistant Voice
                             
@@ -785,19 +806,19 @@ to:
                     
                     <div class="flex flex-col gap-3">
                         
-                        <a class="text-2xl font-medium" href="../../../developer-guide/">
+                        <a class="text-2xl font-medium" href="../developer-guide/">
                             
                             Developer Guide
                             
                         </a>
                         
-                        <a class="text-2xl font-medium" href="../../../session-runtime/">
+                        <a class="text-2xl font-medium" href="../session-runtime/">
                             
                             Session Runtime
                             
                         </a>
                         
-                        <a class="text-2xl font-medium" href="../../../reference/">
+                        <a class="text-2xl font-medium" href="../reference/">
                             
                             Reference
                             
@@ -825,96 +846,100 @@ to:
         
         
         
-        <a href="#problem"
+        <a href="#how-it-works"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
-            Problem
-        </a>
-        
-
-        
-        <a href="#design"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2">
-            Design
+            How it works
         </a>
         
         
-        <a href="#two-breakpoint-strategy"
+        <a href="#session-model"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3">
-            Two-breakpoint strategy
-        </a>
-        
-        <a href="#mobile-layout-768px"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3">
-            Mobile layout (&lt; 768px)
-        </a>
-        
-        <a href="#tablet-layout-768-1023px"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3">
-            Tablet layout (768-1023px)
-        </a>
-        
-        <a href="#desktop-layout-1024px"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3">
-            Desktop layout (&gt;= 1024px)
+            Session model
         </a>
         
         
 
         
-        <a href="#files-to-modify"
+        <a href="#slash-commands"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
-            Files to modify
+            Slash commands
+        </a>
+        
+
+        
+        <a href="#prerequisites"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2">
+            Prerequisites
+        </a>
+        
+
+        
+        <a href="#setup"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2">
+            Setup
         </a>
         
         
-        <a href="#1-navbartsx-50-lines-changed"
+        <a href="#1-register-the-bot-in-nextcloud"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3">
-            1. NavBar.tsx (~50 lines changed)
+            1. Register the bot in Nextcloud
         </a>
         
-        <a href="#2-statusbadgetsx-10-lines-changed"
+        <a href="#2-enable-the-bot-in-conversations"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3">
-            2. StatusBadge.tsx (~10 lines changed)
+            2. Enable the bot in conversations
         </a>
         
-        <a href="#3-useismobilets-no-changes-already-exists"
+        <a href="#3-configure-meeseeks"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3">
-            3. useIsMobile.ts — no changes (already exists)
+            3. Configure Meeseeks
+        </a>
+        
+        <a href="#4-restart-the-api-server"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3">
+            4. Restart the API server
         </a>
         
         
 
         
-        <a href="#issues-addressed"
+        <a href="#usage"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
-            Issues addressed
+            Usage
         </a>
         
 
         
-        <a href="#what-this-does-not-do"
+        <a href="#architecture"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
-            What this does NOT do
+            Architecture
         </a>
         
 
         
-        <a href="#verification"
+        <a href="#limitations"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
-            Verification
+            Limitations
+        </a>
+        
+
+        
+        <a href="#adding-other-chat-platforms"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2">
+            Adding other chat platforms
         </a>
         
 
@@ -951,28 +976,28 @@ to:
 
      
 
-<script src="../../../javascripts/mermaid-init-v2.js"></script>
+<script src="../javascripts/mermaid-init-v2.js"></script>
 
      
 
-<script src="../../../javascripts/version-switcher.js"></script>
+<script src="../javascripts/version-switcher.js"></script>
 
      
 
-<script src="../../../javascripts/copy-page.js"></script>
+<script src="../javascripts/copy-page.js"></script>
 
      
 
-<script src="../../../javascripts/build-info.js"></script>
+<script src="../javascripts/build-info.js"></script>
 
      
 
-<script src="../../../search/main.js"></script>
+<script src="../search/main.js"></script>
 
 
     
 
-    <script src="../../../js/copy-button.js"></script>
+    <script src="../js/copy-button.js"></script>
     <script>updatePygmentsStylesheet();</script>
     
     <script>fetchStargazers("https://github.com/bearlike/Assistant");</script>

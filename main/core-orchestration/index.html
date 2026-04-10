@@ -585,7 +585,7 @@
     <p>This page summarizes the orchestration loop, core components, and operational features for bearlike/Assistant.</p>
 <h2 id="execution-flow">Execution flow</h2>
 <ul>
-<li>Input arrives from a client (CLI, API, chat, or Home Assistant integration).</li>
+<li>Input arrives from a client (CLI, API, Nextcloud Talk, Home Assistant, or other chat platform adapters).</li>
 <li>The orchestrator builds a context snapshot (summary, recent events, and selected history).</li>
 <li>In act mode, a single async <code>ToolUseLoop</code> executes — the LLM decides which tools to call via native <code>bind_tools</code>.</li>
 <li>In plan mode, the <code>Planner</code> generates a plan without execution.</li>
@@ -616,8 +616,9 @@
 <ul>
 <li>Add tools by implementing <code>AbstractTool</code> or by registering MCP servers with schemas.</li>
 <li><strong>Configurable file edit tool:</strong> Set <code>agent.edit_tool</code> in config to <code>"search_replace_block"</code> (Aider-style) or <code>"structured_patch"</code> (per-file exact match). The tool schema, LLM prompt instructions, and backend implementation all switch together — they're bundled in the same <code>ToolSpec</code> registration.</li>
-<li>Add hooks through <code>HookManager</code> for pre/post events and compaction transforms.</li>
+<li>Add hooks through <code>HookManager</code> for pre/post events, compaction transforms, and session lifecycle notifications. Supports shell command hooks (<code>type: "command"</code>) and HTTP webhook hooks (<code>type: "http"</code>, fire-and-forget POST to external URLs).</li>
 <li>Add new interfaces by reusing <code>SessionRuntime</code> and the event transcript model.</li>
+<li><strong>Chat platform adapters</strong>: implement the <code>ChannelAdapter</code> protocol (3 methods: <code>verify_request</code>, <code>parse_inbound</code>, <code>send_response</code>) and register in <code>channels/</code> to receive webhook-driven conversations. Channel sessions are standard API sessions using session tags for thread→session mapping. First adapter: Nextcloud Talk. See <code>docs/clients-nextcloud-talk.md</code>.</li>
 </ul>
   </div>
 </article>

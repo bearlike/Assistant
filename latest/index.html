@@ -573,7 +573,8 @@
 <p><strong>Clients</strong>
 - <a href="clients-cli/">CLI</a> - terminal interface
 - <a href="clients-web-api/">Console + API</a> - Web console and REST API
-- <a href="clients-home-assistant/">Home Assistant voice</a> - HA Assist integration</p>
+- <a href="clients-home-assistant/">Home Assistant voice</a> - HA Assist integration
+- <a href="clients-nextcloud-talk/">Nextcloud Talk</a> - chat platform integration via webhook</p>
 <p><strong>Developer</strong>
 - <a href="developer-guide/">Developer guide</a> - core abstractions and new client walkthrough</p>
 <p><strong>Reference</strong>
@@ -583,13 +584,14 @@
 <ul>
 <li>Unified async tool-use loop where the LLM drives tool selection via native <code>bind_tools</code>.</li>
 <li>Sub-agent spawning for parallel subtasks, managed by the AgentHypervisor control plane.</li>
-<li>Multiple interfaces (web console, REST API, Home Assistant, terminal CLI) backed by one core engine.</li>
+<li>Multiple interfaces (web console, REST API, Home Assistant, Nextcloud Talk, terminal CLI) backed by one core engine.</li>
 <li>Tool registry for local tools plus optional MCP tools.</li>
-<li>Built-in local file and shell tools (Aider adapters) for edit blocks, read, list, and shell execution.</li>
+<li>Built-in local file and shell tools — native <code>read_file</code> with line-windowing and dedup cache, plus edit, list, and shell execution.</li>
 <li>Session transcripts with auto-compact for long runs and token budget awareness.</li>
 <li>Context snapshots built from recent turns plus summaries of prior activity.</li>
 <li>Session listings filter empty sessions and support archiving via the API.</li>
-<li>Permission gate with approval callbacks plus lightweight hooks around tool execution.</li>
+<li>Permission gate with approval callbacks plus bidirectional hooks (command + HTTP) around tool execution and session lifecycle.</li>
+<li>Chat platform adapter framework (<code>ChannelAdapter</code> protocol) with shared <code>_process_inbound()</code> pipeline. Supports webhook-driven (Nextcloud Talk) and poll-driven (Email via IMAP) channels. Slack/Discord follow the same pattern.</li>
 <li>Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.</li>
 <li>External MCP servers can be added via <code>configs/mcp.json</code> with schema-aware tool inputs.</li>
 <li>Optional components (Langfuse, Home Assistant) auto-disable when not configured.</li>
@@ -617,6 +619,8 @@
   User --&gt; Console
   User --&gt; API
   HA --&gt; API
+  NCTalk["Nextcloud Talk"] --&gt;|"webhook"| API
+  Email["Email"] --&gt;|"IMAP poll"| API
   CLI --&gt; Runtime
   Console --&gt; API
   API --&gt; Runtime

@@ -21,6 +21,7 @@ bearlike/Assistant (Meeseeks) is an AI task agent assistant that breaks a reques
 - [CLI](clients-cli.md) - terminal interface
 - [Console + API](clients-web-api.md) - Web console and REST API
 - [Home Assistant voice](clients-home-assistant.md) - HA Assist integration
+- [Nextcloud Talk](clients-nextcloud-talk.md) - chat platform integration via webhook
 
 **Developer**
 - [Developer guide](developer-guide.md) - core abstractions and new client walkthrough
@@ -32,13 +33,14 @@ bearlike/Assistant (Meeseeks) is an AI task agent assistant that breaks a reques
 ## Feature highlights (quick view)
 - Unified async tool-use loop where the LLM drives tool selection via native `bind_tools`.
 - Sub-agent spawning for parallel subtasks, managed by the AgentHypervisor control plane.
-- Multiple interfaces (web console, REST API, Home Assistant, terminal CLI) backed by one core engine.
+- Multiple interfaces (web console, REST API, Home Assistant, Nextcloud Talk, terminal CLI) backed by one core engine.
 - Tool registry for local tools plus optional MCP tools.
-- Built-in local file and shell tools (Aider adapters) for edit blocks, read, list, and shell execution.
+- Built-in local file and shell tools — native `read_file` with line-windowing and dedup cache, plus edit, list, and shell execution.
 - Session transcripts with auto-compact for long runs and token budget awareness.
 - Context snapshots built from recent turns plus summaries of prior activity.
 - Session listings filter empty sessions and support archiving via the API.
-- Permission gate with approval callbacks plus lightweight hooks around tool execution.
+- Permission gate with approval callbacks plus bidirectional hooks (command + HTTP) around tool execution and session lifecycle.
+- Chat platform adapter framework (`ChannelAdapter` protocol) with shared `_process_inbound()` pipeline. Supports webhook-driven (Nextcloud Talk) and poll-driven (Email via IMAP) channels. Slack/Discord follow the same pattern.
 - Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.
 - External MCP servers can be added via `configs/mcp.json` with schema-aware tool inputs.
 - Optional components (Langfuse, Home Assistant) auto-disable when not configured.
@@ -66,6 +68,8 @@ flowchart LR
   User --> Console
   User --> API
   HA --> API
+  NCTalk["Nextcloud Talk"] -->|"webhook"| API
+  Email["Email"] -->|"IMAP poll"| API
   CLI --> Runtime
   Console --> API
   API --> Runtime

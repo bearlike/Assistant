@@ -58,14 +58,26 @@
         },
         "max_iters": {
           "default": 30,
-          "description": "Maximum orchestration iterations for root agent (max_steps = max_iters * 3).",
+          "description": "Deprecated. The tool-use loop now runs until natural completion (model returns text without tool calls). This field is retained for API backward compatibility but is not enforced.",
           "title": "Max Iters",
           "type": "integer"
         },
         "sub_agent_max_steps": {
           "default": 10,
-          "description": "Default maximum tool-use steps per sub-agent before forced termination.",
+          "description": "Deprecated. Sub-agents now run until natural completion. This field is retained for API backward compatibility but is not enforced. Safety is provided by session_step_budget, stall detection, and LLM timeouts.",
           "title": "Sub Agent Max Steps",
+          "type": "integer"
+        },
+        "llm_call_timeout": {
+          "default": 60.0,
+          "description": "Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models. On timeout, the call is retried up to llm_call_retries times before cascading to fallback models.",
+          "title": "Llm Call Timeout",
+          "type": "number"
+        },
+        "llm_call_retries": {
+          "default": 2,
+          "description": "Maximum retry attempts for the primary model before cascading to fallback_models. Each fallback model gets one attempt.",
+          "title": "Llm Call Retries",
           "type": "integer"
         },
         "default_denied_tools": {
@@ -85,6 +97,20 @@
           ],
           "title": "Edit Tool",
           "type": "string"
+        },
+        "plan_mode_shell_allowlist": {
+          "description": "Shell command prefixes allowed during plan mode. Each entry matches a command at a word boundary (e.g. 'git log' matches 'git log --oneline' but not 'git logger'). Commands containing pipes, redirects, variable expansion, command substitution, or chaining (|, >, <, &, ;, $, backtick) are always rejected. Set to an empty list to disable shell in plan mode entirely.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Plan Mode Shell Allowlist",
+          "type": "array"
+        },
+        "plan_mode_allow_mcp": {
+          "default": true,
+          "description": "Allow ALL user-enabled MCP tools (tools with kind='mcp') during plan mode. Matches Claude Code's permissive default and trusts the user's mcp.json configuration. Set to false to block MCP tools in plan mode regardless of their read-only status.",
+          "title": "Plan Mode Allow Mcp",
+          "type": "boolean"
         }
       },
       "title": "AgentConfig",
@@ -217,15 +243,29 @@
       "properties": {
         "type": {
           "default": "command",
-          "description": "Hook type. Currently only 'command' is supported.",
+          "description": "Hook type: 'command' (shell) or 'http' (POST to URL).",
           "title": "Type",
           "type": "string"
         },
         "command": {
           "default": "",
-          "description": "Shell command to execute when the hook fires.",
+          "description": "Shell command to execute (type=command).",
           "title": "Command",
           "type": "string"
+        },
+        "url": {
+          "default": "",
+          "description": "Target URL for HTTP POST (type=http).",
+          "title": "Url",
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra HTTP headers (type=http).",
+          "title": "Headers",
+          "type": "object"
         },
         "matcher": {
           "anyOf": [
@@ -242,7 +282,7 @@
         },
         "timeout": {
           "default": 30,
-          "description": "Maximum seconds to wait for the hook command to finish.",
+          "description": "Maximum seconds to wait for the hook to finish.",
           "title": "Timeout",
           "type": "integer"
         }
@@ -338,6 +378,29 @@
           ],
           "title": "Tool Model",
           "type": "string"
+        },
+        "title_model": {
+          "default": "",
+          "description": "Model ID for session-title generation. Falls back to default_model when empty.",
+          "examples": [
+            "anthropic/claude-haiku-4-5-20251001"
+          ],
+          "title": "Title Model",
+          "type": "string"
+        },
+        "fallback_models": {
+          "description": "Ordered list of fallback model IDs. On retryable LLM failure, the system tries each in order after exhausting retries on the primary model. Empty = no fallback.",
+          "examples": [
+            [
+              "gpt-5.4",
+              "gemini-2.5-pro"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Fallback Models",
+          "type": "array"
         },
         "reasoning_effort": {
           "default": "",
@@ -689,7 +752,17 @@
       "$ref": "#/$defs/AgentConfig"
     },
     "hooks": {
-      "$ref": "#/$defs/HooksConfig"
+      "$ref": "#/$defs/HooksConfig",
+      "description": "External hooks fired during the session lifecycle (command or http)."
+    },
+    "channels": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "description": "Chat platform channel adapters (nextcloud-talk, slack, etc.).",
+      "title": "Channels",
+      "type": "object"
     },
     "projects": {
       "additionalProperties": {

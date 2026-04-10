@@ -628,6 +628,15 @@
 <li><code>SessionRuntime.list_sessions()</code> hides archived sessions by default. Use
   <code>list_sessions(include_archived=True)</code> to include them.</li>
 </ul>
+<h2 id="channel-adapter-sessions">Channel adapter sessions</h2>
+<p>Chat platform adapters (Nextcloud Talk, etc.) create standard sessions via the runtime. Thread-to-session mapping uses existing session tags:</p>
+<ul>
+<li><strong>Tag format</strong>: <code>"&lt;platform&gt;:&lt;thread_id&gt;"</code> (e.g. <code>"nextcloud-talk:100"</code>)</li>
+<li><strong>Lookup</strong>: <code>session_store.resolve_tag(tag)</code> returns the session ID or <code>None</code></li>
+<li><strong>Create</strong>: <code>create_session()</code> + <code>tag_session(session_id, tag)</code></li>
+<li>Tags persist in MongoDB/JSON and survive API restarts</li>
+</ul>
+<p>Channel sessions are indistinguishable from console/CLI sessions in listings, event streams, and Langfuse traces. A <code>context</code> event with <code>source_platform</code> metadata is injected at creation so the LLM and completion callback know the session origin.</p>
 <h2 id="design-goals">Design goals</h2>
 <ul>
 <li>Keep the core orchestration engine centralized.</li>
@@ -830,6 +839,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2">
             Archiving behavior
+        </a>
+        
+
+        
+        <a href="#channel-adapter-sessions"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2">
+            Channel adapter sessions
         </a>
         
 
