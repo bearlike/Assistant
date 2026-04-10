@@ -29,8 +29,8 @@ jobs:
         with:
           branch: chore/uv-lock-refresh
           delete-branch: true
-          title: "chore(uv): refresh lockfile"
-          commit-message: "chore(uv): refresh lockfile"
+          title: "🔒 chore(uv): refresh lockfile"
+          commit-message: "🔒 chore(uv): refresh lockfile"
           body: |
             - Automated uv.lock refresh.
             - Runs `uv lock` at repo root.
