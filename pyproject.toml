@@ -41,7 +41,7 @@ docs = [
   "mkdocs",
   "mkdocs-shadcn>=0.9.9",
   "mkdocstrings[python]",
-  "pymdown-extensions>=10.20.1",
+  "pymdown-extensions>=10.21.2",
 ]
 
 [tool.uv.workspace]
