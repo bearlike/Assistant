@@ -3,7 +3,7 @@
 # Dockerfile.base — Dev-equipped agent runtime for Meeseeks
 FROM python:3.11-bookworm
 
-ARG VERSION="0.0.9"
+ARG VERSION="0.0.10"
 ARG USERNAME=meeseeks
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
@@ -40,6 +40,12 @@ USER $USERNAME
 RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash \
     && . "$NVM_DIR/nvm.sh" && nvm install --lts
 USER root
+# Expose node/npm/npx on the system PATH via a stable symlink so non-login
+# processes (gunicorn, LSP servers, npx) see the nvm-installed runtime
+# without having to source nvm.sh. `npm install -g` targets the nvm prefix,
+# so new global binaries land in /opt/node/bin automatically.
+RUN ln -sfn "$(ls -d $NVM_DIR/versions/node/*/ | head -1 | sed 's:/$::')" /opt/node
+ENV PATH=/opt/node/bin:$PATH
 
 # ---------- Python: uv + Meeseeks core packages ----------
 RUN pip install --no-cache-dir uv

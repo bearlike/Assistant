@@ -1,62 +1,32 @@
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   clearNotifications,
   dismissNotification,
-  listNotifications
+  listNotifications,
 } from "../api/client";
-import { NotificationItem } from "../types";
 import { logApiError } from "../utils/errors";
 
 export function useNotifications() {
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await listNotifications();
-      setNotifications(data);
-    } catch (err) {
-      const message = logApiError("listNotifications", err);
-      setError(message);
-      setNotifications([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const dismiss = useCallback(async (id: string) => {
-    try {
-      await dismissNotification([id]);
-      setNotifications((prev) => prev.filter((n) => n.id !== id));
-    } catch (err) {
-      const message = logApiError("dismissNotification", err);
-      setError(message);
-    }
-  }, []);
-
-  const clearAll = useCallback(async () => {
-    try {
-      await clearNotifications(true);
-      setNotifications([]);
-    } catch (err) {
-      const message = logApiError("clearNotifications", err);
-      setError(message);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["notifications"],
+    queryFn: listNotifications,
+    refetchInterval: 30_000,
+  });
+  const dismissM = useMutation({
+    mutationFn: (id: string) => dismissNotification([id]),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
+  });
+  const clearM = useMutation({
+    mutationFn: () => clearNotifications(true),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
+  });
   return {
-    notifications,
-    loading,
-    error,
-    refresh,
-    dismiss,
-    clearAll
+    notifications: q.data ?? [],
+    loading: q.isPending,
+    error: q.error ? logApiError("listNotifications", q.error) : null,
+    refresh: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
+    dismiss: (id: string) => dismissM.mutate(id),
+    clearAll: () => clearM.mutate(),
   };
 }

@@ -1,121 +1,96 @@
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   archiveSession,
   createSession,
   listSessions,
   regenerateTitle as apiRegenerateTitle,
   unarchiveSession,
-  updateSessionTitle
+  updateSessionTitle,
 } from "../api/client";
 import { SessionContext, SessionSummary } from "../types";
 import { logApiError } from "../utils/errors";
+
 export function useSessions() {
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [archivedSessions, setArchivedSessions] = useState<SessionSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [archivedLoading, setArchivedLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [archivedError, setArchivedError] = useState<string | null>(null);
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await listSessions(false);
-      setSessions(data);
-    } catch (err) {
-      const message = logApiError("listSessions", err);
-      setError(message);
-      setSessions([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-  const refreshArchived = useCallback(async () => {
-    setArchivedLoading(true);
-    setArchivedError(null);
-    try {
-      const data = await listSessions(true);
-      setArchivedSessions(data.filter((session) => session.archived));
-    } catch (err) {
-      const message = logApiError("listArchivedSessions", err);
-      setArchivedError(message);
-      setArchivedSessions([]);
-    } finally {
-      setArchivedLoading(false);
-    }
-  }, []);
-  const create = useCallback(async (context?: SessionContext) => {
-    const safeContext = context ?? { mcp_tools: [] };
-    const sessionId = await createSession(safeContext);
-    await refresh();
-    return sessionId;
-  }, [refresh]);
-  const archive = useCallback(async (sessionId: string) => {
-    await archiveSession(sessionId);
-    await refresh();
-    await refreshArchived();
-  }, [refresh, refreshArchived]);
-  const unarchive = useCallback(async (sessionId: string) => {
-    await unarchiveSession(sessionId);
-    await refresh();
-    await refreshArchived();
-  }, [refresh, refreshArchived]);
-  const applyTitle = useCallback((sessionId: string, title: string) => {
-    const patch = (prev: SessionSummary[]) =>
-      prev.map((session) =>
-        session.session_id === sessionId ? { ...session, title } : session
-      );
-    setSessions(patch);
-    setArchivedSessions(patch);
-  }, []);
-  const updateTitle = useCallback(
-    async (sessionId: string, title: string) => {
-      const result = await updateSessionTitle(sessionId, title);
-      applyTitle(sessionId, result.title);
-    },
-    [applyTitle]
-  );
-  const regenerateTitle = useCallback(
-    async (sessionId: string): Promise<string> => {
-      const result = await apiRegenerateTitle(sessionId);
-      applyTitle(sessionId, result.title);
-      return result.title;
-    },
-    [applyTitle]
-  );
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-  useEffect(() => {
-    const handleFocus = () => {
+  const qc = useQueryClient();
+  const active = useQuery({
+    queryKey: ["sessions", "active"],
+    queryFn: () => listSessions(false),
+  });
+  const archived = useQuery({
+    queryKey: ["sessions", "archived"],
+    queryFn: () => listSessions(true).then((d) => d.filter((s) => s.archived)),
+    enabled: false,
+  });
+
+  const refresh = async () => {
+    await qc.invalidateQueries({ queryKey: ["sessions", "active"] });
+  };
+  const refreshArchived = async () => {
+    await archived.refetch();
+  };
+
+  const createM = useMutation({
+    mutationFn: (ctx?: SessionContext) =>
+      createSession(ctx ?? { mcp_tools: [] }),
+    onSuccess: () => {
       void refresh();
-    };
-    const handleVisibility = () => {
-      if (!document.hidden) {
-        void refresh();
-      }
-    };
-    window.addEventListener("focus", handleFocus);
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => {
-      window.removeEventListener("focus", handleFocus);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, [refresh]);
+    },
+  });
+  const archiveM = useMutation({
+    mutationFn: (id: string) => archiveSession(id),
+    onSuccess: () => {
+      void refresh();
+      void refreshArchived();
+    },
+  });
+  const unarchiveM = useMutation({
+    mutationFn: (id: string) => unarchiveSession(id),
+    onSuccess: () => {
+      void refresh();
+      void refreshArchived();
+    },
+  });
+
+  const applyTitle = (id: string, title: string) => {
+    const patch = (prev?: SessionSummary[]) =>
+      prev?.map((s) => (s.session_id === id ? { ...s, title } : s)) ?? [];
+    qc.setQueryData<SessionSummary[]>(["sessions", "active"], patch);
+    qc.setQueryData<SessionSummary[]>(["sessions", "archived"], patch);
+  };
+
+  const updateTitleM = useMutation({
+    mutationFn: (vars: { id: string; title: string }) =>
+      updateSessionTitle(vars.id, vars.title),
+    onSuccess: (res) => applyTitle(res.session_id, res.title),
+  });
+  const regenerateTitleM = useMutation({
+    mutationFn: (id: string) => apiRegenerateTitle(id),
+    onSuccess: (res) => applyTitle(res.session_id, res.title),
+  });
+
   return {
-    sessions,
-    archivedSessions,
-    loading,
-    archivedLoading,
-    error,
-    archivedError,
+    sessions: active.data ?? [],
+    archivedSessions: archived.data ?? [],
+    loading: active.isPending,
+    archivedLoading: archived.isFetching,
+    error: active.error ? logApiError("listSessions", active.error) : null,
+    archivedError: archived.error
+      ? logApiError("listArchivedSessions", archived.error)
+      : null,
     refresh,
     refreshArchived,
-    create,
-    archive,
-    unarchive,
-    updateTitle,
-    regenerateTitle,
-    applyTitle
+    create: async (ctx?: SessionContext) => createM.mutateAsync(ctx),
+    archive: async (id: string) => {
+      await archiveM.mutateAsync(id);
+    },
+    unarchive: async (id: string) => {
+      await unarchiveM.mutateAsync(id);
+    },
+    updateTitle: async (id: string, title: string) => {
+      await updateTitleM.mutateAsync({ id, title });
+    },
+    regenerateTitle: async (id: string) =>
+      (await regenerateTitleM.mutateAsync(id)).title,
+    applyTitle,
   };
 }

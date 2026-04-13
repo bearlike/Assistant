@@ -9,11 +9,10 @@ import threading
 from collections.abc import Callable
 
 from meeseeks_core.agent_context import AgentContext
-from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, PlanStep, TaskQueue
+from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
 from meeseeks_core.common import discover_project_instructions, get_logger, session_log_context
-from meeseeks_core.compaction import should_compact, summarize_events
 from meeseeks_core.components import langfuse_session_context
-from meeseeks_core.config import get_config_value
+from meeseeks_core.config import PluginsConfig, get_config, get_config_value
 from meeseeks_core.context import ContextBuilder
 from meeseeks_core.exit_plan_mode import ensure_plan_dir, plan_file_for
 from meeseeks_core.hooks import HookManager, default_hook_manager
@@ -23,7 +22,6 @@ from meeseeks_core.permissions import (
     approval_callback_from_config,
     load_permission_policy,
 )
-from meeseeks_core.planning import Planner
 from meeseeks_core.session_store import SessionStoreBase, create_session_store
 from meeseeks_core.skills import SkillRegistry, activate_skill
 from meeseeks_core.token_budget import get_token_budget
@@ -38,9 +36,7 @@ logging = get_logger(name="core.orchestrator")
 _CLOSURE_ERROR_MAX_LEN = 500
 
 
-def _format_assistant_closure(
-    done_reason: str | None, last_error: str | None
-) -> str:
+def _format_assistant_closure(done_reason: str | None, last_error: str | None) -> str:
     """Return a short human-readable closure marker for a terminal run.
 
     Emitted when a run ends without a real ``task_result`` so every user
@@ -85,19 +81,68 @@ class Orchestrator:
             or get_config_value("llm", "action_plan_model")
             or get_config_value("llm", "default_model", default="gpt-5.2")
         )
-        self._fallback_models = fallback_models if fallback_models is not None else tuple(
-            get_config_value("llm", "fallback_models", default=[]) or []
+        self._fallback_models = (
+            fallback_models
+            if fallback_models is not None
+            else tuple(get_config_value("llm", "fallback_models", default=[]) or [])
         )
         self._session_store = session_store or create_session_store()
-        self._tool_registry = tool_registry or load_registry(cwd=cwd)
         self._permission_policy = permission_policy or load_permission_policy()
         self._approval_callback = approval_callback or approval_callback_from_config()
         self._hook_manager = hook_manager or default_hook_manager()
-        self._context_builder = ContextBuilder(self._session_store)
-        self._planner = Planner(self._tool_registry)
+
         self._project_instructions = discover_project_instructions(cwd)
         self._skill_registry = SkillRegistry()
         self._skill_registry.load(cwd)
+
+        # Plugin loading (before load_registry so MCP servers are collected first).
+        # Uses the shared load_all_plugin_components() so the same logic is
+        # reused by the API /skills and /tools endpoints (DRY).
+        self._agent_registry = None
+        plugins_cfg = get_config().plugins
+
+        if plugins_cfg.enabled:
+            # Reconcile missing plugins on fresh containers / volume wipes.
+            if plugins_cfg.enabled_plugins:
+                self._reconcile_missing_plugins(plugins_cfg)
+
+            from pathlib import Path as _Path
+
+            from meeseeks_core.agent_registry import AgentRegistry, parse_agent_file
+            from meeseeks_core.hooks import merge_plugin_hooks
+            from meeseeks_core.plugins import load_all_plugin_components
+
+            fan_out = load_all_plugin_components()
+            self._agent_registry = AgentRegistry()
+
+            for pc in fan_out.components:
+                if pc.manifest is None:
+                    continue
+                plugin_source = f"plugin:{pc.manifest.name}"
+                for sd in pc.skill_dirs:
+                    self._skill_registry.load_extra_dir(sd, source=plugin_source)
+                for cf in pc.command_files:
+                    self._skill_registry.load_command_file(cf, source=plugin_source)
+                for af in pc.agent_files:
+                    agent_def = parse_agent_file(_Path(af), source=plugin_source)
+                    if agent_def:
+                        self._agent_registry.register(agent_def)
+            for hooks_json, plugin_root in fan_out.hooks_configs:
+                merge_plugin_hooks(self._hook_manager, hooks_json, plugin_root)
+            plugin_mcp_servers = fan_out.mcp_servers
+        else:
+            plugin_mcp_servers = {}
+
+        self._tool_registry = tool_registry or load_registry(
+            cwd=cwd,
+            extra_mcp_servers=plugin_mcp_servers or None,
+        )
+        self._context_builder = ContextBuilder(self._session_store)
+
+        # Register lossless micro-compaction as a pre_compact hook.
+        from meeseeks_core.compaction import micro_compact_events
+
+        self._hook_manager.pre_compact.append(micro_compact_events)
 
     def run(
         self,
@@ -113,13 +158,21 @@ class Orchestrator:
         skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
+        user_id: str | None = None,
+        source_platform: str | None = None,
+        invocation_id: str | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration for a session."""
         if session_id is None:
             session_id = self._session_store.create_session()
 
         with session_log_context(session_id):
-            with langfuse_session_context(session_id):
+            with langfuse_session_context(
+                session_id,
+                user_id=user_id,
+                invocation_id=invocation_id,
+                source_platform=source_platform,
+            ):
                 return self._run_with_session_context(
                     user_query,
                     max_iters=max_iters,
@@ -174,12 +227,26 @@ class Orchestrator:
                 state.summary = updated_summary
 
             if user_query.strip() == "/compact":
-                summary = summarize_events(self._session_store.load_transcript(session_id))
-                self._session_store.save_summary(session_id, summary)
-                state.summary = summary
-                state.done = True
-                state.done_reason = "compacted"
-                task_queue = self._build_direct_response(f"Compaction complete. Summary: {summary}")
+                from meeseeks_core.compact import CompactionMode, compact_conversation
+
+                try:
+                    events = self._session_store.load_transcript(session_id)
+                    result = asyncio.run(compact_conversation(events, CompactionMode.FULL))
+                    summary = result.summary
+                    self._session_store.save_summary(session_id, summary)
+                    state.summary = summary
+                    state.done = True
+                    state.done_reason = "compacted"
+                    task_queue = self._build_direct_response(
+                        f"Compaction complete. Summary: {summary}"
+                    )
+                except Exception as exc:
+                    logging.warning("User-initiated /compact failed", exc_info=True)
+                    state.done = True
+                    state.done_reason = "compact_failed"
+                    task_queue = self._build_direct_response(
+                        f"Compaction failed: {exc}. Session continues uncompacted."
+                    )
                 return (task_queue, state) if return_state else task_queue
 
             context = self._context_builder.build(
@@ -240,6 +307,7 @@ class Orchestrator:
                 project_instructions=self._project_instructions,
                 skill_instructions=skill_instructions,
                 skill_registry=self._skill_registry,
+                agent_registry=self._agent_registry,
                 cwd=self._cwd,
                 session_id=session_id,
             )
@@ -275,9 +343,7 @@ class Orchestrator:
                     {"type": "assistant", "payload": {"text": task_queue.task_result}},
                 )
             else:
-                closure = _format_assistant_closure(
-                    state.done_reason, task_queue.last_error
-                )
+                closure = _format_assistant_closure(state.done_reason, task_queue.last_error)
                 self._session_store.append_event(
                     session_id,
                     {"type": "assistant", "payload": {"text": closure}},
@@ -322,11 +388,7 @@ class Orchestrator:
                 session_id,
                 {
                     "type": "assistant",
-                    "payload": {
-                        "text": _format_assistant_closure(
-                            state.done_reason, str(exc)
-                        )
-                    },
+                    "payload": {"text": _format_assistant_closure(state.done_reason, str(exc))},
                 },
             )
             self._session_store.append_event(
@@ -382,42 +444,118 @@ class Orchestrator:
                 {"type": "title_update", "payload": {"title": title}},
             )
         except Exception as exc:
-            logging.warning(
-                "Title generation failed: {}: {}", type(exc).__name__, exc
-            )
+            logging.warning("Title generation failed: {}: {}", type(exc).__name__, exc)
 
     def _maybe_auto_compact(self, session_id: str) -> str | None:
+        from meeseeks_core.token_budget import read_last_input_tokens
+
         events = self._session_store.load_transcript(session_id)
         events = self._hook_manager.run_pre_compact(events)
         summary = self._session_store.load_summary(session_id)
-        budget = get_token_budget(events, summary, self._model_name)
-        if budget.needs_compact or should_compact(events):
-            try:
-                from meeseeks_core.compact import CompactionMode, compact_conversation
-
-                result = asyncio.get_event_loop().run_until_complete(
-                    compact_conversation(
-                        events,
-                        CompactionMode.PARTIAL,
-                        model_name=self._model_name,
-                    )
-                )
-                summary = result.summary
-            except Exception:
-                logging.warning(
-                    "Structured compaction failed, falling back to simple summary",
-                    exc_info=True,
-                )
-                summary = summarize_events(events)
-            self._session_store.save_summary(session_id, summary)
-            return summary
-        return None
-
-    def _append_action_plan(self, session_id: str, steps: list[PlanStep]) -> None:
-        payload_steps = [{"title": step.title, "description": step.description} for step in steps]
-        self._session_store.append_event(
-            session_id, {"type": "action_plan", "payload": {"steps": payload_steps}}
+        last_input_tokens = read_last_input_tokens(events)
+        budget = get_token_budget(
+            events,
+            summary,
+            self._model_name,
+            last_input_tokens=last_input_tokens,
         )
+        if not budget.needs_compact:
+            return None
+        compact_model = self._model_name
+        try:
+            from meeseeks_core.compact import CompactionMode, compact_conversation
+
+            result = asyncio.run(compact_conversation(events, CompactionMode.PARTIAL))
+            compact_model = result.model or self._model_name
+            summary = result.summary
+            tokens_saved = result.tokens_saved
+        except Exception:
+            # Structured compaction failed. Do NOT substitute concatenated raw
+            # event text — it would poison the context. Skip this cycle; the
+            # next turn will try again.
+            logging.warning("Structured compaction failed; skipping cycle", exc_info=True)
+            return None
+        self._session_store.save_summary(session_id, summary)
+        events_summarized = len(events)
+        self._session_store.append_event(
+            session_id,
+            {
+                "type": "context_compacted",
+                "payload": {
+                    "agent_id": None,
+                    "depth": 0,
+                    "mode": "auto",
+                    "model": compact_model,
+                    "tokens_before": budget.total_tokens,
+                    "tokens_saved": tokens_saved,
+                    "tokens_after": budget.total_tokens - tokens_saved,
+                    "events_summarized": events_summarized,
+                    "summary": summary,
+                    "fallback": False,
+                },
+            },
+        )
+        self._hook_manager.run_on_compact(
+            session_id,
+            summary=summary,
+            tokens_before=budget.total_tokens,
+            tokens_saved=tokens_saved,
+            events_summarized=events_summarized,
+        )
+        return summary
+
+    @staticmethod
+    def _reconcile_missing_plugins(plugins_cfg: PluginsConfig) -> None:
+        """Ensure all ``enabled_plugins`` exist in the registry.
+
+        On a fresh container or after a volume wipe, enabled plugins may be
+        listed in the config but absent from the registry/cache.  This method
+        discovers which are missing and attempts to install them from the
+        configured marketplaces.  Errors are logged and skipped — session
+        startup should not fail because a plugin couldn't be fetched.
+        """
+        from meeseeks_core.plugins import (
+            discover_installed_plugins,
+            discover_marketplace_plugins,
+            install_plugin,
+        )
+
+        cfg = plugins_cfg
+        registry_paths = cfg.resolve_registry_paths()
+        installed = discover_installed_plugins(registry_paths=registry_paths)
+        installed_names = {pc.manifest.name for pc in installed if pc.manifest is not None}
+        missing = [
+            name.split("@")[0]
+            for name in cfg.enabled_plugins
+            if name.split("@")[0] not in installed_names
+        ]
+        if not missing:
+            return
+
+        from meeseeks_core.common import get_logger
+
+        _log = get_logger(name="core.orchestrator")
+        _log.info("Reconciling {} missing plugin(s): {}", len(missing), missing)
+
+        marketplace_dirs = cfg.resolve_marketplace_dirs()
+        available = discover_marketplace_plugins(marketplace_dirs=marketplace_dirs)
+        available_by_name = {p["name"]: p for p in available}
+
+        for name in missing:
+            match = available_by_name.get(name)
+            if match is None:
+                _log.warning("Plugin '{}' not found in any marketplace — skipping", name)
+                continue
+            try:
+                install_plugin(
+                    name,
+                    match["marketplace"],
+                    marketplace_dirs=marketplace_dirs,
+                    install_base=cfg.resolve_install_dir(),
+                )
+                _log.info("Auto-installed plugin '{}'", name)
+            except Exception as exc:
+                _log.warning("Failed to auto-install plugin '{}': {}", name, exc)
 
     @staticmethod
     def _should_update_summary(text: str) -> bool:

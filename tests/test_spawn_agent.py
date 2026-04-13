@@ -46,7 +46,9 @@ def _make_registry(*tool_ids: str) -> ToolRegistry:
 
 
 def _make_context(
-    *, max_depth: int = 5, depth: int = 0,
+    *,
+    max_depth: int = 5,
+    depth: int = 0,
 ) -> AgentContext:
     root = AgentContext.root(
         model_name="test-model",
@@ -100,9 +102,7 @@ class TestSpawnAgentBasic:
 
             # Mock the child's model to return a text response immediately.
             fake_model = MagicMock()
-            fake_model.ainvoke = AsyncMock(
-                return_value=_text_response("Child says hello")
-            )
+            fake_model.ainvoke = AsyncMock(return_value=_text_response("Child says hello"))
             bound = MagicMock()
             bound.ainvoke = fake_model.ainvoke
 
@@ -164,10 +164,12 @@ class TestSpawnAgentToolScoping:
             hook_manager=_make_hook_manager(),
         )
 
-        specs = tool._filter_tool_specs({
-            "allowed_tools": ["tool_a", "tool_b"],
-            "denied_tools": ["tool_b"],
-        })
+        specs = tool._filter_tool_specs(
+            {
+                "allowed_tools": ["tool_a", "tool_b"],
+                "denied_tools": ["tool_b"],
+            }
+        )
         ids = {s.tool_id for s in specs}
         assert ids == {"tool_a"}
 
@@ -238,8 +240,10 @@ class TestSpawnAgentModelValidation:
         with patch(
             "meeseeks_core.spawn_agent.get_config_value",
             side_effect=lambda *a, **kw: (
-                [] if a == ("agent", "allowed_models")
-                else "default-sub" if a == ("agent", "default_sub_model")
+                []
+                if a == ("agent", "allowed_models")
+                else "default-sub"
+                if a == ("agent", "default_sub_model")
                 else kw.get("default", "")
             ),
         ):
@@ -257,8 +261,10 @@ class TestSpawnAgentModelValidation:
         with patch(
             "meeseeks_core.spawn_agent.get_config_value",
             side_effect=lambda *a, **kw: (
-                [] if a == ("agent", "allowed_models")
-                else "" if a == ("agent", "default_sub_model")
+                []
+                if a == ("agent", "allowed_models")
+                else ""
+                if a == ("agent", "default_sub_model")
                 else kw.get("default", "")
             ),
         ):
@@ -335,9 +341,7 @@ class TestSpawnAgentResult:
             )
 
             fake_model = MagicMock()
-            fake_model.ainvoke = AsyncMock(
-                return_value=_text_response("Done!")
-            )
+            fake_model.ainvoke = AsyncMock(return_value=_text_response("Done!"))
             bound = MagicMock()
             bound.ainvoke = fake_model.ainvoke
 
@@ -378,9 +382,7 @@ class TestSpawnAgentResult:
             )
 
             fake_model = MagicMock()
-            fake_model.ainvoke = AsyncMock(
-                return_value=_text_response("Done!")
-            )
+            fake_model.ainvoke = AsyncMock(return_value=_text_response("Done!"))
             bound = MagicMock()
             bound.ainvoke = fake_model.ainvoke
 
@@ -413,6 +415,7 @@ class TestSpawnAgentSchema:
     def test_schema_includes_max_steps_deprecated(self):
         """max_steps field is retained in schema for backward compatibility."""
         from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
+
         props = SPAWN_AGENT_SCHEMA["function"]["parameters"]["properties"]
         assert "max_steps" in props
         assert props["max_steps"]["type"] == "integer"
@@ -420,6 +423,7 @@ class TestSpawnAgentSchema:
 
     def test_schema_includes_acceptance_criteria(self):
         from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
+
         props = SPAWN_AGENT_SCHEMA["function"]["parameters"]["properties"]
         assert "acceptance_criteria" in props
         assert props["acceptance_criteria"]["type"] == "string"

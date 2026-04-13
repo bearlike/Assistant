@@ -1,7 +1,7 @@
 """Custom integration to integrate meeseeks_conversation with Home Assistant.
 
 For more details about this integration, please refer to
-https://github.com/bearlike/personal-Assistant/
+https://github.com/bearlike/Assistant/
 """
 
 from __future__ import annotations

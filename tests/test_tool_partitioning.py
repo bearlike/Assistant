@@ -14,8 +14,12 @@ from meeseeks_core.tool_use_loop import ToolBatch, ToolUseLoop
 
 def _spec(tid: str, concurrent: bool = True, timeout: float = 120.0) -> ToolSpec:
     return ToolSpec(
-        tool_id=tid, name=tid, description=f"t-{tid}",
-        factory=lambda: None, concurrency_safe=concurrent, timeout=timeout,
+        tool_id=tid,
+        name=tid,
+        description=f"t-{tid}",
+        factory=lambda: None,
+        concurrency_safe=concurrent,
+        timeout=timeout,
     )
 
 
@@ -63,9 +67,11 @@ class TestPartitionToolCalls:
 
     def test_consecutive_merged(self):
         specs = {
-            "a": _spec("a"), "b": _spec("b"),
+            "a": _spec("a"),
+            "b": _spec("b"),
             "c": _spec("c", concurrent=False),
-            "d": _spec("d"), "e": _spec("e"),
+            "d": _spec("d"),
+            "e": _spec("e"),
         }
         batches = _loop()._partition_tool_calls([_tc(n) for n in "abcde"], specs)
         assert len(batches) == 3
@@ -116,9 +122,15 @@ class TestToolSpecFields:
 
     def test_custom(self):
         s = ToolSpec(
-            tool_id="t", name="t", description="t", factory=lambda: None,
-            concurrency_safe=False, read_only=True,
-            interrupt_behavior="cancel", max_result_chars=500, timeout=30.0,
+            tool_id="t",
+            name="t",
+            description="t",
+            factory=lambda: None,
+            concurrency_safe=False,
+            read_only=True,
+            interrupt_behavior="cancel",
+            max_result_chars=500,
+            timeout=30.0,
         )
         assert not s.concurrency_safe and s.read_only
         assert s.interrupt_behavior == "cancel"
@@ -153,8 +165,12 @@ class TestAgentError:
 
     def test_str_with_tool(self):
         e = AgentError(
-            agent_id="x", depth=1, task="t", error="fail",
-            last_tool="shell", steps_completed=3,
+            agent_id="x",
+            depth=1,
+            task="t",
+            error="fail",
+            last_tool="shell",
+            steps_completed=3,
         )
         assert "shell" in str(e)
 

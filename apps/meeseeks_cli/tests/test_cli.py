@@ -670,6 +670,7 @@ def test_run_cli_single_query(monkeypatch, tmp_path):
         auto_approve=False,
         verbose=1,
         config=None,
+        fallback_models=None,
     )
 
     def fake_header(*args, **kwargs):
@@ -708,6 +709,7 @@ def test_run_cli_interactive_quit(monkeypatch, tmp_path):
         history_file=str(tmp_path / "history"),
         auto_approve=False,
         config=None,
+        fallback_models=None,
     )
 
     class DummyHistory:

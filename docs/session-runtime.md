@@ -4,6 +4,7 @@ The session runtime is a small shared facade that powers both the CLI and the RE
 
 ## What it does
 - Resolves sessions by id, tag, or fork.
+- Supports fork-from-message via `fork_at_ts`. It creates a new session with only events up to the given timestamp, enabling edit-and-regenerate workflows.
 - Runs orchestration synchronously or in a background thread.
 - Tracks active runs per session and supports cancellation.
 - Filters session events for polling (`after` timestamp).
@@ -44,6 +45,12 @@ result = runtime.run_sync(user_query="Hello", session_id=session_id)
 # async run + polling
 runtime.start_async(session_id=session_id, user_query="Do the task")
 events = runtime.load_events(session_id, after=None)
+
+# fork from a specific message timestamp (edit & regenerate)
+forked_id = runtime.resolve_session(
+    fork_from=session_id,
+    fork_at_ts="2026-04-15T10:30:00+00:00",
+)
 ```
 
 ## Archiving behavior

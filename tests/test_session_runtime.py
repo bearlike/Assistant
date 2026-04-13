@@ -97,6 +97,64 @@ def test_runtime_start_async_and_cancel(tmp_path):
     assert runtime.is_running(session_id) is False
 
 
+def test_enqueue_message_persists_user_event(tmp_path):
+    """Steering messages enqueued mid-run are persisted as user events."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+
+    def fake_run_sync(*, session_id, user_query, should_cancel=None, **_kwargs):
+        while should_cancel and not should_cancel():
+            time.sleep(0.01)
+
+    runtime.run_sync = fake_run_sync
+    session_id = runtime.resolve_session()
+    runtime.start_async(session_id=session_id, user_query="initial")
+    try:
+        assert runtime.enqueue_message(session_id, "steer me") is True
+        events = store.load_transcript(session_id)
+        user_events = [e for e in events if e["type"] == "user_steer"]
+        assert any(e["payload"]["text"] == "steer me" for e in user_events)
+    finally:
+        runtime.cancel(session_id)
+        deadline = time.time() + 2.0
+        while time.time() < deadline and runtime.is_running(session_id):
+            time.sleep(0.01)
+
+
+def test_enqueue_message_returns_false_when_idle(tmp_path):
+    """enqueue_message returns False when no run is active."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    assert runtime.enqueue_message(session_id, "nobody home") is False
+    events = store.load_transcript(session_id)
+    assert not any(e.get("payload", {}).get("text") == "nobody home" for e in events)
+
+
+def test_interrupt_step_persists_user_event(tmp_path):
+    """Interrupting a step records a user event in the transcript."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+
+    def fake_run_sync(*, session_id, user_query, should_cancel=None, **_kwargs):
+        while should_cancel and not should_cancel():
+            time.sleep(0.01)
+
+    runtime.run_sync = fake_run_sync
+    session_id = runtime.resolve_session()
+    runtime.start_async(session_id=session_id, user_query="initial")
+    try:
+        assert runtime.interrupt_step(session_id) is True
+        events = store.load_transcript(session_id)
+        user_events = [e for e in events if e["type"] == "user_steer"]
+        assert any("Interrupted" in str(e["payload"]["text"]) for e in user_events)
+    finally:
+        runtime.cancel(session_id)
+        deadline = time.time() + 2.0
+        while time.time() < deadline and runtime.is_running(session_id):
+            time.sleep(0.01)
+
+
 def test_runtime_list_sessions_skips_empty(tmp_path):
     """Exclude sessions with no events from list output."""
     store = SessionStore(root_dir=str(tmp_path))
@@ -156,8 +214,10 @@ def test_resolve_recovery_query_retry_truncates_failed_turn(tmp_path):
     store.append_event(session_id, {"type": "user", "payload": {"text": "second"}})
     store.append_event(
         session_id,
-        {"type": "tool_result", "payload": {"tool_id": "x", "operation": "get",
-                                             "tool_input": "", "result": "ok"}},
+        {
+            "type": "tool_result",
+            "payload": {"tool_id": "x", "operation": "get", "tool_input": "", "result": "ok"},
+        },
     )
     store.append_event(
         session_id,
@@ -187,38 +247,52 @@ def test_resolve_recovery_query_retry_truncates_failed_turn(tmp_path):
 
 
 def test_resolve_recovery_query_continue_generic_prompt(tmp_path):
-    """``continue`` returns a generic recovery prompt without embedding the original task.
+    """``continue`` returns a terse, stable recovery prompt.
 
-    The original task is already in conversation context (directly or via
-    compaction summary). Repeating it verbatim wastes tokens.
+    The original task is carried forward via ContextBuilder.recent_events
+    (which anchors the first user event) and the compaction summary. The
+    HumanMessage stays small to preserve the cache prefix for prompt caching.
     """
     store = SessionStore(root_dir=str(tmp_path))
     runtime = SessionRuntime(session_store=store)
     session_id = runtime.resolve_session()
     original_task = "build a KISS-compliant auth layer"
-    store.append_event(
-        session_id, {"type": "user", "payload": {"text": original_task}}
-    )
+    store.append_event(session_id, {"type": "user", "payload": {"text": original_task}})
 
     query = runtime.resolve_recovery_query(session_id, "continue")
     assert "interrupted" in query.lower()
-    assert original_task not in query  # task is NOT re-embedded; already in context
+    assert original_task not in query  # task is NOT re-embedded; carried via ContextBuilder
     assert "continue from where you left off" in query.lower()
     transcript = store.load_transcript(session_id)
     recovery_events = [e for e in transcript if e.get("type") == "recovery"]
     assert recovery_events[-1]["payload"] == {"action": "continue"}
 
 
+def test_resolve_recovery_query_continue_is_stable_across_tasks(tmp_path):
+    """The ``continue`` prompt is independent of the user's task text.
+
+    Stability matters for prompt caching: a deterministic HumanMessage
+    means the model provider's cache prefix shape doesn't drift between
+    sessions with different original tasks.
+    """
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    first = runtime.resolve_session()
+    store.append_event(first, {"type": "user", "payload": {"text": "task A"}})
+    second = runtime.resolve_session()
+    store.append_event(second, {"type": "user", "payload": {"text": "an entirely different task"}})
+
+    assert runtime.resolve_recovery_query(first, "continue") == runtime.resolve_recovery_query(
+        second, "continue"
+    )
+
+
 def test_resolve_recovery_query_continue_falls_back_without_original(tmp_path):
-    """Empty original text ⇒ generic recovery prompt (no crash)."""
+    """Whitespace-only original user event still yields the generic prompt."""
     store = SessionStore(root_dir=str(tmp_path))
     runtime = SessionRuntime(session_store=store)
     session_id = runtime.resolve_session()
-    # Whitespace-only original user event — retry would refuse this but
-    # continue must degrade gracefully to a generic recovery prompt.
-    store.append_event(
-        session_id, {"type": "user", "payload": {"text": "   "}}
-    )
+    store.append_event(session_id, {"type": "user", "payload": {"text": "   "}})
 
     query = runtime.resolve_recovery_query(session_id, "continue")
     assert "interrupted" in query.lower()
@@ -235,9 +309,7 @@ def test_resolve_recovery_query_rejects_unknown_action(tmp_path):
     with pytest.raises(ValueError, match="unknown recovery action"):
         runtime.resolve_recovery_query(session_id, "nuke")
     # No recovery event appended on failure.
-    assert not any(
-        e.get("type") == "recovery" for e in store.load_transcript(session_id)
-    )
+    assert not any(e.get("type") == "recovery" for e in store.load_transcript(session_id))
 
 
 def test_resolve_recovery_query_rejects_session_with_no_user_message(tmp_path):
@@ -249,6 +321,64 @@ def test_resolve_recovery_query_rejects_session_with_no_user_message(tmp_path):
 
     with pytest.raises(ValueError, match="no prior user message"):
         runtime.resolve_recovery_query(session_id, "retry")
+
+
+def test_resolve_session_fork_at_ts(tmp_path):
+    """``fork_at_ts`` creates a session with only events up to the cutoff."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    source = runtime.resolve_session()
+    store.append_event(source, {"type": "user", "payload": {"text": "q1"}})
+    store.append_event(source, {"type": "assistant", "payload": {"text": "a1"}})
+    store.append_event(source, {"type": "user", "payload": {"text": "q2"}})
+    events = store.load_transcript(source)
+    cutoff = events[1]["ts"]  # after first assistant response
+
+    forked = runtime.resolve_session(fork_from=source, fork_at_ts=cutoff)
+    assert forked != source
+    forked_events = store.load_transcript(forked)
+    assert len(forked_events) == 2
+    assert forked_events[-1]["payload"]["text"] == "a1"
+
+
+def test_resolve_session_fork_at_ts_ignored_without_fork_from(tmp_path):
+    """``fork_at_ts`` without ``fork_from`` creates a fresh session."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session = runtime.resolve_session(fork_at_ts="2099-01-01T00:00:00+00:00")
+    assert store.load_transcript(session) == []
+
+
+def test_resolve_recovery_query_with_replacement_text(tmp_path):
+    """``replacement_text`` overrides the original user message on retry."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "original"}})
+    store.append_event(
+        session_id,
+        {
+            "type": "completion",
+            "payload": {"done": True, "done_reason": "error", "task_result": None, "error": "fail"},
+        },
+    )
+
+    query = runtime.resolve_recovery_query(session_id, "retry", replacement_text="edited prompt")
+    assert query == "edited prompt"
+    # Transcript should be truncated (original user message removed)
+    transcript = store.load_transcript(session_id)
+    assert not any(e["type"] == "user" for e in transcript)
+
+
+def test_resolve_recovery_query_replacement_text_on_empty_original(tmp_path):
+    """``replacement_text`` works even when the original message was empty."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": ""}})
+
+    query = runtime.resolve_recovery_query(session_id, "retry", replacement_text="fixed prompt")
+    assert query == "fixed prompt"
 
 
 def test_resolve_recovery_query_refuses_running_session(tmp_path):

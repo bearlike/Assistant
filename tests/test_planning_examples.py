@@ -121,7 +121,7 @@ def test_planner_generate_uses_tool_specs_and_updates_span(monkeypatch):
     dummy_span = DummySpan()
 
     @contextmanager
-    def fake_span(_name):
+    def fake_span(_name, **_kwargs):
         yield dummy_span
 
     monkeypatch.setattr(planning_module, "langfuse_trace_span", fake_span)

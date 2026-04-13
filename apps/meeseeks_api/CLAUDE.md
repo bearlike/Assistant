@@ -24,6 +24,13 @@ Scope: this file applies to the `apps/meeseeks_api/` package. It captures runtim
   - `POST /api/query` synchronous endpoint (simple/CLI-compatible)
   - `GET /api/tools` list tool registry entries
   - `GET /api/skills` list available skills
+  - `GET /api/plugins` list installed plugins and their components
+  - `GET /api/plugins/marketplace` list available plugins from configured marketplaces
+  - `POST /api/plugins/marketplace` install a plugin from a marketplace
+  - `DELETE /api/plugins/<name>` uninstall a plugin
+  - `POST /api/sessions/{session_id}/ide` launch a Web IDE (code-server) container
+  - `DELETE /api/sessions/{session_id}/ide` stop the Web IDE container
+  - `POST /api/sessions/{session_id}/ide/extend` extend Web IDE session TTL
   - `GET /api/notifications` list notifications
   - `POST /api/notifications/dismiss` dismiss notifications
   - `POST /api/notifications/clear` clear notifications
@@ -35,6 +42,8 @@ Scope: this file applies to the `apps/meeseeks_api/` package. It captures runtim
 - Channel adapters: `init_channels(app, runtime, _hook_manager, _config)` registers the webhook Blueprint and instantiates adapters from `config.channels`. Completion callback appended to `hook_manager.on_session_end`. Channel sessions are standard sessions (MongoDB-backed, visible in console). Session tags: `nextcloud-talk:room:<token>`, `email:thread:<channel_id>:<root-msg-id>`. Shared `_process_inbound()` pipeline used by both webhook endpoint and email IMAP poller. Email adapter: `EmailAdapter` (IMAP parse, SMTP send, markdown→HTML via mistune) + `EmailPoller` (daemon thread, configurable `poll_interval_seconds`). Email access control: `allowed_senders` allowlist + `@Meeseeks` mention required in multi-party threads, no mention for 1-to-1.
 - Channel slash commands: decorator-based `@command` registry in `channels/routes.py`. `/help`, `/usage`, `/new`, `/switch-project <name>`. Adding a command = one decorator + one function; `/help` auto-generates from the registry. Commands run without LLM invocation.
 - Client-aware system prompt: each `ChannelAdapter` provides a `system_context` property (brief string) injected via `skill_instructions` parameter to `start_async`. The LLM knows which chat interface the conversation flows through.
+- Plugins: `GET/POST /api/plugins`, `GET/POST /api/plugins/marketplace`, `DELETE /api/plugins/<name>`. Uses `meeseeks_core.plugins` for discovery, install, uninstall. Plugin components (skills, hooks, agent definitions, MCP tools) are loaded during session init via `load_all_plugin_components()`.
+- Web IDE: opt-in per-session code-server containers via `agent.web_ide` config. `IdeManager` + `IdeStore` (MongoDB-backed) in `ide.py`. Routes in `ide_routes.py`. Requires MongoDB. Console shows "Open in Web IDE" button when enabled.
 - Orchestration: uses `meeseeks_core.session_runtime.SessionRuntime` to run sync/async sessions. Passes `allowed_tools` from `context.mcp_tools` to scope tool binding per query.
 - Core commands: `/compact`, `/status`, `/terminate` (shared runtime).
 - Sessions: supports `session_id`, `session_tag`, and `fork_from` (tag or id). Tags are resolved via `SessionStore`.

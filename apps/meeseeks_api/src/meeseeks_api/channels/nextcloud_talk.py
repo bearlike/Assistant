@@ -81,9 +81,7 @@ class NextcloudTalkAdapter:
     # ChannelAdapter protocol
     # ------------------------------------------------------------------
 
-    def verify_request(
-        self, headers: dict[str, str], body: bytes
-    ) -> bool:
+    def verify_request(self, headers: dict[str, str], body: bytes) -> bool:
         """Verify HMAC-SHA256 signature from Nextcloud Talk.
 
         Headers used:
@@ -111,9 +109,7 @@ class NextcloudTalkAdapter:
         ).hexdigest()
         return hmac.compare_digest(expected, sig.lower())
 
-    def parse_inbound(
-        self, headers: dict[str, str], body: bytes
-    ) -> InboundMessage | None:
+    def parse_inbound(self, headers: dict[str, str], body: bytes) -> InboundMessage | None:
         """Parse an ActivityStreams 2.0 webhook payload.
 
         Only ``type: "Create"`` events produce an :class:`InboundMessage`.
@@ -169,10 +165,7 @@ class NextcloudTalkAdapter:
 
         The request body is HMAC-signed with the shared secret.
         """
-        url = (
-            f"{self._base_url}/ocs/v2.php/apps/spreed/api/v1/bot"
-            f"/{channel_id}/message"
-        )
+        url = f"{self._base_url}/ocs/v2.php/apps/spreed/api/v1/bot/{channel_id}/message"
 
         body_dict: dict[str, Any] = {"message": text[:32000]}
         if reply_to is not None:
@@ -206,21 +199,23 @@ class NextcloudTalkAdapter:
         if self._host_header:
             headers_dict["Host"] = self._host_header
         req = urllib.request.Request(
-            url, data=body_bytes, method="POST", headers=headers_dict,
+            url,
+            data=body_bytes,
+            method="POST",
+            headers=headers_dict,
         )
 
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
                 if resp.status == 201:
-                    logger.info(
-                        "Sent response to NC Talk room %s", channel_id
-                    )
+                    logger.info("Sent response to NC Talk room %s", channel_id)
                     # OCS API returns XML by default; don't bother
                     # parsing — 201 confirms delivery.
                     return "sent"
                 logger.warning(
                     "Unexpected status %d from NC Talk room %s",
-                    resp.status, channel_id,
+                    resp.status,
+                    channel_id,
                 )
         except Exception:
             logger.warning(
@@ -295,13 +290,15 @@ def _extract_attachments(content: str) -> list[dict[str, str]]:
         attachments: list[dict[str, str]] = []
         for _key, param in params.items():
             if isinstance(param, dict) and param.get("type") == "file":
-                attachments.append({
-                    "id": str(param.get("id", "")),
-                    "name": str(param.get("name", "")),
-                    "mimetype": str(param.get("mimetype", "")),
-                    "size": str(param.get("size", "")),
-                    "link": str(param.get("link", "")),
-                })
+                attachments.append(
+                    {
+                        "id": str(param.get("id", "")),
+                        "name": str(param.get("name", "")),
+                        "mimetype": str(param.get("mimetype", "")),
+                        "size": str(param.get("size", "")),
+                        "link": str(param.get("link", "")),
+                    }
+                )
         return attachments
     except (json.JSONDecodeError, TypeError):
         return []

@@ -65,17 +65,26 @@ class TestAgentDisplayState:
 
     def test_new_fields_defaults(self):
         state = AgentDisplayState(
-            agent_id="x", parent_id=None, depth=0,
-            model="m", task="t", status="running",
+            agent_id="x",
+            parent_id=None,
+            depth=0,
+            model="m",
+            task="t",
+            status="running",
         )
         assert state.started_at == 0.0
         assert state.token_count == 0
 
     def test_new_fields_explicit(self):
         state = AgentDisplayState(
-            agent_id="x", parent_id=None, depth=0,
-            model="m", task="t", status="running",
-            started_at=100.0, token_count=5000,
+            agent_id="x",
+            parent_id=None,
+            depth=0,
+            model="m",
+            task="t",
+            status="running",
+            started_at=100.0,
+            token_count=5000,
         )
         assert state.started_at == 100.0
         assert state.token_count == 5000
@@ -217,23 +226,36 @@ class TestRendering:
     def test_render_with_agents_returns_panel(self):
         mgr = AgentDisplayManager()
         mgr.on_start(_make_handle(agent_id="root", task_description="build app"))
-        mgr.on_start(_make_handle(
-            agent_id="child1", parent_id="root", depth=1,
-            model_name="haiku", task_description="frontend",
-        ))
+        mgr.on_start(
+            _make_handle(
+                agent_id="child1",
+                parent_id="root",
+                depth=1,
+                model_name="haiku",
+                task_description="frontend",
+            )
+        )
         result = mgr.render()
         assert isinstance(result, Panel)
 
     def test_render_tree_structure(self):
         """Verify parent-child tree lines are rendered."""
         mgr = AgentDisplayManager()
-        mgr.on_start(_make_handle(
-            agent_id="rootagent1", task_description="root task",
-        ))
-        mgr.on_start(_make_handle(
-            agent_id="childagen1", parent_id="rootagent1", depth=1,
-            model_name="haiku", task_description="child task",
-        ))
+        mgr.on_start(
+            _make_handle(
+                agent_id="rootagent1",
+                task_description="root task",
+            )
+        )
+        mgr.on_start(
+            _make_handle(
+                agent_id="childagen1",
+                parent_id="rootagent1",
+                depth=1,
+                model_name="haiku",
+                task_description="child task",
+            )
+        )
         output = _render_to_str(mgr)
         assert "rootagen" in output
         assert "childage" in output
@@ -278,9 +300,13 @@ class TestRendering:
         """Collapsed view must not render the tree connectors."""
         mgr = AgentDisplayManager()
         mgr.on_start(_make_handle(agent_id="rootaaaaa"))
-        mgr.on_start(_make_handle(
-            agent_id="child1111", parent_id="rootaaaaa", depth=1,
-        ))
+        mgr.on_start(
+            _make_handle(
+                agent_id="child1111",
+                parent_id="rootaaaaa",
+                depth=1,
+            )
+        )
         mgr.toggle_expand()
 
         output = _render_to_str(mgr)
@@ -291,15 +317,22 @@ class TestRendering:
     def test_footer_shows_deepest_running_agent(self):
         """Footer should show the deepest running agent's task."""
         mgr = AgentDisplayManager()
-        mgr.on_start(_make_handle(
-            agent_id="root1", task_description="Plan the work",
-            status="running",
-        ))
-        mgr.on_start(_make_handle(
-            agent_id="deep1", parent_id="root1", depth=1,
-            task_description="Search docs for patterns",
-            status="running",
-        ))
+        mgr.on_start(
+            _make_handle(
+                agent_id="root1",
+                task_description="Plan the work",
+                status="running",
+            )
+        )
+        mgr.on_start(
+            _make_handle(
+                agent_id="deep1",
+                parent_id="root1",
+                depth=1,
+                task_description="Search docs for patterns",
+                status="running",
+            )
+        )
         output = _render_to_str(mgr)
         assert "Search docs" in output
 
@@ -374,16 +407,11 @@ class TestThreadSafety:
             except Exception as exc:
                 errors.append(exc)
 
-        threads = [
-            threading.Thread(target=_writer, args=(f"agent_{i}",))
-            for i in range(20)
-        ] + [
-            threading.Thread(target=_tool_user)
-            for _ in range(3)
-        ] + [
-            threading.Thread(target=_reader)
-            for _ in range(5)
-        ]
+        threads = (
+            [threading.Thread(target=_writer, args=(f"agent_{i}",)) for i in range(20)]
+            + [threading.Thread(target=_tool_user) for _ in range(3)]
+            + [threading.Thread(target=_reader) for _ in range(5)]
+        )
         for t in threads:
             t.start()
         for t in threads:
@@ -400,6 +428,7 @@ class TestNewLifecycleStates:
 
     def test_submitted_state_renders(self):
         import re
+
         mgr = AgentDisplayManager()
         mgr.on_start(_make_handle(agent_id="sub_agent1", status="submitted"))
         raw = _render_to_str(mgr)
@@ -410,6 +439,7 @@ class TestNewLifecycleStates:
 
     def test_rejected_state_renders(self):
         import re
+
         mgr = AgentDisplayManager()
         handle = _make_handle(agent_id="rej_agent", status="submitted")
         mgr.on_start(handle)
@@ -422,6 +452,7 @@ class TestNewLifecycleStates:
 
     def test_failed_shows_error_message(self):
         import re
+
         mgr = AgentDisplayManager()
         handle = _make_handle(agent_id="fail_agen", status="running")
         mgr.on_start(handle)

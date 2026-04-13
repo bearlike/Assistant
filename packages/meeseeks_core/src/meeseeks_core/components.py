@@ -9,7 +9,8 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from meeseeks_core.common import get_logger
 from meeseeks_core.config import get_config
@@ -112,7 +113,21 @@ def _is_hex_trace_id(value: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-f]{32}", value))
 
 
-def _build_langfuse_trace_context(session_id: str | None) -> TraceContext | None:
+def _build_langfuse_trace_context(
+    session_id: str | None,
+    invocation_id: str | None = None,
+) -> TraceContext | None:
+    """Build a Langfuse trace context.
+
+    When *invocation_id* is given, each invocation gets its own trace
+    (prevents user idle-time between messages from bloating trace
+    duration).  ``session_id`` is propagated separately via
+    ``propagate_attributes`` so Langfuse still groups traces into
+    sessions.
+    """
+    if invocation_id:
+        tid = invocation_id if _is_hex_trace_id(invocation_id) else uuid4().hex
+        return cast(TraceContext, {"trace_id": tid})
     if not session_id:
         return None
     if _is_hex_trace_id(session_id):
@@ -130,24 +145,112 @@ def _build_langfuse_trace_context(session_id: str | None) -> TraceContext | None
     return cast(TraceContext, {"trace_id": trace_id})
 
 
+# -- Propagation & spans ------------------------------------------------
+# ``langfuse_propagate`` is defined *before* ``langfuse_session_context``
+# because the latter calls it.
+
+
 @contextmanager
-def langfuse_session_context(session_id: str, *, user_id: str | None = None) -> Iterator[None]:
-    """Bind a stable Langfuse trace context to the current session."""
-    trace_context = _build_langfuse_trace_context(session_id)
+def langfuse_propagate(
+    *,
+    tags: list[str] | None = None,
+    metadata: dict[str, str] | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+) -> Iterator[None]:
+    """Propagate Langfuse attributes to all child observations.
+
+    Thin wrapper around ``langfuse.propagate_attributes`` that gracefully
+    degrades when Langfuse is disabled or unavailable.
+    """
+    status = resolve_langfuse_status()
+    if not status.enabled:
+        yield
+        return
+    try:
+        from langfuse import propagate_attributes
+    except Exception:  # pragma: no cover - defensive
+        yield
+        return
+    kwargs: dict[str, Any] = {}
+    if tags:
+        kwargs["tags"] = tags
+    if metadata:
+        kwargs["metadata"] = metadata
+    if session_id:
+        kwargs["session_id"] = session_id
+    if user_id:
+        kwargs["user_id"] = user_id
+    if not kwargs:
+        yield
+        return
+    try:
+        with propagate_attributes(**kwargs):
+            yield
+    except Exception:  # pragma: no cover - defensive
+        yield
+
+
+@contextmanager
+def langfuse_session_context(
+    session_id: str,
+    *,
+    user_id: str | None = None,
+    invocation_id: str | None = None,
+    source_platform: str | None = None,
+) -> Iterator[None]:
+    """Bind a Langfuse trace context to the current invocation.
+
+    Each call gets a **unique trace** (via *invocation_id*) while
+    Langfuse groups traces under the same *session_id*.  Pass
+    *source_platform* (e.g. ``"cli"``, ``"nextcloud"``, ``"email"``)
+    so it propagates as a tag on every child observation.
+    """
+    trace_context = _build_langfuse_trace_context(session_id, invocation_id)
     token_ctx = _LANGFUSE_TRACE_CONTEXT.set(trace_context)
     token_session = _LANGFUSE_SESSION_ID.set(session_id)
-    token_user = _LANGFUSE_USER_ID.set(user_id or session_id)
+    resolved_user = user_id or session_id
+    token_user = _LANGFUSE_USER_ID.set(resolved_user)
+
+    # Use propagate_attributes so session_id, user_id, and baseline
+    # tags automatically attach to every child observation (including
+    # LangChain CallbackHandler generations).
+    base_tags = ["meeseeks"]
+    if source_platform:
+        base_tags.append(f"channel:{source_platform}")
+    propagate_cm = langfuse_propagate(
+        session_id=session_id,
+        user_id=resolved_user,
+        tags=base_tags,
+        metadata={"sessionid": session_id[:12]},
+    )
+    propagate_cm.__enter__()
     try:
         yield
     finally:
+        try:
+            propagate_cm.__exit__(None, None, None)
+        except Exception:  # pragma: no cover - defensive
+            pass
         _LANGFUSE_TRACE_CONTEXT.reset(token_ctx)
         _LANGFUSE_SESSION_ID.reset(token_session)
         _LANGFUSE_USER_ID.reset(token_user)
 
 
 @contextmanager
-def langfuse_trace_span(name: str) -> Iterator[object | None]:
-    """Open a Langfuse span bound to the current session trace context."""
+def langfuse_trace_span(
+    name: str,
+    *,
+    metadata: dict[str, str] | None = None,
+    input_data: Any = None,
+    level: str | None = None,
+) -> Iterator[object | None]:
+    """Open a Langfuse span bound to the current session trace context.
+
+    *metadata* is attached to the span for filtering in the Langfuse UI.
+    *input_data* is set as the span's input.  *level* sets the log level
+    (e.g. ``"ERROR"``).
+    """
     status = resolve_langfuse_status()
     if not status.enabled:
         yield None
@@ -173,6 +276,16 @@ def langfuse_trace_span(name: str) -> Iterator[object | None]:
             trace_context=trace_context,
         )
         span = cm.__enter__()
+        if span is not None:
+            update_kwargs: dict[str, Any] = {}
+            if metadata:
+                update_kwargs["metadata"] = metadata
+            if input_data is not None:
+                update_kwargs["input"] = input_data
+            if level:
+                update_kwargs["level"] = level
+            if update_kwargs:
+                span.update(**update_kwargs)
     except Exception:  # pragma: no cover - defensive
         logging.debug("Langfuse trace span setup failed.", exc_info=True)
     try:
@@ -244,6 +357,7 @@ __all__ = [
     "ComponentStatus",
     "build_langfuse_handler",
     "format_component_status",
+    "langfuse_propagate",
     "langfuse_session_context",
     "langfuse_trace_span",
     "resolve_home_assistant_status",

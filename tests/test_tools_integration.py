@@ -7,6 +7,7 @@ import types
 import pytest
 from meeseeks_core.common import get_mock_speaker
 from meeseeks_core.config import set_mcp_config_path
+from meeseeks_core.llm import sanitize_tool_schema
 from meeseeks_tools.integration.homeassistant import HomeAssistant, cache_monitor
 from meeseeks_tools.integration.mcp import (
     MCPToolRunner,
@@ -655,3 +656,104 @@ class TestExpandEnvVars:
         config = {"port": 8080, "enabled": True, "extra": None}
         result = _expand_env_vars(config)
         assert result == {"port": 8080, "enabled": True, "extra": None}
+
+
+# -- sanitize_tool_schema -------------------------------------------------------
+
+
+class TestSanitizeToolSchema:
+    """Validate sanitize_tool_schema fixes provider-strict JSON Schema issues."""
+
+    def test_array_missing_items_top_level(self):
+        schema = {"type": "array"}
+        result = sanitize_tool_schema(schema)
+        assert result == {"type": "array", "items": {}}
+
+    def test_array_with_items_unchanged(self):
+        schema = {"type": "array", "items": {"type": "string"}}
+        result = sanitize_tool_schema(schema)
+        assert result == {"type": "array", "items": {"type": "string"}}
+
+    def test_nested_array_in_properties(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "tags": {"type": "array"},
+            },
+        }
+        result = sanitize_tool_schema(schema)
+        assert result["properties"]["tags"] == {"type": "array", "items": {}}
+
+    def test_deeply_nested_array_in_additional_properties(self):
+        """Mirrors the real-world failure: array inside additionalProperties."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "filters": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "array"},
+                        },
+                    },
+                }
+            },
+        }
+        result = sanitize_tool_schema(schema)
+        value = result["properties"]["filters"]["additionalProperties"]["properties"]["value"]
+        assert value == {"type": "array", "items": {}}
+
+    def test_array_in_anyof(self):
+        schema = {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "array"},
+            ]
+        }
+        result = sanitize_tool_schema(schema)
+        assert result["anyOf"][1] == {"type": "array", "items": {}}
+
+    def test_non_dict_passthrough(self):
+        assert sanitize_tool_schema("string") == "string"
+        assert sanitize_tool_schema(42) == 42
+        assert sanitize_tool_schema(None) is None
+
+    def test_no_mutation_of_input(self):
+        """Sanitizer must not mutate the original schema dict."""
+        original = {"type": "object", "properties": {"x": {"type": "array"}}}
+        sanitize_tool_schema(original)
+        assert "items" not in original["properties"]["x"]
+
+    def test_defs_recursion(self):
+        """Arrays inside $defs (used by Pydantic/OpenAPI schemas) get fixed."""
+        schema = {
+            "type": "object",
+            "$defs": {
+                "Item": {
+                    "type": "object",
+                    "properties": {"tags": {"type": "array"}},
+                }
+            },
+        }
+        result = sanitize_tool_schema(schema)
+        assert result["$defs"]["Item"]["properties"]["tags"] == {
+            "type": "array",
+            "items": {},
+        }
+
+    def test_type_as_list_with_array(self):
+        """Nullable array (type: ['array', 'null']) gets items added."""
+        schema = {"type": ["array", "null"]}
+        result = sanitize_tool_schema(schema)
+        assert result == {"type": ["array", "null"], "items": {}}
+
+    def test_items_as_list_tuple_validation(self):
+        """items as a list (tuple validation) recurses into each element."""
+        schema = {
+            "type": "array",
+            "items": [{"type": "array"}, {"type": "string"}],
+        }
+        result = sanitize_tool_schema(schema)
+        assert result["items"][0] == {"type": "array", "items": {}}
+        assert result["items"][1] == {"type": "string"}

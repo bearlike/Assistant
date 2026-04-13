@@ -51,10 +51,20 @@ This page is generated from inline docstrings via mkdocstrings. The sections bel
 
 ::: meeseeks_core.llm
 
+::: meeseeks_core.plugins
+
+::: meeseeks_core.agent_registry
+
 ## packages/meeseeks_tools (tool integrations)
 ::: meeseeks_tools.integration.mcp
 
 ::: meeseeks_tools.integration.homeassistant
+
+::: meeseeks_tools.integration.lsp
+
+::: meeseeks_tools.integration.lsp.manager
+
+::: meeseeks_tools.integration.lsp.servers
 
 ## Clients (apps/)
 - API entry point: `apps/meeseeks_api/src/meeseeks_api/backend.py`

@@ -1,4 +1,5 @@
 {
+  "$id": "https://thekrishna.in/Assistant/latest/app.schema.json",
   "$defs": {
     "APIConfig": {
       "description": "REST API authentication.",
@@ -57,14 +58,26 @@
         },
         "max_iters": {
           "default": 30,
-          "description": "Maximum orchestration iterations for root agent (max_steps = max_iters * 3).",
+          "description": "Deprecated. The tool-use loop now runs until natural completion (model returns text without tool calls). This field is retained for API backward compatibility but is not enforced.",
           "title": "Max Iters",
           "type": "integer"
         },
         "sub_agent_max_steps": {
           "default": 10,
-          "description": "Default maximum tool-use steps per sub-agent before forced termination.",
+          "description": "Deprecated. Sub-agents now run until natural completion. This field is retained for API backward compatibility but is not enforced. Safety is provided by session_step_budget, stall detection, and LLM timeouts.",
           "title": "Sub Agent Max Steps",
+          "type": "integer"
+        },
+        "llm_call_timeout": {
+          "default": 60.0,
+          "description": "Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models. On timeout, the call is retried up to llm_call_retries times before cascading to fallback models.",
+          "title": "Llm Call Timeout",
+          "type": "number"
+        },
+        "llm_call_retries": {
+          "default": 2,
+          "description": "Maximum retry attempts for the primary model before cascading to fallback_models. Each fallback model gets one attempt.",
+          "title": "Llm Call Retries",
           "type": "integer"
         },
         "default_denied_tools": {
@@ -76,14 +89,44 @@
           "type": "array"
         },
         "edit_tool": {
-          "default": "search_replace_block",
-          "description": "File editing mechanism: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement).",
+          "default": "",
+          "description": "File editing mechanism override: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement). Leave empty (default) to auto-select based on the active model via llm.structured_patch_models.",
           "examples": [
+            "",
             "search_replace_block",
             "structured_patch"
           ],
           "title": "Edit Tool",
           "type": "string"
+        },
+        "plan_mode_shell_allowlist": {
+          "description": "Shell command prefixes allowed during plan mode. Each entry matches a command at a word boundary (e.g. 'git log' matches 'git log --oneline' but not 'git logger'). Commands containing pipes, redirects, variable expansion, command substitution, or chaining (|, >, <, &, ;, $, backtick) are always rejected. Set to an empty list to disable shell in plan mode entirely.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Plan Mode Shell Allowlist",
+          "type": "array"
+        },
+        "plan_mode_allow_mcp": {
+          "default": true,
+          "description": "Allow ALL user-enabled MCP tools (tools with kind='mcp') during plan mode. Matches Claude Code's permissive default and trusts the user's mcp.json configuration. Set to false to block MCP tools in plan mode regardless of their read-only status.",
+          "title": "Plan Mode Allow Mcp",
+          "type": "boolean"
+        },
+        "web_ide": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebIdeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional 'Open in Web IDE' feature config (code-server containers)."
+        },
+        "lsp": {
+          "$ref": "#/$defs/LSPConfig"
         }
       },
       "title": "AgentConfig",
@@ -134,6 +177,22 @@
         }
       },
       "title": "ChatConfig",
+      "type": "object"
+    },
+    "CompactionConfig": {
+      "description": "Summarization prompt selection for conversation compaction.\n\n``caveman_mode`` enables a rule-augmented prompt (inspired by the\n``JuliusBrussee/caveman`` Claude Code skill) that instructs the\nsummarizer LLM to drop articles, filler, pleasantries, and hedging\nwhile preserving code, paths, URLs, and error strings verbatim.\nReduces output tokens in the compaction summary without changing the\n``<analysis>/<summary>`` response structure downstream parsers expect.",
+      "properties": {
+        "caveman_mode": {
+          "default": false,
+          "description": "Enable caveman-style terse summarization prompt. Drops articles, filler, pleasantries, and hedging in the compacted summary while preserving code, file paths, URLs, and error strings verbatim. Reduces compaction output tokens without changing the response structure downstream parsers expect.",
+          "examples": [
+            false
+          ],
+          "title": "Caveman Mode",
+          "type": "boolean"
+        }
+      },
+      "title": "CompactionConfig",
       "type": "object"
     },
     "ContextConfig": {
@@ -216,15 +275,29 @@
       "properties": {
         "type": {
           "default": "command",
-          "description": "Hook type. Currently only 'command' is supported.",
+          "description": "Hook type: 'command' (shell) or 'http' (POST to URL).",
           "title": "Type",
           "type": "string"
         },
         "command": {
           "default": "",
-          "description": "Shell command to execute when the hook fires.",
+          "description": "Shell command to execute (type=command).",
           "title": "Command",
           "type": "string"
+        },
+        "url": {
+          "default": "",
+          "description": "Target URL for HTTP POST (type=http).",
+          "title": "Url",
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra HTTP headers (type=http).",
+          "title": "Headers",
+          "type": "object"
         },
         "matcher": {
           "anyOf": [
@@ -241,7 +314,7 @@
         },
         "timeout": {
           "default": 30,
-          "description": "Maximum seconds to wait for the hook command to finish.",
+          "description": "Maximum seconds to wait for the hook to finish.",
           "title": "Timeout",
           "type": "integer"
         }
@@ -338,6 +411,54 @@
           "title": "Tool Model",
           "type": "string"
         },
+        "title_model": {
+          "default": "",
+          "description": "Model ID for session-title generation. Falls back to default_model when empty.",
+          "examples": [
+            "anthropic/claude-haiku-4-5-20251001"
+          ],
+          "title": "Title Model",
+          "type": "string"
+        },
+        "compact_models": {
+          "description": "Priority-ordered list of models for context compaction. On failure, the next model in the list is tried. The keyword \"default\" resolves to the running agent's model. Example: [\"anthropic/claude-haiku-4-5-20251001\", \"default\"]",
+          "examples": [
+            [
+              "anthropic/claude-haiku-4-5-20251001",
+              "default"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Compact Models",
+          "type": "array"
+        },
+        "fallback_models": {
+          "description": "Ordered list of fallback model IDs. On retryable LLM failure, the system tries each in order after exhausting retries on the primary model. Empty = no fallback.",
+          "examples": [
+            [
+              "gpt-5.4",
+              "gemini-2.5-pro"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Fallback Models",
+          "type": "array"
+        },
+        "proxy_model_prefix": {
+          "default": "openai",
+          "description": "LiteLLM provider prefix prepended to model names when api_base is set. LiteLLM strips this prefix before forwarding the model name to the proxy, so the proxy receives the model ID it advertises in /v1/models. Leave as 'openai' for LiteLLM proxy, Bifrost, and OpenRouter. Only relevant when api_base is configured.",
+          "examples": [
+            "openai",
+            "azure",
+            "vertex_ai"
+          ],
+          "title": "Proxy Model Prefix",
+          "type": "string"
+        },
         "reasoning_effort": {
           "default": "",
           "description": "Reasoning effort hint for supported models. One of low, medium, high, none, or empty.",
@@ -354,9 +475,40 @@
           },
           "title": "Reasoning Effort Models",
           "type": "array"
+        },
+        "structured_patch_models": {
+          "description": "Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; only set this to override or extend.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Structured Patch Models",
+          "type": "array"
         }
       },
       "title": "LLMConfig",
+      "type": "object"
+    },
+    "LSPConfig": {
+      "additionalProperties": false,
+      "description": "Language Server Protocol integration settings.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable native LSP tool.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "servers": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "description": "Override or extend built-in server definitions. Set {\"pyright\": {\"disabled\": true}} to disable a built-in, or add custom servers with command/extensions/root_markers.",
+          "title": "Servers",
+          "type": "object"
+        }
+      },
+      "title": "LSPConfig",
       "type": "object"
     },
     "LangfuseConfig": {
@@ -375,6 +527,15 @@
             "https://langfuse.server.local"
           ],
           "title": "Host",
+          "type": "string"
+        },
+        "project_id": {
+          "default": "",
+          "description": "Langfuse project ID for constructing dashboard URLs.",
+          "examples": [
+            "clvh22gis002oru6ay1rm2eh0"
+          ],
+          "title": "Project Id",
           "type": "string"
         },
         "public_key": {
@@ -449,6 +610,41 @@
         }
       },
       "title": "PermissionsConfig",
+      "type": "object"
+    },
+    "PluginsConfig": {
+      "description": "Plugin system configuration.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable the plugin system.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "enabled_plugins": {
+          "description": "Plugin names to enable. Empty = all installed plugins. Format: 'plugin-name' or 'plugin-name@marketplace'.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Enabled Plugins",
+          "type": "array"
+        },
+        "marketplaces": {
+          "description": "GitHub repos containing marketplace.json plugin indexes.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Marketplaces",
+          "type": "array"
+        },
+        "install_path": {
+          "default": "",
+          "description": "Override install path for Meeseeks-managed plugins. Defaults to $MEESEEKS_HOME/plugins/ (via resolve_meeseeks_home).",
+          "title": "Install Path",
+          "type": "string"
+        }
+      },
+      "title": "PluginsConfig",
       "type": "object"
     },
     "ProjectConfig": {
@@ -575,6 +771,16 @@
           ],
           "title": "Result Export Dir",
           "type": "string"
+        },
+        "projects_home": {
+          "default": "",
+          "description": "Directory for virtual project folders. Defaults to $MEESEEKS_HOME/projects.",
+          "examples": [
+            "~/.meeseeks/projects"
+          ],
+          "title": "Projects Home",
+          "type": "string",
+          "x-protected": true
         }
       },
       "title": "RuntimeConfig",
@@ -626,12 +832,75 @@
           "additionalProperties": {
             "type": "integer"
           },
-          "description": "Per-model context window overrides. Keys are model names, values are token counts.",
+          "description": "Override only: per-model context window in tokens. Keys are model names (with or without provider prefix). The authoritative source is LiteLLM's model catalogue; populate this only to cap below the model's real max, or for models LiteLLM doesn't know yet.",
           "title": "Model Context Windows",
           "type": "object"
         }
       },
       "title": "TokenBudgetConfig",
+      "type": "object"
+    },
+    "WebIdeConfig": {
+      "additionalProperties": false,
+      "description": "Config for the per-session code-server \"Open in Web IDE\" feature.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "image": {
+          "default": "codercom/code-server:latest",
+          "title": "Image",
+          "type": "string"
+        },
+        "default_lifetime_hours": {
+          "default": 1,
+          "maximum": 24,
+          "minimum": 1,
+          "title": "Default Lifetime Hours",
+          "type": "integer"
+        },
+        "max_lifetime_hours": {
+          "default": 8,
+          "maximum": 168,
+          "minimum": 1,
+          "title": "Max Lifetime Hours",
+          "type": "integer"
+        },
+        "cpus": {
+          "default": 1.0,
+          "maximum": 16.0,
+          "minimum": 0.1,
+          "title": "Cpus",
+          "type": "number"
+        },
+        "memory": {
+          "default": "1g",
+          "pattern": "^\\d+[mgMG]$",
+          "title": "Memory",
+          "type": "string"
+        },
+        "pids_limit": {
+          "default": 512,
+          "maximum": 4096,
+          "minimum": 64,
+          "title": "Pids Limit",
+          "type": "integer"
+        },
+        "network": {
+          "default": "meeseeks-ide",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "title": "Network",
+          "type": "string"
+        },
+        "state_dir": {
+          "default": "/tmp/meeseeks-ide",
+          "title": "State Dir",
+          "type": "string"
+        }
+      },
+      "title": "WebIdeConfig",
       "type": "object"
     }
   },
@@ -652,6 +921,10 @@
     },
     "token_budget": {
       "$ref": "#/$defs/TokenBudgetConfig"
+    },
+    "compaction": {
+      "$ref": "#/$defs/CompactionConfig",
+      "description": "Conversation compaction prompt selection (caveman mode)."
     },
     "reflection": {
       "$ref": "#/$defs/ReflectionConfig"
@@ -679,7 +952,20 @@
       "$ref": "#/$defs/AgentConfig"
     },
     "hooks": {
-      "$ref": "#/$defs/HooksConfig"
+      "$ref": "#/$defs/HooksConfig",
+      "description": "External hooks fired during the session lifecycle (command or http)."
+    },
+    "plugins": {
+      "$ref": "#/$defs/PluginsConfig"
+    },
+    "channels": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "description": "Chat platform channel adapters (nextcloud-talk, slack, etc.).",
+      "title": "Channels",
+      "type": "object"
     },
     "projects": {
       "additionalProperties": {

@@ -235,7 +235,7 @@ class HomeAssistantCall(BaseModel):
 
     @field_validator("entity_id")
     @classmethod
-    def validate_entity_id(cls, entity_id: str, info: ValidationInfo) -> str:
+    def validate_entity_id(cls: type[Any], entity_id: str, info: ValidationInfo) -> str:
         """Validate the entity_id against the cache when available.
 
         Args:
@@ -258,7 +258,7 @@ class HomeAssistantCall(BaseModel):
 
     @field_validator("domain")
     @classmethod
-    def validate_domain(cls, domain: str, info: ValidationInfo) -> str:
+    def validate_domain(cls: type[Any], domain: str, info: ValidationInfo) -> str:
         """Validate the domain against the cache when available.
 
         Args:

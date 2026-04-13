@@ -24,7 +24,7 @@ class TestKeyListenerNoop:
     def test_pause_resume_noop_when_not_tty(self):
         listener = KeyListener()
         # No __enter__ called, _fd is None.
-        listener.pause()   # should not raise
+        listener.pause()  # should not raise
         listener.resume()  # should not raise
 
 
@@ -37,7 +37,12 @@ class TestKeyListenerBindings:
     @patch("meeseeks_cli.cli_keys.os")
     @patch("sys.stdin")
     def test_bound_key_fires_callback(
-        self, mock_stdin, mock_os, mock_select, mock_termios, mock_tty,
+        self,
+        mock_stdin,
+        mock_os,
+        mock_select,
+        mock_termios,
+        mock_tty,
     ):
         mock_stdin.isatty.return_value = True
         mock_stdin.fileno.return_value = 0
@@ -77,7 +82,12 @@ class TestKeyListenerBindings:
     @patch("meeseeks_cli.cli_keys.os")
     @patch("sys.stdin")
     def test_unbound_key_ignored(
-        self, mock_stdin, mock_os, mock_select, mock_termios, mock_tty,
+        self,
+        mock_stdin,
+        mock_os,
+        mock_select,
+        mock_termios,
+        mock_tty,
     ):
         mock_stdin.isatty.return_value = True
         mock_stdin.fileno.return_value = 0
@@ -116,7 +126,12 @@ class TestKeyListenerLifecycle:
     @patch("meeseeks_cli.cli_keys.os")
     @patch("sys.stdin")
     def test_stop_sets_event_and_joins(
-        self, mock_stdin, mock_os, mock_select, mock_termios, mock_tty,
+        self,
+        mock_stdin,
+        mock_os,
+        mock_select,
+        mock_termios,
+        mock_tty,
     ):
         mock_stdin.isatty.return_value = True
         mock_stdin.fileno.return_value = 0
@@ -139,7 +154,12 @@ class TestKeyListenerLifecycle:
     @patch("meeseeks_cli.cli_keys.os")
     @patch("sys.stdin")
     def test_pause_sets_event_and_restores_termios(
-        self, mock_stdin, mock_os, mock_select, mock_termios, mock_tty,
+        self,
+        mock_stdin,
+        mock_os,
+        mock_select,
+        mock_termios,
+        mock_tty,
     ):
         mock_stdin.isatty.return_value = True
         mock_stdin.fileno.return_value = 0
@@ -153,7 +173,9 @@ class TestKeyListenerLifecycle:
             assert listener._paused.is_set()
             # Should have restored original settings.
             mock_termios.tcsetattr.assert_called_with(
-                0, mock_termios.TCSADRAIN, old_settings,
+                0,
+                mock_termios.TCSADRAIN,
+                old_settings,
             )
 
             listener.resume()

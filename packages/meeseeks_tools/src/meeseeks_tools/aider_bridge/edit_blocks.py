@@ -6,7 +6,6 @@ Source: https://github.com/Aider-AI/aider (commit 4bf56b77145b0be593ed48c3c90cde
 from __future__ import annotations
 
 import difflib
-import math
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -21,7 +20,6 @@ HEAD = r"^<{5,9} SEARCH>?\s*$"
 DIVIDER = r"^={5,9}\s*$"
 UPDATED = r"^>{5,9} REPLACE\s*$"
 
-HEAD_ERR = "<<<<<<< SEARCH"
 DIVIDER_ERR = "======="
 UPDATED_ERR = ">>>>>>> REPLACE"
 
@@ -153,7 +151,6 @@ def apply_search_replace_blocks(
             path.write_text(updated_content, encoding="utf-8")
 
     return results
-
 
 
 def _compute_replacement(
@@ -316,42 +313,6 @@ def match_but_for_leading_whitespace(whole_lines, part_lines):
         return
 
     return add.pop()
-
-
-def replace_closest_edit_distance(whole_lines, part, part_lines, replace_lines):
-    similarity_thresh = 0.8
-
-    max_similarity = 0
-    most_similar_chunk_start = -1
-    most_similar_chunk_end = -1
-
-    scale = 0.1
-    min_len = math.floor(len(part_lines) * (1 - scale))
-    max_len = math.ceil(len(part_lines) * (1 + scale))
-
-    for length in range(min_len, max_len):
-        for i in range(len(whole_lines) - length + 1):
-            chunk = whole_lines[i : i + length]
-            chunk = "".join(chunk)
-
-            similarity = SequenceMatcher(None, chunk, part).ratio()
-
-            if similarity > max_similarity and similarity:
-                max_similarity = similarity
-                most_similar_chunk_start = i
-                most_similar_chunk_end = i + length
-
-    if max_similarity < similarity_thresh:
-        return
-
-    modified_whole = (
-        whole_lines[:most_similar_chunk_start]
-        + replace_lines
-        + whole_lines[most_similar_chunk_end:]
-    )
-    modified_whole = "".join(modified_whole)
-
-    return modified_whole
 
 
 def strip_quoted_wrapping(res: str, fence: tuple[str, str] = DEFAULT_FENCE) -> str:

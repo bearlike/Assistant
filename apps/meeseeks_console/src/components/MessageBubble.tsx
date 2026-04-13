@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import 'highlight.js/styles/github-dark.css';
+// hljs theme: theme-aware via --hl-* CSS variables in src/index.css
+// (no third-party CSS import — adapts to light/dark mode automatically).
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { CopyButton } from './CopyButton';
 interface MessageBubbleProps {

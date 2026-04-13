@@ -20,6 +20,7 @@ from meeseeks_api.channels.email_adapter import (
 # Helpers
 # ------------------------------------------------------------------
 
+
 def _make_email(
     *,
     from_addr: str = "alice@example.com",
@@ -287,9 +288,7 @@ class TestSendResponse:
 
         # Check decoded HTML part
         parts = list(parsed.walk())
-        html_parts = [
-            p for p in parts if p.get_content_type() == "text/html"
-        ]
+        html_parts = [p for p in parts if p.get_content_type() == "text/html"]
         assert html_parts, "No text/html part found"
         html_body = html_parts[0].get_payload(decode=True).decode()
         assert "<strong>Done!</strong>" in html_body
@@ -311,10 +310,7 @@ class TestSendResponse:
 
         raw_email = mock_smtp.sendmail.call_args[0][2]
         parsed = email_stdlib.message_from_string(raw_email)
-        plain_parts = [
-            p for p in parsed.walk()
-            if p.get_content_type() == "text/plain"
-        ]
+        plain_parts = [p for p in parsed.walk() if p.get_content_type() == "text/plain"]
         assert plain_parts, "No text/plain part found"
         plain_body = plain_parts[0].get_payload(decode=True).decode()
         assert "Plain markdown text" in plain_body
@@ -336,7 +332,8 @@ class TestSendResponse:
 
         adapter = _make_adapter(smtp_ssl=True, smtp_starttls=False)
         adapter.send_response(
-            channel_id="alice@example.com", text="test",
+            channel_id="alice@example.com",
+            text="test",
         )
         mock_smtp_ssl_cls.assert_called_once()
         mock_smtp.starttls.assert_not_called()
@@ -383,16 +380,19 @@ class TestSendReaction:
 
         # Verify reaction JSON
         reaction_parts = [
-            p for p in parsed.walk()
+            p
+            for p in parsed.walk()
             if p.get_content_type() == "text/vnd.google.email-reaction+json"
         ]
         import json
+
         payload = json.loads(reaction_parts[0].get_payload(decode=True).decode())
         assert payload == {"emoji": "\N{EYES}", "version": 1}
 
     @patch("meeseeks_api.channels.email_adapter.smtplib.SMTP")
     def test_send_reaction_smtp_failure_returns_none(
-        self, mock_smtp_cls: MagicMock,
+        self,
+        mock_smtp_cls: MagicMock,
     ) -> None:
         mock_smtp_cls.side_effect = ConnectionRefusedError("no SMTP")
         adapter = _make_adapter()
@@ -417,10 +417,7 @@ class TestSendReaction:
 
         raw = mock_smtp.sendmail.call_args[0][2]
         parsed = email_stdlib.message_from_string(raw)
-        plain_parts = [
-            p for p in parsed.walk()
-            if p.get_content_type() == "text/plain"
-        ]
+        plain_parts = [p for p in parsed.walk() if p.get_content_type() == "text/plain"]
         plain_body = plain_parts[0].get_payload(decode=True).decode()
         assert "Reacted with" in plain_body
         assert "\N{THUMBS UP SIGN}" in plain_body
@@ -455,7 +452,7 @@ class TestMarkdownRendering:
         html = render_markdown_html("Hello")
         assert "Meeseeks" in html  # Header branding
         assert "<!DOCTYPE html>" in html
-        assert "AI Personal Assistant" in html  # Footer
+        assert "agent hypervisor" in html  # Footer
 
 
 # ------------------------------------------------------------------
@@ -510,7 +507,8 @@ class TestEmailPoller:
 
     @patch("meeseeks_api.channels.email_adapter.imapclient.IMAPClient")
     def test_poll_loop_processes_unseen(
-        self, mock_imap_cls: MagicMock,
+        self,
+        mock_imap_cls: MagicMock,
     ) -> None:
         """Verify the poller fetches UNSEEN, parses, and marks SEEN."""
         adapter = _make_adapter()

@@ -1,10 +1,12 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { AlertCircle, Search, X, Archive, RotateCcw, Loader2 } from 'lucide-react';
+import { useState, useMemo, useCallback, useRef, useEffect, type CSSProperties } from 'react';
+import { AlertCircle, Search, X, Archive, RotateCcw, Loader2, ChevronDown } from 'lucide-react';
+import { cn } from '../utils/cn';
 import { SessionItem } from './SessionItem';
 import { InputBar } from './InputBar';
 import { TypewriterGreeting } from './TypewriterGreeting';
 import { QueryMode, SessionContext, SessionSummary } from '../types';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Button } from './ui/button';
 import { formatSessionTime } from '../utils/time';
 interface HomeViewProps {
   sessions: SessionSummary[];
@@ -46,26 +48,55 @@ export function HomeView({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'sessions' | 'archive'>('sessions');
-  const [animPaused, setAnimPaused] = useState(false);
-  const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [chevronHidden, setChevronHidden] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const sessionsRef = useRef<HTMLDivElement | null>(null);
 
-  const handleInputFocusChange = useCallback((focused: boolean, isEmpty: boolean) => {
-    if (resumeTimer.current) {
-      clearTimeout(resumeTimer.current);
-      resumeTimer.current = null;
-    }
-    if (focused) {
-      setAnimPaused(true);
-    } else if (isEmpty) {
-      resumeTimer.current = setTimeout(() => setAnimPaused(false), 1000);
-    }
-  }, []);
-
+  // Chevron is a scroll affordance — show near the top of the hero, hide
+  // once the user has nudged past it, re-show when they scroll back up.
   useEffect(() => {
-    return () => {
-      if (resumeTimer.current) clearTimeout(resumeTimer.current);
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      setChevronHidden(el.scrollTop > 80);
     };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
   }, []);
+
+  // Single page-level IntersectionObserver for .fade-in-row reveal. Observes
+  // anything not yet visible on every render so freshly-rendered session rows
+  // get picked up. CSS owns the transition + stagger via --row-index.
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.05 }
+    );
+    const rows = document.querySelectorAll('.fade-in-row:not(.is-visible)');
+    rows.forEach((row) => observer.observe(row));
+    return () => observer.disconnect();
+  });
+
+  const handleChevronClick = useCallback(() => {
+    sessionsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
+  // Tab switch resets the scroll to the top of the sessions area so the two
+  // lists always open with the same orientation — otherwise the user can land
+  // in the middle of a shorter list after switching from a longer one.
+  const switchTab = useCallback((tab: 'sessions' | 'archive') => {
+    setActiveTab(tab);
+    if (tab === 'archive') onLoadArchived();
+    sessionsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [onLoadArchived]);
   const listError = activeTab === 'archive' ? archivedError : error;
   const listLoading = activeTab === 'archive' ? archivedLoading : loading;
   const scopedSessions = activeTab === 'archive' ? archivedSessions : sessions;
@@ -88,12 +119,19 @@ export function HomeView({
 
   });
   return (
-    <div className="flex flex-col h-full w-full relative overflow-hidden">
-      {/* Fixed Top Section */}
-      <div className="flex-none flex flex-col items-center pt-16 pb-6 px-4 w-full z-20 bg-[hsl(var(--background))]">
-        <TypewriterGreeting paused={animPaused} />
+    <div ref={scrollRef} className="h-full w-full relative overflow-y-auto">
+      {/* Hero — occupies the full viewport so sessions sit naturally below the fold. */}
+      <section className="min-h-[85dvh] flex flex-col items-center justify-center px-4 pt-16 pb-16 relative">
+        <img
+          src="/logo-transparent.svg"
+          alt="Meeseeks"
+          className="w-16 h-16 mb-6 drop-shadow-[0_0_40px_hsl(var(--primary)/.25)]" />
+        <h1 className="text-4xl sm:text-5xl font-semibold text-[hsl(var(--foreground))] tracking-tight mb-3">
+          Meeseeks
+        </h1>
+        <TypewriterGreeting />
 
-        <div className="w-full max-w-3xl">
+        <div className="w-full max-w-4xl">
           {(actionError || (listError && !apiUnavailable)) &&
           <div className="mb-4">
               <Alert variant="destructive">
@@ -105,21 +143,40 @@ export function HomeView({
           <InputBar
             mode="home"
             onSubmit={onCreateAndRun}
-            isSubmitting={isCreating}
-            onFocusChange={handleInputFocusChange} />
+            isSubmitting={isCreating} />
           {isCreating &&
           <div className="mt-2 flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               <span>Creating session...</span>
             </div>
           }
-
         </div>
-      </div>
 
-      {/* Scrollable Bottom Section */}
-      <div className="flex-1 overflow-y-auto w-full">
-        <div className="max-w-3xl mx-auto px-4 pb-20">
+        {/* Scroll affordance — fades out once scrolled past the hero, returns
+            when the user comes back up. Outer div centers via flex so the
+            bounce keyframe's `transform` can't fight a translate-x centering. */}
+        <div
+          aria-hidden={chevronHidden}
+          className={cn(
+            "absolute bottom-8 inset-x-0 flex justify-center transition-opacity duration-300",
+            chevronHidden && "opacity-0 pointer-events-none"
+          )}>
+          <button
+            type="button"
+            onClick={handleChevronClick}
+            aria-label="Scroll to recent sessions"
+            className="flex flex-col items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] animate-scroll-bounce">
+            <span>Recent sessions</span>
+            <ChevronDown className="w-4 h-4" />
+          </button>
+        </div>
+      </section>
+
+      {/* Sessions — naturally below the fold, scrolled as part of the same page.
+          sessions-peek-fade softens the top edge so the first rows peek through
+          the hero → sessions boundary rather than landing with a hard cut. */}
+      <div ref={sessionsRef} className="w-full sessions-peek-fade">
+        <div className="max-w-4xl mx-auto px-4 pb-20">
           {apiUnavailable ?
           <div className="flex flex-col items-center justify-center py-24 text-center">
               <AlertCircle className="w-10 h-10 text-red-500 mb-4" />
@@ -130,27 +187,22 @@ export function HomeView({
                 {listError}
               </p>
               {onRetry &&
-              <button
-                  onClick={onRetry}
-                  className="px-4 py-2 text-sm rounded-lg transition-colors bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]">
+              <Button variant="neutral" size="md" onClick={onRetry}>
                   Try Again
-                </button>
+                </Button>
               }
             </div> :
           <>
-          <div className="sticky top-0 z-10 pt-2 pb-4 mb-2 flex items-center justify-between border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] shadow-[0_4px_12px_hsl(var(--background))]">
+          <div className="sticky top-0 z-10 pt-2 mb-4 flex items-center justify-between border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]/85 backdrop-blur-sm shadow-[0_4px_12px_hsl(var(--background))]">
             <div className="flex gap-8">
               <button
-                onClick={() => setActiveTab('sessions')}
+                onClick={() => switchTab('sessions')}
                 className={`pb-3 text-sm font-medium transition-colors ${activeTab === 'sessions' ? 'text-[hsl(var(--foreground))] border-b-2 border-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'}`}>
 
                 Sessions
               </button>
               <button
-                onClick={() => {
-                  setActiveTab('archive');
-                  onLoadArchived();
-                }}
+                onClick={() => switchTab('archive')}
                 className={`pb-3 text-sm font-medium transition-colors ${activeTab === 'archive' ? 'text-[hsl(var(--foreground))] border-b-2 border-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'}`}>
 
                 Archive
@@ -210,12 +262,14 @@ export function HomeView({
               'Search archived sessions' :
               'Search sessions'}
               </h2>
-              <button
+              <Button
+              variant="ghost"
+              size="sm"
+              iconOnly
               onClick={() => setIsSearchOpen(false)}
-              className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
-
+              aria-label="Close search">
                 <X className="w-4 h-4" />
-              </button>
+              </Button>
             </div>
 
             <div className="p-2">
@@ -230,12 +284,15 @@ export function HomeView({
                 placeholder="Search..." />
 
                 {searchQuery &&
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
                 onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-2.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
-
+                aria-label="Clear search"
+                className="absolute right-1 top-1/2 -translate-y-1/2">
                     <X className="w-3 h-3" />
-                  </button>
+                  </Button>
               }
               </div>
 
@@ -315,7 +372,7 @@ function SessionSection({
       <h3 className="text-xs font-medium text-[hsl(var(--muted-foreground))] mb-3 uppercase tracking-wider pl-2">
         {title}
       </h3>
-      <div className="space-y-1">
+      <div className="divide-y divide-[hsl(var(--border))]">
         {loading &&
         <div className="text-sm text-[hsl(var(--muted-foreground))] pl-2">
             Loading sessions...
@@ -326,14 +383,17 @@ function SessionSection({
             No sessions yet.
           </div>
         }
-        {sessions.map((session) =>
-        <SessionItem
+        {sessions.map((session, i) =>
+        <div
           key={session.session_id}
-          session={session}
-          onClick={onSessionSelect}
-          onArchive={onArchive}
-          onUnarchive={onUnarchive} />
-
+          className="fade-in-row"
+          style={{ '--row-index': i } as CSSProperties}>
+            <SessionItem
+              session={session}
+              onClick={onSessionSelect}
+              onArchive={onArchive}
+              onUnarchive={onUnarchive} />
+          </div>
         )}
       </div>
     </div>);

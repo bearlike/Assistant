@@ -39,6 +39,9 @@ logging = get_logger(name="core.exit_plan_mode")
 PLAN_DIR_ROOT = "/tmp/meeseeks/plans"
 """Root directory for all per-session plan scratch directories."""
 
+SESSION_TEMP_ROOT = "/tmp/meeseeks/sessions"
+"""Root directory for per-session temporary working directories."""
+
 PLAN_FILE_NAME = "plan.md"
 _REVISION_FILE_NAME = "revision.txt"
 
@@ -125,6 +128,13 @@ def _has_unquoted_metachar(command: str) -> bool:
             return True
         i += 1
     return False
+
+
+def session_temp_dir(session_id: str) -> str:
+    """Return the temporary working directory for a session, creating it if needed."""
+    path = os.path.join(SESSION_TEMP_ROOT, session_id)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 def plan_dir_for(session_id: str) -> str:

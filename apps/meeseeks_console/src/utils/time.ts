@@ -1,3 +1,10 @@
+/** Format a token count for display: 1234 → "1234", 5200 → "5.2k", 1500000 → "1.5m" */
+export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
 const SHORT_DATE = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",

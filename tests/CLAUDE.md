@@ -8,6 +8,7 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 - **Sub-agent spawning** (`test_spawn_agent.py`): SpawnAgentTool execution, tool scoping (allowed/denied), model validation, depth gate, approval_callback inheritance, AgentResult structured JSON return, acceptance_criteria schema, deprecated max_steps schema field. Note: tool filtering now uses `filter_specs()` from `tool_registry` — mock `meeseeks_core.tool_registry.get_config_value` (not `spawn_agent.get_config_value`) when testing config-denied tools. Sub-agents now run until natural completion (no max_steps enforcement).
 - **CLI agent display** (`test_cli_agent_display.py`): AgentDisplayManager state, hook callbacks, Rich rendering, tree structure, thread safety, submitted/rejected state rendering, error message display.
 - **Hierarchical instruction discovery** (`test_project_instructions.py`): four-level hierarchy discovery (user/project/rules/local), priority ordering, git context formatting, noload marker, empty/missing files.
+- **Session runtime** (`test_session_runtime.py`): `SessionRuntime` session resolution, fork-from-tag, `fork_at_ts` (fork-from-message), event loading, archiving, and session listing.
 - **Orchestration** (`test_task_master.py`): `orchestrate_session` completion, max-iter, error paths.
 - **Tool registry** behavior and tool disabling when init fails.
 - **MCP discovery**: schema normalization, per-server failures, and CLI visibility even when tools are missing.
@@ -15,6 +16,10 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 - **HTTP hooks** (`test_hooks_http.py`): HTTP hook factories (pre/post tool, session start/end), matcher filtering, mixed command+http hooks, session env var enrichment (`MEESEEKS_SESSION_ID`, `MEESEEKS_ERROR`). Mocks `_post_json` to avoid real HTTP.
 - **Channel adapters** (`test_channels.py`): `DeduplicationGuard` TTL, `ChannelRegistry` CRUD, `NextcloudTalkAdapter` HMAC verification (valid/invalid/missing headers, backend allowlist with missing header bypass), ActivityStreams payload parsing (Create/Update/Delete, thread_id, Rich Object placeholder stripping, file attachment extraction), `ChannelAdapter` protocol compliance.
 - **Email channel** (`test_email_channel.py`): `EmailAdapter.parse_email()` MIME parsing, thread ID extraction (Message-ID/In-Reply-To/References), allowed_senders filtering, multi-party mention gating (`requires_mention()`), `send_response()` SMTP with threading headers and HTML body, markdown→HTML rendering (bold, code blocks, tables, template wrapping), `EmailPoller` lifecycle (start/stop, daemon thread, poll interval floor), protocol compliance.
+- **Plugins** (`test_plugins.py`): plugin discovery, manifest parsing, marketplace reading, install/uninstall, path traversal guards, MCP format unwrap, DRY substitution.
+- **Plugin hooks** (`test_plugin_hooks.py`): hook format translation from plugin manifests to `HooksConfig`, matcher filtering.
+- **Plugin integration** (`test_plugin_integration.py`): end-to-end plugin loading into session init, component wiring (skills, hooks, agent definitions, MCP tools).
+- **Agent registry** (`test_agent_registry.py`): agent definition registry, markdown frontmatter parsing, `agent_type` lookup in `spawn_agent`.
 
 ## Hidden dependencies / assumptions
 - Many tests rely on `monkeypatch` for env vars (LLM config, MCP config, log levels).

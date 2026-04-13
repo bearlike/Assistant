@@ -9,6 +9,7 @@ import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -16,6 +17,7 @@ from rich import box
 from rich.columns import Columns
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.status import Status
@@ -399,9 +401,7 @@ def run_cli(args: argparse.Namespace) -> int:
     store = create_session_store(root_dir=args.session_dir)
     runtime = SessionRuntime(session_store=store)
     session_id = _resolve_session_id(runtime, args.session, args.tag, args.fork)
-    fallback_models = (
-        tuple(args.fallback_models.split(",")) if args.fallback_models else None
-    )
+    fallback_models = tuple(args.fallback_models.split(",")) if args.fallback_models else None
     state = CliState(
         session_id=session_id,
         show_plan=args.show_plan,
@@ -658,9 +658,7 @@ def _run_query(
             )
         )
         if prompt_func is not None:
-            _choice = (
-                prompt_func("[A]pprove  [R]eject  > ") or "r"
-            ).strip().lower()
+            _choice = (prompt_func("[A]pprove  [R]eject  > ") or "r").strip().lower()
             _approved = _choice.startswith("a") or _choice in {"y", "yes"}
         else:
             # Non-interactive (--query mode): auto-reject, user cannot interact.
@@ -711,15 +709,71 @@ def _run_query(
                 border_style="bold green",
             )
         )
+        _print_usage_footer(console, store, state.session_id, state.model_name)
 
     # Surface recovery hint when the run ended in a recoverable failure so
     # users can type ``/retry`` or ``/continue`` at the next prompt.
     _maybe_print_recovery_hint(console, store, state.session_id)
 
 
-def _maybe_print_recovery_hint(
-    console: Console, store: SessionStoreBase, session_id: str
+def _print_usage_footer(
+    console: Console,
+    store: SessionStoreBase,
+    session_id: str,
+    model_name: str | None,
 ) -> None:
+    """Print a single-line token usage summary below the response panel.
+
+    Shows the same faceted view the console footer does: root agent
+    headroom vs. model max (the actual context-window pressure), plus a
+    sub-agent rollup and compaction count. Numbers come from the one
+    ``build_usage_numbers`` helper — no duplicate aggregation here.
+    """
+    try:
+        from meeseeks_core.token_budget import build_usage_numbers
+
+        effective_model = model_name or str(
+            get_config_value("llm", "default_model", default="") or ""
+        )
+        events = store.load_transcript(session_id)
+        u = build_usage_numbers(events, effective_model)
+    except Exception:
+        return  # silent — footer is decorative
+    max_in = u["root_max_input_tokens"]
+    if max_in <= 0 and u["total_input_tokens_billed"] == 0:
+        return  # nothing meaningful yet
+    pct = int(round(u["root_utilization"] * 100))
+    line = Text()
+    line.append(f"{u['root_model']}", style="dim cyan")
+    line.append("  ", style="dim")
+    line.append(
+        f"root {_fmt_tokens(u['root_last_input_tokens'])}/{_fmt_tokens(max_in)} ({pct}%)",
+        style="dim",
+    )
+    if u["sub_peak_input_tokens"] or u["sub_output_tokens"]:
+        # Sub-agents run in isolated contexts; show combined peak pressure
+        # (sum of per-agent peaks) + summed output.
+        sub_peak = _fmt_tokens(u["sub_peak_input_tokens"])
+        sub_out = _fmt_tokens(u["sub_output_tokens"])
+        line.append("  ·  sub peak ", style="dim")
+        line.append(f"{sub_peak} / {sub_out} out", style="dim")
+    line.append("  ·  ", style="dim")
+    line.append(f"{_fmt_tokens(u['tokens_until_compact'])} until compact", style="dim")
+    if u["compaction_count"] > 0:
+        line.append(f"  ·  ⊙ {u['compaction_count']} compaction(s)", style="dim")
+    console.print(line)
+
+
+def _fmt_tokens(n: int) -> str:
+    """Format a token count: 5200 → '5.2k', 1500000 → '1.5m'."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}m"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+def _maybe_print_recovery_hint(console: Console, store: SessionStoreBase, session_id: str) -> None:
     """Inspect the last completion event; print ``/retry`` / ``/continue`` hint."""
     transcript = store.load_transcript(session_id)
     for event in reversed(transcript):
@@ -731,11 +785,7 @@ def _maybe_print_recovery_hint(
         reason = str(payload.get("done_reason") or "").lower()
         if reason not in ("error", "max_steps_reached"):
             return
-        label = (
-            "Run failed"
-            if reason == "error"
-            else "Task interrupted — step limit reached"
-        )
+        label = "Run failed" if reason == "error" else "Task interrupted — step limit reached"
         error_text = payload.get("error") or payload.get("last_error") or ""
         detail = f"\n  {error_text}" if error_text else ""
         console.print(
@@ -1035,12 +1085,51 @@ def _build_cli_hook_manager(
 ) -> HookManager:
     # When agent display is active, the live tree + integrated spinner
     # replace the per-tool console.status() spinner.
+    def _on_compact(session_id: str, **kwargs: Any) -> None:
+        summary = kwargs.get("summary", "")
+        tokens_before = kwargs.get("tokens_before", 0)
+        tokens_saved = kwargs.get("tokens_saved", 0)
+        events_summarized = kwargs.get("events_summarized", 0)
+        tokens_after = tokens_before - tokens_saved
+
+        parts: list[RenderableType] = []
+        if tokens_before and tokens_saved:
+            pct = round((tokens_saved / tokens_before) * 100)
+            parts.append(
+                Text(f"{tokens_before:,} → {tokens_after:,} tokens ({pct}% reduction)", style="dim")
+            )
+        elif tokens_before:
+            parts.append(Text(f"{tokens_before:,} tokens in context", style="dim"))
+        if events_summarized:
+            parts.append(Text(f"{events_summarized} events summarized", style="dim"))
+        if summary:
+            parts.append(Text(""))
+            parts.append(Markdown(summary))
+        elif parts:
+            parts.append(Text(""))
+            parts.append(
+                Text("Summary unavailable — structured compaction failed.", style="dim italic")
+            )
+
+        if parts:
+            console.print(
+                Panel(
+                    Group(*parts),
+                    title="[dim blue]Context Compacted[/dim blue]",
+                    border_style="dim blue",
+                    padding=(0, 1),
+                )
+            )
+        else:
+            console.print("[dim blue]Context compacted[/dim blue]")
+
     if agent_display is not None:
         return HookManager(
             on_agent_start=[agent_display.on_start],
             on_agent_stop=[agent_display.on_stop],
             pre_tool_use=[agent_display.on_tool_start],
             post_tool_use=[agent_display.on_tool_end],
+            on_compact=[_on_compact],
         )
 
     # Fallback: original spinner behavior (no agent tree).
@@ -1066,6 +1155,7 @@ def _build_cli_hook_manager(
     return HookManager(
         pre_tool_use=[_start_spinner],
         post_tool_use=[_stop_spinner],
+        on_compact=[_on_compact],
     )
 
 

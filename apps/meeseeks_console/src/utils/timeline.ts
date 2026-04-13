@@ -1,6 +1,75 @@
-import { DiffFile, EventRecord, TimelineEntry, TurnMeta } from "../types";
+import { DiffFile, EventRecord, TimelineEntry, TurnMeta, TurnTokenUsage } from "../types";
 import { extractUnifiedDiffs, mergeDiffFiles } from "./diff";
 import { parseStructuredResult } from "./logs";
+
+function computeTurnTokenUsage(turnEvents: EventRecord[]): TurnTokenUsage | undefined {
+  // PEAK for input (context pressure), SUM for output (additive).
+  // Within a turn, input_tokens on each call grows as tool results stack
+  // onto the same prompt — summing double-counts everything. The peak is
+  // the real pressure on the model's context window.
+  let peakRootInput = 0;
+  let outputTokens = 0;
+  let billedRootInput = 0;
+  let billedSubInput = 0;
+  const subPeakPerAgent = new Map<string, number>();
+  let subOutputTokens = 0;
+  const subAgents = new Set<string>();
+  let cacheCreationTokens = 0;
+  let cacheReadTokens = 0;
+  let reasoningTokens = 0;
+  for (const e of turnEvents) {
+    if (e.type !== "llm_call_end") continue;
+    const p = e.payload as Record<string, unknown>;
+    const depth = typeof p.depth === "number" ? p.depth : 0;
+    const inTok = typeof p.input_tokens === "number" ? p.input_tokens : 0;
+    const outTok = typeof p.output_tokens === "number" ? p.output_tokens : 0;
+    const cacheCreate =
+      typeof p.cache_creation_input_tokens === "number"
+        ? p.cache_creation_input_tokens
+        : 0;
+    const cacheRead =
+      typeof p.cache_read_input_tokens === "number"
+        ? p.cache_read_input_tokens
+        : 0;
+    const reasoning =
+      typeof p.reasoning_output_tokens === "number"
+        ? p.reasoning_output_tokens
+        : 0;
+    cacheCreationTokens += cacheCreate;
+    cacheReadTokens += cacheRead;
+    reasoningTokens += reasoning;
+    if (depth === 0) {
+      if (inTok > peakRootInput) peakRootInput = inTok;
+      outputTokens += outTok;
+      billedRootInput += inTok;
+    } else {
+      const aid = typeof p.agent_id === "string" ? p.agent_id : "";
+      const prev = subPeakPerAgent.get(aid) ?? 0;
+      if (inTok > prev) subPeakPerAgent.set(aid, inTok);
+      subOutputTokens += outTok;
+      billedSubInput += inTok;
+      if (aid) subAgents.add(aid);
+    }
+  }
+  // Each sub-agent runs in its own isolated context, so summing per-agent
+  // peaks tells us "combined peak pressure across parallel sub-contexts".
+  let subInputTokens = 0;
+  for (const v of subPeakPerAgent.values()) subInputTokens += v;
+  if (!peakRootInput && !outputTokens && !subInputTokens && !subOutputTokens) {
+    return undefined;
+  }
+  return {
+    inputTokens: peakRootInput,
+    outputTokens,
+    subInputTokens,
+    subOutputTokens,
+    subAgentCount: subAgents.size,
+    cacheCreationTokens,
+    cacheReadTokens,
+    reasoningTokens,
+    billedInputTokens: billedRootInput + billedSubInput,
+  };
+}
 export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   let turnIndex = 0;
@@ -8,18 +77,27 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
   let turnEvents: EventRecord[] = [];
   let turnStart: string | undefined;
   let diffFiles: DiffFile[] = [];
+  let lastModel: string | undefined;
+  let turnModel: string | undefined;
   for (const event of events) {
+    if (event.type === "context") {
+      const payload = event.payload as { model?: string } | undefined;
+      if (payload?.model) lastModel = payload.model;
+      continue;
+    }
     if (event.type === "user") {
       turnIndex += 1;
       currentTurnId = `turn-${turnIndex}`;
       turnEvents = [event];
       diffFiles = [];
       turnStart = event.ts;
+      turnModel = lastModel;
       entries.push({
         id: `user-${turnIndex}`,
         role: "user",
         content: String(event.payload?.text ?? ""),
-        turnId: currentTurnId
+        turnId: currentTurnId,
+        ts: event.ts,
       });
       continue;
     }
@@ -75,7 +153,9 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
         id: currentTurnId,
         events: turnEvents,
         duration,
-        files: mergeDiffFiles(diffFiles)
+        files: mergeDiffFiles(diffFiles),
+        model: turnModel,
+        tokenUsage: computeTurnTokenUsage(turnEvents),
       };
       entries.push({
         id: `assistant-${turnIndex}`,
@@ -109,7 +189,9 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
         id: currentTurnId,
         events: turnEvents,
         duration,
-        files: mergeDiffFiles(diffFiles)
+        files: mergeDiffFiles(diffFiles),
+        model: turnModel,
+        tokenUsage: computeTurnTokenUsage(turnEvents),
       };
       entries.push({
         id: `completion-${turnIndex}`,
@@ -132,12 +214,20 @@ export function getActiveTurn(events: EventRecord[]): TurnMeta | null {
   let currentTurnId: string | null = null;
   let turnEvents: EventRecord[] = [];
   let diffFiles: DiffFile[] = [];
+  let lastModel: string | undefined;
+  let turnModel: string | undefined;
   for (const event of events) {
+    if (event.type === "context") {
+      const payload = event.payload as { model?: string } | undefined;
+      if (payload?.model) lastModel = payload.model;
+      continue;
+    }
     if (event.type === "user") {
       turnIndex += 1;
       currentTurnId = `turn-${turnIndex}`;
       turnEvents = [event];
       diffFiles = [];
+      turnModel = lastModel;
       continue;
     }
     if (!currentTurnId) {
@@ -172,7 +262,8 @@ export function getActiveTurn(events: EventRecord[]): TurnMeta | null {
   return {
     id: currentTurnId,
     events: turnEvents,
-    files: mergeDiffFiles(diffFiles)
+    files: mergeDiffFiles(diffFiles),
+    model: turnModel,
   };
 }
 function formatDuration(start?: string, end?: string): string | undefined {

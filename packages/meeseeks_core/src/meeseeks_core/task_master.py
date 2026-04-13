@@ -99,6 +99,9 @@ def orchestrate_session(
     interrupt_step: threading.Event | None = None,
     cwd: str | None = None,
     session_step_budget: int = 0,
+    user_id: str | None = None,
+    source_platform: str | None = None,
+    invocation_id: str | None = None,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
     """Run the orchestration loop."""
     return Orchestrator(
@@ -123,6 +126,9 @@ def orchestrate_session(
         skill_instructions=skill_instructions,
         message_queue=message_queue,
         interrupt_step=interrupt_step,
+        user_id=user_id,
+        source_platform=source_platform,
+        invocation_id=invocation_id,
     )
 
 

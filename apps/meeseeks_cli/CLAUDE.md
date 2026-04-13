@@ -76,6 +76,7 @@ If you add a new interactive flow, use `DialogFactory` instead of writing custom
 - `/fork [TAG]`: fork current session (dialog when TAG omitted).
 - `/plan on|off`: toggle action plan display.
 - `/skills [name]`: list available skills or show skill detail.
+- `/plugins [marketplace|install|uninstall]`: list installed plugins or manage them.
 - `/mcp [select|init]`: list MCP tools, filter, or scaffold config.
 - `/config init`: scaffold a config example file.
 - `/init`: scaffold both config and MCP example files.

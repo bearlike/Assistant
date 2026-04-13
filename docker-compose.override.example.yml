@@ -10,3 +10,14 @@ services:
       - ./docker/init.d:/app/docker/init.d:ro
       - /home/you/Projects/my-project:/home/you/Projects/my-project
       - /home/you/Projects/another-repo:/home/you/Projects/another-repo
+
+  # Uncomment and adjust if an upstream edge proxy / L7 gateway on a
+  # different host on your LAN needs to forward requests to /ide/ at
+  # this machine. The default in docker-compose.yml binds loopback-only
+  # (safe). Use ``!override`` so this list replaces the default instead
+  # of merging with it.
+  #
+  # ide-proxy:
+  #   ports: !override
+  #     - "0.0.0.0:5126:8080"         # all interfaces, or:
+  #     - "192.168.1.10:5126:8080"    # a specific LAN IP

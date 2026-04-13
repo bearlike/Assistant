@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CheckCircle2, XCircle, ChevronRight } from 'lucide-react';
 import { CopyButton } from './CopyButton';
 import { ModelLabel } from './ModelLabel';
+import { HighlightedCode } from './HighlightedCode';
 
 interface TerminalCardProps {
   command: string;
@@ -38,11 +39,10 @@ function countLines(text: string): number {
   return text.split('\n').length;
 }
 
-// Fixed dark backgrounds so the terminal stays dark in both light and dark themes.
-// --bash-bg and --surface-deep become white/cream in light mode, which breaks
-// the "always looks like a terminal" design intent.
-const TITLE_BG = 'bg-[hsl(220_5%_12%)]';   // ~#1c1d1e — dark chrome bar
-const BODY_BG = 'bg-[hsl(220_5%_7%)]';      // ~#101112 — deep terminal body
+// Theme-aware code surfaces — see --code-chrome / --code-body in src/index.css.
+// Both adapt automatically to light/dark mode.
+const TITLE_BG = 'bg-[hsl(var(--code-chrome))]';
+const BODY_BG = 'bg-[hsl(var(--code-body))]';
 
 export function TerminalCard({
   command,
@@ -62,7 +62,7 @@ export function TerminalCard({
 
   return (
     <div
-      className={`rounded-lg overflow-hidden font-mono border-l-[3px] transition-colors ${
+      className={`rounded-lg overflow-hidden font-mono border border-[hsl(var(--border))] border-l-[3px] transition-colors ${
         hasOutput ? 'cursor-pointer' : ''
       } ${
         isError ? 'border-l-red-500' : 'border-l-emerald-500/60'
@@ -74,14 +74,14 @@ export function TerminalCard({
         {/* Traffic-light dots */}
         <div className="flex items-center gap-1.5 shrink-0">
           <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-red-500' : 'bg-emerald-500'}`} />
-          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-red-500/30' : 'bg-white/15'}`} />
-          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-red-500/30' : 'bg-white/15'}`} />
+          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-red-500/30' : 'bg-[hsl(var(--code-fg-subtle))]/30'}`} />
+          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-red-500/30' : 'bg-[hsl(var(--code-fg-subtle))]/30'}`} />
         </div>
 
         {/* CWD tab title */}
         {cwd && (
           <span
-            className="text-[11px] text-white/50 truncate flex-1 min-w-0"
+            className="text-[11px] text-[hsl(var(--code-fg-muted))] truncate flex-1 min-w-0"
             title={cwd}
           >
             {shortenCwd(cwd)}
@@ -90,16 +90,16 @@ export function TerminalCard({
         {!cwd && <span className="flex-1" />}
 
         {/* Model + Agent badges */}
-        {model && <ModelLabel modelId={model} className="text-[10px] text-white/50" />}
+        {model && <ModelLabel modelId={model} className="text-[10px] text-[hsl(var(--code-fg-muted))]" />}
         {agentId && (
-          <span className="text-[10px] font-mono text-white/40 px-1 rounded bg-white/10">
+          <span className="text-[10px] font-mono text-[hsl(var(--code-fg-muted))] px-1 rounded bg-[hsl(var(--code-border))]">
             {agentId.slice(0, 6)}
           </span>
         )}
 
         {/* Duration */}
         {durationMs !== undefined && (
-          <span className="text-[10px] text-white/40 shrink-0 hidden sm:inline">
+          <span className="text-[10px] text-[hsl(var(--code-fg-subtle))] shrink-0 hidden sm:inline">
             {formatDuration(durationMs)}
           </span>
         )}
@@ -121,45 +121,45 @@ export function TerminalCard({
 
       {/* Terminal body */}
       <div className={BODY_BG}>
-        {/* Command line — always visible */}
+        {/* Command line — always visible, syntax-highlighted as bash */}
         <div className="group/copy relative px-3 py-2">
           <div className="flex items-center gap-2">
             <div className={`flex-1 min-w-0 ${expanded ? 'whitespace-pre-wrap break-all' : 'truncate'}`}>
-              <span className="text-emerald-400/70 select-none">$ </span>
-              <span className="text-white/90 text-xs">{command}</span>
+              <span className="text-[hsl(var(--code-prompt))] select-none">$ </span>
+              <HighlightedCode language="bash" code={command} className="text-xs" />
             </div>
             {/* Expand hint — shows line count and chevron when collapsed with output */}
             {hasOutput && !expanded && (
-              <span className="flex items-center gap-1 shrink-0 text-white/25">
+              <span className="flex items-center gap-1 shrink-0 text-[hsl(var(--code-fg-subtle))]">
                 <span className="text-[10px]">{outputLines} line{outputLines !== 1 ? 's' : ''}</span>
                 <ChevronRight className="w-3 h-3" />
               </span>
             )}
             {hasOutput && expanded && (
-              <ChevronRight className="w-3 h-3 shrink-0 text-white/25 rotate-90 transition-transform" />
+              <ChevronRight className="w-3 h-3 shrink-0 text-[hsl(var(--code-fg-subtle))] rotate-90 transition-transform" />
             )}
           </div>
-          <CopyButton text={command} className="absolute right-2 top-1.5 p-1 rounded text-white/40 hover:text-white/80 transition-all opacity-0 group-hover/copy:opacity-100 focus:opacity-100" />
+          <CopyButton text={command} className="absolute right-2 top-1.5 p-1 rounded text-[hsl(var(--code-fg-subtle))] hover:text-[hsl(var(--code-fg))] transition-all opacity-50 group-hover/copy:opacity-100 focus:opacity-100" />
         </div>
 
         {/* Output — expanded only */}
         {expanded && hasOutput && (
-          <div className="group/copy relative border-t border-white/5">
+          <div className="group/copy relative border-t border-[hsl(var(--code-border))]">
             <div className="px-3 py-2 max-h-[200px] sm:max-h-[300px] overflow-y-auto">
               {stdout && (
-                <pre className="text-xs text-white/75 whitespace-pre-wrap break-all leading-relaxed">
+                <pre className="text-xs text-[hsl(var(--code-fg))] whitespace-pre-wrap break-all leading-relaxed">
                   {stdout}
                 </pre>
               )}
               {stderr && (
-                <pre className="text-xs text-red-400/80 whitespace-pre-wrap break-all leading-relaxed mt-1">
+                <pre className="text-xs text-[hsl(var(--code-stderr))] whitespace-pre-wrap break-all leading-relaxed mt-1">
                   {stderr}
                 </pre>
               )}
             </div>
             <CopyButton
               text={[stdout, stderr].filter(Boolean).join('\n')}
-              className="absolute right-2 top-1.5 p-1 rounded text-white/40 hover:text-white/80 transition-all opacity-0 group-hover/copy:opacity-100 focus:opacity-100"
+              className="absolute right-2 top-1.5 p-1 rounded text-[hsl(var(--code-fg-subtle))] hover:text-[hsl(var(--code-fg))] transition-all opacity-50 group-hover/copy:opacity-100 focus:opacity-100"
             />
           </div>
         )}

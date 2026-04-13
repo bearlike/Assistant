@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from meeseeks_core.classes import ActionStep
@@ -33,9 +34,7 @@ class TestHookErrorIsolation:
         assert result.tool_id == "test_tool"
 
     def test_post_tool_use(self):
-        mgr = HookManager(
-            post_tool_use=[lambda s, r: (_ for _ in ()).throw(ValueError)]
-        )
+        mgr = HookManager(post_tool_use=[lambda s, r: (_ for _ in ()).throw(ValueError)])
         result = mgr.run_post_tool_use(_step(), MockSpeaker(content="ok"))
         assert result.content == "ok"
 
@@ -75,11 +74,11 @@ class TestHookErrorIsolation:
         mgr.run_on_session_end("s1", None)
 
     def test_on_compact(self):
-        def bad(*a, **kw):
+        def bad(session_id: str, **kwargs: Any) -> None:
             raise Exception("fail")
 
         mgr = HookManager(on_compact=[bad])
-        mgr.run_on_compact()
+        mgr.run_on_compact("test-session")
 
 
 # -- Chaining ---------------------------------------------------------------
@@ -89,12 +88,16 @@ class TestHookChaining:
     def test_pre_tool_chains(self):
         def h1(s):
             return ActionStep(
-                tool_id=s.tool_id + "_1", operation=s.operation, tool_input=s.tool_input,
+                tool_id=s.tool_id + "_1",
+                operation=s.operation,
+                tool_input=s.tool_input,
             )
 
         def h2(s):
             return ActionStep(
-                tool_id=s.tool_id + "_2", operation=s.operation, tool_input=s.tool_input,
+                tool_id=s.tool_id + "_2",
+                operation=s.operation,
+                tool_input=s.tool_input,
             )
 
         mgr = HookManager(pre_tool_use=[h1, h2])
@@ -130,7 +133,30 @@ class TestSessionLifecycleHooks:
     def test_on_compact_fires(self):
         cb = MagicMock()
         HookManager(on_compact=[cb]).run_on_compact("result")
-        cb.assert_called_once_with("result")
+        cb.assert_called_once_with(
+            "result",
+            summary="",
+            tokens_before=0,
+            tokens_saved=0,
+            events_summarized=0,
+        )
+
+    def test_on_compact_fires_with_kwargs(self):
+        cb = MagicMock()
+        HookManager(on_compact=[cb]).run_on_compact(
+            "s1",
+            summary="test summary",
+            tokens_before=10000,
+            tokens_saved=5000,
+            events_summarized=20,
+        )
+        cb.assert_called_once_with(
+            "s1",
+            summary="test summary",
+            tokens_before=10000,
+            tokens_saved=5000,
+            events_summarized=20,
+        )
 
 
 # -- Matcher ----------------------------------------------------------------

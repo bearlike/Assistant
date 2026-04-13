@@ -134,7 +134,6 @@ def _collect_target_paths(request: EditBlockRequest) -> dict[str, Path]:
     return targets
 
 
-
 def _format_summary(results, *, dry_run: bool) -> str:
     if not results:
         return "No SEARCH/REPLACE blocks found."

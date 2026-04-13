@@ -18,17 +18,10 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_MODULE_PATH = (
-    REPO_ROOT
-    / "packages"
-    / "meeseeks_core"
-    / "src"
-    / "meeseeks_core"
-    / "config.py"
+    REPO_ROOT / "packages" / "meeseeks_core" / "src" / "meeseeks_core" / "config.py"
 )
 SCHEMA_OUTPUT_PATH = REPO_ROOT / "configs" / "app.schema.json"
-SCHEMA_ID = (
-    "https://thekrishna.in/Assistant/latest/app.schema.json"
-)
+SCHEMA_ID = "https://thekrishna.in/Assistant/latest/app.schema.json"
 
 
 # ---------------------------------------------------------------------------
@@ -37,9 +30,7 @@ SCHEMA_ID = (
 def _ast_check() -> None:
     source = CONFIG_MODULE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(CONFIG_MODULE_PATH))
-    class_names = {
-        node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
-    }
+    class_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
     if "AppConfig" not in class_names:
         raise RuntimeError(
             f"AppConfig class not found in {CONFIG_MODULE_PATH}. "

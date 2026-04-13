@@ -5,19 +5,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from pydantic import BaseModel, Field
 
-from meeseeks_core.common import (
-    InstructionSource,
-    discover_all_instructions,
-    format_tool_input,
-    get_logger,
-)
+from meeseeks_core.common import format_tool_input, get_logger
 from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
 from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.llm import build_chat_model
@@ -132,21 +126,6 @@ class ContextBuilder:
     def __init__(self, session_store: SessionStoreBase) -> None:
         """Initialize the context builder."""
         self._session_store = session_store
-        self._instruction_cache: list[InstructionSource] | None = None
-        self._instruction_cache_cwd: str | None = None
-
-    def get_instructions(self, cwd: str | None = None) -> list[InstructionSource]:
-        """Get cached instruction sources, refreshing if CWD changed."""
-        effective_cwd = cwd or str(Path.cwd())
-        if self._instruction_cache is None or self._instruction_cache_cwd != effective_cwd:
-            self._instruction_cache = discover_all_instructions(effective_cwd)
-            self._instruction_cache_cwd = effective_cwd
-        return self._instruction_cache
-
-    def invalidate_cache(self) -> None:
-        """Clear all cached context."""
-        self._instruction_cache = None
-        self._instruction_cache_cwd = None
 
     def build(
         self,
@@ -171,7 +150,22 @@ class ContextBuilder:
         recent_limit = int(get_config_value("context", "recent_event_limit", default=8))
         recent_events = context_events[-recent_limit:] if recent_limit > 0 else []
         candidate_events = context_events[:-recent_limit] if recent_limit > 0 else context_events
-        budget = get_token_budget(events, summary, model_name)
+        # Anchor the first user event so long sessions cannot FIFO-evict the
+        # original task from recent_events. Cached prefix-friendly: the anchor
+        # renders into the SystemMessage's "Recent conversation:" block, which
+        # is inside the cacheable prefix rather than the per-turn HumanMessage.
+        first_user = next((e for e in context_events if e.get("type") == "user"), None)
+        if first_user is not None and first_user not in recent_events:
+            recent_events = [first_user, *recent_events]
+        from meeseeks_core.token_budget import read_last_input_tokens
+
+        last_input_tokens = read_last_input_tokens(list(events))
+        budget = get_token_budget(
+            events,
+            summary,
+            model_name,
+            last_input_tokens=last_input_tokens,
+        )
         selected_events: list[EventRecord] | None = None
         selection_threshold = float(get_config_value("context", "selection_threshold", default=0.8))
         if (
@@ -243,7 +237,7 @@ class ContextBuilder:
         handler = build_langfuse_handler(
             user_id="meeseeks-context",
             session_id=f"context-{os.getpid()}-{os.urandom(4).hex()}",
-            trace_name="meeseeks-context",
+            trace_name="context-select",
             version=get_version(),
             release=get_config_value("runtime", "envmode", default="Not Specified"),
         )
@@ -254,17 +248,17 @@ class ContextBuilder:
             if isinstance(metadata, dict) and metadata:
                 config["metadata"] = metadata
         try:
-            with langfuse_trace_span("context-select") as span:
-                if span is not None:
-                    try:
-                        span.update_trace(
-                            input={
-                                "user_query": user_query.strip(),
-                                "candidate_count": len(lines),
-                            }
-                        )
-                    except Exception:
-                        pass
+            with langfuse_trace_span(
+                "context-select",
+                metadata={
+                    "model": selector_model,
+                    "candidates": str(len(lines)),
+                },
+                input_data={
+                    "user_query": user_query.strip()[:200],
+                    "candidate_count": len(lines),
+                },
+            ) as span:
                 selection = (prompt | model | parser).invoke(
                     {"user_query": user_query.strip(), "candidates": candidates_text},
                     config=config or None,

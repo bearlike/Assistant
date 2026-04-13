@@ -1,6 +1,7 @@
-.PHONY: bootstrap lint lint-fix typecheck precommit-install vendor-aider
+.PHONY: bootstrap lint lint-fix typecheck precommit-install vendor-aider docs docs-build
 
 VENV ?= .venv
+DOCS_ADDR ?= 0.0.0.0:8000
 
 bootstrap:
 	uv venv $(VENV)
@@ -23,3 +24,9 @@ precommit-install:
 
 vendor-aider:
 	./scripts/vendor_aider.sh
+
+docs:
+	uv run --group docs mkdocs serve --dev-addr $(DOCS_ADDR)
+
+docs-build:
+	uv run --group docs mkdocs build --strict

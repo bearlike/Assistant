@@ -1,92 +1,93 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef } from "react";
 import { fetchEvents } from "../api/client";
 import { EventRecord } from "../types";
 import { logApiError } from "../utils/errors";
+
 const POLL_INTERVAL_MS = 1000;
+
+type State = {
+  events: EventRecord[];
+  running: boolean;
+  lastTs?: string;
+};
+
+function eventKey(event: EventRecord): string {
+  const payload =
+    event.payload && typeof event.payload === "object"
+      ? JSON.stringify(event.payload)
+      : String(event.payload ?? "");
+  return `${event.ts}|${event.type}|${payload}`;
+}
+
 export function useSessionEvents(sessionId?: string) {
-  const [events, setEvents] = useState<EventRecord[]>([]);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pollingEnabled, setPollingEnabled] = useState(true);
+  const qc = useQueryClient();
   const lastTsRef = useRef<string | undefined>(undefined);
-  const hasFetchedRef = useRef(false);
-  const reset = useCallback(() => {
-    setEvents([]);
-    setRunning(false);
-    setError(null);
-    setPollingEnabled(true);
+
+  const key = ["session-events", sessionId ?? ""] as const;
+
+  // Reset cursor whenever the session changes — the cached state is keyed
+  // by sessionId so the previous session's data stays in its own slot.
+  useEffect(() => {
     lastTsRef.current = undefined;
-    hasFetchedRef.current = false;
-  }, []);
-  const getEventKey = useCallback((event: EventRecord) => {
-    const payload =
-      event.payload && typeof event.payload === "object"
-        ? JSON.stringify(event.payload)
-        : String(event.payload ?? "");
-    return `${event.ts}|${event.type}|${payload}`;
-  }, []);
-  useEffect(() => {
-    reset();
-  }, [sessionId, reset]);
-  useEffect(() => {
-    if (!sessionId || !pollingEnabled) {
-      return;
-    }
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const payload = await fetchEvents(sessionId, lastTsRef.current);
-        if (cancelled) {
-          return;
-        }
-        hasFetchedRef.current = true;
-        setError(null);
-        if (payload.events.length) {
-          setEvents((prev) => {
-            const seen = new Set(prev.map(getEventKey));
-            const next = payload.events.filter(
-              (event) => !seen.has(getEventKey(event))
-            );
-            return next.length ? [...prev, ...next] : prev;
-          });
-          lastTsRef.current = payload.events[payload.events.length - 1].ts;
-        }
-        setRunning(payload.running);
-        if (!payload.running) {
-          setPollingEnabled(false);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          const message = logApiError("fetchEvents", err);
-          setError(message);
-          setRunning(false);
-          if (hasFetchedRef.current) {
-            setPollingEnabled(false);
-          }
-        }
-      }
-    };
-    const interval = window.setInterval(() => {
-      void poll();
-    }, POLL_INTERVAL_MS);
-    void poll();
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [sessionId, pollingEnabled, getEventKey]);
-  const resume = useCallback(() => {
-    if (!sessionId) {
-      return;
-    }
-    setPollingEnabled(true);
   }, [sessionId]);
+
+  const q = useQuery<State>({
+    queryKey: key,
+    enabled: Boolean(sessionId),
+    queryFn: async () => {
+      if (!sessionId) {
+        return { events: [], running: false, lastTs: undefined } as State;
+      }
+      const prev =
+        qc.getQueryData<State>(key) ??
+        ({ events: [], running: false, lastTs: undefined } as State);
+      const payload = await fetchEvents(sessionId, lastTsRef.current);
+      let nextEvents = prev.events;
+      let nextLastTs = prev.lastTs;
+      if (payload.events.length) {
+        const seen = new Set(prev.events.map(eventKey));
+        const fresh = payload.events.filter((e) => !seen.has(eventKey(e)));
+        if (fresh.length) {
+          nextEvents = [...prev.events, ...fresh];
+        }
+        nextLastTs = payload.events[payload.events.length - 1].ts;
+        lastTsRef.current = nextLastTs;
+      }
+      return { events: nextEvents, running: payload.running, lastTs: nextLastTs };
+    },
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      // Stop polling once the session is no longer running. `resume()` flips
+      // the cache back into a "needs refetch" state to wake polling up.
+      return data?.running ? POLL_INTERVAL_MS : false;
+    },
+    staleTime: 0,
+  });
+
+  const reset = useCallback(() => {
+    lastTsRef.current = undefined;
+    qc.setQueryData<State>(key, {
+      events: [],
+      running: false,
+      lastTs: undefined,
+    });
+    void qc.invalidateQueries({ queryKey: key });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qc, sessionId]);
+
+  const resume = useCallback(() => {
+    if (!sessionId) return;
+    void qc.invalidateQueries({ queryKey: key });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qc, sessionId]);
+
   return {
-    events,
-    running,
-    error,
+    events: q.data?.events ?? [],
+    running: q.data?.running ?? false,
+    error: q.error ? logApiError("fetchEvents", q.error) : null,
+    pollingEnabled: q.data?.running ?? true,
     reset,
     resume,
-    pollingEnabled
   };
 }

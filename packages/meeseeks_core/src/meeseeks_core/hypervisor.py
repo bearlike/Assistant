@@ -42,12 +42,12 @@ if TYPE_CHECKING:
 # Expanded from 4 to 6 states: added 'submitted' (pre-execution) and
 # 'rejected' (declined at admission).
 AgentStatus = Literal[
-    "submitted",   # Registered, awaiting execution start
-    "running",     # Actively executing tools
-    "completed",   # Finished successfully (terminal)
-    "failed",      # Finished with error (terminal)
-    "cancelled",   # Cancelled by parent/timeout (terminal)
-    "rejected",    # Declined at admission (terminal)
+    "submitted",  # Registered, awaiting execution start
+    "running",  # Actively executing tools
+    "completed",  # Finished successfully (terminal)
+    "failed",  # Finished with error (terminal)
+    "cancelled",  # Cancelled by parent/timeout (terminal)
+    "rejected",  # Declined at admission (terminal)
 ]
 
 
@@ -66,12 +66,12 @@ class AgentResult:
     snapshot — even on failure, partial work survives for retry.
     """
 
-    content: str                  # Primary output text
-    status: str                   # completed | failed | partial | cannot_solve
-    steps_used: int               # Tool steps consumed
-    artifacts: list[str] = field(default_factory=list)   # Files touched
-    warnings: list[str] = field(default_factory=list)    # Non-fatal issues
-    summary: str = ""             # Compressed CU for parent context
+    content: str  # Primary output text
+    status: str  # completed | failed | partial | cannot_solve
+    steps_used: int  # Tool steps consumed
+    artifacts: list[str] = field(default_factory=list)  # Files touched
+    warnings: list[str] = field(default_factory=list)  # Non-fatal issues
+    summary: str = ""  # Compressed CU for parent context
 
 
 @dataclass(slots=True)
@@ -110,6 +110,13 @@ class AgentHandle:
     result: AgentResult | None = None
     # Ref: [DeepMind-Delegation §4.5] Auto-updated progress for monitoring
     progress_note: str | None = None
+    # Context compaction tracking — visible in agent tree rendering.
+    compaction_count: int = 0
+    last_compacted_at: float | None = None
+    # Token usage — accumulated from LLM response.usage_metadata per call.
+    # Written only by the owning ToolUseLoop coroutine; read by CLI/API.
+    input_tokens: int = 0
+    output_tokens: int = 0
     # Signaled when agent reaches a terminal state (completed/failed/cancelled).
     done_event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -270,10 +277,7 @@ class AgentHypervisor:
         Ref: [AgentCgroup §4.2] Graduated enforcement — this is the trigger
         check. The response (NL warning injection) happens in ToolUseLoop.
         """
-        return (
-            self._session_step_budget > 0
-            and self._total_steps >= self._session_step_budget
-        )
+        return self._session_step_budget > 0 and self._total_steps >= self._session_step_budget
 
     def budget_remaining(self) -> int:
         """Steps remaining in the session budget (0 = unlimited)."""
@@ -290,7 +294,8 @@ class AgentHypervisor:
         now = time.monotonic()
         async with self._lock:
             return [
-                h for h in self._agents.values()
+                h
+                for h in self._agents.values()
                 if h.status == "running"
                 and h.last_step_at is not None
                 and (now - h.last_step_at) > threshold
@@ -321,12 +326,22 @@ class AgentHypervisor:
             handle.message_queue.put_nowait(message)
             return None
 
+    async def record_compaction(self, agent_id: str) -> None:
+        """Record that an agent compacted its context."""
+        async with self._lock:
+            handle = self._agents.get(agent_id)
+            if handle:
+                handle.compaction_count += 1
+                handle.last_compacted_at = time.monotonic()
+
     # ------------------------------------------------------------------
     # Global eye  (Ref: [DeepMind-Delegation §4.5])
     # ------------------------------------------------------------------
 
     async def render_agent_tree(
-        self, *, exclude_agent_id: str | None = None,
+        self,
+        *,
+        exclude_agent_id: str | None = None,
     ) -> str:
         """Render a concise text summary of the agent tree for the root's system prompt.
 
@@ -341,10 +356,7 @@ class AgentHypervisor:
         async with self._lock:
             if not self._agents:
                 return ""
-            visible = [
-                h for h in self._agents.values()
-                if h.agent_id != exclude_agent_id
-            ]
+            visible = [h for h in self._agents.values() if h.agent_id != exclude_agent_id]
             if not visible:
                 return ""
             counts: dict[str, int] = {}
@@ -374,10 +386,11 @@ class AgentHypervisor:
                     extra = f" | result({h.result.status}): {h.result.summary[:120]}"
                 elif h.progress_note:
                     extra = f" | progress: {h.progress_note[:120]}"
+                compact_marker = f" | compacted x{h.compaction_count}" if h.compaction_count else ""
                 task_preview = h.task_description[:80]
                 lines.append(
                     f"{indent}- [{h.agent_id[:8]}] {h.status}: "
-                    f"\"{task_preview}\" ({step_info}{status_marker}{extra})"
+                    f'"{task_preview}" ({step_info}{status_marker}{compact_marker}{extra})'
                 )
             return "\n".join(lines)
 
@@ -394,19 +407,18 @@ class AgentHypervisor:
         terminal = {"completed", "failed", "cancelled"}
         async with self._lock:
             return [
-                h for h in self._agents.values()
-                if h.parent_id == parent_id
-                and h.status in terminal
-                and h.result is not None
+                h
+                for h in self._agents.values()
+                if h.parent_id == parent_id and h.status in terminal and h.result is not None
             ]
 
     async def collect_running(self, parent_id: str) -> list[AgentHandle]:
         """Return children of *parent_id* that are still active."""
         async with self._lock:
             return [
-                h for h in self._agents.values()
-                if h.parent_id == parent_id
-                and h.status in ("submitted", "running")
+                h
+                for h in self._agents.values()
+                if h.parent_id == parent_id and h.status in ("submitted", "running")
             ]
 
     async def send_to_parent(self, child_agent_id: str, message: str) -> str | None:
@@ -464,9 +476,7 @@ class AgentHypervisor:
         Phase 3: Force-mark any still-pending agents as cancelled.
         """
         async with self._lock:
-            running = [
-                h for h in self._agents.values() if h.status == "running"
-            ]
+            running = [h for h in self._agents.values() if h.status == "running"]
 
         if not running:
             async with self._lock:
@@ -479,13 +489,12 @@ class AgentHypervisor:
                 handle.asyncio_task.cancel()
 
         # Phase 2: Wait with timeout.
-        tasks = [
-            h.asyncio_task for h in running
-            if h.asyncio_task and not h.asyncio_task.done()
-        ]
+        tasks = [h.asyncio_task for h in running if h.asyncio_task and not h.asyncio_task.done()]
         if tasks:
             done, pending = await asyncio.wait(
-                tasks, timeout=timeout, return_when=asyncio.ALL_COMPLETED,
+                tasks,
+                timeout=timeout,
+                return_when=asyncio.ALL_COMPLETED,
             )
 
             # Phase 3: Force-mark any still-pending as cancelled.

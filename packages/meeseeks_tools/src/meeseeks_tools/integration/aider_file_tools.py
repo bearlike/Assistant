@@ -19,8 +19,8 @@ from meeseeks_tools.vendor.aider.io import InputOutput
 class ReadFileRequest:
     path: str
     root: str
-    offset: int = 0              # 0-based start line
-    limit: int | None = None     # max lines to read (None → default 2000)
+    offset: int = 0  # 0-based start line
+    limit: int | None = None  # max lines to read (None → default 2000)
     max_bytes: int | None = None  # byte truncation (backwards compat)
 
 
@@ -64,7 +64,11 @@ def _parse_read_request(action_step: ActionStep | None) -> ReadFileRequest:
             except (TypeError, ValueError):
                 max_bytes = None
         return ReadFileRequest(
-            path=path, root=root, offset=offset, limit=limit, max_bytes=max_bytes,
+            path=path,
+            root=root,
+            offset=offset,
+            limit=limit,
+            max_bytes=max_bytes,
         )
     raise ValueError("Tool input must be a string path or an object payload.")
 
@@ -123,7 +127,7 @@ class ReadFileTool(AbstractTool):
 
         # Apply offset
         if request.offset > 0:
-            lines = lines[request.offset:]
+            lines = lines[request.offset :]
 
         # Apply limit (default 2000)
         effective_limit = request.limit if request.limit is not None else DEFAULT_LINE_LIMIT

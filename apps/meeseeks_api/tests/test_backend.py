@@ -308,9 +308,7 @@ def test_sessions_create_hidden_until_user_event(monkeypatch, tmp_path):
     sessions = listing.get_json()["sessions"]
     assert all(item["session_id"] != session_id for item in sessions)
 
-    backend.session_store.append_event(
-        session_id, {"type": "user", "payload": {"text": "hello"}}
-    )
+    backend.session_store.append_event(session_id, {"type": "user", "payload": {"text": "hello"}})
     listing = client.get(
         "/api/sessions",
         headers={"X-API-KEY": backend.MASTER_API_TOKEN},
@@ -904,18 +902,22 @@ def _nc_payload(
     thread_id: int | None = None,
 ) -> str:
     obj = {
-        "type": "Note", "id": message_id, "name": "message",
+        "type": "Note",
+        "id": message_id,
+        "name": "message",
         "content": json.dumps({"message": message, "parameters": {}}),
         "mediaType": "text/markdown",
     }
     if thread_id is not None:
         obj["threadId"] = thread_id
-    return json.dumps({
-        "type": "Create",
-        "actor": {"type": "Person", "id": "users/alice", "name": "Alice"},
-        "object": obj,
-        "target": {"type": "Collection", "id": "room1", "name": "General"},
-    })
+    return json.dumps(
+        {
+            "type": "Create",
+            "actor": {"type": "Person", "id": "users/alice", "name": "Alice"},
+            "object": obj,
+            "target": {"type": "Collection", "id": "room1", "name": "General"},
+        }
+    )
 
 
 def _setup_nc_channel(tmp_path, monkeypatch):
@@ -989,8 +991,7 @@ def test_webhook_creates_session(monkeypatch, tmp_path):
 
     # Context event was injected
     events = backend.session_store.load_transcript(session_id)
-    ctx = next(e for e in events if e.get("type") == "context"
-               and "sender" in e.get("payload", {}))
+    ctx = next(e for e in events if e.get("type") == "context" and "sender" in e.get("payload", {}))
     assert ctx["payload"]["source_platform"] == "nextcloud-talk"
     assert ctx["payload"]["channel_id"] == "room1"
     assert ctx["payload"]["sender"] == "Alice"
@@ -1091,8 +1092,7 @@ def test_webhook_no_mention_ignored(monkeypatch, tmp_path):
     client = backend.app.test_client()
 
     started = []
-    monkeypatch.setattr(backend.runtime, "start_async",
-                        lambda **kw: started.append(1) or True)
+    monkeypatch.setattr(backend.runtime, "start_async", lambda **kw: started.append(1) or True)
 
     body = _nc_payload(message="Just chatting", message_id="600")
     resp = client.post("/api/webhooks/nextcloud-talk", data=body, headers=_nc_sign(body))
@@ -1116,8 +1116,7 @@ def _send_command(client, monkeypatch, message, message_id="610"):
 
     monkeypatch.setattr(adapter, "send_response", capture_send)
     started = []
-    monkeypatch.setattr(backend.runtime, "start_async",
-                        lambda **kw: started.append(1) or True)
+    monkeypatch.setattr(backend.runtime, "start_async", lambda **kw: started.append(1) or True)
 
     body = _nc_payload(message=message, message_id=message_id)
     resp = client.post("/api/webhooks/nextcloud-talk", data=body, headers=_nc_sign(body))
@@ -1171,9 +1170,7 @@ def test_webhook_new_command(monkeypatch, tmp_path):
     assert session_a is not None
 
     # /new creates session B — capture the response
-    resp, responses, _ = _send_command(
-        client, monkeypatch, "@Meeseeks /new", message_id="621"
-    )
+    resp, responses, _ = _send_command(client, monkeypatch, "@Meeseeks /new", message_id="621")
     assert resp.status_code == 200
     assert len(responses) == 1
     assert "Fresh conversation" in responses[0]
@@ -1191,11 +1188,19 @@ def test_webhook_switch_project_valid(monkeypatch, tmp_path):
 
     project_dir = str(tmp_path / "my-project")
     os.makedirs(project_dir, exist_ok=True)
-    monkeypatch.setattr(ch_routes, "get_config", lambda: type(
-        "Cfg", (), {"projects": {
-            "test-proj": ProjectConfig(path=project_dir, description="Test"),
-        }}
-    )())
+    monkeypatch.setattr(
+        ch_routes,
+        "get_config",
+        lambda: type(
+            "Cfg",
+            (),
+            {
+                "projects": {
+                    "test-proj": ProjectConfig(path=project_dir, description="Test"),
+                }
+            },
+        )(),
+    )
 
     # Switch to the project
     body = _nc_payload(message="@Meeseeks /switch-project test-proj", message_id="630")
@@ -1205,15 +1210,17 @@ def test_webhook_switch_project_valid(monkeypatch, tmp_path):
     # Verify context event was written
     session_id = backend.session_store.resolve_tag("nextcloud-talk:room:room1")
     events = backend.session_store.load_transcript(session_id)
-    project_ctx = [e for e in events if e.get("type") == "context"
-                   and "active_project_cwd" in e.get("payload", {})]
+    project_ctx = [
+        e
+        for e in events
+        if e.get("type") == "context" and "active_project_cwd" in e.get("payload", {})
+    ]
     assert len(project_ctx) == 1
     assert project_ctx[0]["payload"]["active_project_cwd"] == project_dir
 
     # Now send a real query — cwd should be read from the context event
     captured = {}
-    monkeypatch.setattr(backend.runtime, "start_async",
-                        lambda **kw: captured.update(kw) or True)
+    monkeypatch.setattr(backend.runtime, "start_async", lambda **kw: captured.update(kw) or True)
 
     body2 = _nc_payload(message="@Meeseeks list files", message_id="631")
     client.post("/api/webhooks/nextcloud-talk", data=body2, headers=_nc_sign(body2))
@@ -1240,13 +1247,20 @@ def test_webhook_non_create_event_acknowledged(monkeypatch, tmp_path):
     _setup_nc_channel(tmp_path, monkeypatch)
     client = backend.app.test_client()
 
-    body = json.dumps({
-        "type": "Delete",
-        "actor": {"type": "Person", "id": "users/alice", "name": "Alice"},
-        "object": {"type": "Note", "id": "500", "name": "msg", "content": "{}",
-                   "mediaType": "text/plain"},
-        "target": {"type": "Collection", "id": "room1", "name": "General"},
-    })
+    body = json.dumps(
+        {
+            "type": "Delete",
+            "actor": {"type": "Person", "id": "users/alice", "name": "Alice"},
+            "object": {
+                "type": "Note",
+                "id": "500",
+                "name": "msg",
+                "content": "{}",
+                "mediaType": "text/plain",
+            },
+            "target": {"type": "Collection", "id": "room1", "name": "General"},
+        }
+    )
     headers = _nc_sign(body)
     resp = client.post("/api/webhooks/nextcloud-talk", data=body, headers=headers)
     assert resp.status_code == 200

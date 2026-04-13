@@ -69,22 +69,15 @@ _INLINE_STYLES: dict[str, str] = {
         "'Liberation Mono',Menlo,monospace;font-size:13px;line-height:1.45;"
     ),
     "code": (
-        "font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,"
-        "monospace;font-size:13px;"
+        "font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:13px;"
     ),
-    "blockquote": (
-        "border-left:4px solid #ddd;margin:0;padding:0 16px;color:#666;"
-    ),
-    "table": (
-        "border-collapse:collapse;width:100%;margin:16px 0;"
-    ),
+    "blockquote": ("border-left:4px solid #ddd;margin:0;padding:0 16px;color:#666;"),
+    "table": ("border-collapse:collapse;width:100%;margin:16px 0;"),
     "th": (
         "border:1px solid #ddd;padding:8px 12px;text-align:left;"
         "background-color:#f9f9f9;font-weight:600;"
     ),
-    "td": (
-        "border:1px solid #ddd;padding:8px 12px;"
-    ),
+    "td": ("border:1px solid #ddd;padding:8px 12px;"),
     "a": "color:#0366d6;text-decoration:none;",
     "h1": "font-size:24px;margin:24px 0 8px;font-weight:600;",
     "h2": "font-size:20px;margin:20px 0 8px;font-weight:600;",
@@ -233,25 +226,25 @@ class EmailAdapter:
         self._username = username
         self._password = password
         self._from_address = from_address or username
-        self._allowed: set[str] = {
-            s.lower() for s in (allowed_senders or [])
-        }
-        self._allowed_recipients: set[str] = {
-            r.lower() for r in (allowed_recipients or [])
-        }
+        self._allowed: set[str] = {s.lower() for s in (allowed_senders or [])}
+        self._allowed_recipients: set[str] = {r.lower() for r in (allowed_recipients or [])}
         # Thread metadata for constructing reply headers
         self._thread_meta: dict[str, _ThreadMeta] = {}
 
     # -- ChannelAdapter protocol stubs (not used for polled channels) --
 
     def verify_request(
-        self, headers: dict[str, str], body: bytes,
+        self,
+        headers: dict[str, str],
+        body: bytes,
     ) -> bool:
         """Always True — email is polled, not pushed via webhook."""
         return True
 
     def parse_inbound(
-        self, headers: dict[str, str], body: bytes,
+        self,
+        headers: dict[str, str],
+        body: bytes,
     ) -> InboundMessage | None:
         """Not used by the IMAP poller.  Returns None."""
         return None
@@ -280,7 +273,8 @@ class EmailAdapter:
             self._allowed_recipients & {r.lower() for r in recipients}
         ):
             logger.debug(
-                "Email to %s rejected (no allowed_recipients match)", recipients,
+                "Email to %s rejected (no allowed_recipients match)",
+                recipients,
             )
             return None
 
@@ -344,7 +338,9 @@ class EmailAdapter:
             return mime_msg["Message-ID"]
         except Exception:
             logger.warning(
-                "Failed to send email to %s", recipient, exc_info=True,
+                "Failed to send email to %s",
+                recipient,
+                exc_info=True,
             )
             return None
 
@@ -414,10 +410,13 @@ class EmailAdapter:
         msg = MIMEMultipart("alternative")
         # Order: text/plain, reaction JSON, text/html (Gmail recommendation)
         msg.attach(MIMEText(f"Reacted with {emoji}", "plain", "utf-8"))
-        msg.attach(MIMEText(
-            json.dumps({"emoji": emoji, "version": 1}),
-            "vnd.google.email-reaction+json", "utf-8",
-        ))
+        msg.attach(
+            MIMEText(
+                json.dumps({"emoji": emoji, "version": 1}),
+                "vnd.google.email-reaction+json",
+                "utf-8",
+            )
+        )
         msg.attach(MIMEText(f"<p>Reacted with {emoji}</p>", "html", "utf-8"))
         self._build_thread_headers(msg, channel_id, thread_id, reply_to)
 
@@ -484,7 +483,9 @@ class EmailPoller:
             return
         self._stop_event.clear()
         self._thread = threading.Thread(
-            target=self._poll_loop, daemon=True, name="email-poller",
+            target=self._poll_loop,
+            daemon=True,
+            name="email-poller",
         )
         self._thread.start()
 
@@ -499,7 +500,9 @@ class EmailPoller:
     def _connect(self) -> imapclient.IMAPClient:
         """Create and authenticate an IMAP connection."""
         client = imapclient.IMAPClient(
-            self._imap_host, port=self._imap_port, ssl=self._imap_ssl,
+            self._imap_host,
+            port=self._imap_port,
+            ssl=self._imap_ssl,
         )
         client.login(self._username, self._password)
         client.select_folder(self._mailbox)
@@ -517,7 +520,9 @@ class EmailPoller:
                     backoff = 5  # Reset backoff on successful connect
                     logger.info(
                         "Email poller connected to %s:%d/%s",
-                        self._imap_host, self._imap_port, self._mailbox,
+                        self._imap_host,
+                        self._imap_port,
+                        self._mailbox,
                     )
 
                 uids = client.search(["UNSEEN"])
@@ -530,7 +535,8 @@ class EmailPoller:
             except Exception:
                 logger.warning(
                     "Email poller error (reconnecting in %ds)",
-                    backoff, exc_info=True,
+                    backoff,
+                    exc_info=True,
                 )
                 client = None
                 self._stop_event.wait(backoff)
@@ -565,5 +571,7 @@ class EmailPoller:
             client.add_flags([uid], [imapclient.SEEN])
         except Exception:
             logger.warning(
-                "Failed to process email UID %s", uid, exc_info=True,
+                "Failed to process email UID %s",
+                uid,
+                exc_info=True,
             )

@@ -99,6 +99,7 @@ class AgentDisplayManager:
                 state.last_tool = handle.last_tool_id
                 state.error = str(handle.error)[:100] if handle.error else None
                 state.stopped_at = handle.stopped_at
+                state.token_count = handle.input_tokens + handle.output_tokens
 
     # ------------------------------------------------------------------
     # Tool execution hooks (pre_tool_use / post_tool_use)

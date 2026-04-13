@@ -276,20 +276,14 @@ class TestShellCommandAllowlist:
         assert is_shell_command_plan_safe("git status", ["git status"]) is True
 
     def test_multi_token_prefix_with_args(self):
-        assert is_shell_command_plan_safe(
-            "git diff HEAD~5..HEAD --stat", ["git diff"]
-        ) is True
+        assert is_shell_command_plan_safe("git diff HEAD~5..HEAD --stat", ["git diff"]) is True
 
     def test_matches_any_in_list(self):
-        assert is_shell_command_plan_safe(
-            "find . -name '*.py'", ["ls", "find", "grep"]
-        ) is True
+        assert is_shell_command_plan_safe("find . -name '*.py'", ["ls", "find", "grep"]) is True
 
     def test_quoted_arg_tokenization(self):
         # shlex correctly parses the quoted regex — still matches "grep"
-        assert is_shell_command_plan_safe(
-            'grep -rn "class Foo" .', ["grep"]
-        ) is True
+        assert is_shell_command_plan_safe('grep -rn "class Foo" .', ["grep"]) is True
 
     # ---- Word-boundary / prefix rejection -----------------------------
 
@@ -329,9 +323,7 @@ class TestShellCommandAllowlist:
         assert is_shell_command_plan_safe("find . -type f &", ["find"]) is False
 
     def test_command_substitution_dollar_rejected(self):
-        assert is_shell_command_plan_safe(
-            "cat $(cat /etc/passwd)", ["cat"]
-        ) is False
+        assert is_shell_command_plan_safe("cat $(cat /etc/passwd)", ["cat"]) is False
 
     def test_command_substitution_backtick_rejected(self):
         assert is_shell_command_plan_safe("echo `whoami`", ["echo"]) is False
@@ -371,48 +363,32 @@ class TestQuotedMetacharAllowed:
     """
 
     def test_quoted_alternation_allowed(self):
-        assert is_shell_command_plan_safe(
-            r'grep -n "JAZZ\|BREEZY" file.py', ["grep"]
-        ) is True
+        assert is_shell_command_plan_safe(r'grep -n "JAZZ\|BREEZY" file.py', ["grep"]) is True
 
     def test_quoted_dollar_anchor_allowed(self):
-        assert is_shell_command_plan_safe(
-            'grep -n "end$" file.py', ["grep"]
-        ) is True
+        assert is_shell_command_plan_safe('grep -n "end$" file.py', ["grep"]) is True
 
     def test_quoted_ampersand_in_find_allowed(self):
-        assert is_shell_command_plan_safe(
-            'find . -name "foo&bar.py"', ["find"]
-        ) is True
+        assert is_shell_command_plan_safe('find . -name "foo&bar.py"', ["find"]) is True
 
     def test_git_log_grep_quoted_alternation_allowed(self):
-        assert is_shell_command_plan_safe(
-            r'git log --grep="fix\|feat"', ["git log"]
-        ) is True
+        assert is_shell_command_plan_safe(r'git log --grep="fix\|feat"', ["git log"]) is True
 
     def test_single_quoted_metachar_allowed(self):
-        assert is_shell_command_plan_safe(
-            "grep 'a|b' file.py", ["grep"]
-        ) is True
+        assert is_shell_command_plan_safe("grep 'a|b' file.py", ["grep"]) is True
 
     def test_nested_quotes_allowed(self):
         # Single quote inside double quotes is literal — no toggle.
         # Dollar sign inside double quotes is shell-data, not our concern.
-        assert is_shell_command_plan_safe(
-            'grep "it\'s $HOME" file', ["grep"]
-        ) is True
+        assert is_shell_command_plan_safe('grep "it\'s $HOME" file', ["grep"]) is True
 
     def test_quoted_redirect_char_allowed(self):
-        assert is_shell_command_plan_safe(
-            'grep "<tag>" file.html', ["grep"]
-        ) is True
+        assert is_shell_command_plan_safe('grep "<tag>" file.html', ["grep"]) is True
 
     def test_escaped_metachar_outside_quotes_still_rejected(self):
         # Backslash-escaped metachar at the command level is a second
         # evasion syntax and is intentionally still rejected.
-        assert is_shell_command_plan_safe(
-            r"echo foo\|bar", ["echo"]
-        ) is False
+        assert is_shell_command_plan_safe(r"echo foo\|bar", ["echo"]) is False
 
     def test_trailing_backslash_does_not_crash(self):
         # Walker must not index past end of string. shlex.split raises
@@ -451,7 +427,8 @@ class TestPlanModeSchemaFiltering:
         shell_spec = _make_spec("aider_shell_tool", read_only=False)
         loop = self._make_loop(current_mode="plan")
         schemas = loop._build_tool_schemas_for_mode(
-            [read_spec, list_spec, edit_spec, shell_spec], "plan",
+            [read_spec, list_spec, edit_spec, shell_spec],
+            "plan",
         )
         names = {s["function"]["name"] for s in schemas}
         assert "read_file" in names
@@ -464,7 +441,8 @@ class TestPlanModeSchemaFiltering:
         shell_spec = _make_spec("aider_shell_tool", read_only=False)
         loop = self._make_loop(current_mode="act")
         schemas = loop._build_tool_schemas_for_mode(
-            [read_spec, shell_spec], "act",
+            [read_spec, shell_spec],
+            "act",
         )
         names = {s["function"]["name"] for s in schemas}
         assert names == {"read_file", "aider_shell_tool"}
@@ -475,7 +453,8 @@ class TestPlanModeSchemaFiltering:
         loop = self._make_loop(current_mode="plan")
         with _patch_plan_config(shell_allowlist=["ls"], allow_mcp=False):
             schemas = loop._build_tool_schemas_for_mode(
-                [read_spec, shell_spec], "plan",
+                [read_spec, shell_spec],
+                "plan",
             )
         names = {s["function"]["name"] for s in schemas}
         assert "aider_shell_tool" in names
@@ -487,7 +466,8 @@ class TestPlanModeSchemaFiltering:
         loop = self._make_loop(current_mode="plan")
         with _patch_plan_config(shell_allowlist=[], allow_mcp=False):
             schemas = loop._build_tool_schemas_for_mode(
-                [read_spec, shell_spec], "plan",
+                [read_spec, shell_spec],
+                "plan",
             )
         names = {s["function"]["name"] for s in schemas}
         assert "aider_shell_tool" not in names
@@ -498,7 +478,8 @@ class TestPlanModeSchemaFiltering:
         loop = self._make_loop(current_mode="plan")
         with _patch_plan_config(shell_allowlist=[], allow_mcp=True):
             schemas = loop._build_tool_schemas_for_mode(
-                [read_spec, mcp_spec], "plan",
+                [read_spec, mcp_spec],
+                "plan",
             )
         names = {s["function"]["name"] for s in schemas}
         assert "mcp__devin__ask_question" in names
@@ -509,7 +490,8 @@ class TestPlanModeSchemaFiltering:
         loop = self._make_loop(current_mode="plan")
         with _patch_plan_config(shell_allowlist=[], allow_mcp=False):
             schemas = loop._build_tool_schemas_for_mode(
-                [read_spec, mcp_spec], "plan",
+                [read_spec, mcp_spec],
+                "plan",
             )
         names = {s["function"]["name"] for s in schemas}
         assert "mcp__devin__ask_question" not in names
@@ -525,7 +507,8 @@ class TestPlanModeSchemaFiltering:
         loop = self._make_loop(current_mode="plan")
         with _patch_plan_config(shell_allowlist=[], allow_mcp=False):
             schemas = loop._build_tool_schemas_for_mode(
-                [read_spec, edit_spec, shell_spec, mcp_spec], "plan",
+                [read_spec, edit_spec, shell_spec, mcp_spec],
+                "plan",
             )
         names = {s["function"]["name"] for s in schemas}
         assert names == {"read_file"}
@@ -536,7 +519,8 @@ class TestPlanModeSchemaFiltering:
         edit_spec = _make_edit_spec()
         loop = self._make_loop(current_mode="plan")
         tool_schemas = loop._build_tool_schemas_for_mode(
-            [read_spec, edit_spec], "plan",
+            [read_spec, edit_spec],
+            "plan",
         )
         with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
             model_obj = MagicMock()
@@ -644,7 +628,8 @@ class TestPlanModePermission:
             tool_input={"command": "rm -rf /"},
         )
         with _patch_plan_config(
-            shell_allowlist=["ls", "git log"], allow_mcp=False,
+            shell_allowlist=["ls", "git log"],
+            allow_mcp=False,
         ):
             assert loop._check_permission(step) is False
         msg = str(step.result.content) if step.result else ""
@@ -769,7 +754,7 @@ class TestExitPlanModeHandler:
         return sid
 
     def _cleanup(self, sid: str) -> None:
-        for name in (os.listdir(plan_dir_for(sid)) or []):
+        for name in os.listdir(plan_dir_for(sid)) or []:
             os.remove(os.path.join(plan_dir_for(sid), name))
         shutil.rmtree(plan_dir_for(sid), ignore_errors=True)
 
@@ -982,7 +967,8 @@ class TestPlanModeHypervisorIntegration:
 
             # spawn_agent should NOT have been denied by permission
             permission_denials = [
-                e for e in events
+                e
+                for e in events
                 if e.get("type") == "permission"
                 and e.get("payload", {}).get("decision") == "deny"
                 and e.get("payload", {}).get("tool_id") == "spawn_agent"
@@ -1087,18 +1073,28 @@ class TestEpisodicPlanApproval:
     def test_approve_emits_event(self):
         runtime = self._make_runtime()
         sid = runtime.resolve_session()
-        runtime.session_store.append_event(sid, {
-            "type": "user", "payload": {"text": "plan something"}
-        })
-        runtime.session_store.append_event(sid, {
-            "type": "plan_proposed",
-            "payload": {"plan_path": "/tmp/test/plan.md", "revision": 1,
-                        "content": "# Plan", "summary": "test"},
-        })
-        runtime.session_store.append_event(sid, {
-            "type": "completion",
-            "payload": {"done": True, "done_reason": "awaiting_approval"},
-        })
+        runtime.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "plan something"}}
+        )
+        runtime.session_store.append_event(
+            sid,
+            {
+                "type": "plan_proposed",
+                "payload": {
+                    "plan_path": "/tmp/test/plan.md",
+                    "revision": 1,
+                    "content": "# Plan",
+                    "summary": "test",
+                },
+            },
+        )
+        runtime.session_store.append_event(
+            sid,
+            {
+                "type": "completion",
+                "payload": {"done": True, "done_reason": "awaiting_approval"},
+            },
+        )
         assert not runtime.is_running(sid)
         ok = runtime.approve_plan(sid)
         assert ok is True
@@ -1110,18 +1106,28 @@ class TestEpisodicPlanApproval:
     def test_reject_emits_event_no_new_run(self):
         runtime = self._make_runtime()
         sid = runtime.resolve_session()
-        runtime.session_store.append_event(sid, {
-            "type": "user", "payload": {"text": "plan something"}
-        })
-        runtime.session_store.append_event(sid, {
-            "type": "plan_proposed",
-            "payload": {"plan_path": "/tmp/test/plan.md", "revision": 1,
-                        "content": "# Plan", "summary": ""},
-        })
-        runtime.session_store.append_event(sid, {
-            "type": "completion",
-            "payload": {"done": True, "done_reason": "awaiting_approval"},
-        })
+        runtime.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "plan something"}}
+        )
+        runtime.session_store.append_event(
+            sid,
+            {
+                "type": "plan_proposed",
+                "payload": {
+                    "plan_path": "/tmp/test/plan.md",
+                    "revision": 1,
+                    "content": "# Plan",
+                    "summary": "",
+                },
+            },
+        )
+        runtime.session_store.append_event(
+            sid,
+            {
+                "type": "completion",
+                "payload": {"done": True, "done_reason": "awaiting_approval"},
+            },
+        )
         ok = runtime.reject_plan(sid)
         assert ok is True
         events = runtime.session_store.load_transcript(sid)
@@ -1132,41 +1138,50 @@ class TestEpisodicPlanApproval:
     def test_approve_fails_when_no_pending_proposal(self):
         runtime = self._make_runtime()
         sid = runtime.resolve_session()
-        runtime.session_store.append_event(sid, {
-            "type": "user", "payload": {"text": "just a query"}
-        })
-        runtime.session_store.append_event(sid, {
-            "type": "completion",
-            "payload": {"done": True, "done_reason": "completed"},
-        })
+        runtime.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "just a query"}}
+        )
+        runtime.session_store.append_event(
+            sid,
+            {
+                "type": "completion",
+                "payload": {"done": True, "done_reason": "completed"},
+            },
+        )
         ok = runtime.approve_plan(sid)
         assert ok is False
 
     def test_approve_fails_when_already_resolved(self):
         runtime = self._make_runtime()
         sid = runtime.resolve_session()
-        runtime.session_store.append_event(sid, {
-            "type": "plan_proposed",
-            "payload": {"plan_path": "/tmp/p.md", "revision": 1,
-                        "content": "x", "summary": ""},
-        })
-        runtime.session_store.append_event(sid, {
-            "type": "plan_approved",
-            "payload": {"plan_path": "/tmp/p.md", "revision": 1},
-        })
+        runtime.session_store.append_event(
+            sid,
+            {
+                "type": "plan_proposed",
+                "payload": {"plan_path": "/tmp/p.md", "revision": 1, "content": "x", "summary": ""},
+            },
+        )
+        runtime.session_store.append_event(
+            sid,
+            {
+                "type": "plan_approved",
+                "payload": {"plan_path": "/tmp/p.md", "revision": 1},
+            },
+        )
         ok = runtime.approve_plan(sid)
         assert ok is False
 
     def test_summarize_session_awaiting_approval_status(self):
         runtime = self._make_runtime()
         sid = runtime.resolve_session()
-        runtime.session_store.append_event(sid, {
-            "type": "user", "payload": {"text": "plan x"}
-        })
-        runtime.session_store.append_event(sid, {
-            "type": "completion",
-            "payload": {"done": True, "done_reason": "awaiting_approval"},
-        })
+        runtime.session_store.append_event(sid, {"type": "user", "payload": {"text": "plan x"}})
+        runtime.session_store.append_event(
+            sid,
+            {
+                "type": "completion",
+                "payload": {"done": True, "done_reason": "awaiting_approval"},
+            },
+        )
         summary = runtime.summarize_session(sid)
         assert summary["status"] == "awaiting_approval"
 

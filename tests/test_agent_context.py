@@ -106,8 +106,11 @@ class TestAgentHypervisor:
         async def _test():
             reg = AgentHypervisor()
             handle = AgentHandle(
-                agent_id="a1", parent_id=None, depth=0,
-                model_name="m", task_description="test",
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="test",
             )
             await reg.register(handle)
             got = await reg.get("a1")
@@ -119,8 +122,11 @@ class TestAgentHypervisor:
         async def _test():
             reg = AgentHypervisor()
             handle = AgentHandle(
-                agent_id="a1", parent_id=None, depth=0,
-                model_name="m", task_description="test",
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="test",
             )
             await reg.register(handle)
             removed = await reg.unregister("a1")
@@ -133,20 +139,32 @@ class TestAgentHypervisor:
         async def _test():
             reg = AgentHypervisor()
             root = AgentHandle(
-                agent_id="root", parent_id=None, depth=0,
-                model_name="m", task_description="root",
+                agent_id="root",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="root",
             )
             child1 = AgentHandle(
-                agent_id="c1", parent_id="root", depth=1,
-                model_name="m", task_description="child1",
+                agent_id="c1",
+                parent_id="root",
+                depth=1,
+                model_name="m",
+                task_description="child1",
             )
             child2 = AgentHandle(
-                agent_id="c2", parent_id="root", depth=1,
-                model_name="m", task_description="child2",
+                agent_id="c2",
+                parent_id="root",
+                depth=1,
+                model_name="m",
+                task_description="child2",
             )
             grandchild = AgentHandle(
-                agent_id="gc1", parent_id="c1", depth=2,
-                model_name="m", task_description="grandchild",
+                agent_id="gc1",
+                parent_id="c1",
+                depth=2,
+                model_name="m",
+                task_description="grandchild",
             )
             for h in [root, child1, child2, grandchild]:
                 await reg.register(h)
@@ -160,12 +178,15 @@ class TestAgentHypervisor:
         async def _test():
             reg = AgentHypervisor()
             for h in [
-                AgentHandle(agent_id="r", parent_id=None, depth=0,
-                            model_name="m", task_description="r"),
-                AgentHandle(agent_id="c1", parent_id="r", depth=1,
-                            model_name="m", task_description="c1"),
-                AgentHandle(agent_id="gc1", parent_id="c1", depth=2,
-                            model_name="m", task_description="gc1"),
+                AgentHandle(
+                    agent_id="r", parent_id=None, depth=0, model_name="m", task_description="r"
+                ),
+                AgentHandle(
+                    agent_id="c1", parent_id="r", depth=1, model_name="m", task_description="c1"
+                ),
+                AgentHandle(
+                    agent_id="gc1", parent_id="c1", depth=2, model_name="m", task_description="gc1"
+                ),
             ]:
                 await reg.register(h)
 
@@ -178,8 +199,11 @@ class TestAgentHypervisor:
         async def _test():
             reg = AgentHypervisor()
             handle = AgentHandle(
-                agent_id="a1", parent_id=None, depth=0,
-                model_name="m", task_description="test",
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="test",
             )
             await reg.register(handle)
             await reg.mark_done("a1", "completed")
@@ -194,8 +218,11 @@ class TestAgentHypervisor:
         async def _test():
             reg = AgentHypervisor()
             handle = AgentHandle(
-                agent_id="a1", parent_id=None, depth=0,
-                model_name="m", task_description="test",
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="test",
             )
             await reg.register(handle)
             await reg.update_step("a1", "shell_tool")
@@ -225,8 +252,11 @@ class TestAgentHypervisor:
         async def _test():
             reg = AgentHypervisor()
             handle = AgentHandle(
-                agent_id="a1", parent_id=None, depth=0,
-                model_name="m", task_description="test",
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="test",
             )
             await reg.register(handle)
             await reg.cleanup(timeout=1.0)
@@ -244,8 +274,11 @@ class TestAgentHypervisor:
 
             task = asyncio.create_task(_dummy())
             handle = AgentHandle(
-                agent_id="a1", parent_id=None, depth=0,
-                model_name="m", task_description="test",
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="test",
                 asyncio_task=task,
             )
             await reg.register(handle)
@@ -270,13 +303,15 @@ class TestHypervisorBudget:
         async def _test():
             reg = AgentHypervisor()
             for aid in ("a1", "a2"):
-                h = AgentHandle(agent_id=aid, parent_id=None, depth=0,
-                                model_name="m", task_description="t")
+                h = AgentHandle(
+                    agent_id=aid, parent_id=None, depth=0, model_name="m", task_description="t"
+                )
                 await reg.register(h)
             await reg.update_step("a1", "tool1")
             await reg.update_step("a1", "tool2")
             await reg.update_step("a2", "tool3")
             assert reg.total_steps == 3
+
         asyncio.run(_test())
 
     def test_budget_exhausted_unlimited(self):
@@ -287,13 +322,15 @@ class TestHypervisorBudget:
     def test_budget_exhausted_at_limit(self):
         async def _test():
             reg = AgentHypervisor(session_step_budget=2)
-            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
-                            model_name="m", task_description="t")
+            h = AgentHandle(
+                agent_id="a1", parent_id=None, depth=0, model_name="m", task_description="t"
+            )
             await reg.register(h)
             await reg.update_step("a1", "t1")
             assert reg.budget_exhausted() is False
             await reg.update_step("a1", "t2")
             assert reg.budget_exhausted() is True
+
         asyncio.run(_test())
 
     def test_budget_remaining(self):
@@ -313,39 +350,55 @@ class TestHypervisorStallDetection:
     def test_last_step_at_updated(self):
         async def _test():
             reg = AgentHypervisor()
-            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
-                            model_name="m", task_description="t")
+            h = AgentHandle(
+                agent_id="a1", parent_id=None, depth=0, model_name="m", task_description="t"
+            )
             await reg.register(h)
             assert h.last_step_at is None
             await reg.update_step("a1", "tool")
             assert h.last_step_at is not None
+
         asyncio.run(_test())
 
     def test_stalled_agents_returns_stalled(self):
         async def _test():
             import time
+
             reg = AgentHypervisor()
-            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
-                            model_name="m", task_description="t",
-                            status="running")
+            h = AgentHandle(
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="t",
+                status="running",
+            )
             h.last_step_at = time.monotonic() - 200  # 200s ago
             await reg.register(h)
             stalled = await reg.stalled_agents(threshold=120.0)
             assert len(stalled) == 1
             assert stalled[0].agent_id == "a1"
+
         asyncio.run(_test())
 
     def test_stalled_agents_ignores_active(self):
         async def _test():
             import time
+
             reg = AgentHypervisor()
-            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
-                            model_name="m", task_description="t",
-                            status="running")
+            h = AgentHandle(
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="t",
+                status="running",
+            )
             h.last_step_at = time.monotonic()  # Just now
             await reg.register(h)
             stalled = await reg.stalled_agents(threshold=120.0)
             assert len(stalled) == 0
+
         asyncio.run(_test())
 
 
@@ -355,29 +408,45 @@ class TestHypervisorMessagePassing:
     def test_send_message_to_running_agent(self):
         async def _test():
             import queue
+
             reg = AgentHypervisor()
             q = queue.Queue()
-            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
-                            model_name="m", task_description="t",
-                            status="running", message_queue=q)
+            h = AgentHandle(
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="t",
+                status="running",
+                message_queue=q,
+            )
             await reg.register(h)
             result = await reg.send_message("a1", "wrap up now")
             assert result is None  # None = success
             assert q.get_nowait() == "wrap up now"
+
         asyncio.run(_test())
 
     def test_send_message_to_completed_agent_fails(self):
         async def _test():
             import queue
+
             reg = AgentHypervisor()
             q = queue.Queue()
-            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
-                            model_name="m", task_description="t",
-                            status="completed", message_queue=q)
+            h = AgentHandle(
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="t",
+                status="completed",
+                message_queue=q,
+            )
             await reg.register(h)
             result = await reg.send_message("a1", "hello")
             assert result is not None  # str = failure reason
             assert q.empty()
+
         asyncio.run(_test())
 
     def test_send_message_to_unknown_agent_fails(self):
@@ -385,6 +454,7 @@ class TestHypervisorMessagePassing:
             reg = AgentHypervisor()
             result = await reg.send_message("nonexistent", "hello")
             assert result is not None  # str = failure reason
+
         asyncio.run(_test())
 
 
@@ -396,17 +466,28 @@ class TestHypervisorGlobalEye:
             reg = AgentHypervisor()
             tree = await reg.render_agent_tree()
             assert tree == ""
+
         asyncio.run(_test())
 
     def test_tree_shows_agents(self):
         async def _test():
             reg = AgentHypervisor()
-            root = AgentHandle(agent_id="root1234", parent_id=None, depth=0,
-                               model_name="m", task_description="Main task",
-                               status="running")
-            child = AgentHandle(agent_id="child567", parent_id="root1234", depth=1,
-                                model_name="m", task_description="Sub task",
-                                status="completed")
+            root = AgentHandle(
+                agent_id="root1234",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="Main task",
+                status="running",
+            )
+            child = AgentHandle(
+                agent_id="child567",
+                parent_id="root1234",
+                depth=1,
+                model_name="m",
+                task_description="Sub task",
+                status="completed",
+            )
             child.steps_completed = 5
             await reg.register(root)
             await reg.register(child)
@@ -416,30 +497,49 @@ class TestHypervisorGlobalEye:
             assert "running" in tree
             assert "completed" in tree
             assert "5 steps" in tree
+
         asyncio.run(_test())
 
     def test_tree_shows_budget(self):
         async def _test():
             reg = AgentHypervisor(session_step_budget=100)
-            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
-                            model_name="m", task_description="t", status="running")
+            h = AgentHandle(
+                agent_id="a1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="t",
+                status="running",
+            )
             await reg.register(h)
             await reg.update_step("a1", "tool")
             tree = await reg.render_agent_tree()
             assert "Budget:" in tree
             assert "1/100" in tree
+
         asyncio.run(_test())
 
     def test_tree_excludes_specified_agent(self):
         """Excluding the calling agent's own ID prevents self-steering."""
+
         async def _test():
             reg = AgentHypervisor()
-            root = AgentHandle(agent_id="root1234", parent_id=None, depth=0,
-                               model_name="m", task_description="Root task",
-                               status="running")
-            child = AgentHandle(agent_id="child567", parent_id="root1234", depth=1,
-                                model_name="m", task_description="Child task",
-                                status="submitted")
+            root = AgentHandle(
+                agent_id="root1234",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="Root task",
+                status="running",
+            )
+            child = AgentHandle(
+                agent_id="child567",
+                parent_id="root1234",
+                depth=1,
+                model_name="m",
+                task_description="Child task",
+                status="submitted",
+            )
             await reg.register(root)
             await reg.register(child)
 
@@ -452,17 +552,86 @@ class TestHypervisorGlobalEye:
             tree_all = await reg.render_agent_tree()
             assert "root1234" in tree_all
             assert "child567" in tree_all
+
         asyncio.run(_test())
 
     def test_tree_exclude_only_agent_returns_empty(self):
         """If the only registered agent is excluded, return empty string."""
+
         async def _test():
             reg = AgentHypervisor()
-            h = AgentHandle(agent_id="solo1234", parent_id=None, depth=0,
-                            model_name="m", task_description="t", status="running")
+            h = AgentHandle(
+                agent_id="solo1234",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="t",
+                status="running",
+            )
             await reg.register(h)
             tree = await reg.render_agent_tree(exclude_agent_id="solo1234")
             assert tree == ""
+
+        asyncio.run(_test())
+
+
+class TestHypervisorCompaction:
+    """Compaction tracking on AgentHandle and visibility in agent tree."""
+
+    def test_record_compaction_increments_count(self):
+        async def _test():
+            reg = AgentHypervisor()
+            h = AgentHandle(
+                agent_id="agent123",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="t",
+                status="running",
+            )
+            await reg.register(h)
+            assert h.compaction_count == 0
+            await reg.record_compaction("agent123")
+            assert h.compaction_count == 1
+            assert h.last_compacted_at is not None
+            await reg.record_compaction("agent123")
+            assert h.compaction_count == 2
+
+        asyncio.run(_test())
+
+    def test_tree_shows_compaction_marker(self):
+        async def _test():
+            reg = AgentHypervisor()
+            h = AgentHandle(
+                agent_id="compact1",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="task",
+                status="running",
+            )
+            await reg.register(h)
+            await reg.record_compaction("compact1")
+            tree = await reg.render_agent_tree()
+            assert "compacted x1" in tree
+
+        asyncio.run(_test())
+
+    def test_tree_hides_marker_when_no_compaction(self):
+        async def _test():
+            reg = AgentHypervisor()
+            h = AgentHandle(
+                agent_id="nocomp12",
+                parent_id=None,
+                depth=0,
+                model_name="m",
+                task_description="task",
+                status="running",
+            )
+            await reg.register(h)
+            tree = await reg.render_agent_tree()
+            assert "compacted" not in tree
+
         asyncio.run(_test())
 
 
@@ -471,6 +640,7 @@ class TestAgentResultStructure:
 
     def test_agent_result_fields(self):
         from meeseeks_core.hypervisor import AgentResult
+
         result = AgentResult(
             content="Task completed",
             status="completed",
@@ -490,6 +660,7 @@ class TestAgentResultStructure:
         from dataclasses import asdict
 
         from meeseeks_core.hypervisor import AgentResult
+
         result = AgentResult(
             content="output",
             status="failed",
@@ -506,6 +677,7 @@ class TestAgentResultStructure:
     def test_cannot_solve_status(self):
         """Ref: [Aletheia §3] Explicit failure admission as first-class outcome."""
         from meeseeks_core.hypervisor import AgentResult
+
         result = AgentResult(
             content="Cannot solve: depth exceeded",
             status="cannot_solve",
@@ -518,20 +690,23 @@ class TestAgentStatusExpansion:
     """Ref: [A2A v1.0] Expanded state machine with submitted/rejected states."""
 
     def test_submitted_status(self):
-        h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
-                        model_name="m", task_description="t")
+        h = AgentHandle(
+            agent_id="a1", parent_id=None, depth=0, model_name="m", task_description="t"
+        )
         assert h.status == "submitted"  # Default is now submitted, not running
 
     def test_rejected_status(self):
         async def _test():
             reg = AgentHypervisor()
-            h = AgentHandle(agent_id="a1", parent_id=None, depth=0,
-                            model_name="m", task_description="t")
+            h = AgentHandle(
+                agent_id="a1", parent_id=None, depth=0, model_name="m", task_description="t"
+            )
             await reg.register(h)
             await reg.mark_done("a1", "rejected")
             got = await reg.get("a1")
             assert got is not None
             assert got.status == "rejected"
+
         asyncio.run(_test())
 
 
@@ -541,8 +716,11 @@ class TestDoneEvent:
     def test_mark_done_sets_done_event(self):
         hyper = AgentHypervisor(max_concurrent=10)
         handle = AgentHandle(
-            agent_id="evt_test", parent_id=None, depth=0,
-            model_name="test", task_description="test",
+            agent_id="evt_test",
+            parent_id=None,
+            depth=0,
+            model_name="test",
+            task_description="test",
         )
         asyncio.run(hyper.register(handle))
         assert not handle.done_event.is_set()
@@ -552,8 +730,11 @@ class TestDoneEvent:
     def test_cancel_agent_sets_done_event(self):
         hyper = AgentHypervisor(max_concurrent=10)
         handle = AgentHandle(
-            agent_id="cancel_evt", parent_id=None, depth=0,
-            model_name="test", task_description="test",
+            agent_id="cancel_evt",
+            parent_id=None,
+            depth=0,
+            model_name="test",
+            task_description="test",
         )
 
         async def _run():

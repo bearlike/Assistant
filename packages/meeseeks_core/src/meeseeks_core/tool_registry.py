@@ -13,7 +13,7 @@ from typing import Protocol
 
 from meeseeks_core.classes import ActionStep, set_available_tools
 from meeseeks_core.common import MockSpeaker, get_logger
-from meeseeks_core.components import resolve_home_assistant_status
+from meeseeks_core.components import ComponentStatus, resolve_home_assistant_status
 from meeseeks_core.config import get_config_value, get_mcp_config_path
 from meeseeks_core.types import JsonValue
 
@@ -194,46 +194,26 @@ _AIDER_EDIT_SCHEMA: dict[str, object] = {
 }
 
 
-def _edit_tool_spec_and_manifest() -> tuple[ToolSpec, dict[str, object]]:
-    """Return the ToolSpec and manifest entry for the configured edit tool.
+def _all_edit_tool_specs() -> list[ToolSpec]:
+    """Return ToolSpecs for both edit tools.
 
-    Single conditional consumed by both ``_default_registry()`` and
-    ``_built_in_manifest_entries()``.
+    Both are always registered; ``ToolUseLoop._configured_edit_tool_id()``
+    selects the active one per-model at schema-building time.
     """
-    mechanism = get_config_value("agent", "edit_tool", default="search_replace_block")
-    if mechanism == "structured_patch":
-        spec = ToolSpec(
-            tool_id="file_edit_tool",
-            name="File Edit",
-            description="Apply exact string replacement to a file.",
-            factory=_import_factory(
-                "meeseeks_tools.integration.file_edit_tool", "FileEditTool"
-            ),
-            prompt_path="tools/file-edit",
-            concurrency_safe=False,
-            metadata={
-                "reflect": True,
-                "capabilities": ["file_write"],
-                "schema": _FILE_EDIT_SCHEMA,
-            },
-        )
-        manifest: dict[str, object] = {
-            "tool_id": "file_edit_tool",
-            "name": "File Edit",
-            "description": spec.description,
-            "module": "meeseeks_tools.integration.file_edit_tool",
-            "class": "FileEditTool",
-            "kind": "local",
-            "enabled": True,
-            "prompt": "tools/file-edit",
+    file_edit_spec = ToolSpec(
+        tool_id="file_edit_tool",
+        name="File Edit",
+        description="Apply exact string replacement to a file.",
+        factory=_import_factory("meeseeks_tools.integration.file_edit_tool", "FileEditTool"),
+        prompt_path="tools/file-edit",
+        concurrency_safe=False,
+        metadata={
             "reflect": True,
             "capabilities": ["file_write"],
             "schema": _FILE_EDIT_SCHEMA,
-        }
-        return spec, manifest
-
-    # Default: Aider-style search/replace blocks
-    spec = ToolSpec(
+        },
+    )
+    aider_edit_spec = ToolSpec(
         tool_id="aider_edit_block_tool",
         name="Aider Edit Blocks",
         description="Apply Aider-style SEARCH/REPLACE blocks to files.",
@@ -248,20 +228,70 @@ def _edit_tool_spec_and_manifest() -> tuple[ToolSpec, dict[str, object]]:
             "schema": _AIDER_EDIT_SCHEMA,
         },
     )
-    manifest = {
-        "tool_id": "aider_edit_block_tool",
-        "name": "Aider Edit Blocks",
-        "description": spec.description,
-        "module": "meeseeks_tools.integration.aider_edit_blocks",
-        "class": "AiderEditBlockTool",
-        "kind": "local",
-        "enabled": True,
-        "prompt": "tools/aider-edit-blocks",
-        "reflect": True,
-        "capabilities": ["file_write"],
-        "schema": _AIDER_EDIT_SCHEMA,
-    }
-    return spec, manifest
+    return [file_edit_spec, aider_edit_spec]
+
+
+def _all_edit_tool_manifest_entries() -> list[dict[str, object]]:
+    """Return manifest entries for both edit tools."""
+    return [
+        {
+            "tool_id": "file_edit_tool",
+            "name": "File Edit",
+            "description": "Apply exact string replacement to a file.",
+            "module": "meeseeks_tools.integration.file_edit_tool",
+            "class": "FileEditTool",
+            "kind": "local",
+            "enabled": True,
+            "prompt": "tools/file-edit",
+            "reflect": True,
+            "capabilities": ["file_write"],
+            "schema": _FILE_EDIT_SCHEMA,
+        },
+        {
+            "tool_id": "aider_edit_block_tool",
+            "name": "Aider Edit Blocks",
+            "description": "Apply Aider-style SEARCH/REPLACE blocks to files.",
+            "module": "meeseeks_tools.integration.aider_edit_blocks",
+            "class": "AiderEditBlockTool",
+            "kind": "local",
+            "enabled": True,
+            "prompt": "tools/aider-edit-blocks",
+            "reflect": True,
+            "capabilities": ["file_write"],
+            "schema": _AIDER_EDIT_SCHEMA,
+        },
+    ]
+
+
+def _resolve_lsp_status() -> ComponentStatus:
+    """Determine whether the LSP tool should be enabled."""
+    from meeseeks_core.config import get_config
+
+    cfg = get_config()
+    lsp_cfg = cfg.agent.lsp
+    if not lsp_cfg.enabled:
+        return ComponentStatus(name="lsp_tool", enabled=False, reason="disabled via config")
+    try:
+        from meeseeks_tools.integration.lsp import LSP_AVAILABLE
+
+        if not LSP_AVAILABLE:
+            return ComponentStatus(
+                name="lsp_tool",
+                enabled=False,
+                reason="pygls not installed",
+            )
+        from meeseeks_tools.integration.lsp.servers import available_servers
+
+        servers = available_servers(lsp_cfg.servers)
+        if not servers:
+            return ComponentStatus(
+                name="lsp_tool",
+                enabled=False,
+                reason="no language server binaries found on PATH",
+            )
+    except Exception as exc:
+        return ComponentStatus(name="lsp_tool", enabled=False, reason=str(exc))
+    return ComponentStatus(name="lsp_tool", enabled=True)
 
 
 def _default_registry() -> ToolRegistry:
@@ -293,8 +323,8 @@ def _default_registry() -> ToolRegistry:
             metadata=ha_metadata,
         )
     )
-    edit_spec, _ = _edit_tool_spec_and_manifest()
-    registry.register(edit_spec)
+    for edit_spec in _all_edit_tool_specs():
+        registry.register(edit_spec)
     registry.register(
         ToolSpec(
             tool_id="read_file",
@@ -375,6 +405,54 @@ def _default_registry() -> ToolRegistry:
             },
         )
     )
+    # LSP tool — opt-in, requires pygls + at least one server binary
+    lsp_status = _resolve_lsp_status()
+    lsp_meta: dict[str, JsonValue] = {
+        "schema": {
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["diagnostics", "definition", "references", "hover"],
+                    "description": "LSP operation to perform",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the file",
+                },
+                "line": {
+                    "type": "integer",
+                    "description": "0-based line number (for definition/references/hover)",
+                },
+                "character": {
+                    "type": "integer",
+                    "description": "0-based column (for definition/references/hover)",
+                },
+            },
+            "required": ["operation", "file_path"],
+        },
+    }
+    if not lsp_status.enabled:
+        lsp_meta["disabled_reason"] = lsp_status.reason
+    registry.register(
+        ToolSpec(
+            tool_id="lsp_tool",
+            name="Language Server",
+            description=(
+                "Query language servers for code diagnostics, "
+                "go-to-definition, find-references, and hover info."
+            ),
+            factory=_import_factory(
+                "meeseeks_tools.integration.lsp.tool",
+                "LSPTool",
+            ),
+            enabled=lsp_status.enabled,
+            prompt_path="tools/lsp",
+            read_only=True,
+            concurrency_safe=True,
+            metadata=lsp_meta,
+        )
+    )
     return registry
 
 
@@ -412,7 +490,7 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
                 "required": ["task"],
             },
         },
-        _edit_tool_spec_and_manifest()[1],
+        *_all_edit_tool_manifest_entries(),
         {
             "tool_id": "read_file",
             "name": "Read File",
@@ -511,6 +589,7 @@ def _try_pool_discovery(
     mcp_config_path: str,
     *,
     cwd: str | None = None,
+    extra_mcp_servers: dict[str, dict] | None = None,
 ) -> dict[str, list[dict[str, object]]] | None:
     """Attempt MCP tool discovery via the connection pool.
 
@@ -518,7 +597,7 @@ def _try_pool_discovery(
     path is unavailable or fails.
     """
     try:
-        from meeseeks_tools.integration.mcp import _load_mcp_config, _normalize_mcp_config
+        from meeseeks_tools.integration.mcp import _normalize_mcp_config
         from meeseeks_tools.integration.mcp_pool import get_mcp_pool
     except Exception:
         return None
@@ -526,7 +605,15 @@ def _try_pool_discovery(
     try:
         import asyncio
 
-        config = _normalize_mcp_config(_load_mcp_config(mcp_config_path, cwd=cwd))
+        if extra_mcp_servers:
+            from meeseeks_core.config import get_merged_mcp_config
+
+            merged = get_merged_mcp_config(cwd, extra_servers=extra_mcp_servers)
+            config = _normalize_mcp_config(merged)
+        else:
+            from meeseeks_tools.integration.mcp import _load_mcp_config
+
+            config = _normalize_mcp_config(_load_mcp_config(mcp_config_path, cwd=cwd))
         pool = get_mcp_pool()
         # refresh_if_config_changed diffs against the pool's previous config
         # and disconnects servers that are no longer present — essential when
@@ -551,6 +638,7 @@ def _ensure_auto_manifest(
     mcp_config_path: str,
     *,
     cwd: str | None = None,
+    extra_mcp_servers: dict[str, dict] | None = None,
 ) -> str | None:
     manifest_path = _default_manifest_cache_path()
     existing_manifest: dict[str, JsonValue] | None = None
@@ -562,7 +650,7 @@ def _ensure_auto_manifest(
             logging.warning("Failed to read existing MCP manifest: {}", exc)
 
     # Try pool-based discovery first (faster, persistent connections)
-    pool_tools = _try_pool_discovery(mcp_config_path, cwd=cwd)
+    pool_tools = _try_pool_discovery(mcp_config_path, cwd=cwd, extra_mcp_servers=extra_mcp_servers)
 
     mcp_module = _load_mcp_support()
     mcp_tools: dict[str, list[dict[str, object]]] = {}
@@ -576,9 +664,16 @@ def _ensure_auto_manifest(
         global_failure = RuntimeError("MCP support is not installed.")
     else:
         try:
-            config = mcp_module._load_mcp_config(
-                mcp_config_path if mcp_config_path else None, cwd=cwd
-            )
+            if extra_mcp_servers:
+                from meeseeks_core.config import get_merged_mcp_config
+
+                config = mcp_module._normalize_mcp_config(
+                    get_merged_mcp_config(cwd, extra_servers=extra_mcp_servers)
+                )
+            else:
+                config = mcp_module._load_mcp_config(
+                    mcp_config_path if mcp_config_path else None, cwd=cwd
+                )
             mcp_tools, failures = mcp_module.discover_mcp_tool_details_with_failures(config)
         except Exception as exc:
             logging.warning("Failed to auto-discover MCP tools: {}", exc)
@@ -635,6 +730,7 @@ def load_registry(
     manifest_path: str | None = None,
     *,
     cwd: str | None = None,
+    extra_mcp_servers: dict[str, dict] | None = None,
 ) -> ToolRegistry:
     """Load tool registry, auto-discovering MCP tools when configured."""
     if manifest_path is None:
@@ -651,9 +747,14 @@ def load_registry(
             from meeseeks_core.config import _discover_subtree_mcp_json
 
             has_subtree_mcp = bool(_discover_subtree_mcp_json(cwd))
-        if (mcp_config_path and os.path.exists(mcp_config_path)) or has_cwd_mcp or has_subtree_mcp:
+        if (
+            (mcp_config_path and os.path.exists(mcp_config_path))
+            or has_cwd_mcp
+            or has_subtree_mcp
+            or extra_mcp_servers
+        ):
             manifest_path = _ensure_auto_manifest(
-                mcp_config_path or "", cwd=cwd
+                mcp_config_path or "", cwd=cwd, extra_mcp_servers=extra_mcp_servers
             )
 
     if not manifest_path:

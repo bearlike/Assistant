@@ -52,23 +52,17 @@ class TestDiscoverProjectInstructions:
         assert discover_project_instructions(str(tmp_path)) is None
 
     def test_noload_marker_skips_claude_md(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(
-            f"{_NOLOAD_MARKER}\n# Skip this.", encoding="utf-8"
-        )
+        (tmp_path / "CLAUDE.md").write_text(f"{_NOLOAD_MARKER}\n# Skip this.", encoding="utf-8")
         assert discover_project_instructions(str(tmp_path)) is None
 
     def test_noload_marker_skips_claude_md_falls_through(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(
-            f"{_NOLOAD_MARKER}\n# Skip this.", encoding="utf-8"
-        )
+        (tmp_path / "CLAUDE.md").write_text(f"{_NOLOAD_MARKER}\n# Skip this.", encoding="utf-8")
         (tmp_path / "AGENTS.md").write_text("agents content", encoding="utf-8")
         result = discover_project_instructions(str(tmp_path))
         assert result == "agents content"
 
     def test_noload_marker_skips_agents_md(self, tmp_path):
-        (tmp_path / "AGENTS.md").write_text(
-            f"{_NOLOAD_MARKER}\nSkip.", encoding="utf-8"
-        )
+        (tmp_path / "AGENTS.md").write_text(f"{_NOLOAD_MARKER}\nSkip.", encoding="utf-8")
         assert discover_project_instructions(str(tmp_path)) is None
 
 
@@ -129,9 +123,7 @@ class TestDiscoverAllInstructions:
         assert levels.index("rules") < levels.index("local")
 
     def test_noload_marker_skips_source(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text(
-            f"{_NOLOAD_MARKER}\nskip this", encoding="utf-8"
-        )
+        (tmp_path / "CLAUDE.md").write_text(f"{_NOLOAD_MARKER}\nskip this", encoding="utf-8")
         sources = discover_all_instructions(str(tmp_path))
         assert len([s for s in sources if s.level == "project"]) == 0
 
@@ -142,9 +134,7 @@ class TestDiscoverAllInstructions:
         assert sources == []
 
     def test_instruction_source_dataclass(self):
-        src = InstructionSource(
-            content="hello", path="/tmp/test.md", level="project", priority=20
-        )
+        src = InstructionSource(content="hello", path="/tmp/test.md", level="project", priority=20)
         assert src.content == "hello"
         assert src.level == "project"
         assert src.priority == 20
@@ -256,9 +246,7 @@ class TestDiscoverSubtreeInstructions:
     def test_respects_noload_marker(self, tmp_path):
         sub = tmp_path / "sub"
         sub.mkdir()
-        (sub / "CLAUDE.md").write_text(
-            f"{_NOLOAD_MARKER}\nSkip me", encoding="utf-8"
-        )
+        (sub / "CLAUDE.md").write_text(f"{_NOLOAD_MARKER}\nSkip me", encoding="utf-8")
         result = discover_subtree_instructions(str(tmp_path))
         assert len(result) == 0
 

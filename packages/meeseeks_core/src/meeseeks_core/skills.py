@@ -17,7 +17,6 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -95,7 +94,9 @@ ACTIVATE_SKILL_SCHEMA: dict[str, object] = {
 # ------------------------------------------------------------------
 
 
-def _parse_skill_file(path: Path, source: str) -> SkillSpec | None:
+def _parse_skill_file(
+    path: Path, source: str, *, default_name: str | None = None
+) -> SkillSpec | None:
     """Parse a SKILL.md file into a SkillSpec, or ``None`` on failure."""
     try:
         raw = path.read_text(encoding="utf-8")
@@ -118,7 +119,7 @@ def _parse_skill_file(path: Path, source: str) -> SkillSpec | None:
         logging.warning("Frontmatter is not a mapping in {}", path)
         return None
 
-    name = meta.get("name")
+    name = meta.get("name") or default_name
     description = meta.get("description")
 
     if not name or not isinstance(name, str):
@@ -147,7 +148,7 @@ def _parse_skill_file(path: Path, source: str) -> SkillSpec | None:
     elif isinstance(allowed_tools_raw, list):
         allowed_tools = [str(t) for t in allowed_tools_raw if t]
 
-    body = raw[match.end():]
+    body = raw[match.end() :]
 
     try:
         mtime = path.stat().st_mtime
@@ -189,7 +190,11 @@ def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
         for child in sorted(personal_dir.iterdir()):
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
-                spec = _parse_skill_file(skill_file, source="personal")
+                spec = _parse_skill_file(
+                    skill_file,
+                    source="personal",
+                    default_name=child.name,
+                )
                 if spec is not None:
                     skills[spec.name] = spec
 
@@ -200,7 +205,11 @@ def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
         for child in sorted(project_dir.iterdir()):
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
-                spec = _parse_skill_file(skill_file, source="project")
+                spec = _parse_skill_file(
+                    skill_file,
+                    source="project",
+                    default_name=child.name,
+                )
                 if spec is not None:
                     skills[spec.name] = spec  # project overrides personal
 
@@ -225,7 +234,8 @@ def _discover_subtree_skills(
         depth = len(rel.parts)
         # Prune non-project dirs (must happen before any continue)
         dirnames[:] = [
-            d for d in dirnames
+            d
+            for d in dirnames
             if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
         ]
         if depth > max_depth:
@@ -240,7 +250,11 @@ def _discover_subtree_skills(
         for child in sorted(skills_dir.iterdir()):
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
-                spec = _parse_skill_file(skill_file, source="project")
+                spec = _parse_skill_file(
+                    skill_file,
+                    source="project",
+                    default_name=child.name,
+                )
                 if spec is not None:
                     # Subtree skills DON'T override project-root or personal skills
                     if spec.name not in skills:
@@ -258,14 +272,12 @@ class SkillRegistry:
     def __init__(self) -> None:  # noqa: D107
         self._skills: dict[str, SkillSpec] = {}
         self._cwd: str | None = None
-        self._last_scan: float = 0.0
 
     def load(self, cwd: str | None = None) -> None:
         """Discover and load all skills."""
         self._cwd = cwd
         for spec in discover_skills(cwd):
             self._skills[spec.name] = spec
-        self._last_scan = time.monotonic()
         if self._skills:
             logging.info("Loaded {} skill(s)", len(self._skills))
 
@@ -290,9 +302,7 @@ class SkillRegistry:
         auto = self.list_auto_invocable()
         if not auto:
             return ""
-        lines = [
-            "Available skills (use activate_skill to load instructions when relevant):"
-        ]
+        lines = ["Available skills (use activate_skill to load instructions when relevant):"]
         for skill in auto:
             lines.append(f"- {skill.name}: {skill.description}")
         return "\n".join(lines)
@@ -331,6 +341,31 @@ class SkillRegistry:
             logging.info("Skills reloaded ({} active)", len(self._skills))
         return changed
 
+    def load_extra_dir(self, skills_dir: str, source: str = "plugin") -> None:
+        """Load skills from an extra directory. Does NOT override existing."""
+        base = Path(skills_dir)
+        if not base.is_dir():
+            return
+        for child in sorted(base.iterdir()):
+            skill_file = child / "SKILL.md"
+            if child.is_dir() and skill_file.is_file():
+                spec = _parse_skill_file(
+                    skill_file,
+                    source=source,
+                    default_name=child.name,
+                )
+                if spec is not None and spec.name not in self._skills:
+                    self._skills[spec.name] = spec
+
+    def load_command_file(self, path: str, source: str = "plugin") -> None:
+        """Load a flat commands/*.md file as a skill."""
+        p = Path(path)
+        if not p.is_file():
+            return
+        spec = _parse_skill_file(p, source=source, default_name=p.stem)
+        if spec is not None and spec.name not in self._skills:
+            self._skills[spec.name] = spec
+
 
 # ------------------------------------------------------------------
 # Shell preprocessing
@@ -355,9 +390,13 @@ def _preprocess_shell(body: str) -> str:
                 text=True,
                 timeout=30,
             )
-            return result.stdout.strip() if result.returncode == 0 else (
-                f"[ERROR: command exited {result.returncode}: "
-                f"{result.stderr.strip() or result.stdout.strip()}]"
+            return (
+                result.stdout.strip()
+                if result.returncode == 0
+                else (
+                    f"[ERROR: command exited {result.returncode}: "
+                    f"{result.stderr.strip() or result.stdout.strip()}]"
+                )
             )
         except subprocess.TimeoutExpired:
             return f"[ERROR: command timed out after 30s: {cmd}]"

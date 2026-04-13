@@ -1,25 +1,44 @@
 site_name: bearlike/Assistant
-site_description: Documentation for the bearlike/Assistant (Meeseeks) project.
+site_description: Documentation for Meeseeks — an AI assistant modeled as a conversation state machine with a hierarchical agent hypervisor. Accessible via CLI, web console, REST API, and Home Assistant.
 repo_url: https://github.com/bearlike/Assistant
 repo_name: bearlike/Assistant
 site_url: https://thekrishna.in/Assistant/
 
 theme:
   name: shadcn
+  custom_dir: overrides
+  favicon: logos/favicon.ico
+  icon: logos/logo-transparent.svg
+  pygments_style:
+    light: shadcn-light
+    dark: github-dark
+
+hooks:
+  - docs/hooks/schema_to_md.py
 
 markdown_extensions:
+  - pymdownx.highlight:
+      use_pygments: true
+      linenums: false
+      css_class: codehilite
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
-  - pymdownx.highlight:
-      use_pygments: true
-      linenums: false
   - pymdownx.inlinehilite
+  - admonition
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
 
 plugins:
   - search
+  - callouts:
+      aliases: false
   - mkdocstrings:
       handlers:
         python:
@@ -40,7 +59,12 @@ extra:
   version:
     provider: mike
 
+extra_css:
+  - stylesheets/extra.css
+
 extra_javascript:
+  - javascripts/pygments-theme.js
+  - javascripts/search-enhance.js
   - https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js
   - javascripts/mermaid-init-v2.js
   - javascripts/version-switcher.js
@@ -49,15 +73,40 @@ extra_javascript:
 
 nav:
   - Home: index.md
-  - Core Orchestration: core-orchestration.md
-  - Getting Started:
-      - Installation: getting-started.md
+  - Get Started: getting-started.md
+  - Configure:
       - LLM Setup: llm-setup.md
-  - Clients:
+      - Project Setup: project-configuration.md
+      - Configuration Reference: configuration.md
+  - Use:
       - CLI: clients-cli.md
-      - Web + API: clients-web-api.md
-      - Home Assistant Voice: clients-home-assistant.md
-  - Developers:
-      - Developer Guide: developer-guide.md
+      - Web Console + API: clients-web-api.md
+      - Home Assistant: clients-home-assistant.md
+      - Nextcloud Talk: clients-nextcloud-talk.md
+      - Email: clients-email.md
+  - Capabilities:
+      - Workspace & Execution:
+          - Built-in Tools: features-builtin-tools.md
+          - Web IDE: features-web-ide.md
+          - Code Intelligence (LSP): features-lsp.md
+          - External Tools (MCP): features-mcp.md
+      - Composition & Delegation:
+          - Sub-agents: features-agents.md
+          - Skills: features-skills.md
+          - Plugins & Marketplace: features-plugins.md
+      - Control & Safety:
+          - Plan Mode: features-plan-mode.md
+          - Permissions & Hooks: features-permissions-hooks.md
+      - Session & Context:
+          - Token Usage: features-token-usage.md
+          - Compaction: features-compaction.md
+  - Deploy:
+      - Docker Compose: deployment-docker.md
+      - Storage Backends: deployment-storage.md
+      - Production Setup: deployment-production.md
+  - Develop:
+      - Architecture Overview: core-orchestration.md
       - Session Runtime: session-runtime.md
-      - Reference: reference.md
+      - Building a Client: developer-guide.md
+      - API Reference: reference.md
+  - Troubleshooting: troubleshooting.md

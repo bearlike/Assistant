@@ -20,11 +20,13 @@ CORE_COMMANDS = {"/compact", "/terminate", "/status"}
 RecoveryAction = Literal["retry", "continue"]
 
 
-def _build_continue_recovery_query(original_user_text: str) -> str:
+def _build_continue_recovery_query() -> str:
     """Build the ``continue`` recovery prompt.
 
-    The original task is already in conversation context (directly or via
-    compaction summary). Repeating it verbatim wastes tokens.
+    Terse by design. The original task and prior work are already in the
+    system prompt via ``ContextBuilder.recent_events`` (which anchors the
+    first user event) and the compaction summary when present. Keeping
+    this HumanMessage small preserves the cache prefix for prompt caching.
     """
     return (
         "You were previously interrupted by an error. "
@@ -182,11 +184,19 @@ class SessionRuntime:
         session_id: str | None = None,
         session_tag: str | None = None,
         fork_from: str | None = None,
+        fork_at_ts: str | None = None,
     ) -> str:
-        """Resolve session identifiers, tags, and forks to a session id."""
+        """Resolve session identifiers, tags, and forks to a session id.
+
+        When *fork_at_ts* is provided alongside *fork_from*, only events up to
+        (and including) that timestamp are copied into the new session.
+        """
         if fork_from:
             source_session_id = self._session_store.resolve_tag(fork_from) or fork_from
-            session_id = self._session_store.fork_session(source_session_id)
+            if fork_at_ts:
+                session_id = self._session_store.fork_session_at(source_session_id, fork_at_ts)
+            else:
+                session_id = self._session_store.fork_session(source_session_id)
         if session_tag and not session_id:
             resolved = self._session_store.resolve_tag(session_tag)
             session_id = resolved if resolved else None
@@ -223,7 +233,7 @@ class SessionRuntime:
             if event.get("type") == "context":
                 payload = event.get("payload")
                 if isinstance(payload, dict):
-                    context = payload
+                    context = {**(context or {}), **payload}
             if event.get("type") == "user":
                 has_user_event = True
                 if title is None:
@@ -304,6 +314,9 @@ class SessionRuntime:
         skill_instructions: str | None = None,
         cwd: str | None = None,
         session_step_budget: int = 0,
+        user_id: str | None = None,
+        source_platform: str | None = None,
+        invocation_id: str | None = None,
     ) -> bool:
         """Start an asynchronous orchestration run for the session."""
         msg_queue: queue.Queue[str] = queue.Queue()
@@ -328,6 +341,9 @@ class SessionRuntime:
                 interrupt_step=interrupt_event,
                 cwd=cwd,
                 session_step_budget=session_step_budget,
+                user_id=user_id,
+                source_platform=source_platform,
+                invocation_id=invocation_id,
             )
 
         return self._run_registry.start(
@@ -358,6 +374,9 @@ class SessionRuntime:
         interrupt_step: threading.Event | None = None,
         cwd: str | None = None,
         session_step_budget: int = 0,
+        user_id: str | None = None,
+        source_platform: str | None = None,
+        invocation_id: str | None = None,
     ) -> TaskQueue:
         """Run an orchestration request synchronously."""
         return orchestrate_session(
@@ -380,6 +399,9 @@ class SessionRuntime:
             interrupt_step=interrupt_step,
             cwd=cwd,
             session_step_budget=session_step_budget,
+            user_id=user_id,
+            source_platform=source_platform,
+            invocation_id=invocation_id,
         )
 
     def cancel(self, session_id: str) -> bool:
@@ -396,6 +418,7 @@ class SessionRuntime:
         action: RecoveryAction,
         *,
         from_ts: str | None = None,
+        replacement_text: str | None = None,
     ) -> str:
         """Resolve the user query text for a retry/continue recovery action.
 
@@ -405,6 +428,10 @@ class SessionRuntime:
         :class:`ContextBuilder`, so the caller does not need to trim the
         transcript.
 
+        When *replacement_text* is provided (only meaningful for ``retry``),
+        the edited text is used instead of the original user message — enabling
+        "edit and regenerate" workflows.
+
         Raises :class:`ValueError` when ``action`` is unrecognised, there is
         no prior user message to recover from, or (for ``retry``) the last
         user message is empty.
@@ -412,14 +439,9 @@ class SessionRuntime:
         session — cancel it first.
         """
         if action not in ("retry", "continue"):
-            raise ValueError(
-                f"unknown recovery action: {action!r}; "
-                "expected 'retry' or 'continue'"
-            )
+            raise ValueError(f"unknown recovery action: {action!r}; expected 'retry' or 'continue'")
         if self.is_running(session_id):
-            raise RuntimeError(
-                f"session {session_id} is running; cancel before recovering"
-            )
+            raise RuntimeError(f"session {session_id} is running; cancel before recovering")
         events = self._session_store.load_transcript(session_id)
 
         # Find the target user event.  When *from_ts* is given (only
@@ -428,17 +450,11 @@ class SessionRuntime:
         # last one.  Otherwise fall back to the most recent user event.
         if from_ts and action == "retry":
             last_user = next(
-                (
-                    e
-                    for e in events
-                    if e.get("type") == "user" and e.get("ts") == from_ts
-                ),
+                (e for e in events if e.get("type") == "user" and e.get("ts") == from_ts),
                 None,
             )
             if last_user is None:
-                raise ValueError(
-                    f"no user event at ts={from_ts!r}"
-                )
+                raise ValueError(f"no user event at ts={from_ts!r}")
         else:
             last_user = next(
                 (e for e in reversed(events) if e.get("type") == "user"),
@@ -446,26 +462,10 @@ class SessionRuntime:
             )
         if last_user is None:
             raise ValueError(
-                "no prior user message to recover from — start with "
-                "a fresh query instead"
+                "no prior user message to recover from — start with a fresh query instead"
             )
         user_payload = last_user.get("payload") or {}
-        original_text = (
-            user_payload.get("text", "")
-            if isinstance(user_payload, dict)
-            else ""
-        )
-        # The FIRST user event's text anchors the "continue" prompt
-        # (defence-in-depth for long multi-turn sessions where the
-        # ContextBuilder may have FIFO-evicted the original task).
-        first_user = next(
-            (e for e in events if e.get("type") == "user"), None
-        )
-        first_user_text = (
-            (first_user.get("payload") or {}).get("text", "")
-            if first_user and isinstance(first_user.get("payload"), dict)
-            else original_text
-        )
+        original_text = user_payload.get("text", "") if isinstance(user_payload, dict) else ""
 
         if action == "retry":
             # ----------------------------------------------------------
@@ -474,10 +474,8 @@ class SessionRuntime:
             # sent. ``Orchestrator.run`` re-appends the user event +
             # runs a fresh attempt. Prior successful turns stay intact.
             # ----------------------------------------------------------
-            if not original_text:
-                raise ValueError(
-                    "last user message has empty text; cannot retry"
-                )
+            if not replacement_text and not original_text:
+                raise ValueError("last user message has empty text; cannot retry")
             last_user_ts = last_user.get("ts", "")
             if last_user_ts:
                 # Delete the user event itself + everything after it
@@ -492,16 +490,12 @@ class SessionRuntime:
                         break
                     prev_ts = ev.get("ts", "")
                 if prev_ts:
-                    self._session_store.truncate_after(
-                        session_id, prev_ts
-                    )
+                    self._session_store.truncate_after(session_id, prev_ts)
                 else:
                     # The user event is the first event — nuke everything
                     # by truncating after an impossibly-early timestamp.
-                    self._session_store.truncate_after(
-                        session_id, "0000-00-00T00:00:00+00:00"
-                    )
-            query_text = original_text
+                    self._session_store.truncate_after(session_id, "0000-00-00T00:00:00+00:00")
+            query_text = replacement_text or original_text
         else:
             # ----------------------------------------------------------
             # Continue = stitch: keep the failed run's traces, delete
@@ -513,12 +507,8 @@ class SessionRuntime:
                 if ev.get("type") == "completion":
                     last_completion_ts = ev.get("ts", "")
             if last_completion_ts:
-                self._session_store.truncate_after(
-                    session_id, last_completion_ts
-                )
-            query_text = _build_continue_recovery_query(
-                first_user_text or original_text
-            )
+                self._session_store.truncate_after(session_id, last_completion_ts)
+            query_text = _build_continue_recovery_query()
             # Audit marker so the transcript records when the user
             # triggered a continue. Not appended for retry (the failed
             # turn is deleted entirely — no trace left to annotate).
@@ -532,11 +522,17 @@ class SessionRuntime:
     def enqueue_message(self, session_id: str, text: str) -> bool:
         """Enqueue a steering message for the root agent of a running session.
 
+        The message is also persisted as a ``"user"`` event so it appears in
+        the session transcript (console timeline, CLI history, Langfuse).
+
         Returns False if no active run or no message queue.
         """
         handle = self._run_registry.get_handle(session_id)
         if handle and handle.message_queue is not None:
             handle.message_queue.put_nowait(text)
+            self._session_store.append_event(
+                session_id, {"type": "user_steer", "payload": {"text": text}}
+            )
             return True
         return False
 
@@ -549,6 +545,10 @@ class SessionRuntime:
         handle = self._run_registry.get_handle(session_id)
         if handle and handle.interrupt_step is not None:
             handle.interrupt_step.set()
+            self._session_store.append_event(
+                session_id,
+                {"type": "user_steer", "payload": {"text": "[Interrupted by user]"}},
+            )
             return True
         return False
 
@@ -599,6 +599,11 @@ class SessionRuntime:
                 "type": "plan_approved",
                 "payload": {"plan_path": plan_path, "revision": revision},
             },
+        )
+        # Signal mode transition so all clients pick up the change.
+        self._session_store.append_event(
+            session_id,
+            {"type": "context", "payload": {"mode": "act"}},
         )
         return True
 

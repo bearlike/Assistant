@@ -1,0 +1,59 @@
+{#
+  Shared title → Lucide icon mapping for the sidebar. Included by both
+  sidebar_item.html (leaf pages) and sidebar_section.html (expandable groups).
+
+  Icons are fetched from api.iconify.design via the shadcn theme's `iconify`
+  filter, which is LRU-cached per build so each icon is only fetched once.
+  Titles must match mkdocs.yml `nav:` labels exactly — no substring matching.
+#}
+{% set nav_icons = {
+    "Home": "lucide:house",
+    "Get Started": "lucide:rocket",
+    "Troubleshooting": "lucide:life-buoy",
+
+    "Configure": "lucide:sliders-horizontal",
+    "LLM Setup": "lucide:brain",
+    "Project Setup": "lucide:folder-cog",
+    "Configuration Reference": "lucide:file-json",
+
+    "Use": "lucide:monitor-play",
+    "CLI": "lucide:terminal",
+    "Web Console + API": "lucide:layout-dashboard",
+    "Home Assistant": "lucide:house-plug",
+    "Nextcloud Talk": "lucide:message-circle",
+    "Email": "lucide:mail",
+
+    "Capabilities": "lucide:sparkles",
+    "Workspace & Execution": "lucide:hammer",
+    "Built-in Tools": "lucide:wrench",
+    "Web IDE": "lucide:code-xml",
+    "Code Intelligence (LSP)": "lucide:zap",
+    "External Tools (MCP)": "lucide:plug",
+    "Composition & Delegation": "lucide:users",
+    "Sub-agents": "lucide:git-branch",
+    "Skills": "lucide:graduation-cap",
+    "Plugins & Marketplace": "lucide:puzzle",
+    "Control & Safety": "lucide:shield",
+    "Plan Mode": "lucide:clipboard-list",
+    "Permissions & Hooks": "lucide:lock",
+    "Session & Context": "lucide:clock",
+    "Token Usage": "lucide:coins",
+    "Compaction": "lucide:archive",
+
+    "Deploy": "lucide:package",
+    "Docker Compose": "lucide:container",
+    "Storage Backends": "lucide:database",
+    "Production Setup": "lucide:server",
+
+    "Develop": "lucide:code",
+    "Architecture Overview": "lucide:blocks",
+    "Session Runtime": "lucide:cpu",
+    "Building a Client": "lucide:hammer",
+    "API Reference": "lucide:book-open-text"
+} %}
+
+{% macro nav_icon(title) -%}
+    {%- if title in nav_icons -%}
+        {{ nav_icons[title] | iconify(height="16px") | safe }}
+    {%- endif -%}
+{%- endmacro %}
