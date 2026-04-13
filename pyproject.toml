@@ -58,7 +58,7 @@ meeseeks-api = { path = "apps/meeseeks_api", editable = true }
 meeseeks-ha-conversation = { path = "meeseeks_ha_conversation", editable = true }
 
 [build-system]
-requires = ["hatchling>=1.25.0"]
+requires = ["hatchling>=1.29.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
