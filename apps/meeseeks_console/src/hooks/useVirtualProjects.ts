@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   listProjects,
   createVirtualProject,
   updateVirtualProject,
   deleteVirtualProject,
-  invalidateCache,
 } from "../api/client";
 import { VirtualProject } from "../types";
 import { logApiError } from "../utils/errors";
 
 export function useVirtualProjects() {
+  const qc = useQueryClient();
   const [projects, setProjects] = useState<VirtualProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,30 +51,34 @@ export function useVirtualProjects() {
     return () => { mounted = false; };
   }, [fetchKey]);
 
+  const invalidateProjects = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["projects"] });
+  }, [qc]);
+
   const refresh = useCallback(() => {
-    invalidateCache("projects");
+    invalidateProjects();
     setFetchKey((k) => k + 1);
-  }, []);
+  }, [invalidateProjects]);
 
   const create = useCallback(async (name: string, description: string, path?: string) => {
     const proj = await createVirtualProject(name, description, path);
-    invalidateCache("projects");
+    invalidateProjects();
     setFetchKey((k) => k + 1);
     return proj;
-  }, []);
+  }, [invalidateProjects]);
 
   const update = useCallback(async (id: string, data: { name?: string; description?: string }) => {
     const proj = await updateVirtualProject(id, data);
-    invalidateCache("projects");
+    invalidateProjects();
     setProjects((prev) => prev.map((p) => (p.project_id === id ? { ...p, name: proj.name, description: proj.description } : p)));
     return proj;
-  }, []);
+  }, [invalidateProjects]);
 
   const remove = useCallback(async (id: string) => {
     await deleteVirtualProject(id);
-    invalidateCache("projects");
+    invalidateProjects();
     setProjects((prev) => prev.filter((p) => p.project_id !== id));
-  }, []);
+  }, [invalidateProjects]);
 
   return { projects, loading, error, refresh, create, update, remove };
 }

@@ -34,7 +34,7 @@ _CONFIG_WARNED = False
 _LAST_PREFLIGHT: dict[str, dict[str, Any]] | None = None
 _logger = logging.getLogger("core.config")
 
-_PACKAGE_NAME = "meeseeks-workspace"
+_PACKAGE_NAMES = ("meeseeks-core", "meeseeks-workspace")
 
 
 def resolve_meeseeks_home() -> Path:
@@ -54,11 +54,17 @@ def _resolve_config_path(filename: str) -> Path:
 
 
 def get_version() -> str:
-    """Return the package version from pyproject.toml (via importlib.metadata)."""
-    try:
-        return _pkg_version(_PACKAGE_NAME)
-    except PackageNotFoundError:
-        return "0.0.0"
+    """Return the package version from pyproject.toml (via importlib.metadata).
+
+    Tries ``meeseeks-core`` first (always installed), then the workspace
+    package (only available in local dev with ``uv sync``).
+    """
+    for name in _PACKAGE_NAMES:
+        try:
+            return _pkg_version(name)
+        except PackageNotFoundError:
+            continue
+    return "0.0.0"
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -224,6 +230,16 @@ class LLMConfig(BaseModel):
         ),
         examples=["anthropic/claude-haiku-4-5-20251001"],
     )
+    compact_models: list[str] = Field(
+        default_factory=lambda: ["default"],
+        description=(
+            "Priority-ordered list of models for context compaction. "
+            "On failure, the next model in the list is tried. "
+            'The keyword "default" resolves to the running agent\'s model. '
+            'Example: ["anthropic/claude-haiku-4-5-20251001", "default"]'
+        ),
+        examples=[["anthropic/claude-haiku-4-5-20251001", "default"]],
+    )
     fallback_models: list[str] = Field(
         default_factory=list,
         description=(
@@ -342,11 +358,13 @@ class LLMConfig(BaseModel):
         except ValueError as exc:
             return ConfigCheck(name="llm", enabled=True, ok=False, reason=str(exc))
         missing: list[str] = []
+        compact_explicit = {m for m in self.compact_models if m and m != "default"}
         for model_name in {
             self.default_model,
             self.action_plan_model,
             self.tool_model,
             self.title_model,
+            *compact_explicit,
         }:
             if model_name and model_name not in models:
                 missing.append(model_name)
@@ -436,19 +454,13 @@ class TokenBudgetConfig(BaseModel):
         ),
         examples=[0.8],
     )
-    overhead_estimate: int = Field(
-        25000,
-        description=(
-            "Estimated token overhead for system prompt and tool schemas. "
-            "Used by the orchestrator's coarse budget check when exact "
-            "tool schemas are not available."
-        ),
-        examples=[25000],
-    )
     model_context_windows: dict[str, int] = Field(
         default_factory=dict,
         description=(
-            "Per-model context window overrides. Keys are model names, values are token counts."
+            "Override only: per-model context window in tokens. Keys are model "
+            "names (with or without provider prefix). The authoritative source "
+            "is LiteLLM's model catalogue; populate this only to cap below the "
+            "model's real max, or for models LiteLLM doesn't know yet."
         ),
     )
 
@@ -470,15 +482,6 @@ class TokenBudgetConfig(BaseModel):
             return 0.8
         return min(max(parsed, 0.0), 1.0)
 
-    @field_validator("overhead_estimate", mode="before")
-    @classmethod
-    def _normalize_overhead_estimate(cls, value: Any) -> int:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return 25000
-        return max(parsed, 0)
-
     @field_validator("model_context_windows", mode="before")
     @classmethod
     def _normalize_model_context_windows(cls, value: Any) -> dict[str, int]:
@@ -491,6 +494,37 @@ class TokenBudgetConfig(BaseModel):
             except (TypeError, ValueError):
                 continue
         return cleaned
+
+
+class CompactionConfig(BaseModel):
+    """Summarization prompt selection for conversation compaction.
+
+    ``caveman_mode`` enables a rule-augmented prompt (inspired by the
+    ``JuliusBrussee/caveman`` Claude Code skill) that instructs the
+    summarizer LLM to drop articles, filler, pleasantries, and hedging
+    while preserving code, paths, URLs, and error strings verbatim.
+    Reduces output tokens in the compaction summary without changing the
+    ``<analysis>/<summary>`` response structure downstream parsers expect.
+    """
+
+    model_config = ConfigDict(validate_default=True)
+
+    caveman_mode: bool = Field(
+        False,
+        description=(
+            "Enable caveman-style terse summarization prompt. Drops articles, "
+            "filler, pleasantries, and hedging in the compacted summary while "
+            "preserving code, file paths, URLs, and error strings verbatim. "
+            "Reduces compaction output tokens without changing the response "
+            "structure downstream parsers expect."
+        ),
+        examples=[False],
+    )
+
+    @field_validator("caveman_mode", mode="before")
+    @classmethod
+    def _normalize_caveman_mode(cls, value: Any) -> bool:
+        return _coerce_bool(value, default=False)
 
 
 class ReflectionConfig(BaseModel):
@@ -851,7 +885,8 @@ class PluginsConfig(BaseModel):
             # Even with existing dirs, ensure all configured repos are cloned
             existing_names = {d.name for d in dirs}
             missing = [
-                r for r in self.marketplaces
+                r
+                for r in self.marketplaces
                 if (r.split("/")[-1] if "/" in r else r) not in existing_names
             ]
             if missing:
@@ -910,7 +945,7 @@ class LSPConfig(BaseModel):
         default_factory=dict,
         description=(
             "Override or extend built-in server definitions. "
-            "Set {\"pyright\": {\"disabled\": true}} to disable a built-in, "
+            'Set {"pyright": {"disabled": true}} to disable a built-in, '
             "or add custom servers with command/extensions/root_markers."
         ),
     )
@@ -992,17 +1027,47 @@ class AgentConfig(BaseModel):
     plan_mode_shell_allowlist: list[str] = Field(
         default_factory=lambda: [
             # Filesystem inspection
-            "ls", "pwd", "cat", "head", "tail", "wc", "file", "stat", "tree",
+            "ls",
+            "pwd",
+            "cat",
+            "head",
+            "tail",
+            "wc",
+            "file",
+            "stat",
+            "tree",
             # Searching
-            "find", "grep", "rg", "ag", "ack",
+            "find",
+            "grep",
+            "rg",
+            "ag",
+            "ack",
             # Environment / process / system introspection
-            "echo", "which", "whereis", "env", "printenv", "ps", "uname", "date",
+            "echo",
+            "which",
+            "whereis",
+            "env",
+            "printenv",
+            "ps",
+            "uname",
+            "date",
             # Disk usage
-            "du", "df",
+            "du",
+            "df",
             # Git read-only subcommands (prefix-matched; all flags/args allowed)
-            "git status", "git log", "git diff", "git show", "git blame",
-            "git branch", "git tag", "git remote", "git config --get",
-            "git rev-parse", "git ls-files", "git describe", "git reflog",
+            "git status",
+            "git log",
+            "git diff",
+            "git show",
+            "git blame",
+            "git branch",
+            "git tag",
+            "git remote",
+            "git config --get",
+            "git rev-parse",
+            "git ls-files",
+            "git describe",
+            "git reflog",
         ],
         description=(
             "Shell command prefixes allowed during plan mode. Each entry "
@@ -1152,9 +1217,7 @@ class StorageConfig(BaseModel):
             value = env
         raw = str(value).strip().lower() if value else "json"
         if raw not in {"json", "mongodb"}:
-            raise ValueError(
-                f"Unknown storage driver {raw!r}. Expected 'json' or 'mongodb'."
-            )
+            raise ValueError(f"Unknown storage driver {raw!r}. Expected 'json' or 'mongodb'.")
         return raw
 
 
@@ -1176,6 +1239,10 @@ def _context_config_default() -> ContextConfig:
 
 def _token_budget_config_default() -> TokenBudgetConfig:
     return TokenBudgetConfig.model_validate({})
+
+
+def _compaction_config_default() -> CompactionConfig:
+    return CompactionConfig.model_validate({})
 
 
 def _reflection_config_default() -> ReflectionConfig:
@@ -1241,6 +1308,10 @@ class AppConfig(BaseModel):
     token_budget: TokenBudgetConfig = Field(
         default_factory=_token_budget_config_default,
         description="Token budget and auto-compaction thresholds.",
+    )
+    compaction: CompactionConfig = Field(
+        default_factory=_compaction_config_default,
+        description="Conversation compaction prompt selection (caveman mode).",
     )
     reflection: ReflectionConfig = Field(
         default_factory=_reflection_config_default,

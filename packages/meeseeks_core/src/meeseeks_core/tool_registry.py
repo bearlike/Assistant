@@ -204,9 +204,7 @@ def _all_edit_tool_specs() -> list[ToolSpec]:
         tool_id="file_edit_tool",
         name="File Edit",
         description="Apply exact string replacement to a file.",
-        factory=_import_factory(
-            "meeseeks_tools.integration.file_edit_tool", "FileEditTool"
-        ),
+        factory=_import_factory("meeseeks_tools.integration.file_edit_tool", "FileEditTool"),
         prompt_path="tools/file-edit",
         concurrency_safe=False,
         metadata={
@@ -278,14 +276,17 @@ def _resolve_lsp_status() -> ComponentStatus:
 
         if not LSP_AVAILABLE:
             return ComponentStatus(
-                name="lsp_tool", enabled=False, reason="pygls not installed",
+                name="lsp_tool",
+                enabled=False,
+                reason="pygls not installed",
             )
         from meeseeks_tools.integration.lsp.servers import available_servers
 
         servers = available_servers(lsp_cfg.servers)
         if not servers:
             return ComponentStatus(
-                name="lsp_tool", enabled=False,
+                name="lsp_tool",
+                enabled=False,
                 reason="no language server binaries found on PATH",
             )
     except Exception as exc:
@@ -649,9 +650,7 @@ def _ensure_auto_manifest(
             logging.warning("Failed to read existing MCP manifest: {}", exc)
 
     # Try pool-based discovery first (faster, persistent connections)
-    pool_tools = _try_pool_discovery(
-        mcp_config_path, cwd=cwd, extra_mcp_servers=extra_mcp_servers
-    )
+    pool_tools = _try_pool_discovery(mcp_config_path, cwd=cwd, extra_mcp_servers=extra_mcp_servers)
 
     mcp_module = _load_mcp_support()
     mcp_tools: dict[str, list[dict[str, object]]] = {}

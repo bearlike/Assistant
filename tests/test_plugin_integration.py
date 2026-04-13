@@ -35,34 +35,36 @@ def test_plugin_components_fan_out(tmp_path):
     # Hooks
     (plugin_dir / "hooks").mkdir()
     (plugin_dir / "hooks" / "hooks.json").write_text(
-        json.dumps({
-            "hooks": {
-                "SessionStart": [
-                    {"hooks": [{"type": "command", "command": "echo started"}]}
-                ]
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [{"hooks": [{"type": "command", "command": "echo started"}]}]
+                }
             }
-        })
+        )
     )
     # MCP — flat format (server-name → config), no "servers" wrapper
     (plugin_dir / ".mcp.json").write_text(
-        json.dumps({
-            "test-server": {"command": "echo", "args": ["${CLAUDE_PLUGIN_ROOT}/serve"]}
-        })
+        json.dumps({"test-server": {"command": "echo", "args": ["${CLAUDE_PLUGIN_ROOT}/serve"]}})
     )
 
     # Create registry
     registry_file = tmp_path / "installed_plugins.json"
     registry_file.write_text(
-        json.dumps({
-            "version": 2,
-            "plugins": {
-                "test-plugin@test-mp": [{
-                    "scope": "user",
-                    "installPath": str(plugin_dir),
-                    "version": "1.0.0",
-                }]
-            },
-        })
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "test-plugin@test-mp": [
+                        {
+                            "scope": "user",
+                            "installPath": str(plugin_dir),
+                            "version": "1.0.0",
+                        }
+                    ]
+                },
+            }
+        )
     )
 
     from meeseeks_core.agent_registry import AgentRegistry, parse_agent_file

@@ -29,18 +29,51 @@ EXAMPLE_TAG_OPEN = '<example desc="Illustrative only; not part of the live conve
 EXAMPLE_TAG_CLOSE = "</example>"
 INTENT_KEYWORDS: dict[str, set[str]] = {
     "web": {
-        "latest", "current", "today", "now", "verify", "official", "news",
-        "fetch", "lookup", "look up", "search the web", "web search", "internet",
+        "latest",
+        "current",
+        "today",
+        "now",
+        "verify",
+        "official",
+        "news",
+        "fetch",
+        "lookup",
+        "look up",
+        "search the web",
+        "web search",
+        "internet",
     },
     "file": {
-        "file", "edit", "write", "create", "script", "patch", "diff", "repo",
-        "directory", "folder", "pwd", "local", "workspace",
+        "file",
+        "edit",
+        "write",
+        "create",
+        "script",
+        "patch",
+        "diff",
+        "repo",
+        "directory",
+        "folder",
+        "pwd",
+        "local",
+        "workspace",
     },
     "home": {
-        "home assistant", "ha", "device", "light", "switch", "sensor", "climate",
+        "home assistant",
+        "ha",
+        "device",
+        "light",
+        "switch",
+        "sensor",
+        "climate",
     },
     "shell": {
-        "shell", "command", "run", "execute", "terminal", "cli",
+        "shell",
+        "command",
+        "run",
+        "execute",
+        "terminal",
+        "cli",
     },
 }
 INTENT_CAPABILITIES: dict[str, set[str]] = {
@@ -161,12 +194,10 @@ class Planner:
         """Generate a plan from the user query."""
         if self._tool_registry is None:
             raise ValueError("Tool registry is required for planning.")
-        user_id = "meeseeks-task-master"
-        session_id = f"action-queue-id-{os.getpid()}-{os.urandom(4).hex()}"
         langfuse_handler = build_langfuse_handler(
-            user_id=user_id,
-            session_id=session_id,
-            trace_name=user_id,
+            user_id="meeseeks-task-master",
+            session_id=f"planning-{os.getpid()}-{os.urandom(4).hex()}",
+            trace_name="planning",
             version=get_version(),
             release=get_config_value("runtime", "envmode", default="Not Specified"),
         )
@@ -207,8 +238,7 @@ class Planner:
                 SystemMessage(content=system_prompt),
                 *example_messages,
                 HumanMessagePromptTemplate.from_template(
-                    "## Format Instructions\n{format_instructions}\n"
-                    f"{instruction}\n{user_prompt}"
+                    f"## Format Instructions\n{{format_instructions}}\n{instruction}\n{user_prompt}"
                 ),
             ],
             partial_variables={"format_instructions": parser.get_format_instructions()},
@@ -226,12 +256,11 @@ class Planner:
             metadata = getattr(langfuse_handler, "langfuse_metadata", None)
             if isinstance(metadata, dict) and metadata:
                 config["metadata"] = metadata
-        with langfuse_trace_span("action-plan") as span:
-            if span is not None:
-                try:
-                    span.update_trace(input={"user_query": user_query.strip()})
-                except Exception:
-                    pass
+        with langfuse_trace_span(
+            "planning",
+            metadata={"model": model_name, "mode": mode},
+            input_data={"user_query": user_query.strip()[:200]},
+        ) as span:
             action_plan = (prompt | model | parser).invoke(
                 {"user_query": user_query.strip()},
                 config=config or None,

@@ -11,7 +11,6 @@ from collections.abc import Callable
 from meeseeks_core.agent_context import AgentContext
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, PlanStep, TaskQueue
 from meeseeks_core.common import discover_project_instructions, get_logger, session_log_context
-from meeseeks_core.compaction import should_compact, summarize_events
 from meeseeks_core.components import langfuse_session_context
 from meeseeks_core.config import PluginsConfig, get_config, get_config_value
 from meeseeks_core.context import ContextBuilder
@@ -38,9 +37,7 @@ logging = get_logger(name="core.orchestrator")
 _CLOSURE_ERROR_MAX_LEN = 500
 
 
-def _format_assistant_closure(
-    done_reason: str | None, last_error: str | None
-) -> str:
+def _format_assistant_closure(done_reason: str | None, last_error: str | None) -> str:
     """Return a short human-readable closure marker for a terminal run.
 
     Emitted when a run ends without a real ``task_result`` so every user
@@ -85,8 +82,10 @@ class Orchestrator:
             or get_config_value("llm", "action_plan_model")
             or get_config_value("llm", "default_model", default="gpt-5.2")
         )
-        self._fallback_models = fallback_models if fallback_models is not None else tuple(
-            get_config_value("llm", "fallback_models", default=[]) or []
+        self._fallback_models = (
+            fallback_models
+            if fallback_models is not None
+            else tuple(get_config_value("llm", "fallback_models", default=[]) or [])
         )
         self._session_store = session_store or create_session_store()
         self._permission_policy = permission_policy or load_permission_policy()
@@ -136,7 +135,8 @@ class Orchestrator:
             plugin_mcp_servers = {}
 
         self._tool_registry = tool_registry or load_registry(
-            cwd=cwd, extra_mcp_servers=plugin_mcp_servers or None,
+            cwd=cwd,
+            extra_mcp_servers=plugin_mcp_servers or None,
         )
         self._context_builder = ContextBuilder(self._session_store)
         self._planner = Planner(self._tool_registry)
@@ -160,13 +160,21 @@ class Orchestrator:
         skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
+        user_id: str | None = None,
+        source_platform: str | None = None,
+        invocation_id: str | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration for a session."""
         if session_id is None:
             session_id = self._session_store.create_session()
 
         with session_log_context(session_id):
-            with langfuse_session_context(session_id):
+            with langfuse_session_context(
+                session_id,
+                user_id=user_id,
+                invocation_id=invocation_id,
+                source_platform=source_platform,
+            ):
                 return self._run_with_session_context(
                     user_query,
                     max_iters=max_iters,
@@ -221,7 +229,11 @@ class Orchestrator:
                 state.summary = updated_summary
 
             if user_query.strip() == "/compact":
-                summary = summarize_events(self._session_store.load_transcript(session_id))
+                from meeseeks_core.compact import CompactionMode, compact_conversation
+
+                events = self._session_store.load_transcript(session_id)
+                result = asyncio.run(compact_conversation(events, CompactionMode.FULL))
+                summary = result.summary
                 self._session_store.save_summary(session_id, summary)
                 state.summary = summary
                 state.done = True
@@ -323,9 +335,7 @@ class Orchestrator:
                     {"type": "assistant", "payload": {"text": task_queue.task_result}},
                 )
             else:
-                closure = _format_assistant_closure(
-                    state.done_reason, task_queue.last_error
-                )
+                closure = _format_assistant_closure(state.done_reason, task_queue.last_error)
                 self._session_store.append_event(
                     session_id,
                     {"type": "assistant", "payload": {"text": closure}},
@@ -370,11 +380,7 @@ class Orchestrator:
                 session_id,
                 {
                     "type": "assistant",
-                    "payload": {
-                        "text": _format_assistant_closure(
-                            state.done_reason, str(exc)
-                        )
-                    },
+                    "payload": {"text": _format_assistant_closure(state.done_reason, str(exc))},
                 },
             )
             self._session_store.append_event(
@@ -430,50 +436,65 @@ class Orchestrator:
                 {"type": "title_update", "payload": {"title": title}},
             )
         except Exception as exc:
-            logging.warning(
-                "Title generation failed: {}: {}", type(exc).__name__, exc
-            )
+            logging.warning("Title generation failed: {}: {}", type(exc).__name__, exc)
 
     def _maybe_auto_compact(self, session_id: str) -> str | None:
+        from meeseeks_core.token_budget import read_last_input_tokens
+
         events = self._session_store.load_transcript(session_id)
         events = self._hook_manager.run_pre_compact(events)
         summary = self._session_store.load_summary(session_id)
-        overhead = int(get_config_value("token_budget", "overhead_estimate", default=25000))
-        budget = get_token_budget(events, summary, self._model_name, overhead_tokens=overhead)
-        if budget.needs_compact or should_compact(events):
-            tokens_saved = 0
-            try:
-                from meeseeks_core.compact import CompactionMode, compact_conversation
+        last_input_tokens = read_last_input_tokens(events)
+        budget = get_token_budget(
+            events,
+            summary,
+            self._model_name,
+            last_input_tokens=last_input_tokens,
+        )
+        if not budget.needs_compact:
+            return None
+        compact_model = self._model_name
+        try:
+            from meeseeks_core.compact import CompactionMode, compact_conversation
 
-                result = asyncio.get_event_loop().run_until_complete(
-                    compact_conversation(
-                        events,
-                        CompactionMode.PARTIAL,
-                        model_name=self._model_name,
-                    )
-                )
-                summary = result.summary
-                tokens_saved = result.tokens_saved
-            except Exception:
-                logging.warning(
-                    "Structured compaction failed, falling back to simple summary",
-                    exc_info=True,
-                )
-                summary = summarize_events(events)
-            self._session_store.save_summary(session_id, summary)
-            self._session_store.append_event(session_id, {
+            result = asyncio.run(compact_conversation(events, CompactionMode.PARTIAL))
+            compact_model = result.model or self._model_name
+            summary = result.summary
+            tokens_saved = result.tokens_saved
+        except Exception:
+            # Structured compaction failed. Do NOT substitute concatenated raw
+            # event text — it would poison the context. Skip this cycle; the
+            # next turn will try again.
+            logging.warning("Structured compaction failed; skipping cycle", exc_info=True)
+            return None
+        self._session_store.save_summary(session_id, summary)
+        events_summarized = len(events)
+        self._session_store.append_event(
+            session_id,
+            {
                 "type": "context_compacted",
                 "payload": {
                     "agent_id": None,
                     "depth": 0,
                     "mode": "auto",
+                    "model": compact_model,
                     "tokens_before": budget.total_tokens,
                     "tokens_saved": tokens_saved,
+                    "tokens_after": budget.total_tokens - tokens_saved,
+                    "events_summarized": events_summarized,
+                    "summary": summary,
+                    "fallback": False,
                 },
-            })
-            self._hook_manager.run_on_compact(session_id)
-            return summary
-        return None
+            },
+        )
+        self._hook_manager.run_on_compact(
+            session_id,
+            summary=summary,
+            tokens_before=budget.total_tokens,
+            tokens_saved=tokens_saved,
+            events_summarized=events_summarized,
+        )
+        return summary
 
     def _append_action_plan(self, session_id: str, steps: list[PlanStep]) -> None:
         payload_steps = [{"title": step.title, "description": step.description} for step in steps]
@@ -500,9 +521,7 @@ class Orchestrator:
         cfg = plugins_cfg
         registry_paths = cfg.resolve_registry_paths()
         installed = discover_installed_plugins(registry_paths=registry_paths)
-        installed_names = {
-            pc.manifest.name for pc in installed if pc.manifest is not None
-        }
+        installed_names = {pc.manifest.name for pc in installed if pc.manifest is not None}
         missing = [
             name.split("@")[0]
             for name in cfg.enabled_plugins
@@ -512,6 +531,7 @@ class Orchestrator:
             return
 
         from meeseeks_core.common import get_logger
+
         _log = get_logger(name="core.orchestrator")
         _log.info("Reconciling {} missing plugin(s): {}", len(missing), missing)
 

@@ -77,8 +77,8 @@ class LSPTool(AbstractTool):
             character = tool_input.get("character", 0)
             return self._do_navigation(manager, resolved, operation, line, character)
         else:
-            return MockSpeaker(content=
-                f"Unknown operation '{operation}'. "
+            return MockSpeaker(
+                content=f"Unknown operation '{operation}'. "
                 "Use: diagnostics, definition, references, hover"
             )
 
@@ -92,11 +92,11 @@ class LSPTool(AbstractTool):
         if client is None:
             sdef = manager.server_for_file(file_path)
             if sdef is None:
-                return MockSpeaker(content=
-                    f"No language server configured for {Path(file_path).suffix} files."
+                return MockSpeaker(
+                    content=f"No language server configured for {Path(file_path).suffix} files."
                 )
-            return MockSpeaker(content=
-                f"Language server '{sdef.id}' is not available. "
+            return MockSpeaker(
+                content=f"Language server '{sdef.id}' is not available. "
                 f"Install it: {sdef.command[0]}"
             )
 
@@ -105,19 +105,25 @@ class LSPTool(AbstractTool):
 
         # Give the server a moment to publish diagnostics
         import time
+
         time.sleep(2)
 
         diags = manager.get_cached_diagnostics(file_path)
         return MockSpeaker(content=self._format_diagnostics(file_path, diags, manager))
 
     def _do_navigation(
-        self, manager: Any, file_path: str, operation: str, line: int, character: int,
+        self,
+        manager: Any,
+        file_path: str,
+        operation: str,
+        line: int,
+        character: int,
     ) -> MockSpeaker:
         """Handle definition/references/hover."""
         client = run_lsp_async(manager.ensure_server(file_path))
         if client is None:
-            return MockSpeaker(content=
-                f"No language server available for {Path(file_path).suffix} files."
+            return MockSpeaker(
+                content=f"No language server available for {Path(file_path).suffix} files."
             )
 
         # Ensure file is open
@@ -167,7 +173,9 @@ class LSPTool(AbstractTool):
 
     @staticmethod
     def _format_diagnostics(
-        file_path: str, diags: list[types.Diagnostic], manager: Any,
+        file_path: str,
+        diags: list[types.Diagnostic],
+        manager: Any,
     ) -> str:
         sdef = manager.server_for_file(file_path)
         server_name = sdef.id if sdef else "unknown"
@@ -178,8 +186,10 @@ class LSPTool(AbstractTool):
 
         # Filter to errors and warnings only
         relevant = [
-            d for d in diags
-            if d.severity in (
+            d
+            for d in diags
+            if d.severity
+            in (
                 types.DiagnosticSeverity.Error,
                 types.DiagnosticSeverity.Warning,
                 None,  # some servers omit severity
@@ -200,9 +210,7 @@ class LSPTool(AbstractTool):
             else:
                 warnings += 1
             code_str = f" ({d.code})" if d.code else ""
-            lines.append(
-                f"line {d.range.start.line + 1}: {sev} — {d.message}{code_str}"
-            )
+            lines.append(f"line {d.range.start.line + 1}: {sev} — {d.message}{code_str}")
 
         lines.append(f"\n{errors} error(s), {warnings} warning(s)")
         if len(relevant) > 50:
@@ -211,10 +219,7 @@ class LSPTool(AbstractTool):
 
     @staticmethod
     def _format_locations(
-        result: types.Location
-        | list[types.Location]
-        | list[types.LocationLink]
-        | None,
+        result: types.Location | list[types.Location] | list[types.LocationLink] | None,
         label: str,
     ) -> str:
         if result is None:

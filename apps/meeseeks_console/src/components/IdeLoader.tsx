@@ -8,7 +8,7 @@ import {
   IdeInstance,
   IdeStatus,
 } from "../api/ide";
-import { Button } from "./ui/Button";
+import { Button } from "./ui/button";
 
 type LoaderPhase = "creating" | "polling" | "redirecting" | "error";
 

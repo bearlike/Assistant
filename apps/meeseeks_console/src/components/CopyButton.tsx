@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { copyText } from '../utils/clipboard';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
 
 /**
  * Copy-to-clipboard button with icon-swap feedback. Uses the shared Button

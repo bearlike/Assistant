@@ -85,8 +85,10 @@ class LSPServerManager:
         resolved = Path(file_path).resolve()
         uri = resolved.as_uri()
         sdef = self.server_for_file(file_path)
-        lang_id = sdef.language_id if sdef else _EXTENSION_LANGUAGE_MAP.get(
-            resolved.suffix.lower(), "plaintext"
+        lang_id = (
+            sdef.language_id
+            if sdef
+            else _EXTENSION_LANGUAGE_MAP.get(resolved.suffix.lower(), "plaintext")
         )
         try:
             text = resolved.read_text(encoding="utf-8", errors="replace")

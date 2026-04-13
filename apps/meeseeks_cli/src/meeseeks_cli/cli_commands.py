@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from meeseeks_core.config import get_config_value, get_mcp_config_path
-from meeseeks_core.token_budget import get_token_budget
+from meeseeks_core.token_budget import get_token_budget, read_last_input_tokens
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, load_registry
 from rich import box
 from rich.console import Console, Group
@@ -170,9 +170,7 @@ def _run_recovery(context: CommandContext, action: str) -> bool:
     used by ``/compact``.
     """
     try:
-        query = context.runtime.resolve_recovery_query(
-            context.state.session_id, action
-        )
+        query = context.runtime.resolve_recovery_query(context.state.session_id, action)
     except (ValueError, RuntimeError) as exc:
         context.console.print(f"Cannot {action}: {exc}", style="yellow")
         return True
@@ -188,9 +186,7 @@ def _run_recovery(context: CommandContext, action: str) -> bool:
     if task_queue.task_result:
         context.console.print(Panel(task_queue.task_result, title="Response"))
     elif task_queue.last_error:
-        context.console.print(
-            f"{action.title()} failed: {task_queue.last_error}", style="red"
-        )
+        context.console.print(f"{action.title()} failed: {task_queue.last_error}", style="red")
     return True
 
 
@@ -200,9 +196,7 @@ def _cmd_retry(context: CommandContext, args: list[str]) -> bool:
     return _run_recovery(context, "retry")
 
 
-@REGISTRY.command(
-    "/continue", "Resume after a failed run with a recovery prompt"
-)
+@REGISTRY.command("/continue", "Resume after a failed run with a recovery prompt")
 def _cmd_continue(context: CommandContext, args: list[str]) -> bool:
     del args
     return _run_recovery(context, "continue")
@@ -266,9 +260,7 @@ def _cmd_fork(context: CommandContext, args: list[str]) -> bool:
             return True
         tag = tag.strip() or None
     if at_ts:
-        new_session_id = context.store.fork_session_at(
-            context.state.session_id, at_ts
-        )
+        new_session_id = context.store.fork_session_at(context.state.session_id, at_ts)
     else:
         new_session_id = context.store.fork_session(context.state.session_id)
     context.state.session_id = new_session_id
@@ -364,8 +356,7 @@ def _cmd_skills(context: CommandContext, args: list[str]) -> bool:
     if not skills:
         context.console.print("No skills discovered.")
         context.console.print(
-            "Place SKILL.md files in ~/.claude/skills/<name>/ "
-            "or .claude/skills/<name>/",
+            "Place SKILL.md files in ~/.claude/skills/<name>/ or .claude/skills/<name>/",
             style="dim",
         )
         return True
@@ -698,12 +689,31 @@ def _cmd_automatic(context: CommandContext, args: list[str]) -> bool:
     return True
 
 
+def _resolve_cli_model(context: CommandContext) -> str:
+    """Return the effective model name, falling back to config default.
+
+    The CLI leaves ``state.model_name`` empty when ``--model`` was not
+    supplied and relies on ``build_chat_model`` to pick the default at
+    LLM-call time. Usage/budget helpers that resolve the context window
+    via LiteLLM need an explicit name — feed them the same default.
+    """
+    name = context.state.model_name or ""
+    if name:
+        return name
+    return str(get_config_value("llm", "default_model", default="") or "")
+
+
 @REGISTRY.command("/tokens", "Show token usage and remaining context")
 def _cmd_tokens(context: CommandContext, args: list[str]) -> bool:
     del args
     events = context.store.load_transcript(context.state.session_id)
     summary = context.store.load_summary(context.state.session_id)
-    budget = get_token_budget(events, summary, context.state.model_name)
+    budget = get_token_budget(
+        events,
+        summary,
+        _resolve_cli_model(context),
+        last_input_tokens=read_last_input_tokens(events),
+    )
     table = Table(title="Token Budget", show_lines=True)
     table.add_column("Metric", style="cyan")
     table.add_column("Value")

@@ -5,14 +5,9 @@
   Your browser does not support the video tag.
 </video>
 
-The CLI client lives in `apps/meeseeks_cli/`. It is a terminal-native client for developers working in the local environment, running the core runtime in-process and executing tools directly against local files and shell commands. The key distinction from the Meeseeks Console (web client) is execution context and autonomy: the CLI operates directly on the local machine, while the web client delegates through the API. Both clients share the same core runtime and can run long-lived tasks.
+The CLI is a terminal-native client for developers working in their local environment. It runs the core runtime in-process, so tools execute directly against your local files and shell — no API round-trip. The main difference from the web console is execution context and autonomy: the CLI operates on your local machine, while the web console delegates work through the API. Both clients share the same underlying runtime and can run long-lived tasks.
 
-## Setup (uv)
-```bash
-uv sync --extra cli
-```
-
-Before running, complete [Installation](getting-started.md) and [LLM setup](llm-setup.md).
+See [Get Started](getting-started.md#cli-setup) for installation.
 
 ## Run
 ```bash
@@ -63,3 +58,44 @@ uv run meeseeks
 | `/automatic [on\|off]` | Auto-approve tool actions. | Use `--yes` to confirm in non-interactive mode. |
 | `/tokens` | Show token usage and remaining context. |  |
 | `/budget` | Show token usage and remaining context. | Alias for `/tokens`. |
+
+## Session management
+
+### Tags and resuming
+
+Sessions can be tagged for easy retrieval:
+
+```bash
+meeseeks --tag my-project       # create or resume a tagged session
+meeseeks --session <session-id> # resume by ID
+```
+
+### Forking
+
+Fork a session to branch from any point in its history:
+
+```bash
+meeseeks --fork my-project      # fork from a tagged session at its current state
+```
+
+Inside a running session, `/fork [tag]` creates a new session branching from the current conversation state. The optional tag names the fork for later retrieval.
+
+### Forking from a message
+
+In the console, every message has a "Fork from here" option that creates a new session with history up to that point. In the CLI, use `/fork` to branch from the current session state. The API equivalent is `POST /api/sessions` with `fork_from` and `fork_at_ts`.
+
+## Token usage
+
+View current token consumption at any time:
+
+```bash
+/tokens   # or /budget (alias)
+```
+
+A usage summary appears below each response showing:
+
+- Root input/output tokens and LLM call count
+- Sub-agent rollup (if any agents were spawned)
+- Compaction count and tokens saved
+
+See [Token Usage & Caching](features-token-usage.md) for details.

@@ -26,6 +26,7 @@ def _isolate_personal_skills(tmp_path, monkeypatch):
 # Helpers
 # ------------------------------------------------------------------
 
+
 def _write_skill(base, name, body, *, source="project", **meta_overrides):
     """Write a SKILL.md file into the expected directory structure."""
     import yaml
@@ -353,6 +354,7 @@ class TestSkillRegistry:
         assert len(registry.list_all()) == 1
 
         import shutil
+
         shutil.rmtree(skills_dir / "deletable")
         changed = registry.maybe_reload()
         assert changed is True

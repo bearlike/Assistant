@@ -8,8 +8,8 @@ import {
   SessionExport,
   SessionSummary,
   ShareRecord
-} from '../types';
-import { SkillSummary, ToolSummary } from '../api/contracts';
+} from '../../types';
+import { SkillSummary, ToolSummary } from '../../api/contracts';
 
 // ---------------------------------------------------------------------------
 // In-memory state (persists for the browser session)

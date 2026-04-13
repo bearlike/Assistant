@@ -27,7 +27,11 @@ from langchain_core.messages import (
 from meeseeks_core.agent_context import AgentContext
 from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
 from meeseeks_core.common import get_git_context, get_logger, get_mock_speaker, get_system_prompt
-from meeseeks_core.components import build_langfuse_handler, langfuse_trace_span
+from meeseeks_core.components import (
+    build_langfuse_handler,
+    langfuse_propagate,
+    langfuse_trace_span,
+)
 from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.context import ContextSnapshot, render_event_lines
 from meeseeks_core.exit_plan_mode import (
@@ -70,7 +74,8 @@ def _classify_llm_error(exc: Exception) -> tuple[bool, float]:
     if isinstance(exc, litellm_exc.ContextWindowExceededError):
         return False, 0
     if isinstance(
-        exc, litellm_exc.AuthenticationError | litellm_exc.PermissionDeniedError,
+        exc,
+        litellm_exc.AuthenticationError | litellm_exc.PermissionDeniedError,
     ):
         return False, 0
     if isinstance(exc, litellm_exc.BadRequestError):
@@ -243,8 +248,9 @@ class ToolUseLoop:
         # Plan-mode state (mutable across the loop's lifetime).
         self._current_mode: str = "act"
         self._full_tool_specs: list[ToolSpec] = []
-        # Overhead tokens from tool schemas + system prompt (computed at bind time).
-        self._overhead_tokens: int = 0
+        # Authoritative token count from the most recent LLM response's
+        # usage_metadata.input_tokens. Zero until the first call lands.
+        self._last_input_tokens: int = 0
 
         # Create SpawnAgentTool when this agent can spawn children.
         self._spawn_agent_tool: Any = None
@@ -325,6 +331,11 @@ class ToolUseLoop:
         if self._ctx.depth == 0:
             watchdog_task = asyncio.create_task(self._watchdog())
 
+        # Langfuse context managers — initialized in try, cleaned in finally.
+        agent_span: Any = None
+        _agent_span_cm: Any = None
+        _propagate_cm: Any = None
+
         try:
             # Ref: [DeepMind-Delegation §4.5] Global eye for root agent
             agent_tree = ""
@@ -339,18 +350,10 @@ class ToolUseLoop:
                 agent_tree=agent_tree,
             )
             tool_schemas = self._build_tool_schemas_for_mode(
-                tool_specs, self._current_mode,
+                tool_specs,
+                self._current_mode,
             )
             model = self._bind_model(tool_schemas)
-
-            # Compute overhead once — tool schemas + system prompt tokens
-            # that are invisible to event-based budget calculations.
-            from meeseeks_core.token_budget import estimate_overhead_tokens
-
-            system_text = messages[0].content if messages else ""
-            self._overhead_tokens = estimate_overhead_tokens(
-                tool_schemas, system_text if isinstance(system_text, str) else "",
-            )
 
             langfuse_handler = build_langfuse_handler(
                 user_id="meeseeks-tool-use",
@@ -365,6 +368,29 @@ class ToolUseLoop:
                 metadata = getattr(langfuse_handler, "langfuse_metadata", None)
                 if isinstance(metadata, dict) and metadata:
                     invoke_config["metadata"] = metadata
+
+            # -- Langfuse: agent-level span + attribute propagation --------
+            _agent_role = "root" if self._ctx.depth == 0 else f"child-{self._ctx.agent_id[:8]}"
+            _agent_span_name = f"agent:{_agent_role}"
+            _agent_span_cm = langfuse_trace_span(
+                _agent_span_name,
+                metadata={
+                    "agentid": self._ctx.agent_id[:12],
+                    "model": self._ctx.model_name,
+                    "depth": str(self._ctx.depth),
+                    "mode": self._current_mode,
+                },
+                input_data={"task": user_query[:200]},
+            )
+            agent_span = _agent_span_cm.__enter__()
+            _propagate_cm = langfuse_propagate(
+                tags=[
+                    "meeseeks-tool-use",
+                    f"model:{self._ctx.model_name}",
+                    f"depth:{self._ctx.depth}",
+                ]
+            )
+            _propagate_cm.__enter__()
 
             turns = 0
             compacted_this_turn = False
@@ -392,12 +418,16 @@ class ToolUseLoop:
                         except _queue_mod.Empty:
                             break
 
-                with langfuse_trace_span("tool-use-step") as span:
+                with langfuse_trace_span(
+                    f"step:{turns}",
+                    metadata={
+                        "turn": str(turns),
+                        "model": self._ctx.model_name,
+                    },
+                ) as span:
                     if span is not None:
                         try:
-                            span.update_trace(
-                                input={"turn": turns, "message_count": len(messages)}
-                            )
+                            span.update_trace(input={"turn": turns, "message_count": len(messages)})
                         except Exception:
                             pass
 
@@ -413,24 +443,30 @@ class ToolUseLoop:
 
                     llm_timeout = float(
                         get_config_value(
-                            "agent", "llm_call_timeout", default=60.0,
+                            "agent",
+                            "llm_call_timeout",
+                            default=60.0,
                         )
                     )
                     llm_max_retries = int(
                         get_config_value(
-                            "agent", "llm_call_retries", default=2,
+                            "agent",
+                            "llm_call_retries",
+                            default=2,
                         )
                     )
                     # Heartbeat events so clients (console/CLI) can distinguish
                     # "waiting on LLM" from a silent hang.
-                    self._emit_event({
-                        "type": "llm_call_start",
-                        "payload": {
-                            "agent_id": self._ctx.agent_id,
-                            "depth": self._ctx.depth,
-                            "step": turns,
-                        },
-                    })
+                    self._emit_event(
+                        {
+                            "type": "llm_call_start",
+                            "payload": {
+                                "agent_id": self._ctx.agent_id,
+                                "depth": self._ctx.depth,
+                                "step": turns,
+                            },
+                        }
+                    )
                     response: AIMessage | None = None
                     last_exc: Exception | None = None
                     non_retryable = False
@@ -445,18 +481,20 @@ class ToolUseLoop:
                             active_model = build_chat_model(
                                 model_name=try_model_name,
                             ).bind_tools(tool_schemas)
-                            self._emit_event({
-                                "type": "llm_retry",
-                                "payload": {
-                                    "agent_id": self._ctx.agent_id,
-                                    "depth": self._ctx.depth,
-                                    "step": turns,
-                                    "attempt": 0,
-                                    "max_attempts": 1,
-                                    "error": str(last_exc)[:200],
-                                    "fallback_to": try_model_name,
-                                },
-                            })
+                            self._emit_event(
+                                {
+                                    "type": "llm_retry",
+                                    "payload": {
+                                        "agent_id": self._ctx.agent_id,
+                                        "depth": self._ctx.depth,
+                                        "step": turns,
+                                        "attempt": 0,
+                                        "max_attempts": 1,
+                                        "error": str(last_exc)[:200],
+                                        "fallback_to": try_model_name,
+                                    },
+                                }
+                            )
                             logging.warning(
                                 "Falling back to %s (%s)",
                                 try_model_name,
@@ -467,58 +505,74 @@ class ToolUseLoop:
                         for attempt in range(1, retries + 1):
                             try:
                                 response = await asyncio.wait_for(
-                                    active_model.ainvoke(
-                                        messages, config=invoke_config or None
-                                    ),
+                                    active_model.ainvoke(messages, config=invoke_config or None),
                                     timeout=llm_timeout,
                                 )
+                                _usage = getattr(response, "usage_metadata", None)
+                                if _usage:
+                                    _h = await self._ctx.registry.get(self._ctx.agent_id)
+                                    if _h:
+                                        _h.input_tokens += _usage.get("input_tokens", 0)
+                                        _h.output_tokens += _usage.get("output_tokens", 0)
+                                    # Authoritative signal for compaction: what
+                                    # the API just said this prompt consumed.
+                                    self._last_input_tokens = int(
+                                        _usage.get("input_tokens", 0) or 0
+                                    )
                                 break
                             except (asyncio.TimeoutError, Exception) as exc:
                                 last_exc = exc
                                 should_retry, delay = _classify_llm_error(exc)
                                 if not should_retry:
                                     # Reactive fallback: compact on context overflow.
-                                    if (
-                                        _is_context_overflow(exc)
-                                        and not compacted_this_turn
-                                        and await self._compact_messages(messages)
-                                    ):
+                                    _compact_info = (
+                                        await self._compact_messages(messages)
+                                        if _is_context_overflow(exc) and not compacted_this_turn
+                                        else None
+                                    )
+                                    if _compact_info:
                                         compacted_this_turn = True
                                         await self._ctx.registry.record_compaction(
                                             self._ctx.agent_id,
                                         )
-                                        self._emit_event({
-                                            "type": "context_compacted",
-                                            "payload": {
-                                                "agent_id": self._ctx.agent_id,
-                                                "depth": self._ctx.depth,
-                                                "mode": "reactive",
-                                                "turn": turns,
-                                            },
-                                        })
+                                        self._emit_event(
+                                            {
+                                                "type": "context_compacted",
+                                                "payload": {
+                                                    **_compact_info,
+                                                    "agent_id": self._ctx.agent_id,
+                                                    "depth": self._ctx.depth,
+                                                    "mode": "reactive",
+                                                    "turn": turns,
+                                                },
+                                            }
+                                        )
                                         continue  # Retry with compacted messages
                                     non_retryable = True
                                     break  # Don't cascade non-retryable errors
                                 if attempt == retries:
                                     break  # Next model or final failure
-                                self._emit_event({
-                                    "type": "llm_retry",
-                                    "payload": {
-                                        "agent_id": self._ctx.agent_id,
-                                        "depth": self._ctx.depth,
-                                        "step": turns,
-                                        "attempt": attempt,
-                                        "max_attempts": retries,
-                                        "error": str(exc)[:200],
-                                        "delay": delay,
-                                        "retryable": should_retry,
-                                    },
-                                })
+                                self._emit_event(
+                                    {
+                                        "type": "llm_retry",
+                                        "payload": {
+                                            "agent_id": self._ctx.agent_id,
+                                            "depth": self._ctx.depth,
+                                            "step": turns,
+                                            "attempt": attempt,
+                                            "max_attempts": retries,
+                                            "error": str(exc)[:200],
+                                            "delay": delay,
+                                            "retryable": should_retry,
+                                        },
+                                    }
+                                )
                                 logging.warning(
-                                    "LLM call attempt {}/{} failed ({}), "
-                                    "retrying in {:.1f}s",
-                                    attempt, retries,
-                                    str(exc)[:100], delay,
+                                    "LLM call attempt {}/{} failed ({}), retrying in {:.1f}s",
+                                    attempt,
+                                    retries,
+                                    str(exc)[:100],
+                                    delay,
                                 )
                                 if delay > 0:
                                     await asyncio.sleep(delay)
@@ -526,28 +580,75 @@ class ToolUseLoop:
                             break  # Success
 
                     if response is None:
-                        self._emit_event({
-                            "type": "llm_call_end",
-                            "payload": {
-                                "agent_id": self._ctx.agent_id,
-                                "depth": self._ctx.depth,
-                                "step": turns,
-                            },
-                        })
+                        self._emit_event(
+                            {
+                                "type": "llm_call_end",
+                                "payload": {
+                                    "agent_id": self._ctx.agent_id,
+                                    "depth": self._ctx.depth,
+                                    "step": turns,
+                                },
+                            }
+                        )
+                        # Enrich Langfuse span with structured error info.
+                        if span is not None:
+                            try:
+                                span.update(
+                                    level="ERROR",
+                                    status_message=str(last_exc)[:500],
+                                    metadata={
+                                        "errortype": type(last_exc).__name__
+                                        if last_exc
+                                        else "Unknown",
+                                        "models_tried": ",".join(models_to_try),
+                                    },
+                                )
+                            except Exception:
+                                pass
                         raise RuntimeError(
                             f"LLM call failed on all models "
                             f"({', '.join(models_to_try)}): "
                             f"{last_exc}"
                         ) from last_exc
-                    self._emit_event({
-                        "type": "llm_call_end",
-                        "payload": {
-                            "agent_id": self._ctx.agent_id,
-                            "depth": self._ctx.depth,
-                            "step": turns,
-                        },
-                    })
                     assert response is not None  # guaranteed by loop or raise
+                    _step_usage = getattr(response, "usage_metadata", None)
+                    _h_ref = await self._ctx.registry.get(self._ctx.agent_id)
+                    # LangChain ``UsageMetadata`` exposes provider cache and
+                    # reasoning subtotals (Anthropic + OpenAI normalised):
+                    #   input_token_details.cache_creation — written to cache
+                    #     this call (Anthropic 5-min: 1.25× input price)
+                    #   input_token_details.cache_read — served from cache
+                    #     (Anthropic: 0.1× input; OpenAI: 0.5× input)
+                    #   output_token_details.reasoning — extended-thinking /
+                    #     o1 hidden tokens (billed as output)
+                    # Capturing them per call lets clients show fresh-vs-
+                    # cached breakdown and an honest billable signal that
+                    # accounts for cache discounts.
+                    _in_det = _step_usage.get("input_token_details") or {} if _step_usage else {}
+                    _out_det = _step_usage.get("output_token_details") or {} if _step_usage else {}
+                    self._emit_event(
+                        {
+                            "type": "llm_call_end",
+                            "payload": {
+                                "agent_id": self._ctx.agent_id,
+                                "depth": self._ctx.depth,
+                                "step": turns,
+                                "input_tokens": (
+                                    _step_usage.get("input_tokens", 0) if _step_usage else 0
+                                ),
+                                "output_tokens": (
+                                    _step_usage.get("output_tokens", 0) if _step_usage else 0
+                                ),
+                                "cache_creation_input_tokens": int(
+                                    _in_det.get("cache_creation", 0) or 0
+                                ),
+                                "cache_read_input_tokens": int(_in_det.get("cache_read", 0) or 0),
+                                "reasoning_output_tokens": int(_out_det.get("reasoning", 0) or 0),
+                                "cumulative_input_tokens": (_h_ref.input_tokens if _h_ref else 0),
+                                "cumulative_output_tokens": (_h_ref.output_tokens if _h_ref else 0),
+                            },
+                        }
+                    )
                     # Strip thinking blocks from the response before appending
                     # to the conversation history.  Anthropic requires a
                     # ``signature`` field on thinking blocks when replayed,
@@ -565,19 +666,15 @@ class ToolUseLoop:
                         # history cause extended-thinking models to
                         # hallucinate framework-style placeholders.
                         if not sanitized:
-                            sanitized = [
-                                {"type": "text", "text": _NO_CONTENT_PLACEHOLDER}
-                            ]
+                            sanitized = [{"type": "text", "text": _NO_CONTENT_PLACEHOLDER}]
                         response = AIMessage(
                             content=sanitized,
                             tool_calls=response.tool_calls,
                             additional_kwargs=response.additional_kwargs,
+                            usage_metadata=response.usage_metadata,
                             id=response.id,
                         )
-                    elif (
-                        response.tool_calls
-                        and (not raw or not str(raw).strip())
-                    ):
+                    elif response.tool_calls and (not raw or not str(raw).strip()):
                         # The proxy (LiteLLM) strips thinking blocks itself
                         # and returns ``content=""`` (a STRING, not a list).
                         # Without this branch, the empty string survives
@@ -587,15 +684,14 @@ class ToolUseLoop:
                             content=_NO_CONTENT_PLACEHOLDER,
                             tool_calls=response.tool_calls,
                             additional_kwargs=response.additional_kwargs,
+                            usage_metadata=response.usage_metadata,
                             id=response.id,
                         )
                     messages.append(response)
 
                     if not response.tool_calls:
                         # Text response — task is done.
-                        content = self._extract_text_content(
-                            getattr(response, "content", "")
-                        )
+                        content = self._extract_text_content(getattr(response, "content", ""))
                         final_response = content
                         tool_outputs.append(content)
                         state.done = True
@@ -603,18 +699,18 @@ class ToolUseLoop:
                         break
 
                     # Emit intermediate text as agent_message for trace logs.
-                    text_content = self._extract_text_content(
-                        getattr(response, "content", "")
-                    )
+                    text_content = self._extract_text_content(getattr(response, "content", ""))
                     if text_content:
-                        self._emit_event({
-                            "type": "agent_message",
-                            "payload": {
-                                "text": text_content,
-                                "agent_id": self._ctx.agent_id,
-                                "depth": self._ctx.depth,
-                            },
-                        })
+                        self._emit_event(
+                            {
+                                "type": "agent_message",
+                                "payload": {
+                                    "text": text_content,
+                                    "agent_id": self._ctx.agent_id,
+                                    "depth": self._ctx.depth,
+                                },
+                            }
+                        )
 
                     # Execute tool calls with concurrency-aware partitioning.
                     # Exclusive tools run alone; concurrent-safe tools are gathered.
@@ -684,26 +780,32 @@ class ToolUseLoop:
                     # Inject failure feedback so the model can adapt.
                     failures = [r for r in results if not r.success]
                     if failures:
-                        messages.append(SystemMessage(
-                            content=f"{len(failures)}/{len(results)} tool call(s)"
-                            " failed this step — adapt your approach."
-                        ))
+                        messages.append(
+                            SystemMessage(
+                                content=f"{len(failures)}/{len(results)} tool call(s)"
+                                " failed this step — adapt your approach."
+                            )
+                        )
 
                     # Proactive mid-loop compaction check.
                     if self._should_compact_messages(messages):
-                        if await self._compact_messages(messages):
+                        _compact_info = await self._compact_messages(messages)
+                        if _compact_info:
                             await self._ctx.registry.record_compaction(
                                 self._ctx.agent_id,
                             )
-                            self._emit_event({
-                                "type": "context_compacted",
-                                "payload": {
-                                    "agent_id": self._ctx.agent_id,
-                                    "depth": self._ctx.depth,
-                                    "mode": "mid_loop",
-                                    "turn": turns,
-                                },
-                            })
+                            self._emit_event(
+                                {
+                                    "type": "context_compacted",
+                                    "payload": {
+                                        **_compact_info,
+                                        "agent_id": self._ctx.agent_id,
+                                        "depth": self._ctx.depth,
+                                        "mode": "mid_loop",
+                                        "turn": turns,
+                                    },
+                                }
+                            )
 
                     if span is not None:
                         try:
@@ -738,24 +840,27 @@ class ToolUseLoop:
                             r = h.result
                             if r:
                                 result_lines.append(
-                                    f"[{h.agent_id[:8]}] {r.status}: "
-                                    f"{r.summary or r.content[:300]}"
+                                    f"[{h.agent_id[:8]}] {r.status}: {r.summary or r.content[:300]}"
                                 )
                         if result_lines:
-                            messages.append(SystemMessage(
-                                content="Completed sub-agent results:\n"
-                                + "\n".join(result_lines),
-                            ))
+                            messages.append(
+                                SystemMessage(
+                                    content="Completed sub-agent results:\n"
+                                    + "\n".join(result_lines),
+                                )
+                            )
                     still_running = await self._ctx.registry.collect_running(
                         self._ctx.agent_id,
                     )
                     if still_running:
                         ids = ", ".join(h.agent_id[:8] for h in still_running)
-                        messages.append(SystemMessage(
-                            content=f"WARNING: {len(still_running)} agent(s) "
-                            f"still running ({ids}). Include their partial "
-                            "progress in your synthesis.",
-                        ))
+                        messages.append(
+                            SystemMessage(
+                                content=f"WARNING: {len(still_running)} agent(s) "
+                                f"still running ({ids}). Include their partial "
+                                "progress in your synthesis.",
+                            )
+                        )
 
                 try:
                     messages.append(
@@ -773,14 +878,16 @@ class ToolUseLoop:
                         get_config_value("agent", "llm_call_timeout", default=60.0)
                     )
                     synthesis: AIMessage = await asyncio.wait_for(
-                        unbound.ainvoke(
-                            messages, config=invoke_config or None
-                        ),
+                        unbound.ainvoke(messages, config=invoke_config or None),
                         timeout=synthesis_timeout,
                     )
-                    final_response = self._extract_text_content(
-                        getattr(synthesis, "content", "")
-                    )
+                    _usage = getattr(synthesis, "usage_metadata", None)
+                    if _usage:
+                        _h = await self._ctx.registry.get(self._ctx.agent_id)
+                        if _h:
+                            _h.input_tokens += _usage.get("input_tokens", 0)
+                            _h.output_tokens += _usage.get("output_tokens", 0)
+                    final_response = self._extract_text_content(getattr(synthesis, "content", ""))
                 except Exception:
                     logging.warning("Final synthesis turn failed.", exc_info=True)
 
@@ -790,9 +897,7 @@ class ToolUseLoop:
                 if not final_response or not final_response.strip():
                     successful = [o for o in tool_outputs if o and not o.startswith("ERROR")]
                     if successful:
-                        final_response = (
-                            "Partial results:\n\n" + "\n\n".join(successful[-5:])
-                        )
+                        final_response = "Partial results:\n\n" + "\n\n".join(successful[-5:])
 
             if not state.done:
                 state.done = True
@@ -810,6 +915,28 @@ class ToolUseLoop:
             state.tool_results = tool_outputs
 
         finally:
+            # Close Langfuse agent span and propagation context.
+            if agent_span is not None:
+                try:
+                    agent_span.update(
+                        output={
+                            "total_steps": turns,
+                            "done_reason": state.done_reason or "unknown",
+                        }
+                    )
+                except Exception:
+                    pass
+            if _propagate_cm is not None:
+                try:
+                    _propagate_cm.__exit__(None, None, None)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            if _agent_span_cm is not None:
+                try:
+                    _agent_span_cm.__exit__(None, None, None)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+
             # Stop the background watchdog.
             if watchdog_task is not None and not watchdog_task.done():
                 watchdog_task.cancel()
@@ -994,9 +1121,7 @@ class ToolUseLoop:
                     hyper_template = ""
                 if hyper_template:
                     plan_path = plan_file_for(self._session_id)
-                    system_parts.append(
-                        f"{hyper_template}\n\nPlan file: {plan_path}"
-                    )
+                    system_parts.append(f"{hyper_template}\n\nPlan file: {plan_path}")
             else:
                 # Plan sub-agent: full plan-mode prompt with placeholders.
                 try:
@@ -1010,10 +1135,8 @@ class ToolUseLoop:
                         bullets = "\n".join(f"    - `{entry}`" for entry in shell_allowlist)
                     else:
                         bullets = "    - (none — shell is disabled in plan mode)"
-                    rendered = (
-                        template
-                        .replace("{plan_path}", plan_path)
-                        .replace("{shell_allowlist_bullets}", bullets)
+                    rendered = template.replace("{plan_path}", plan_path).replace(
+                        "{shell_allowlist_bullets}", bullets
                     )
                     system_parts.append(rendered)
 
@@ -1071,36 +1194,41 @@ class ToolUseLoop:
                 ]
             # Shared root sections: delegation protocol, safety, synthesis,
             # system awareness, when to stop — apply in both plan and act mode.
-            lines.extend([
-                "",
-                "## Async delegation protocol (when you spawn)",
-                "- spawn_agent returns immediately with {agent_id, status: 'submitted'}.",
-                "- Continue with independent work while children execute in background.",
-                "- React to '[Agent xxx finished: ...]' notifications between your steps.",
-                "- Call check_agents to see tree state and collect completed results.",
-                "- Call check_agents(wait=true) when you have no independent work left.",
-                "- Use steer_agent to inject context or course-correct running agents.",
-                "- Do NOT call check_agents in a loop — trust notifications. (epoll, not poll)",
-                "",
-                "## Safety",
-                "- steer_agent(action='cancel') stops a stuck or misbehaving agent.",
-                "- A background watchdog warns stalled agents automatically (2min+ no progress).",
-                "",
-                "## Synthesize",
-                "- When all children complete, collect results via check_agents.",
-                "- Verify results against acceptance_criteria before trusting them.",
-                "- Check 'status' before using: completed=reliable, failed/cannot_solve=handle.",
-                "",
-                "## System awareness",
-                "- You operate within a bounded environment with intentional guardrails.",
-                "- CWD restrictions, permission denials, and tool scope limits are non-negotiable.",
-                "- If a tool or sub-agent reports a restriction, adapt — do NOT retry blindly.",
-                "",
-                "## When to stop",
-                "- If the same operation fails twice, do not retry it a third time.",
-                "- If a sub-agent fails, do not spawn another sub-agent for the same task.",
-                "- Report what failed, why, and what you tried — then let the user decide.",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "## Async delegation protocol (when you spawn)",
+                    "- spawn_agent returns immediately with {agent_id, status: 'submitted'}.",
+                    "- Continue with independent work while children execute in background.",
+                    "- React to '[Agent xxx finished: ...]' notifications between your steps.",
+                    "- Call check_agents to see tree state and collect completed results.",
+                    "- Call check_agents(wait=true) when you have no independent work left.",
+                    "- Use steer_agent to inject context or course-correct running agents.",
+                    "- Do NOT call check_agents in a loop — trust notifications. (epoll, not poll)",
+                    "",
+                    "## Safety",
+                    "- steer_agent(action='cancel') stops a stuck or misbehaving agent.",
+                    "- A background watchdog warns stalled agents automatically"
+                    " (2min+ no progress).",
+                    "",
+                    "## Synthesize",
+                    "- When all children complete, collect results via check_agents.",
+                    "- Verify results against acceptance_criteria before trusting them.",
+                    "- Check 'status' before using:"
+                    " completed=reliable, failed/cannot_solve=handle.",
+                    "",
+                    "## System awareness",
+                    "- You operate within a bounded environment with intentional guardrails.",
+                    "- CWD restrictions, permission denials, and tool scope limits"
+                    " are non-negotiable.",
+                    "- If a tool or sub-agent reports a restriction, adapt — do NOT retry blindly.",
+                    "",
+                    "## When to stop",
+                    "- If the same operation fails twice, do not retry it a third time.",
+                    "- If a sub-agent fails, do not spawn another sub-agent for the same task.",
+                    "- Report what failed, why, and what you tried — then let the user decide.",
+                ]
+            )
         elif is_leaf:
             # Ref: [DeepMind-Delegation §4.7] Liability firebreak at leaf
             lines = [
@@ -1171,13 +1299,11 @@ class ToolUseLoop:
                 for h in stalled:
                     await self._ctx.registry.send_message(
                         h.agent_id,
-                        "STALL WARNING: No progress for 2+ minutes. "
-                        "Wrap up or report status.",
+                        "STALL WARNING: No progress for 2+ minutes. Wrap up or report status.",
                     )
                     if self._ctx.message_queue is not None:
                         self._ctx.message_queue.put_nowait(
-                            f"[Watchdog: Agent {h.agent_id[:8]} stalled "
-                            f"on {h.last_tool_id}]",
+                            f"[Watchdog: Agent {h.agent_id[:8]} stalled on {h.last_tool_id}]",
                         )
         except asyncio.CancelledError:
             pass  # Normal shutdown path.
@@ -1283,31 +1409,35 @@ class ToolUseLoop:
     # ------------------------------------------------------------------
 
     def _should_compact_messages(self, messages: list[BaseMessage]) -> bool:
-        """Cheap check: are in-flight messages approaching the context window?"""
-        # Rough estimate: ~3 chars per token, plus computed overhead.
-        char_total = sum(
-            len(m.content) if isinstance(m.content, str) else len(str(m.content))
-            for m in messages
-        )
-        estimated_tokens = char_total // 3 + self._overhead_tokens
-        from meeseeks_core.token_budget import get_context_window
+        """Token-reality check anchored on the last response's usage_metadata.
 
-        context_window = get_context_window(self._ctx.model_name)
-        threshold = float(get_config_value(
-            "token_budget", "auto_compact_threshold", default=0.8,
-        ))
-        return estimated_tokens >= context_window * threshold
+        ``messages`` is intentionally unused — the LLM's ``usage_metadata``
+        already reflects everything it saw (system prompt, tool schemas,
+        all messages). No char-count estimation, no manual overhead.
+        """
+        del messages  # Signature preserved for callers; data comes from the API.
+        if self._last_input_tokens <= 0:
+            return False  # No LLM call yet; nothing authoritative to check.
+        from meeseeks_core.token_budget import get_model_max_input_tokens
 
-    async def _compact_messages(self, messages: list[BaseMessage]) -> bool:
+        max_input = get_model_max_input_tokens(self._ctx.model_name)
+        threshold = float(get_config_value("token_budget", "auto_compact_threshold", default=0.8))
+        return self._last_input_tokens >= max_input * threshold
+
+    async def _compact_messages(
+        self,
+        messages: list[BaseMessage],
+    ) -> dict[str, Any] | None:
         """Compact the in-flight message list by summarizing older messages.
 
         Keeps messages[0] (system prompt) and the last ``recent_keep``
         messages, summarizing everything in between via the structured
-        compaction prompt.  Returns True if compaction was performed.
+        compaction prompt.  Returns a dict with ``summary`` and
+        ``events_summarized`` on success, or ``None`` if skipped.
         """
         recent_keep = 6  # ~3 turn pairs (AI + Tool)
         if len(messages) <= recent_keep + 2:
-            return False  # Not enough to compact
+            return None  # Not enough to compact
 
         to_summarize = messages[1:-recent_keep]
         kept_tail = messages[-recent_keep:]
@@ -1328,18 +1458,48 @@ class ToolUseLoop:
             if tree:
                 summary_input += f"\n\n# Active agent tree at compaction:\n{tree}"
 
-        # Invoke the compaction LLM.
-        from meeseeks_core.compact import COMPACT_PROMPT, _extract_summary
+        # Invoke the compaction LLM with priority-ordered model fallback.
+        from meeseeks_core.compact import (
+            _extract_summary,
+            get_compact_prompt,
+            resolve_compact_models,
+        )
 
-        llm = build_chat_model(model_name=self._ctx.model_name)
-        try:
-            response = await llm.ainvoke([
-                SystemMessage(content=COMPACT_PROMPT),
-                HumanMessage(content=f"Summarize this conversation:\n\n{summary_input}"),
-            ])
-        except Exception:
-            logging.warning("Mid-loop compaction LLM call failed", exc_info=True)
-            return False
+        _compact_models = resolve_compact_models(self._ctx.model_name)
+        _compact_model = _compact_models[0]
+        _msgs = [
+            SystemMessage(content=get_compact_prompt()),
+            HumanMessage(content=f"Summarize this conversation:\n\n{summary_input}"),
+        ]
+        response = None
+        for _i, _candidate in enumerate(_compact_models):
+            _compact_model = _candidate
+            try:
+                llm = build_chat_model(model_name=_compact_model)
+                response = await llm.ainvoke(_msgs)
+                break
+            except Exception:
+                if _i < len(_compact_models) - 1:
+                    logging.warning(
+                        "Mid-loop compact model %s failed, trying next: %s",
+                        _compact_model,
+                        _compact_models[_i + 1],
+                        exc_info=True,
+                    )
+                else:
+                    logging.warning("Mid-loop compaction LLM call failed", exc_info=True)
+                    return None
+
+        if response is None:
+            return None  # all models failed
+
+        # Capture compaction LLM tokens on the agent handle.
+        _usage = getattr(response, "usage_metadata", None)
+        if _usage:
+            _h = await self._ctx.registry.get(self._ctx.agent_id)
+            if _h:
+                _h.input_tokens += _usage.get("input_tokens", 0)
+                _h.output_tokens += _usage.get("output_tokens", 0)
 
         raw = response.content if hasattr(response, "content") else str(response)
         if isinstance(raw, list):
@@ -1348,6 +1508,7 @@ class ToolUseLoop:
                 "",
             )
         summary = _extract_summary(raw)
+        events_summarized = len(to_summarize)
 
         # Rebuild messages in-place.
         system_msg = messages[0]
@@ -1355,10 +1516,16 @@ class ToolUseLoop:
         messages.append(system_msg)
         messages.append(SystemMessage(content=f"[Compacted context]\n{summary}"))
         messages.extend(kept_tail)
-        return True
+        return {
+            "summary": summary,
+            "events_summarized": events_summarized,
+            "model": _compact_model,
+        }
 
     def _build_tool_schemas_for_mode(
-        self, specs: list[ToolSpec], mode: str,
+        self,
+        specs: list[ToolSpec],
+        mode: str,
     ) -> list[dict[str, Any]]:
         """Return langchain tool schemas appropriate for ``mode``.
 
@@ -1375,7 +1542,8 @@ class ToolUseLoop:
         shell_enabled = bool(self._plan_mode_shell_allowlist())
         allow_mcp = self._plan_mode_allow_mcp()
         filtered = [
-            spec for spec in specs
+            spec
+            for spec in specs
             if spec.read_only
             or (spec.tool_id == edit_tool_id and self._ctx.depth > 0)
             or (shell_enabled and spec.tool_id in SHELL_TOOL_IDS)
@@ -1584,15 +1752,19 @@ class ToolUseLoop:
 
         # Snapshot for the event — preserves the JSON envelope so the
         # frontend can always parse structured fields (exit_code, duration_ms).
+        # Use a generous event-side cap (decoupled from `max_chars`, which is
+        # the LLM-context cap): the frontend can scroll the full output, and
+        # `result_file` still backstops pathological results when an export dir
+        # is configured. Without this, MCP tool responses get truncated to
+        # 2000 chars in the UI even though the full content exists in memory.
         event_str = content_str
-        if max_chars and len(event_str) > max_chars:
-            event_str = event_str[:max_chars] + "\n[truncated]"
+        EVENT_MAX_CHARS = 100_000
+        if len(event_str) > EVENT_MAX_CHARS:
+            event_str = event_str[:EVENT_MAX_CHARS] + "\n[truncated — see result_file]"
 
         # Save large results to file when export dir is configured.
         result_file: str | None = None
-        export_dir = str(
-            get_config_value("runtime", "result_export_dir", default="") or ""
-        )
+        export_dir = str(get_config_value("runtime", "result_export_dir", default="") or "")
         if export_dir and max_chars and len(content_str) > max_chars:
             try:
                 export_path = Path(export_dir)
@@ -1626,7 +1798,9 @@ class ToolUseLoop:
                 self._file_read_cache.pop(norm, None)
                 # Passive LSP diagnostics: surface errors after edits.
                 content_str = _append_lsp_feedback(
-                    content_str, norm, self._cwd or "",
+                    content_str,
+                    norm,
+                    self._cwd or "",
                 )
 
         self._emit_tool_result_event(action_step, event_str, result_file=result_file)
@@ -1726,7 +1900,10 @@ class ToolUseLoop:
         except (TypeError, ValueError, OSError):
             return
         self._file_read_cache[full_path] = _CachedFileRead(
-            path=full_path, offset=offset, limit=limit, mtime=mtime,
+            path=full_path,
+            offset=offset,
+            limit=limit,
+            mtime=mtime,
         )
 
     # ------------------------------------------------------------------
@@ -1829,8 +2006,7 @@ class ToolUseLoop:
             if self._session_id is not None:
                 if self._ctx.depth == 0:
                     plan_hint = (
-                        " You cannot write the plan directly."
-                        " Spawn a sub-agent to draft it."
+                        " You cannot write the plan directly. Spawn a sub-agent to draft it."
                     )
                 else:
                     plan_hint = (
@@ -1865,14 +2041,9 @@ class ToolUseLoop:
         plan_hint = ""
         if self._session_id is not None:
             if self._ctx.depth == 0:
-                plan_hint = (
-                    " You cannot write the plan directly."
-                    " Spawn a sub-agent to draft it."
-                )
+                plan_hint = " You cannot write the plan directly. Spawn a sub-agent to draft it."
             else:
-                plan_hint = (
-                    f" Plan file: {plan_file_for(self._session_id)}."
-                )
+                plan_hint = f" Plan file: {plan_file_for(self._session_id)}."
         mock = get_mock_speaker()
         action_step.result = mock(
             content=(
@@ -1908,6 +2079,10 @@ class ToolUseLoop:
     ) -> None:
         spec = self._tool_registry.get_spec(action_step.tool_id)
         max_chars = spec.max_result_chars if spec else 2000
+        # `summary` is a short preview for log titles / agent-tree rendering;
+        # the full payload lives in `result`, which the frontend renders in a
+        # scrollable container. Keep `summary` capped at the LLM-context size
+        # so it stays human-skimmable.
         if max_chars and result and len(result) > max_chars:
             summary = error or result[:max_chars]
         else:

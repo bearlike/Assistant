@@ -5,7 +5,7 @@ import { InputBar } from './InputBar';
 import { TypewriterGreeting } from './TypewriterGreeting';
 import { QueryMode, SessionContext, SessionSummary } from '../types';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
 import { formatSessionTime } from '../utils/time';
 interface HomeViewProps {
   sessions: SessionSummary[];
@@ -137,7 +137,7 @@ export function HomeView({
               }
             </div> :
           <>
-          <div className="sticky top-0 z-10 pt-2 pb-4 mb-2 flex items-center justify-between border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] shadow-[0_4px_12px_hsl(var(--background))]">
+          <div className="sticky top-0 z-10 pt-2 mb-4 flex items-center justify-between border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] shadow-[0_4px_12px_hsl(var(--background))]">
             <div className="flex gap-8">
               <button
                 onClick={() => setActiveTab('sessions')}

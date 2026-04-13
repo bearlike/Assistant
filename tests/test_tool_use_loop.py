@@ -281,12 +281,14 @@ class TestToolUseLoopNaturalCompletion:
         registry = _make_registry(spec)
 
         fake_model = MagicMock()
-        fake_model.ainvoke = AsyncMock(side_effect=[
-            _tool_call_response("aider_shell_tool", {"command": "ls"}, "c1"),
-            _tool_call_response("aider_shell_tool", {"command": "cat"}, "c2"),
-            _tool_call_response("aider_shell_tool", {"command": "wc"}, "c3"),
-            _text_response("Done. Found 3 files."),
-        ])
+        fake_model.ainvoke = AsyncMock(
+            side_effect=[
+                _tool_call_response("aider_shell_tool", {"command": "ls"}, "c1"),
+                _tool_call_response("aider_shell_tool", {"command": "cat"}, "c2"),
+                _tool_call_response("aider_shell_tool", {"command": "wc"}, "c3"),
+                _text_response("Done. Found 3 files."),
+            ]
+        )
         bound = MagicMock()
         bound.ainvoke = fake_model.ainvoke
 
@@ -325,6 +327,7 @@ class TestToolUseLoopNaturalCompletion:
         messages_seen: list = []
 
         fake_model = MagicMock()
+
         def _capture_invoke(msgs, **kwargs):
             messages_seen.extend(msgs)
             if len(messages_seen) < 10:
@@ -353,9 +356,7 @@ class TestToolUseLoopNaturalCompletion:
                 permission_policy=_allow_all_policy(),
                 hook_manager=_make_hook_manager(),
             )
-            asyncio.run(
-                loop.run("do work", tool_specs=[spec], context=_make_context())
-            )
+            asyncio.run(loop.run("do work", tool_specs=[spec], context=_make_context()))
 
         # No message should contain step counting patterns.
         for msg in messages_seen:
@@ -368,6 +369,7 @@ class TestToolUseLoopNaturalCompletion:
     def test_run_has_no_max_steps_parameter(self):
         """Verify run() signature does not accept max_steps."""
         import inspect
+
         sig = inspect.signature(ToolUseLoop.run)
         assert "max_steps" not in sig.parameters
         assert "max_turns" not in sig.parameters
@@ -762,7 +764,7 @@ class TestDepthGuidance:
         """Ref: [DeepMind-Delegation §4.7] Liability firebreaks at chain boundaries."""
         ctx = _make_agent_context(max_depth=3)
         c1 = ctx.child()  # depth=1
-        c2 = c1.child()   # depth=2, remaining=1
+        c2 = c1.child()  # depth=2, remaining=1
         loop = ToolUseLoop(
             agent_context=c2,
             tool_registry=_make_registry(_make_spec()),
@@ -793,17 +795,11 @@ class TestThinkingOnlyContentPlaceholder:
         registry = _make_registry(spec)
 
         thinking_only = AIMessage(
-            content=[
-                {"type": "thinking", "thinking": "pondering...", "signature": "sig"}
-            ],
-            tool_calls=[
-                {"name": "shell_tool", "args": {"input": "x"}, "id": "call_x"}
-            ],
+            content=[{"type": "thinking", "thinking": "pondering...", "signature": "sig"}],
+            tool_calls=[{"name": "shell_tool", "args": {"input": "x"}, "id": "call_x"}],
         )
         fake_model = MagicMock()
-        fake_model.ainvoke = AsyncMock(
-            side_effect=[thinking_only, _text_response("done")]
-        )
+        fake_model.ainvoke = AsyncMock(side_effect=[thinking_only, _text_response("done")])
         bound = MagicMock()
         bound.ainvoke = fake_model.ainvoke
 
@@ -827,9 +823,7 @@ class TestThinkingOnlyContentPlaceholder:
                 permission_policy=_allow_all_policy(),
                 hook_manager=_make_hook_manager(),
             )
-            asyncio.run(
-                loop.run("do it", tool_specs=[spec], context=_make_context())
-            )
+            asyncio.run(loop.run("do it", tool_specs=[spec], context=_make_context()))
 
         # Placeholder must NOT leak out as an agent_message event (mirrors
         # Claude Code's src/utils/messages.ts:717 display filter).
@@ -852,14 +846,10 @@ class TestThinkingOnlyContentPlaceholder:
         # Simulate proxy response: content="" (string) with tool_calls.
         string_empty = AIMessage(
             content="",
-            tool_calls=[
-                {"name": "shell_tool", "args": {"input": "x"}, "id": "call_y"}
-            ],
+            tool_calls=[{"name": "shell_tool", "args": {"input": "x"}, "id": "call_y"}],
         )
         fake_model = MagicMock()
-        fake_model.ainvoke = AsyncMock(
-            side_effect=[string_empty, _text_response("done")]
-        )
+        fake_model.ainvoke = AsyncMock(side_effect=[string_empty, _text_response("done")])
         bound = MagicMock()
         bound.ainvoke = fake_model.ainvoke
 
@@ -883,9 +873,7 @@ class TestThinkingOnlyContentPlaceholder:
                 permission_policy=_allow_all_policy(),
                 hook_manager=_make_hook_manager(),
             )
-            asyncio.run(
-                loop.run("do it", tool_specs=[spec], context=_make_context())
-            )
+            asyncio.run(loop.run("do it", tool_specs=[spec], context=_make_context()))
 
         # The empty-string content must have been replaced so no
         # hallucination-triggering empty turns leak into the history.
@@ -901,9 +889,7 @@ class TestThinkingOnlyContentPlaceholder:
         assert ToolUseLoop._extract_text_content(placeholder_list) == ""
         assert ToolUseLoop._extract_text_content("(no content)") == ""
         # Sanity: real text still passes through.
-        assert ToolUseLoop._extract_text_content(
-            [{"type": "text", "text": "hello"}]
-        ) == "hello"
+        assert ToolUseLoop._extract_text_content([{"type": "text", "text": "hello"}]) == "hello"
 
 
 # ---------------------------------------------------------------------------
@@ -933,8 +919,10 @@ class TestLlmCallTimeoutCeiling:
             patch(
                 "meeseeks_core.tool_use_loop.get_config_value",
                 side_effect=lambda *keys, default=None: (
-                    0.05 if keys == ("agent", "llm_call_timeout")
-                    else 1 if keys == ("agent", "llm_call_retries")
+                    0.05
+                    if keys == ("agent", "llm_call_timeout")
+                    else 1
+                    if keys == ("agent", "llm_call_retries")
                     else default
                 ),
             ),
@@ -951,9 +939,7 @@ class TestLlmCallTimeoutCeiling:
             import pytest
 
             with pytest.raises(RuntimeError, match="LLM call failed on all models"):
-                asyncio.run(
-                    loop.run("hang", tool_specs=[spec], context=_make_context())
-                )
+                asyncio.run(loop.run("hang", tool_specs=[spec], context=_make_context()))
 
 
 # ---------------------------------------------------------------------------
@@ -1139,9 +1125,13 @@ class TestFileReadDedupCache:
         )
         # Populate with a fake entry.
         import os
+
         fake_path = os.path.normpath(str(tmp_path / "missing.txt"))
         loop._file_read_cache[fake_path] = _CachedFileRead(
-            path=fake_path, offset=0, limit=None, mtime=0.0,
+            path=fake_path,
+            offset=0,
+            limit=None,
+            mtime=0.0,
         )
         # mtime check should fail since file doesn't exist.
         assert loop._check_file_read_cache(step) is None
@@ -1149,7 +1139,10 @@ class TestFileReadDedupCache:
     def test_cached_file_read_dataclass(self):
         """_CachedFileRead stores all fields correctly."""
         entry = _CachedFileRead(
-            path="/tmp/test.txt", offset=5, limit=10, mtime=12345.0,
+            path="/tmp/test.txt",
+            offset=5,
+            limit=10,
+            mtime=12345.0,
         )
         assert entry.path == "/tmp/test.txt"
         assert entry.offset == 5
@@ -1205,13 +1198,12 @@ class TestBudgetWarningStillFires:
                 permission_policy=_allow_all_policy(),
                 hook_manager=_make_hook_manager(),
             )
-            tq, state = asyncio.run(
-                loop.run("do work", tool_specs=[spec], context=_make_context())
-            )
+            tq, state = asyncio.run(loop.run("do work", tool_specs=[spec], context=_make_context()))
 
         assert state.done is True
         budget_warnings = [
-            m for m in messages_seen
+            m
+            for m in messages_seen
             if isinstance(m, SystemMessage) and "BUDGET WARNING" in m.content
         ]
         assert len(budget_warnings) >= 1
@@ -1227,6 +1219,7 @@ class TestModelFallback:
 
     def test_fallback_on_primary_failure(self):
         """Primary model fails -> fallback model succeeds."""
+
         async def _test():
             ctx = _make_agent_context(model_name="primary-model")
             object.__setattr__(ctx, "fallback_models", ("fallback-model",))
@@ -1242,6 +1235,7 @@ class TestModelFallback:
             fallback_response = _text_response("fallback worked")
 
             call_count = 0
+
             async def _side_effect(messages, **kw):
                 nonlocal call_count
                 call_count += 1
@@ -1268,6 +1262,7 @@ class TestModelFallback:
 
     def test_no_fallback_on_non_retryable_error(self):
         """Non-retryable error fails immediately, no fallback."""
+
         async def _test():
             ctx = _make_agent_context(model_name="primary-model")
             object.__setattr__(ctx, "fallback_models", ("fallback-model",))
@@ -1280,8 +1275,10 @@ class TestModelFallback:
             )
 
             bad_request = ValueError("bad request")
-            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build, \
-                 patch("meeseeks_core.tool_use_loop._classify_llm_error", return_value=(False, 0)):
+            with (
+                patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+                patch("meeseeks_core.tool_use_loop._classify_llm_error", return_value=(False, 0)),
+            ):
                 mock_model = MagicMock()
                 mock_model.bind_tools.return_value.ainvoke = AsyncMock(side_effect=bad_request)
                 mock_build.return_value = mock_model
@@ -1301,6 +1298,7 @@ class TestModelFallback:
 
     def test_no_fallback_when_not_configured(self):
         """Without fallback_models, behaves like before."""
+
         async def _test():
             ctx = _make_agent_context(model_name="only-model")
 

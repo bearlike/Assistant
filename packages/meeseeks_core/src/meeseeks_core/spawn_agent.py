@@ -147,9 +147,7 @@ CHECK_AGENTS_SCHEMA: dict[str, object] = {
                 },
                 "timeout": {
                     "type": "number",
-                    "description": (
-                        "Max seconds to wait when wait=true. Default: 30."
-                    ),
+                    "description": ("Max seconds to wait when wait=true. Default: 30."),
                 },
             },
             "required": [],
@@ -172,8 +170,7 @@ STEER_AGENT_SCHEMA: dict[str, object] = {
                 "agent_id": {
                     "type": "string",
                     "description": (
-                        "The agent_id to steer (8-char prefix from "
-                        "check_agents output)."
+                        "The agent_id to steer (8-char prefix from check_agents output)."
                     ),
                 },
                 "action": {
@@ -187,8 +184,7 @@ STEER_AGENT_SCHEMA: dict[str, object] = {
                 "message": {
                     "type": "string",
                     "description": (
-                        "The steering message to send "
-                        "(required when action='message')."
+                        "The steering message to send (required when action='message')."
                     ),
                 },
             },
@@ -275,9 +271,7 @@ class SpawnAgentTool:
 
         # 2. Admission control.
         if not await registry.admit():
-            return MockSpeaker(
-                content="ERROR: Max concurrent agents reached. Try again later."
-            )
+            return MockSpeaker(content="ERROR: Max concurrent agents reached. Try again later.")
 
         child_ctx: AgentContext | None = None
         handle: AgentHandle | None = None
@@ -341,7 +335,10 @@ class SpawnAgentTool:
                 # Non-blocking: lifecycle manager handles completion in background
                 lm_task = asyncio.create_task(
                     self._run_child_lifecycle(
-                        child_task, child_ctx, handle, task_desc,
+                        child_task,
+                        child_ctx,
+                        handle,
+                        task_desc,
                     )
                 )
                 self._lifecycle_tasks.append(lm_task)
@@ -350,15 +347,19 @@ class SpawnAgentTool:
                 # Prevent finally block from cleaning up — lifecycle manager owns it
                 child_ctx = None
                 handle = None
-                return MockSpeaker(content=json.dumps({
-                    "agent_id": child_id,
-                    "status": "submitted",
-                    "task": task_desc[:200],
-                    "message": (
-                        "Agent spawned. Use check_agents to monitor "
-                        "progress and collect results."
-                    ),
-                }))
+                return MockSpeaker(
+                    content=json.dumps(
+                        {
+                            "agent_id": child_id,
+                            "status": "submitted",
+                            "task": task_desc[:200],
+                            "message": (
+                                "Agent spawned. Use check_agents to monitor "
+                                "progress and collect results."
+                            ),
+                        }
+                    )
+                )
 
             # Blocking: current behavior for non-root agents.
             tq, state = await child_task
@@ -370,6 +371,7 @@ class SpawnAgentTool:
 
             # Ref: [CoA §3.1] Build Communication Unit — compressed context for parent
             from meeseeks_core.hypervisor import AgentResult
+
             result = AgentResult(
                 content=tq.task_result or state.done_reason or "No result",
                 status="completed" if state.done else "failed",
@@ -387,10 +389,13 @@ class SpawnAgentTool:
             )
             if handle:
                 await registry.mark_done(
-                    handle.agent_id, "failed", error=agent_error,
+                    handle.agent_id,
+                    "failed",
+                    error=agent_error,
                 )
                 self._hook_manager.run_on_agent_stop(handle)
             from meeseeks_core.hypervisor import AgentResult
+
             result = AgentResult(
                 content=f"Depth exceeded: {exc}",
                 status="cannot_solve",
@@ -419,11 +424,14 @@ class SpawnAgentTool:
             )
             if child_ctx:
                 await registry.mark_done(
-                    child_ctx.agent_id, "failed", error=agent_error,
+                    child_ctx.agent_id,
+                    "failed",
+                    error=agent_error,
                 )
             if handle:
                 self._hook_manager.run_on_agent_stop(handle)
             from meeseeks_core.hypervisor import AgentResult
+
             partial_result = (tq.task_result or "")[:500] if tq is not None else ""
             result = AgentResult(
                 content=f"Sub-agent failed: {exc}",
@@ -455,12 +463,8 @@ class SpawnAgentTool:
 
         Returns model name, or ``"ERROR: ..."`` string on validation failure.
         """
-        allowed_models = _coerce_list(
-            get_config_value("agent", "allowed_models", default=[])
-        )
-        default_sub = str(
-            get_config_value("agent", "default_sub_model", default="") or ""
-        ).strip()
+        allowed_models = _coerce_list(get_config_value("agent", "allowed_models", default=[]))
+        default_sub = str(get_config_value("agent", "default_sub_model", default="") or "").strip()
 
         if model_override and isinstance(model_override, str):
             model = model_override.strip()
@@ -498,11 +502,7 @@ class SpawnAgentTool:
 
     async def handle_check_agents(self, action_step: ActionStep) -> MockSpeaker:
         """Return agent tree state with completed results and progress."""
-        args = (
-            action_step.tool_input
-            if isinstance(action_step.tool_input, dict)
-            else {}
-        )
+        args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
         wait = bool(args.get("wait", False))
         timeout = float(args.get("timeout", 30))
         registry = self._agent_context.registry
@@ -514,7 +514,9 @@ class SpawnAgentTool:
                 waiters = [asyncio.create_task(h.done_event.wait()) for h in running]
                 try:
                     _done, pending = await asyncio.wait(
-                        waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED,
+                        waiters,
+                        timeout=timeout,
+                        return_when=asyncio.FIRST_COMPLETED,
                     )
                 except asyncio.TimeoutError:
                     pending = set(waiters)
@@ -537,10 +539,7 @@ class SpawnAgentTool:
             for h in completed:
                 r = h.result
                 if r:
-                    parts.append(
-                        f"  [{h.agent_id[:8]}] {r.status}: "
-                        f"{r.summary or r.content[:300]}"
-                    )
+                    parts.append(f"  [{h.agent_id[:8]}] {r.status}: {r.summary or r.content[:300]}")
 
         if running:
             parts.append(f"\n{len(running)} agent(s) still running.")
@@ -551,11 +550,7 @@ class SpawnAgentTool:
 
     async def handle_steer_agent(self, action_step: ActionStep) -> MockSpeaker:
         """Send a steering message to or cancel a running agent."""
-        args = (
-            action_step.tool_input
-            if isinstance(action_step.tool_input, dict)
-            else {}
-        )
+        args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
         agent_id = str(args.get("agent_id", ""))
         action = str(args.get("action", ""))
         message = str(args.get("message", ""))
@@ -571,8 +566,7 @@ class SpawnAgentTool:
                 agent_id = handle.agent_id
             elif len(matches) > 1:
                 return MockSpeaker(
-                    content=f"ERROR: Ambiguous prefix '{agent_id}' "
-                    f"matches {len(matches)} agents.",
+                    content=f"ERROR: Ambiguous prefix '{agent_id}' matches {len(matches)} agents.",
                 )
             else:
                 return MockSpeaker(
@@ -594,7 +588,8 @@ class SpawnAgentTool:
                     content="ERROR: 'message' is required when action='message'.",
                 )
             reason = await registry.send_message(
-                agent_id, f"[From parent] {message}",
+                agent_id,
+                f"[From parent] {message}",
             )
             if reason is None:
                 return MockSpeaker(content="Message sent.")
@@ -628,10 +623,11 @@ class SpawnAgentTool:
                     "detail": detail,
                     "status": handle.status if handle else action,
                     "steps_completed": handle.steps_completed if handle else 0,
+                    "input_tokens": handle.input_tokens if handle else 0,
+                    "output_tokens": handle.output_tokens if handle else 0,
                 },
             }
             ctx.event_logger(event)
-
 
     # ------------------------------------------------------------------
     # Non-blocking lifecycle manager  (Ref: [DeepMind-Delegation §4.4])
@@ -660,7 +656,10 @@ class SpawnAgentTool:
             await registry.mark_done(child_ctx.agent_id, "completed")
             self._hook_manager.run_on_agent_stop(handle)
             self._emit_event(
-                child_ctx, "stop", state.done_reason or "completed", handle=handle,
+                child_ctx,
+                "stop",
+                state.done_reason or "completed",
+                handle=handle,
             )
 
             from meeseeks_core.hypervisor import AgentResult
@@ -695,7 +694,9 @@ class SpawnAgentTool:
                 steps_completed=handle.steps_completed,
             )
             await registry.mark_done(
-                child_ctx.agent_id, "failed", error=agent_error,
+                child_ctx.agent_id,
+                "failed",
+                error=agent_error,
             )
             self._hook_manager.run_on_agent_stop(handle)
 
@@ -735,7 +736,9 @@ class SpawnAgentTool:
         pending = [t for t in self._lifecycle_tasks if not t.done()]
         if pending:
             _done, still_pending = await asyncio.wait(
-                pending, timeout=timeout, return_when=asyncio.ALL_COMPLETED,
+                pending,
+                timeout=timeout,
+                return_when=asyncio.ALL_COMPLETED,
             )
             for task in still_pending:
                 task.cancel()

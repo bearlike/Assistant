@@ -1,16 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Mic,
-  ArrowUp,
-  Plus,
   Send,
   Paperclip,
   Check,
-  Square,
-  Loader2,
-  Maximize2,
-  Minimize2 } from
-'lucide-react';
+  Plus,
+  Minimize2,
+} from 'lucide-react';
 import { QueryMode, SessionContext } from '../types';
 import { useMcpTools } from '../hooks/useMcpTools';
 import { useSkills } from '../hooks/useSkills';
@@ -18,9 +13,18 @@ import { useProjects } from '../hooks/useProjects';
 import { useModels } from '../hooks/useModels';
 import { useContainerCompact } from '../hooks/useContainerCompact';
 import { ConfigMenu, McpOption, McpStatus } from './ConfigMenu';
-import { Popover } from './Popover';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
+import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
+import { InputComposerBody } from './InputComposerBody';
 
 /** Container base — shared by home & detail mode outer wrapper. */
 const INPUT_CONTAINER_BASE =
@@ -32,9 +36,6 @@ const INPUT_CONTAINER_GLOW =
   'ring-2 ring-[hsl(var(--ring))]/40 ' +
   'shadow-[0_0_20px_hsl(var(--ring)/0.15)] ' +
   'border-[hsl(var(--ring))]/30';
-
-/** Textarea min-height transition — actual min-h toggled via JS state, not CSS focus. */
-const TEXTAREA_TRANSITION = 'transition-[min-height] duration-200 ease-out';
 
 type McpToolOption = McpOption & {
   server?: string;
@@ -104,50 +105,11 @@ export function InputBar({
   } = useProjects();
   const [mcps, setMcps] = useState<McpToolOption[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const menuRef = useRef<HTMLDivElement>(null);
-  const configRef = useRef<HTMLDivElement>(null);
-  const overlayMenuRef = useRef<HTMLDivElement>(null);
-  const overlayConfigRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fullScreenTextareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const compact = useContainerCompact(containerRef);
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      const target = event.target as Node;
-      const inPlus =
-        (menuRef.current?.contains(target) ?? false) ||
-        (overlayMenuRef.current?.contains(target) ?? false);
-      if (!inPlus) {
-        setIsPlusMenuOpen(false);
-      }
-      const inConfig =
-        (configRef.current?.contains(target) ?? false) ||
-        (overlayConfigRef.current?.contains(target) ?? false);
-      if (!inConfig) {
-        setIsConfigOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-  // Reset transient popovers when full-screen toggles
-  useEffect(() => {
-    setIsPlusMenuOpen(false);
-    setIsConfigOpen(false);
-  }, [isFullScreen]);
-  // Escape closes full-screen overlay
-  useEffect(() => {
-    if (!isFullScreen) return;
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setIsFullScreen(false);
-      }
-    }
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [isFullScreen]);
   // Sync local state from session context when navigating between sessions
   useEffect(() => {
     setActiveProject(sessionContext?.project ?? null);
@@ -160,7 +122,11 @@ export function InputBar({
   useEffect(() => {
     setMcps((prev) => {
       if (mcpTools.length === 0) {
-        return prev.length ? prev : [];
+        // Bail out unconditionally — returning a new `[]` when prev is already
+        // empty would still register as a state change (Object.is fails on
+        // distinct array refs) and re-trigger this effect via mcpTools
+        // identity churn from `q.data ?? []` upstream.
+        return prev;
       }
       const prevMap = new Map(prev.map((mcp) => [mcp.id, mcp.active]));
       // On fresh load after session context change, use stored mcp_tools
@@ -296,49 +262,55 @@ export function InputBar({
       handleSubmit();
     }
   };
-  const PlusMenu = ({ direction }: { direction: 'up' | 'down' }) =>
-  <Popover direction={direction} width="w-48" maxHeight="">
-      <div className="px-3 pt-2 pb-1">
-        <span className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+  const renderPlusMenu = (direction: 'up' | 'down') => (
+    <DropdownMenu
+      open={isPlusMenuOpen}
+      onOpenChange={(open) => {
+        setIsPlusMenuOpen(open);
+        if (open) setIsConfigOpen(false);
+      }}
+    >
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          iconOnly
+          className={isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}
+          aria-label="Open menu"
+        >
+          <Plus className="w-3.5 h-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side={direction === 'up' ? 'top' : 'bottom'} align="start" className="w-48">
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-[hsl(var(--muted-foreground))] font-medium">
           Built-in
-        </span>
-      </div>
-      <button
-      onClick={togglePlanMode}
-      className="w-full text-left px-3 py-1.5 text-xs text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] flex items-center gap-2 transition-colors">
-
-        <Send className="w-3.5 h-3.5" />
-        <span className="flex-1">Plan mode</span>
-        {queryMode === 'plan' &&
-        <Check className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
-        }
-      </button>
-      <div className="h-px bg-[hsl(var(--border))] mx-2 my-1" />
-      <div className="px-3 pt-1 pb-1">
-        <span className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+        </DropdownMenuLabel>
+        {/* Plan mode is locked while a run is in progress — switching mode mid-run
+            would change the next turn's intent without affecting the running step. */}
+        <DropdownMenuItem
+          onSelect={togglePlanMode}
+          disabled={isRunning}
+          title={isRunning ? 'Plan mode is locked while the agent is running' : undefined}
+        >
+          <Send className="w-3.5 h-3.5 mr-2" />
+          <span className="flex-1">Plan mode</span>
+          {queryMode === 'plan' && (
+            <Check className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
+          )}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-[hsl(var(--muted-foreground))] font-medium">
           External
-        </span>
-      </div>
-      <button
-      onClick={handleAttach}
-      className="w-full text-left px-3 py-1.5 text-xs text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] flex items-center gap-2 transition-colors">
-
-        <Paperclip className="w-3.5 h-3.5" />
-        Upload attachment
-      </button>
-    </Popover>;
-
-  const closeOverlayIfBackdrop = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget) {
-      setIsFullScreen(false);
-    }
-  };
-  const renderConfigMenu = (
-    ref: React.RefObject<HTMLDivElement>,
-    direction: 'up' | 'down',
-  ) => (
+        </DropdownMenuLabel>
+        <DropdownMenuItem onSelect={handleAttach}>
+          <Paperclip className="w-3.5 h-3.5 mr-2" />
+          Upload attachment
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+  const renderConfigMenu = (direction: 'up' | 'down') => (
     <ConfigMenu
-      ref={ref}
       mcpOptions={groupedOptions}
       skills={availableSkills}
       projects={availableProjects}
@@ -371,348 +343,177 @@ export function InputBar({
       }}
       direction={direction}
       compact={compact}
+      disabled={isRunning}
     />
   );
 
-  const fullScreenOverlay = isFullScreen && (
-    <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
-      onMouseDown={closeOverlayIfBackdrop}
-      data-testid="inputbar-fullscreen">
-      <div className="w-full max-w-3xl h-[85vh] max-h-[85vh] bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl shadow-2xl flex flex-col overflow-hidden">
+  const fullScreenOverlay = (
+    <Dialog
+      open={isFullScreen}
+      onOpenChange={(open) => {
+        setIsFullScreen(open);
+        // Toggling full-screen closes Plus/Config popovers (preserves prior rule).
+        if (!open) {
+          setIsPlusMenuOpen(false);
+          setIsConfigOpen(false);
+        }
+      }}
+    >
+      <DialogContent
+        className="max-w-3xl h-[85vh] p-0 gap-0 flex flex-col overflow-hidden"
+        data-testid="inputbar-fullscreen"
+      >
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-[hsl(var(--border))]">
-          <span className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
+          <DialogTitle className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wider font-normal">
             Compose prompt
-          </span>
+          </DialogTitle>
           <Button
             variant="ghost"
             size="sm"
             iconOnly
             onClick={() => setIsFullScreen(false)}
-            aria-label="Minimize editor">
+            aria-label="Minimize editor"
+          >
             <Minimize2 className="w-3.5 h-3.5" />
           </Button>
         </div>
-        {attachedFiles.length > 0 &&
-        <div className="px-4 pt-3 pb-0">
-            <div className="bg-[hsl(var(--accent))] rounded px-2 py-1 text-xs text-[hsl(var(--foreground))] inline-flex items-center gap-2 w-fit">
-              <Paperclip className="w-3 h-3" />
-              <span className="truncate max-w-[240px]">{attachedFiles[0].name}</span>
-              {attachedFiles.length > 1 &&
-              <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                  +{attachedFiles.length - 1}
-                </span>
-              }
-              <button
-                onClick={() => setAttachedFiles([])}
-                className="hover:opacity-70">
-                ×
-              </button>
-            </div>
-          </div>
-        }
-        <div className="flex-1 px-4 py-3 overflow-hidden">
-          <textarea
-            ref={fullScreenTextareaRef}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Write your prompt..."
-            aria-label="Task description (expanded)"
-            disabled={isSubmitting}
-            autoFocus
-            className="w-full h-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-base resize-none" />
-        </div>
-        <div className="flex items-center justify-between px-3 py-2 border-t border-[hsl(var(--border))]">
-          <div className="flex items-center gap-2 min-w-0 flex-nowrap">
-            <div className="relative" ref={overlayMenuRef}>
-              <Button
-                variant="ghost"
-                size="sm"
-                iconOnly
-                onClick={() => {
-                  setIsPlusMenuOpen(!isPlusMenuOpen);
-                  setIsConfigOpen(false);
-                }}
-                className={isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}
-                aria-label="Open menu">
-                <Plus className="w-3.5 h-3.5" />
-              </Button>
-              {isPlusMenuOpen && <PlusMenu direction="up" />}
-            </div>
-            {queryMode === 'plan' &&
-            <Button variant="neutral" size="sm" className="uppercase tracking-wide text-[10px]">
-              Plan
-            </Button>
-            }
-            {renderConfigMenu(overlayConfigRef, 'up')}
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <Button
-              variant="primary"
-              size="md"
-              iconOnly
-              onClick={handleSubmit}
-              aria-label="Send query"
-              disabled={isSubmitting || !inputValue.trim()}>
-              {isSubmitting ?
-              <Loader2 className="w-4 h-4 animate-spin" /> :
-              <ArrowUp className="w-4 h-4" />
-              }
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
+        <InputComposerBody
+          variant="dialog"
+          inputValue={inputValue}
+          onInputChange={setInputValue}
+          onSubmit={handleSubmit}
+          onKeyDown={handleKeyDown}
+          isSubmitting={isSubmitting}
+          isExpanded={isExpanded}
+          queryMode={queryMode}
+          attachedFiles={attachedFiles}
+          onClearAttachments={() => setAttachedFiles([])}
+          plusMenu={renderPlusMenu('up')}
+          configMenu={renderConfigMenu('up')}
+          textareaRef={fullScreenTextareaRef}
+          placeholder="Write your prompt..."
+          ariaLabel="Task description (expanded)"
+          showVoice={false}
+          showStop={false}
+          showMaximize={false}
+          autoFocus
+          fillHeight
+        />
+      </DialogContent>
+    </Dialog>
   );
 
   if (mode === 'home') {
     return (
       <>
-      <div className="w-full mb-0 relative" data-testid="inputbar-home">
+        <div className="w-full mb-0 relative" data-testid="inputbar-home">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={handleFileChange}
+            className="hidden"
+            aria-hidden="true"
+          />
+          <div className="relative">
+            <div ref={containerRef} className={`${INPUT_CONTAINER_BASE} ${isExpanded ? INPUT_CONTAINER_GLOW : ''}`}>
+              <InputComposerBody
+                variant="home"
+                inputValue={inputValue}
+                onInputChange={setInputValue}
+                onSubmit={handleSubmit}
+                onKeyDown={handleKeyDown}
+                isSubmitting={isSubmitting}
+                isExpanded={isExpanded}
+                queryMode={queryMode}
+                onToggleFullScreen={() => setIsFullScreen(true)}
+                attachedFiles={attachedFiles}
+                onClearAttachments={() => setAttachedFiles([])}
+                plusMenu={renderPlusMenu(popupDirection)}
+                configMenu={renderConfigMenu(popupDirection)}
+                textareaRef={textareaRef}
+                placeholder="Describe a task..."
+                ariaLabel="Task description"
+                showVoice
+                showStop={false}
+                showMaximize
+                onFocus={() => {
+                  setIsFocused(true);
+                  onFocusChange?.(true, !inputValue.trim());
+                }}
+                onBlur={() => {
+                  setIsFocused(false);
+                  onFocusChange?.(false, !inputValue.trim());
+                }}
+              />
+            </div>
+          </div>
+        </div>
+        {fullScreenOverlay}
+      </>
+    );
+  }
+
+  // While a run is in progress every submit is auto-routed to `sendMessage`
+  // (the steer endpoint) by useSessionQuery.send — surface that intent in the
+  // placeholder so users understand the input is steering, not queuing a new turn.
+  const detailPlaceholder = isRunning
+    ? (compact ? "Steer the agent..." : "Steer the running agent (your message joins its queue)…")
+    : (compact ? "Ask anything..." : "Request changes or ask a question");
+
+  return (
+    <>
+      <div
+        className="border-t border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] p-4 shadow-[0_-4px_12px_rgba(0,0,0,0.12)]"
+        data-testid="inputbar-detail"
+      >
         <input
           ref={fileInputRef}
           type="file"
           multiple
           onChange={handleFileChange}
           className="hidden"
-          aria-hidden="true" />
-
-        <div className="relative">
-          <div ref={containerRef} className={`${INPUT_CONTAINER_BASE} ${isExpanded ? INPUT_CONTAINER_GLOW : ''}`}>
-            {attachedFiles.length > 0 &&
-            <div className="px-4 pt-3 pb-0 flex items-center gap-2">
-                <div className="bg-[hsl(var(--accent))] rounded px-2 py-1 text-xs text-[hsl(var(--foreground))] flex items-center gap-2">
-                  <Paperclip className="w-3 h-3" />
-                  <span className="truncate max-w-[180px]">{attachedFiles[0].name}</span>
-                  {attachedFiles.length > 1 &&
-                  <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                      +{attachedFiles.length - 1}
-                    </span>
-                  }
-                  <button
-                  onClick={() => setAttachedFiles([])}
-                  className="hover:opacity-70">
-
-                    ×
-                  </button>
-                </div>
-              </div>
-            }
-
-            <div className="relative px-4 py-3">
-              <textarea
-                ref={textareaRef}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onFocus={() => { setIsFocused(true); onFocusChange?.(true, !inputValue.trim()); }}
-                onBlur={() => { setIsFocused(false); onFocusChange?.(false, !inputValue.trim()); }}
-                placeholder="Describe a task..."
-                aria-label="Task description"
-                disabled={isSubmitting}
-                rows={1}
-                className={`w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-base resize-none max-h-[200px] pr-7 ${TEXTAREA_TRANSITION} ${isExpanded ? 'min-h-[72px]' : 'min-h-[24px]'}`} />
-              <Button
-                variant="ghost"
-                size="sm"
-                iconOnly
-                onClick={() => setIsFullScreen(true)}
-                aria-label="Expand editor"
-                className="absolute top-2 right-2 opacity-60 hover:opacity-100">
-                <Maximize2 className="w-3.5 h-3.5" />
-              </Button>
+          aria-hidden="true"
+        />
+        <div className="max-w-4xl mx-auto relative" ref={containerRef}>
+          {error && (
+            <div className="mb-3">
+              <Alert variant="destructive">
+                <AlertTitle>Request error</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
             </div>
-
-            <div className="flex items-center justify-between px-2 pb-1">
-              <div className="flex items-center gap-2 min-w-0 flex-nowrap">
-                <div className="relative" ref={menuRef}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    iconOnly
-                    onClick={() => {
-                      setIsPlusMenuOpen(!isPlusMenuOpen);
-                      setIsConfigOpen(false);
-                    }}
-                    className={isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}
-                    aria-label="Open menu">
-                    <Plus className="w-3.5 h-3.5" />
-                  </Button>
-                  {isPlusMenuOpen && <PlusMenu direction={popupDirection} />}
-                </div>
-                {queryMode === 'plan' &&
-                <Button variant="neutral" size="sm" className="uppercase tracking-wide text-[10px]">
-                  Plan
-                </Button>
-                }
-
-                {renderConfigMenu(configRef, popupDirection)}
-              </div>
-
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <Button
-                  variant="ghost"
-                  size="md"
-                  iconOnly
-                  aria-label="Voice input">
-                  <Mic className="w-4 h-4" />
-                </Button>
-                <Button
-                  variant="primary"
-                  size="md"
-                  iconOnly
-                  onClick={handleSubmit}
-                  aria-label="Send query"
-                  disabled={isSubmitting || !inputValue.trim()}>
-                  {isSubmitting ?
-                  <Loader2 className="w-4 h-4 animate-spin" /> :
-                  <ArrowUp className="w-4 h-4" />
-                  }
-                </Button>
-              </div>
-            </div>
+          )}
+          <div className={`${INPUT_CONTAINER_BASE} ${isExpanded ? INPUT_CONTAINER_GLOW : ''}`}>
+            <InputComposerBody
+              variant="detail"
+              inputValue={inputValue}
+              onInputChange={setInputValue}
+              onSubmit={handleSubmit}
+              onKeyDown={handleKeyDown}
+              isSubmitting={isSubmitting}
+              isExpanded={isExpanded}
+              isRunning={isRunning}
+              onStop={onStop}
+              queryMode={queryMode}
+              onToggleFullScreen={() => setIsFullScreen(true)}
+              attachedFiles={attachedFiles}
+              onClearAttachments={() => setAttachedFiles([])}
+              plusMenu={renderPlusMenu(popupDirection)}
+              configMenu={renderConfigMenu(popupDirection)}
+              textareaRef={textareaRef}
+              placeholder={detailPlaceholder}
+              ariaLabel="Session query"
+              showVoice
+              showStop
+              showMaximize
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+            />
           </div>
         </div>
       </div>
       {fullScreenOverlay}
-      </>);
-
-  }
-  const detailPlaceholder = isRunning
-    ? (compact ? "Send a message..." : "Send a message to the running session...")
-    : (compact ? "Ask anything..." : "Request changes or ask a question");
-
-  return (
-    <>
-    <div
-      className="border-t border-[hsl(var(--border-strong))] bg-[hsl(var(--background))] p-4 shadow-[0_-4px_12px_rgba(0,0,0,0.12)]"
-      data-testid="inputbar-detail">
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        onChange={handleFileChange}
-        className="hidden"
-        aria-hidden="true" />
-
-      <div className="max-w-4xl mx-auto relative" ref={containerRef}>
-        {error &&
-        <div className="mb-3">
-            <Alert variant="destructive">
-              <AlertTitle>Request error</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          </div>
-        }
-        <div className={`${INPUT_CONTAINER_BASE} ${isExpanded ? INPUT_CONTAINER_GLOW : ''}`}>
-          {attachedFiles.length > 0 &&
-          <div className="px-3 pt-2 pb-0">
-              <div className="bg-[hsl(var(--accent))] rounded px-2 py-0.5 text-xs text-[hsl(var(--foreground))] inline-flex items-center gap-2 w-fit">
-                <Paperclip className="w-3 h-3" />
-                <span className="truncate max-w-[180px]">{attachedFiles[0].name}</span>
-                {attachedFiles.length > 1 &&
-                <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                    +{attachedFiles.length - 1}
-                  </span>
-                }
-                <button
-                onClick={() => setAttachedFiles([])}
-                className="hover:opacity-70">
-                  ×
-                </button>
-              </div>
-            </div>
-          }
-
-          <div className="relative px-3 py-2">
-            <textarea
-              ref={textareaRef}
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
-              placeholder={detailPlaceholder}
-              aria-label="Session query"
-              disabled={isSubmitting}
-              rows={1}
-              className={`w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-sm resize-none max-h-[200px] pr-7 ${TEXTAREA_TRANSITION} ${isExpanded ? 'min-h-[72px]' : 'min-h-[24px]'}`} />
-            <Button
-              variant="ghost"
-              size="sm"
-              iconOnly
-              onClick={() => setIsFullScreen(true)}
-              aria-label="Expand editor"
-              className="absolute top-1 right-1 opacity-60 hover:opacity-100">
-              <Maximize2 className="w-3.5 h-3.5" />
-            </Button>
-          </div>
-
-          <div className="flex items-center justify-between px-1 pb-1">
-            <div className="flex items-center gap-1 min-w-0 flex-nowrap">
-              <div className="relative" ref={menuRef}>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  iconOnly
-                  onClick={() => {
-                    setIsPlusMenuOpen(!isPlusMenuOpen);
-                    setIsConfigOpen(false);
-                  }}
-                  className={isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}
-                  aria-label="Open menu">
-                  <Plus className="w-3.5 h-3.5" />
-                </Button>
-                {isPlusMenuOpen && <PlusMenu direction={popupDirection} />}
-              </div>
-              {queryMode === 'plan' &&
-              <Button variant="neutral" size="sm" className="uppercase tracking-wide text-[10px]">
-                Plan
-              </Button>
-              }
-
-              {renderConfigMenu(configRef, popupDirection)}
-            </div>
-
-            <div className="flex items-center gap-1 flex-shrink-0">
-              <Button
-                variant="ghost"
-                size="md"
-                iconOnly
-                aria-label="Voice input">
-                <Mic className="w-4 h-4" />
-              </Button>
-              {isRunning &&
-              <Button
-                variant="ghost"
-                size="md"
-                iconOnly
-                tone="danger"
-                onClick={onStop}
-                aria-label="Stop run">
-                <Square className="w-4 h-4" />
-              </Button>
-              }
-              <Button
-                variant="primary"
-                size="md"
-                iconOnly
-                onClick={handleSubmit}
-                aria-label="Send query"
-                disabled={isSubmitting || !inputValue.trim()}>
-                {isSubmitting ?
-                <Loader2 className="w-4 h-4 animate-spin" /> :
-                <ArrowUp className="w-4 h-4" />
-                }
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    {fullScreenOverlay}
-    </>);
-
+    </>
+  );
 }

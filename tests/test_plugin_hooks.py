@@ -41,9 +41,7 @@ def test_merge_plugin_hooks_skips_non_command():
     manager = HookManager()
     hooks_json = {
         "hooks": {
-            "SessionStart": [
-                {"hooks": [{"type": "prompt", "prompt": "Check safety"}]}
-            ],
+            "SessionStart": [{"hooks": [{"type": "prompt", "prompt": "Check safety"}]}],
         }
     }
     merge_plugin_hooks(manager, hooks_json, plugin_root="/opt")

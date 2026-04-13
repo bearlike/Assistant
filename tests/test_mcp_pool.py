@@ -34,7 +34,9 @@ class TestMCPConnectionPool:
     def test_server_can_be_added_and_queried(self):
         """Verify manual server registration and tool detail queries."""
         self.pool._servers["s1"] = ServerState(
-            name="s1", config={"cmd": "x"}, connected=True,
+            name="s1",
+            config={"cmd": "x"},
+            connected=True,
             tools=[{"name": "tool_a"}, {"name": "tool_b"}],
         )
         details = self.pool.get_all_tool_details()
@@ -42,7 +44,10 @@ class TestMCPConnectionPool:
 
     def test_returns_cached(self):
         self.pool._servers["s"] = ServerState(
-            name="s", config={}, connected=True, client=MagicMock(),
+            name="s",
+            config={},
+            connected=True,
+            client=MagicMock(),
         )
         state = asyncio.run(self.pool.get_or_connect("s"))
         assert state.connected
@@ -50,14 +55,18 @@ class TestMCPConnectionPool:
     def test_reconnects_disconnected(self):
         """A disconnected server should attempt reconnection."""
         self.pool._servers["s"] = ServerState(
-            name="s", config={"cmd": "x"}, connected=False,
+            name="s",
+            config={"cmd": "x"},
+            connected=False,
         )
         self.pool._mcp_config = {"servers": {"s": {"cmd": "x"}}}
 
         async def _run():
             async def mc(name, cfg):
                 return ServerState(
-                    name=name, config=cfg, connected=True,
+                    name=name,
+                    config=cfg,
+                    connected=True,
                 )
 
             with patch.object(self.pool, "_connect_single", side_effect=mc):
@@ -68,8 +77,11 @@ class TestMCPConnectionPool:
 
     def test_invalidate_removes_server(self):
         self.pool._servers["s"] = ServerState(
-            name="s", config={}, connected=True,
-            client=MagicMock(), tools=[{"name": "t"}],
+            name="s",
+            config={},
+            connected=True,
+            client=MagicMock(),
+            tools=[{"name": "t"}],
         )
         asyncio.run(self.pool.invalidate_server("s"))
         assert "s" not in self.pool._servers
@@ -81,7 +93,9 @@ class TestMCPConnectionPool:
         async def _run():
             async def mc(name, cfg):
                 self.pool._servers[name] = ServerState(
-                    name=name, config=cfg, connected=True,
+                    name=name,
+                    config=cfg,
+                    connected=True,
                 )
 
             with patch.object(self.pool, "_connect_single", side_effect=mc):
@@ -98,7 +112,9 @@ class TestMCPConnectionPool:
         async def _run():
             async def mc(name, c):
                 self.pool._servers[name] = ServerState(
-                    name=name, config=c, connected=True,
+                    name=name,
+                    config=c,
+                    connected=True,
                 )
 
             with patch.object(self.pool, "_connect_single", side_effect=mc):
@@ -115,6 +131,7 @@ class TestMCPConnectionPool:
         entries, never prunes. With refresh_if_config_changed, servers
         missing from the new config must be disconnected and removed.
         """
+
         async def _run():
             async def mc(name, cfg):
                 return ServerState(
@@ -126,14 +143,10 @@ class TestMCPConnectionPool:
 
             with patch.object(self.pool, "_connect_single", side_effect=mc):
                 # Project A: servers {x, y}
-                await self.pool.connect_all(
-                    {"servers": {"x": {"v": "1"}, "y": {"v": "1"}}}
-                )
+                await self.pool.connect_all({"servers": {"x": {"v": "1"}, "y": {"v": "1"}}})
                 assert set(self.pool._servers.keys()) == {"x", "y"}
                 # Switch to project B: only server {z}
-                await self.pool.refresh_if_config_changed(
-                    {"servers": {"z": {"v": "1"}}}
-                )
+                await self.pool.refresh_if_config_changed({"servers": {"z": {"v": "1"}}})
 
         asyncio.run(_run())
         assert set(self.pool._servers.keys()) == {"z"}
@@ -143,10 +156,14 @@ class TestMCPConnectionPool:
 
     def test_shutdown_disconnects_all(self):
         self.pool._servers["a"] = ServerState(
-            name="a", config={}, connected=True,
+            name="a",
+            config={},
+            connected=True,
         )
         self.pool._servers["b"] = ServerState(
-            name="b", config={}, connected=True,
+            name="b",
+            config={},
+            connected=True,
         )
         asyncio.run(self.pool.shutdown())
         assert all(not s.connected for s in self.pool._servers.values())
@@ -156,7 +173,9 @@ class TestMCPConnectionPool:
 
     def test_tool_details_with_data(self):
         self.pool._servers["s"] = ServerState(
-            name="s", config={}, connected=True,
+            name="s",
+            config={},
+            connected=True,
             tools=[{"name": "t1", "description": "d"}],
         )
         d = self.pool.get_all_tool_details()
@@ -164,7 +183,8 @@ class TestMCPConnectionPool:
 
     def test_error_counter(self):
         s = ServerState(
-            name="s", config={},
+            name="s",
+            config={},
             consecutive_errors=MAX_ERRORS_BEFORE_RECONNECT - 1,
         )
         assert s.consecutive_errors == MAX_ERRORS_BEFORE_RECONNECT - 1

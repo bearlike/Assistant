@@ -56,10 +56,10 @@ class PluginComponents:
     """Fan-out of a single plugin's contributions to existing registries."""
 
     manifest: PluginManifest | None
-    skill_dirs: list[str] = field(default_factory=list)    # paths to skills/<name>/ dirs
+    skill_dirs: list[str] = field(default_factory=list)  # paths to skills/<name>/ dirs
     command_files: list[str] = field(default_factory=list)  # paths to commands/*.md files
-    agent_files: list[str] = field(default_factory=list)    # paths to agents/*.md files
-    mcp_config: dict | None = None    # parsed .mcp.json content (vars substituted)
+    agent_files: list[str] = field(default_factory=list)  # paths to agents/*.md files
+    mcp_config: dict | None = None  # parsed .mcp.json content (vars substituted)
     hooks_config: dict | None = None  # parsed hooks/hooks.json content
 
 
@@ -266,7 +266,8 @@ def discover_installed_plugins(
             if not install_path or not Path(install_path).is_dir():
                 logging.debug(
                     "Plugin {} installPath '{}' does not exist — skipping",
-                    plugin_name, install_path,
+                    plugin_name,
+                    install_path,
                 )
                 continue
 
@@ -276,7 +277,8 @@ def discover_installed_plugins(
             if not manifest_file.is_file():
                 logging.trace(
                     "Plugin {} has no manifest at {} — skipping stale cache entry",
-                    plugin_name, manifest_file,
+                    plugin_name,
+                    manifest_file,
                 )
                 continue
 
@@ -388,13 +390,15 @@ def discover_marketplace_plugins(marketplace_dirs: list[Path | str]) -> list[dic
 
         marketplace_name = data.get("name", str(mp_dir.name))
         for plugin in data.get("plugins", []):
-            result.append({
-                "name": plugin.get("name", ""),
-                "description": plugin.get("description", ""),
-                "category": plugin.get("category", ""),
-                "marketplace": marketplace_name,
-                "installed": False,
-            })
+            result.append(
+                {
+                    "name": plugin.get("name", ""),
+                    "description": plugin.get("description", ""),
+                    "category": plugin.get("category", ""),
+                    "marketplace": marketplace_name,
+                    "installed": False,
+                }
+            )
 
     return result
 
@@ -497,11 +501,13 @@ def install_plugin(
 
     registry.setdefault("plugins", {})
     key = f"{name}@{marketplace}"
-    registry["plugins"][key] = [{
-        "scope": "user",
-        "installPath": str(cache_dir),
-        "version": version,
-    }]
+    registry["plugins"][key] = [
+        {
+            "scope": "user",
+            "installPath": str(cache_dir),
+            "version": version,
+        }
+    ]
     registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
 
     manifest = parse_plugin_manifest(cache_dir)

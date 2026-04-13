@@ -167,9 +167,7 @@ class IdeStore:
             }
         )
 
-    def update_expiry(
-        self, session_id: str, *, expires_at: datetime, extensions: int
-    ) -> None:
+    def update_expiry(self, session_id: str, *, expires_at: datetime, extensions: int) -> None:
         """Atomically bump ``expires_at`` and the extension counter."""
         self._col.update_one(
             {"session_id": session_id},
@@ -368,9 +366,7 @@ class IdeManager:
         # lives longer than Mongo records — strictly safer, and ``get()``
         # reconciles it on the next read.
         self._write_deadline(self._deadline_file(session_id), new_expires_at)
-        self._store.update_expiry(
-            session_id, expires_at=new_expires_at, extensions=new_extensions
-        )
+        self._store.update_expiry(session_id, expires_at=new_expires_at, extensions=new_extensions)
 
         updated = replace(
             instance,

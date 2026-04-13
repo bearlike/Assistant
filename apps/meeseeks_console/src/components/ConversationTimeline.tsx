@@ -3,7 +3,7 @@ import { ChevronRight, Info, Loader2, Pencil } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { CopyButton } from './CopyButton';
 import { ScrollToBottom } from './ScrollToBottom';
-import { DiffFile, EventRecord, TimelineEntry, TurnMeta } from '../types';
+import { DiffFile, EventRecord, SessionUsage, TimelineEntry, TurnMeta } from '../types';
 import { FileList } from './FileList';
 import { PlanCard } from './PlanCard';
 import { SummaryBlock } from './SummaryBlock';
@@ -11,7 +11,10 @@ import { RetryFromHereButton } from './RetryFromHereButton';
 import { ForkFromHereButton } from './ForkFromHereButton';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import { ModelLabel } from './ModelLabel';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
+import { ContextWindowBar } from './ContextWindowBar';
+import { formatTokens } from '../utils/time';
+
 interface ConversationTimelineProps {
   timeline: TimelineEntry[];
   onShowTrace: (turn: TurnMeta) => void;
@@ -25,6 +28,7 @@ interface ConversationTimelineProps {
   onEditAndRegenerate?: (fromTs: string, newText: string) => void;
   events?: EventRecord[];
   model?: string;
+  sessionUsage?: SessionUsage | null;
   systemBlock?: {
     summary?: {
       text: string[];
@@ -48,6 +52,7 @@ export function ConversationTimeline({
   onEditAndRegenerate,
   events = [],
   model,
+  sessionUsage,
   systemBlock
 }: ConversationTimelineProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -92,6 +97,33 @@ export function ConversationTimeline({
     }
     return agents;
   }, [events]);
+  // Token usage for the current (active) turn only — scoped to events after
+  // the last "user" event so we show what THIS turn consumed, not cumulative.
+  // Mirrors `computeTurnTokenUsage` (utils/timeline.ts): PEAK input across
+  // root calls (sum double-counts the baseline as tool results stack onto
+  // the same prompt), SUM output. Also aggregates cache + reasoning so the
+  // live footer can show fresh-vs-cached and extended-thinking overhead.
+  const turnTokenUsage = useMemo(() => {
+    let turnStart = 0;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === 'user') { turnStart = i; break; }
+    }
+    const turnEvents = events.slice(turnStart);
+    let peakInput = 0, output = 0, cacheRead = 0, cacheCreate = 0, reasoning = 0;
+    for (const event of turnEvents) {
+      if (event.type !== 'llm_call_end') continue;
+      const p = event.payload as Record<string, unknown>;
+      const inTok = typeof p.input_tokens === 'number' ? p.input_tokens : 0;
+      const outTok = typeof p.output_tokens === 'number' ? p.output_tokens : 0;
+      if (inTok > peakInput) peakInput = inTok;
+      output += outTok;
+      if (typeof p.cache_read_input_tokens === 'number') cacheRead += p.cache_read_input_tokens;
+      if (typeof p.cache_creation_input_tokens === 'number') cacheCreate += p.cache_creation_input_tokens;
+      if (typeof p.reasoning_output_tokens === 'number') reasoning += p.reasoning_output_tokens;
+    }
+    if (peakInput === 0 && output === 0) return null;
+    return { peakInput, output, cacheRead, cacheCreate, reasoning };
+  }, [events]);
   const { scrollRef, isAtBottom, scrollToBottom, onScroll } = useAutoScroll(timeline.length);
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -114,8 +146,10 @@ export function ConversationTimeline({
                         onKeyDown={(e) => {
                           if (e.key === 'Escape') cancelEdit();
                           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                            const fromTs = entry.turn?.events[0]?.ts;
-                            if (fromTs) submitEdit(fromTs);
+                            // User entries carry their own `ts` (the assistant
+                            // entry's `turn.events[0].ts` is not populated on
+                            // user-role entries). See types.ts → TimelineEntry.
+                            if (entry.ts) submitEdit(entry.ts);
                           }
                         }}
                       />
@@ -126,8 +160,10 @@ export function ConversationTimeline({
                           size="sm"
                           tone="info"
                           onClick={() => {
-                            const fromTs = entry.turn?.events[0]?.ts;
-                            if (fromTs) submitEdit(fromTs);
+                            // User entries carry their own `ts` (the assistant
+                            // entry's `turn.events[0].ts` is not populated on
+                            // user-role entries). See types.ts → TimelineEntry.
+                            if (entry.ts) submitEdit(entry.ts);
                           }}
                         >
                           Save &amp; Regenerate
@@ -160,7 +196,7 @@ export function ConversationTimeline({
                     </button>
                   )}
                   {entry.turnId === activeTurnId &&
-              <div className="inline-flex flex-col text-xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-lg overflow-hidden max-w-[320px]">
+              <div className="inline-flex flex-col text-xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-lg overflow-hidden">
                       <div className="flex items-center justify-between gap-3 px-3 py-1.5">
                         <div className="flex items-center gap-2 min-w-0">
                           {isRunning && !awaitingPlanApproval &&
@@ -180,6 +216,24 @@ export function ConversationTimeline({
                         </button>
                   }
                       </div>
+                      {turnTokenUsage &&
+                        <div
+                          className="border-t border-[hsl(var(--border))] px-3 py-1 flex items-center gap-3 font-mono text-[10px] text-[hsl(var(--muted-foreground))]"
+                          title="Peak input = largest prompt the model saw this turn (the real context-pressure signal). Cache reads bill at 0.1× input on Anthropic / 0.5× on OpenAI."
+                        >
+                          <span className="opacity-60">{formatTokens(turnTokenUsage.peakInput)} peak in</span>
+                          <span className="opacity-40">·</span>
+                          <span className="opacity-60">{formatTokens(turnTokenUsage.output)} out</span>
+                          {turnTokenUsage.cacheRead > 0 && <>
+                            <span className="opacity-40">·</span>
+                            <span className="opacity-60">{formatTokens(turnTokenUsage.cacheRead)} cached</span>
+                          </>}
+                          {turnTokenUsage.reasoning > 0 && <>
+                            <span className="opacity-40">·</span>
+                            <span className="opacity-60">{formatTokens(turnTokenUsage.reasoning)} reasoning</span>
+                          </>}
+                        </div>
+                      }
                       {isRunning && activeAgents.size > 0 &&
                         <div className="border-t border-[hsl(var(--border))] px-3 py-1.5 space-y-0.5 bg-[hsl(var(--accent))]/30">
                           {[...activeAgents.entries()].map(([id, a]) => (
@@ -226,6 +280,9 @@ export function ConversationTimeline({
           <div className="mt-5 pt-4 border-t border-[hsl(var(--border))] space-y-4">
                   <div className="flex items-center gap-4 text-xs text-[hsl(var(--muted-foreground))]">
                     <ModelLabel modelId={entry.turn?.model ?? model} className="font-mono opacity-70" />
+                    {sessionUsage && sessionUsage.root_max_input_tokens > 0 &&
+              <ContextWindowBar usage={sessionUsage} />
+              }
                     {entry.turn.duration &&
               <span className="font-mono opacity-70">
                         {entry.turn.duration}
@@ -286,3 +343,4 @@ export function ConversationTimeline({
     </div>);
 
 }
+

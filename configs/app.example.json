@@ -37,6 +37,9 @@
     "auto_compact_threshold": 0.8,
     "model_context_windows": {}
   },
+  "compaction": {
+    "caveman_mode": false
+  },
   "reflection": {
     "enabled": true,
     "model": ""

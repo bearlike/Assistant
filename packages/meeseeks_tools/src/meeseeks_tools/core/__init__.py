@@ -40,7 +40,19 @@ def resolve_safe_path(path: str, root: str | None = None) -> Path:
     Checks (in order): *root* if given, then every ``projects[*].path``
     from the app config, then the process CWD.
 
-    Raises ``ValueError`` when the resolved path is outside all roots.
+    Two views of the path are checked so legitimate symlinks inside a
+    project root are honored:
+
+    * ``resolved`` — ``Path.resolve()``; normalizes ``..`` *and* follows
+      symlinks. Authoritative physical location on disk.
+    * ``logical``  — ``os.path.abspath``; normalizes ``..`` but preserves
+      symlinks. Reflects the user's intent when a symlink lives inside
+      an allowed root (e.g. ``<project>/homelab`` → ``/mnt/external``).
+
+    The path is accepted if *either* view lands under an allowed root.
+    ``../`` escape attempts still fail both checks and are rejected.
+
+    Raises ``ValueError`` when the path is outside all roots.
     """
     candidate = Path(path)
     root_path = Path(root).resolve() if root else None
@@ -49,22 +61,35 @@ def resolve_safe_path(path: str, root: str | None = None) -> Path:
         base = root_path or Path(os.getcwd()).resolve()
         candidate = base / candidate
     resolved = candidate.resolve()
+    logical = Path(os.path.abspath(candidate))
 
     # Build a single check list: explicit root first, then config roots.
     roots = _get_allowed_roots()
     if root_path is not None and root_path not in roots:
         roots.insert(0, root_path)
+    # Also accept roots under their logical (symlink-preserving) form so a
+    # project whose configured path traverses a symlink still matches the
+    # user's logical view of the path.
+    logical_roots: list[Path] = []
+    for r in roots:
+        lr = Path(os.path.abspath(r))
+        if lr != r and lr not in roots and lr not in logical_roots:
+            logical_roots.append(lr)
 
     for r in roots:
         try:
             resolved.relative_to(r)
             return resolved
         except ValueError:
+            pass
+    for r in [*roots, *logical_roots]:
+        try:
+            logical.relative_to(r)
+            return logical
+        except ValueError:
             continue
 
-    raise ValueError(
-        f"Path '{path}' resolves outside all allowed project roots."
-    )
+    raise ValueError(f"Path '{path}' resolves outside all allowed project roots.")
 
 
 __all__ = ["resolve_safe_path"]

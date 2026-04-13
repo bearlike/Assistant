@@ -302,7 +302,8 @@ def discover_subtree_instructions(
         depth = len(rel.parts)
         # Prune hidden dirs and common non-project dirs (must happen before any continue)
         dirnames[:] = [
-            d for d in dirnames
+            d
+            for d in dirnames
             if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
         ]
         if depth == 0:

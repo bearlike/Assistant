@@ -87,12 +87,14 @@ def test_parse_plugin_manifest(tmp_path):
     plugin_dir.mkdir()
     (plugin_dir / ".claude-plugin").mkdir()
     (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({
-            "name": "test-plugin",
-            "description": "A test plugin",
-            "version": "1.0.0",
-            "author": {"name": "Test Author"},
-        })
+        json.dumps(
+            {
+                "name": "test-plugin",
+                "description": "A test plugin",
+                "version": "1.0.0",
+                "author": {"name": "Test Author"},
+            }
+        )
     )
     manifest = parse_plugin_manifest(plugin_dir)
     assert manifest is not None
@@ -107,10 +109,12 @@ def test_parse_plugin_manifest_author_string(tmp_path):
     plugin_dir.mkdir()
     (plugin_dir / ".claude-plugin").mkdir()
     (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({
-            "name": "test-plugin",
-            "author": "Plain Author",
-        })
+        json.dumps(
+            {
+                "name": "test-plugin",
+                "author": "Plain Author",
+            }
+        )
     )
     manifest = parse_plugin_manifest(plugin_dir)
     assert manifest is not None
@@ -168,16 +172,16 @@ def test_discover_plugin_components(tmp_path):
     (plugin_dir / "commands" / "deploy.md").write_text("---\ndescription: Deploy\n---\nBody")
     # MCP — Claude Code style (no top-level "servers" key)
     (plugin_dir / ".mcp.json").write_text(
-        json.dumps({
-            "test-server": {"command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server.js"]}
-        })
+        json.dumps(
+            {"test-server": {"command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server.js"]}}
+        )
     )
     # Hooks
     (plugin_dir / "hooks").mkdir()
     (plugin_dir / "hooks" / "hooks.json").write_text(
-        json.dumps({
-            "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "echo hi"}]}]}
-        })
+        json.dumps(
+            {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "echo hi"}]}]}}
+        )
     )
 
     components = discover_plugin_components(plugin_dir)
@@ -199,11 +203,13 @@ def test_discover_plugin_components_mcp_native_format(tmp_path):
     (plugin_dir / ".claude-plugin").mkdir()
     (plugin_dir / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "native-mcp"}))
     (plugin_dir / ".mcp.json").write_text(
-        json.dumps({
-            "servers": {
-                "my-server": {"command": "python", "args": ["${CLAUDE_PLUGIN_ROOT}/server.py"]}
+        json.dumps(
+            {
+                "servers": {
+                    "my-server": {"command": "python", "args": ["${CLAUDE_PLUGIN_ROOT}/server.py"]}
+                }
             }
-        })
+        )
     )
     components = discover_plugin_components(plugin_dir)
     assert components.mcp_config is not None
@@ -243,16 +249,20 @@ def test_discover_installed_plugins(tmp_path):
     )
     registry_file = tmp_path / "installed_plugins.json"
     registry_file.write_text(
-        json.dumps({
-            "version": 2,
-            "plugins": {
-                "my-plugin@test-mp": [{
-                    "scope": "user",
-                    "installPath": str(plugin_dir),
-                    "version": "1.0.0",
-                }]
-            },
-        })
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "my-plugin@test-mp": [
+                        {
+                            "scope": "user",
+                            "installPath": str(plugin_dir),
+                            "version": "1.0.0",
+                        }
+                    ]
+                },
+            }
+        )
     )
     plugins = discover_installed_plugins(registry_paths=[registry_file])
     assert len(plugins) == 1
@@ -267,12 +277,14 @@ def test_discover_installed_plugins_scope_set(tmp_path):
     (plugin_dir / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "p"}))
     registry_file = tmp_path / "installed_plugins.json"
     registry_file.write_text(
-        json.dumps({
-            "version": 2,
-            "plugins": {
-                "p@mp": [{"scope": "project", "installPath": str(plugin_dir), "version": "1.0"}]
-            },
-        })
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "p@mp": [{"scope": "project", "installPath": str(plugin_dir), "version": "1.0"}]
+                },
+            }
+        )
     )
     plugins = discover_installed_plugins(registry_paths=[registry_file])
     assert plugins[0].manifest.scope == "project"
@@ -290,13 +302,15 @@ def test_discover_installed_plugins_enabled_filter(tmp_path):
     path_b = str(tmp_path / "cache/mp/plugin-b/1.0")
     registry_file = tmp_path / "installed_plugins.json"
     registry_file.write_text(
-        json.dumps({
-            "version": 2,
-            "plugins": {
-                "plugin-a@mp": [{"scope": "user", "installPath": path_a, "version": "1.0"}],
-                "plugin-b@mp": [{"scope": "user", "installPath": path_b, "version": "1.0"}],
-            },
-        })
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "plugin-a@mp": [{"scope": "user", "installPath": path_a, "version": "1.0"}],
+                    "plugin-b@mp": [{"scope": "user", "installPath": path_b, "version": "1.0"}],
+                },
+            }
+        )
     )
     plugins = discover_installed_plugins(registry_paths=[registry_file], enabled=["plugin-a"])
     assert len(plugins) == 1
@@ -317,15 +331,21 @@ def test_discover_installed_plugins_dedup_first_wins(tmp_path):
     p2 = str(tmp_path / "reg1/mp/p/2.0")
     reg1 = tmp_path / "reg1_installed_plugins.json"
     reg1.write_text(
-        json.dumps({"version": 2, "plugins": {
-            "p@mp": [{"scope": "user", "installPath": p1, "version": "1.0"}]
-        }})
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {"p@mp": [{"scope": "user", "installPath": p1, "version": "1.0"}]},
+            }
+        )
     )
     reg2 = tmp_path / "reg2_installed_plugins.json"
     reg2.write_text(
-        json.dumps({"version": 2, "plugins": {
-            "p@mp": [{"scope": "user", "installPath": p2, "version": "2.0"}]
-        }})
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {"p@mp": [{"scope": "user", "installPath": p2, "version": "2.0"}]},
+            }
+        )
     )
     plugins = discover_installed_plugins(registry_paths=[reg1, reg2])
     assert len(plugins) == 1
@@ -337,9 +357,14 @@ def test_discover_installed_plugins_missing_path(tmp_path):
     missing = str(tmp_path / "does/not/exist")
     registry_file = tmp_path / "installed_plugins.json"
     registry_file.write_text(
-        json.dumps({"version": 2, "plugins": {
-            "ghost@mp": [{"scope": "user", "installPath": missing, "version": "1.0"}]
-        }})
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "ghost@mp": [{"scope": "user", "installPath": missing, "version": "1.0"}]
+                },
+            }
+        )
     )
     plugins = discover_installed_plugins(registry_paths=[registry_file])
     assert plugins == []
@@ -349,20 +374,24 @@ def test_discover_marketplace_plugins(tmp_path):
     mp_dir = tmp_path / "marketplace"
     (mp_dir / ".claude-plugin").mkdir(parents=True)
     (mp_dir / ".claude-plugin" / "marketplace.json").write_text(
-        json.dumps({
-            "name": "test-marketplace",
-            "plugins": [
-                {
-                    "name": "plugin-a", "description": "First",
-                    "source": "./plugins/a", "category": "dev",
-                },
-                {
-                    "name": "plugin-b",
-                    "description": "Second",
-                    "source": {"source": "github", "repo": "org/repo"},
-                },
-            ],
-        })
+        json.dumps(
+            {
+                "name": "test-marketplace",
+                "plugins": [
+                    {
+                        "name": "plugin-a",
+                        "description": "First",
+                        "source": "./plugins/a",
+                        "category": "dev",
+                    },
+                    {
+                        "name": "plugin-b",
+                        "description": "Second",
+                        "source": {"source": "github", "repo": "org/repo"},
+                    },
+                ],
+            }
+        )
     )
     available = discover_marketplace_plugins(marketplace_dirs=[mp_dir])
     assert len(available) == 2
@@ -416,8 +445,11 @@ def test_skill_registry_load_extra_dir_no_override(tmp_path):
     registry = SkillRegistry()
     # Pre-populate with a "personal" skill
     registry._skills["existing"] = SkillSpec(
-        name="existing", description="Personal version", source_path="/personal",
-        source="personal", body="Personal body."
+        name="existing",
+        description="Personal version",
+        source_path="/personal",
+        source="personal",
+        body="Personal body.",
     )
     registry.load_extra_dir(str(tmp_path / "skills"), source="plugin:test")
     assert registry.get("existing").description == "Personal version"

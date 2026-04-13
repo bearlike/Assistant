@@ -32,9 +32,7 @@ OTHER_SID = "b" * 32
 
 
 class FakeContainer:
-    def __init__(
-        self, name: str, store: FakeContainers, status: str = "running"
-    ) -> None:
+    def __init__(self, name: str, store: FakeContainers, status: str = "running") -> None:
         self.name = name
         self._store = store
         self.removed = False
@@ -110,9 +108,7 @@ class InMemoryStore:
         # IdeInstance is frozen so the reference is immutable anyway.
         self._docs[instance.session_id] = instance
 
-    def update_expiry(
-        self, session_id: str, *, expires_at: datetime, extensions: int
-    ) -> None:
+    def update_expiry(self, session_id: str, *, expires_at: datetime, extensions: int) -> None:
         from dataclasses import replace
 
         self._docs[session_id] = replace(
@@ -168,9 +164,7 @@ def store() -> InMemoryStore:
 
 
 @pytest.fixture
-def manager(
-    cfg: WebIdeConfig, store: InMemoryStore, fake_client: FakeDockerClient
-) -> IdeManager:
+def manager(cfg: WebIdeConfig, store: InMemoryStore, fake_client: FakeDockerClient) -> IdeManager:
     return IdeManager(cfg, store, docker_client=fake_client)
 
 
@@ -223,9 +217,7 @@ def test_ensure_creates_container_and_persists(
     assert vols[deadline_file] == {"bind": "/meeseeks/deadline", "mode": "ro"}
 
 
-def test_ensure_reconnect_when_container_alive(
-    manager: IdeManager, project_path: str
-) -> None:
+def test_ensure_reconnect_when_container_alive(manager: IdeManager, project_path: str) -> None:
     with patch.object(IdeManager, "_probe_ready", return_value=True):
         first, created1 = manager.ensure(VALID_SID, "demo", project_path)
         second, created2 = manager.ensure(VALID_SID, "demo", project_path)
@@ -315,9 +307,7 @@ def test_ensure_rolls_back_mongo_on_run_failure(
     assert not os.path.exists(deadline_file)
 
 
-def test_ensure_rejects_invalid_session_id(
-    manager: IdeManager, project_path: str
-) -> None:
+def test_ensure_rejects_invalid_session_id(manager: IdeManager, project_path: str) -> None:
     with pytest.raises(ValueError):
         manager.ensure("nope", "demo", project_path)
     with pytest.raises(ValueError):
@@ -406,9 +396,7 @@ def test_extend_rejects_neither_or_both(manager: IdeManager, project_path: str) 
     with pytest.raises(ValueError):
         manager.extend(VALID_SID)
     with pytest.raises(ValueError):
-        manager.extend(
-            VALID_SID, hours=1, expires_at=datetime.now(UTC) + timedelta(hours=2)
-        )
+        manager.extend(VALID_SID, hours=1, expires_at=datetime.now(UTC) + timedelta(hours=2))
 
 
 def test_extend_unknown_session_raises(manager: IdeManager) -> None:
@@ -481,9 +469,7 @@ def test_get_reconciles_drift_when_container_vanished(
     assert store.get(VALID_SID) is None
 
 
-def test_get_returns_ready_when_probe_passes(
-    manager: IdeManager, project_path: str
-) -> None:
+def test_get_returns_ready_when_probe_passes(manager: IdeManager, project_path: str) -> None:
     with patch.object(IdeManager, "_probe_ready", return_value=True):
         manager.ensure(VALID_SID, "demo", project_path)
         state = manager.get(VALID_SID)
@@ -513,9 +499,7 @@ def test_probe_ready_200() -> None:
 def test_probe_ready_connection_refused() -> None:
     import urllib.error
 
-    with patch(
-        "urllib.request.urlopen", side_effect=urllib.error.URLError("refused")
-    ):
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
         assert IdeManager._probe_ready(VALID_SID) is False
 
 
@@ -557,8 +541,6 @@ def test_docker_unavailable_wrapped(cfg: WebIdeConfig) -> None:
             return False
 
     mgr = IdeManager(cfg, RaisingStore(), docker_client=None)
-    with patch(
-        "meeseeks_api.ide.docker_from_env", side_effect=DockerException("no sock")
-    ):
+    with patch("meeseeks_api.ide.docker_from_env", side_effect=DockerException("no sock")):
         with pytest.raises(DockerUnavailable):
             mgr._docker()

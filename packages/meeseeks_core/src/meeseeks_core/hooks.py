@@ -43,7 +43,7 @@ class HookManager:
     on_agent_stop: list[Callable[[AgentHandle], None]] = field(default_factory=list)
     on_session_start: list[Callable[[str], None]] = field(default_factory=list)
     on_session_end: list[Callable[[str, str | None], None]] = field(default_factory=list)
-    on_compact: list[Callable[[str], None]] = field(default_factory=list)
+    on_compact: list[Callable[..., None]] = field(default_factory=list)
 
     def run_pre_tool_use(self, action_step: ActionStep) -> ActionStep:
         """Apply pre-tool hooks to an action step.
@@ -146,11 +146,25 @@ class HookManager:
             except Exception:
                 logger.warning("on_session_end hook failed", exc_info=True)
 
-    def run_on_compact(self, session_id: str) -> None:
+    def run_on_compact(
+        self,
+        session_id: str,
+        *,
+        summary: str = "",
+        tokens_before: int = 0,
+        tokens_saved: int = 0,
+        events_summarized: int = 0,
+    ) -> None:
         """Notify hooks that compaction occurred."""
         for hook in self.on_compact:
             try:
-                hook(session_id)
+                hook(
+                    session_id,
+                    summary=summary,
+                    tokens_before=tokens_before,
+                    tokens_saved=tokens_saved,
+                    events_summarized=events_summarized,
+                )
             except Exception:
                 logger.warning("on_compact hook failed", exc_info=True)
 
@@ -163,21 +177,13 @@ class HookManager:
         start_map = {"command": _make_session_hook, "http": _make_http_session_hook}
         end_map = {"command": _make_session_end_hook, "http": _make_http_session_end_hook}
         for entry in hooks_config.pre_tool_use:
-            manager.pre_tool_use.append(
-                pre_map.get(entry.type, _make_command_hook)(entry)
-            )
+            manager.pre_tool_use.append(pre_map.get(entry.type, _make_command_hook)(entry))
         for entry in hooks_config.post_tool_use:
-            manager.post_tool_use.append(
-                post_map.get(entry.type, _make_post_tool_hook)(entry)
-            )
+            manager.post_tool_use.append(post_map.get(entry.type, _make_post_tool_hook)(entry))
         for entry in hooks_config.on_session_start:
-            manager.on_session_start.append(
-                start_map.get(entry.type, _make_session_hook)(entry)
-            )
+            manager.on_session_start.append(start_map.get(entry.type, _make_session_hook)(entry))
         for entry in hooks_config.on_session_end:
-            manager.on_session_end.append(
-                end_map.get(entry.type, _make_session_end_hook)(entry)
-            )
+            manager.on_session_end.append(end_map.get(entry.type, _make_session_end_hook)(entry))
         return manager
 
 
@@ -209,64 +215,84 @@ def _session_env(session_id: str, error: str | None = None) -> dict[str, str]:
 
 def _make_command_hook(entry: HookEntry) -> Callable[[ActionStep], ActionStep]:
     """Create a pre-tool-use hook from a config entry."""
+
     def hook(action_step: ActionStep) -> ActionStep:
         if not _matches(entry.matcher, action_step.tool_id):
             return action_step
         try:
             subprocess.run(
-                entry.command, shell=True, timeout=entry.timeout,
-                capture_output=True, text=True,
+                entry.command,
+                shell=True,
+                timeout=entry.timeout,
+                capture_output=True,
+                text=True,
                 env=_hook_env(action_step),
             )
         except (subprocess.TimeoutExpired, OSError):
             logger.warning("Command hook timed out or failed: %s", entry.command)
         return action_step
+
     return hook
 
 
 def _make_post_tool_hook(entry: HookEntry) -> Callable[[ActionStep, MockSpeaker], MockSpeaker]:
     """Create a post-tool-use hook from a config entry."""
+
     def hook(action_step: ActionStep, result: MockSpeaker) -> MockSpeaker:
         if not _matches(entry.matcher, action_step.tool_id):
             return result
         content = getattr(result, "content", None)
         try:
             subprocess.run(
-                entry.command, shell=True, timeout=entry.timeout,
-                capture_output=True, text=True,
+                entry.command,
+                shell=True,
+                timeout=entry.timeout,
+                capture_output=True,
+                text=True,
                 env=_hook_env(action_step, str(content) if content else None),
             )
         except (subprocess.TimeoutExpired, OSError):
             logger.warning("Command hook timed out or failed: %s", entry.command)
         return result
+
     return hook
 
 
 def _make_session_hook(entry: HookEntry) -> Callable[[str], None]:
     """Create a session lifecycle hook from a config entry."""
+
     def hook(session_id: str) -> None:
         try:
             subprocess.run(
-                entry.command, shell=True, timeout=entry.timeout,
-                capture_output=True, text=True,
+                entry.command,
+                shell=True,
+                timeout=entry.timeout,
+                capture_output=True,
+                text=True,
                 env=_session_env(session_id),
             )
         except (subprocess.TimeoutExpired, OSError):
             logger.warning("Session hook timed out or failed: %s", entry.command)
+
     return hook
 
 
 def _make_session_end_hook(entry: HookEntry) -> Callable[[str, str | None], None]:
     """Create a session end hook from a config entry."""
+
     def hook(session_id: str, error: str | None = None) -> None:
         try:
             subprocess.run(
-                entry.command, shell=True, timeout=entry.timeout,
-                capture_output=True, text=True,
+                entry.command,
+                shell=True,
+                timeout=entry.timeout,
+                capture_output=True,
+                text=True,
                 env=_session_env(session_id, error),
             )
         except (subprocess.TimeoutExpired, OSError):
             logger.warning("Session end hook timed out or failed: %s", entry.command)
+
     return hook
 
 
@@ -274,12 +300,15 @@ def _make_session_end_hook(entry: HookEntry) -> Callable[[str, str | None], None
 # HTTP hook factories (fire-and-forget POST to external URLs)
 # ---------------------------------------------------------------------------
 
+
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> None:
     """POST JSON payload to a URL. Called from a daemon thread."""
     try:
         data = json.dumps(payload).encode()
         req = urllib.request.Request(
-            url, data=data, method="POST",
+            url,
+            data=data,
+            method="POST",
             headers={"Content-Type": "application/json", **headers},
         )
         urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
@@ -294,13 +323,18 @@ def _fire_http(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
 
 def _make_http_hook(entry: HookEntry) -> Callable[[ActionStep], ActionStep]:
     """Create a pre-tool-use HTTP hook from a config entry."""
+
     def hook(action_step: ActionStep) -> ActionStep:
         if not _matches(entry.matcher, action_step.tool_id):
             return action_step
-        payload = {"event": "pre_tool_use", "tool_id": action_step.tool_id,
-                   "operation": action_step.operation}
+        payload = {
+            "event": "pre_tool_use",
+            "tool_id": action_step.tool_id,
+            "operation": action_step.operation,
+        }
         _fire_http(entry.url, payload, entry.headers, entry.timeout)
         return action_step
+
     return hook
 
 
@@ -308,36 +342,47 @@ def _make_http_post_tool_hook(
     entry: HookEntry,
 ) -> Callable[[ActionStep, MockSpeaker], MockSpeaker]:
     """Create a post-tool-use HTTP hook from a config entry."""
+
     def hook(action_step: ActionStep, result: MockSpeaker) -> MockSpeaker:
         if not _matches(entry.matcher, action_step.tool_id):
             return result
         content = getattr(result, "content", None)
         payload: dict[str, Any] = {
-            "event": "post_tool_use", "tool_id": action_step.tool_id,
+            "event": "post_tool_use",
+            "tool_id": action_step.tool_id,
             "operation": action_step.operation,
         }
         if content is not None:
             payload["result_preview"] = str(content)[:2000]
         _fire_http(entry.url, payload, entry.headers, entry.timeout)
         return result
+
     return hook
 
 
 def _make_http_session_hook(entry: HookEntry) -> Callable[[str], None]:
     """Create a session start HTTP hook from a config entry."""
+
     def hook(session_id: str) -> None:
-        _fire_http(entry.url, {"event": "session_start", "session_id": session_id},
-                   entry.headers, entry.timeout)
+        _fire_http(
+            entry.url,
+            {"event": "session_start", "session_id": session_id},
+            entry.headers,
+            entry.timeout,
+        )
+
     return hook
 
 
 def _make_http_session_end_hook(entry: HookEntry) -> Callable[[str, str | None], None]:
     """Create a session end HTTP hook from a config entry."""
+
     def hook(session_id: str, error: str | None = None) -> None:
         payload: dict[str, Any] = {"event": "session_end", "session_id": session_id}
         if error is not None:
             payload["error"] = error
         _fire_http(entry.url, payload, entry.headers, entry.timeout)
+
     return hook
 
 

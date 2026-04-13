@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getConfig, getConfigSchema, patchConfig } from "../api/client";
 import { logApiError } from "../utils/errors";
 
@@ -47,59 +48,58 @@ function shallowDiff(
 }
 
 export function useConfig(): ConfigState {
-  const [schema, setSchema] = useState<Record<string, unknown> | null>(null);
-  const [config, setConfig] = useState<Record<string, unknown> | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const qc = useQueryClient();
   const originalRef = useRef<Record<string, unknown> | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [s, c] = await Promise.all([getConfigSchema(), getConfig()]);
-      setSchema(s);
-      setConfig(c);
-      originalRef.current = c;
-    } catch (err) {
-      const message = logApiError("getConfig", err);
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const save = useCallback(
-    async (formData: Record<string, unknown>): Promise<boolean> => {
-      const patch = originalRef.current
-        ? shallowDiff(originalRef.current, formData)
-        : formData;
-      if (!patch) {
-        setError(null);
-        return true; // nothing to save
-      }
-      setSaving(true);
-      setError(null);
-      try {
-        const updated = await patchConfig(patch);
-        setConfig(updated);
-        originalRef.current = updated;
-        return true;
-      } catch (err) {
-        const message = logApiError("patchConfig", err);
-        setError(message);
-        return false;
-      } finally {
-        setSaving(false);
-      }
-    },
-    []
-  );
-
+  const schemaQ = useQuery({
+    queryKey: ["config-schema"],
+    queryFn: getConfigSchema,
+    staleTime: Infinity,
+  });
+  const configQ = useQuery({ queryKey: ["config"], queryFn: getConfig });
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (configQ.data) {
+      originalRef.current = configQ.data;
+    }
+  }, [configQ.data]);
+  const patchM = useMutation({
+    mutationFn: (patch: Record<string, unknown>) => patchConfig(patch),
+    onSuccess: (updated) => {
+      originalRef.current = updated;
+      qc.setQueryData(["config"], updated);
+    },
+  });
 
-  return { schema, config, loading, saving, error, save, refresh };
+  const save = async (formData: Record<string, unknown>): Promise<boolean> => {
+    const patch = originalRef.current
+      ? shallowDiff(originalRef.current, formData)
+      : formData;
+    if (!patch) {
+      return true;
+    }
+    try {
+      await patchM.mutateAsync(patch);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const refresh = async () => {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["config"] }),
+      qc.invalidateQueries({ queryKey: ["config-schema"] }),
+    ]);
+  };
+
+  const errSource = schemaQ.error || configQ.error || patchM.error;
+  return {
+    schema: schemaQ.data ?? null,
+    config: configQ.data ?? null,
+    loading: schemaQ.isPending || configQ.isPending,
+    saving: patchM.isPending,
+    error: errSource ? logApiError("config", errSource) : null,
+    save,
+    refresh,
+  };
 }

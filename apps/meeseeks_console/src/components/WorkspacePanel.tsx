@@ -3,7 +3,7 @@ import { ReviewPane } from './ReviewPane';
 import { LogsView } from './LogsView';
 import { DiffFile, EventRecord, TurnMeta } from '../types';
 import { cn } from '../utils/cn';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
 interface WorkspacePanelProps {
   onClose: () => void;
   activeTab: 'diff' | 'logs';

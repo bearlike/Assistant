@@ -155,7 +155,6 @@ def apply_search_replace_blocks(
     return results
 
 
-
 def _compute_replacement(
     *,
     content: str,

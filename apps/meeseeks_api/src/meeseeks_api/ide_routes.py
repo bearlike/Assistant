@@ -199,9 +199,7 @@ class IdeExtendResource(Resource):
             ]
             return {"message": "invalid request body", "errors": errors}, 400
         try:
-            instance = _manager.extend(
-                session_id, hours=body.hours, expires_at=body.expires_at
-            )
+            instance = _manager.extend(session_id, hours=body.hours, expires_at=body.expires_at)
         except LookupError:
             return {"message": "no ide instance for session"}, 404
         except MaxLifetimeReached as exc:

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FolderOpen, Pencil, Trash2, Check, X } from 'lucide-react';
 import { VirtualProject } from '../types';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
 
 interface ProjectCardProps {
   project: VirtualProject;

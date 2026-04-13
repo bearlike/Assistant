@@ -16,7 +16,7 @@ import {
   uninstallPlugin,
 } from '../api/client';
 import type { MarketplacePlugin, PluginSummary } from '../api/client';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
 
 function Badge({ children, variant = 'default' }: { children: React.ReactNode; variant?: 'default' | 'success' | 'muted' }) {
   const cls =

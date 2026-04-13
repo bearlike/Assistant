@@ -39,6 +39,7 @@ dev = [
 docs = [
   "mike",
   "mkdocs",
+  "mkdocs-callouts>=1.16.0",
   "mkdocs-shadcn>=0.9.9",
   "mkdocstrings[python]",
   "pymdown-extensions>=10.20.1",

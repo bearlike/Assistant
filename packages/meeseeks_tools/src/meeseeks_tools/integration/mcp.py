@@ -59,6 +59,7 @@ def _expand_env_vars(config: dict[str, Any]) -> dict[str, Any]:
                 logging.debug("Env var '{}' referenced in MCP config not found", var_name)
                 return match.group(0)  # Leave unresolved
             return resolved
+
         return _ENV_VAR_PATTERN.sub(_replace, value)
 
     def _walk(obj: Any) -> Any:

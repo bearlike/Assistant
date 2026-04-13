@@ -383,7 +383,7 @@ def _resolve_project_cwd(request_data: dict[str, object]) -> str | None:
 
     # Managed (virtual) project: "managed:<uuid>"
     if project_name.startswith("managed:"):
-        vpid = project_name[len("managed:"):]
+        vpid = project_name[len("managed:") :]
         proj = project_store.get_project(vpid)
         if proj is None:
             raise ValueError(f"Managed project '{vpid}' not found.")
@@ -494,14 +494,16 @@ class Projects(Resource):
         ]
         # Managed (virtual) projects
         for vp in project_store.list_projects():
-            result.append({
-                "name": vp.name,
-                "project_id": vp.project_id,
-                "path": vp.path,
-                "description": vp.description,
-                "available": os.path.isdir(vp.path),
-                "source": "managed",
-            })
+            result.append(
+                {
+                    "name": vp.name,
+                    "project_id": vp.project_id,
+                    "path": vp.path,
+                    "description": vp.description,
+                    "available": os.path.isdir(vp.path),
+                    "source": "managed",
+                }
+            )
         return {"projects": result}, 200
 
 
@@ -621,9 +623,7 @@ class Sessions(Resource):
                     project_name = ctx.get("project", "")
             context_payload["project"] = project_name
         if "model" not in context_payload:
-            context_payload["model"] = get_config_value(
-                "llm", "default_model", default="unknown"
-            )
+            context_payload["model"] = get_config_value("llm", "default_model", default="unknown")
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
         return {"session_id": session_id}, 200
@@ -654,9 +654,7 @@ class SessionQuery(Resource):
         context_payload = _build_context_payload(request_data)
         # Use model from context if provided, else config default
         if "model" not in context_payload:
-            context_payload["model"] = get_config_value(
-                "llm", "default_model", default="unknown"
-            )
+            context_payload["model"] = get_config_value("llm", "default_model", default="unknown")
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
 
@@ -826,9 +824,7 @@ class SessionRecovery(Resource):
         body = request.get_json(silent=True) or {}
         action = body.get("action")
         if action not in ("retry", "continue"):
-            return {
-                "message": "'action' must be 'retry' or 'continue'"
-            }, 400
+            return {"message": "'action' must be 'retry' or 'continue'"}, 400
         from_ts: str | None = body.get("from_ts")
         edited_text: str | None = body.get("edited_text")
         model_override: str | None = body.get("model")
@@ -836,7 +832,9 @@ class SessionRecovery(Resource):
             return {"message": "Session is already running."}, 409
         try:
             user_query = runtime.resolve_recovery_query(
-                session_id, action, from_ts=from_ts,
+                session_id,
+                action,
+                from_ts=from_ts,
                 replacement_text=edited_text,
             )
         except ValueError as exc:
@@ -965,8 +963,7 @@ class SessionPlanApprove(Resource):
             if not ok:
                 return {
                     "message": (
-                        "No pending plan proposal for this session, or "
-                        "a run is already active."
+                        "No pending plan proposal for this session, or a run is already active."
                     ),
                 }, 404
             # Start a new run in act mode with a synthetic continuation
@@ -993,8 +990,7 @@ class SessionPlanApprove(Resource):
             if not ok:
                 return {
                     "message": (
-                        "No pending plan proposal for this session, or "
-                        "a run is already active."
+                        "No pending plan proposal for this session, or a run is already active."
                     ),
                 }, 404
             return {"session_id": session_id, "approved": False}, 200
@@ -1059,17 +1055,52 @@ class SessionAgents(Resource):
                 "detail": e.get("payload", {}).get("detail"),
                 "status": e.get("payload", {}).get("status"),
                 "steps_completed": e.get("payload", {}).get("steps_completed", 0),
+                "input_tokens": e.get("payload", {}).get("input_tokens", 0),
+                "output_tokens": e.get("payload", {}).get("output_tokens", 0),
                 "ts": e.get("ts"),
             }
             for e in events
             if e.get("type") == "sub_agent"
         ]
         running = runtime.is_running(session_id)
+        stop_agents = [a for a in agents if a.get("action") == "stop"]
+        total_input_tokens = sum(a.get("input_tokens", 0) for a in stop_agents)
+        total_output_tokens = sum(a.get("output_tokens", 0) for a in stop_agents)
         return {
             "agents": agents,
             "running": running,
             "total_steps": total_steps,
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
         }, 200
+
+
+@ns.route("/sessions/<string:session_id>/usage")
+class SessionUsage(Resource):
+    """Return token usage broken down by root agent vs sub-agents."""
+
+    @api.doc(security="apikey")
+    def get(self, session_id: str) -> tuple[dict, int]:
+        """Return root/sub-agent token usage + compaction stats."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        from meeseeks_core.token_budget import build_usage_numbers
+
+        events = runtime.load_events(session_id)
+        root_model: str | None = None
+        for event in reversed(events):
+            if event.get("type") != "context":
+                continue
+            payload = event.get("payload")
+            if isinstance(payload, dict):
+                candidate = payload.get("model")
+                if isinstance(candidate, str) and candidate:
+                    root_model = candidate
+                    break
+        if not root_model:
+            root_model = str(get_config_value("llm", "default_model", default="") or "")
+        return build_usage_numbers(events, root_model), 200
 
 
 @ns.route("/sessions/<string:session_id>/archive")
@@ -1603,9 +1634,7 @@ def _collect_protected_paths(
         if ref:
             ref_name = ref.rsplit("/", 1)[-1]
             if ref_name in defs:
-                protected |= _collect_protected_paths(
-                    defs[ref_name], defs=defs, prefix=path
-                )
+                protected |= _collect_protected_paths(defs[ref_name], defs=defs, prefix=path)
         # Recurse into inline objects
         if prop.get("type") == "object" and "properties" in prop:
             protected |= _collect_protected_paths(prop, defs=defs, prefix=path)
@@ -1763,9 +1792,7 @@ class PluginMarketplace(Resource):
 
         cfg = get_config().plugins
         return {
-            "plugins": discover_marketplace_plugins(
-                marketplace_dirs=cfg.resolve_marketplace_dirs()
-            )
+            "plugins": discover_marketplace_plugins(marketplace_dirs=cfg.resolve_marketplace_dirs())
         }, 200
 
     @api.doc(security="apikey")

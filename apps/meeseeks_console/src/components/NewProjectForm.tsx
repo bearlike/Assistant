@@ -1,79 +1,124 @@
 import { useState } from 'react';
-import { Button } from './ui/Button';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from './ui/form';
+import { Input } from './ui/input';
+import { Textarea } from './ui/textarea';
+import { Button } from './ui/button';
+
+const schema = z.object({
+  name: z.string().trim().min(1, 'Name is required'),
+  description: z.string().optional(),
+  path: z.string().optional(),
+});
+
+export type NewProjectFormValues = z.infer<typeof schema>;
 
 interface NewProjectFormProps {
-  onSubmit: (name: string, description: string, path?: string) => Promise<void>;
+  onSubmit: (values: NewProjectFormValues) => Promise<void>;
   onCancel: () => void;
 }
 
 export function NewProjectForm({ onSubmit, onCancel }: NewProjectFormProps) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [path, setPath] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const form = useForm<NewProjectFormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: { name: '', description: '', path: '' },
+  });
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    setBusy(true);
-    setError(null);
+  const handleSubmit = form.handleSubmit(async (values) => {
+    setSubmitError(null);
+    const trimmed: NewProjectFormValues = {
+      name: values.name.trim(),
+      description: values.description?.trim() || undefined,
+      path: values.path?.trim() || undefined,
+    };
     try {
-      await onSubmit(name.trim(), description.trim(), path.trim() || undefined);
+      await onSubmit(trimmed);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create project');
-    } finally {
-      setBusy(false);
+      setSubmitError(err instanceof Error ? err.message : 'Failed to create project');
     }
-  };
+  });
+
+  const submitting = form.formState.isSubmitting;
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 flex flex-col gap-3"
-    >
-      <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">New Project</h3>
-      <div className="flex flex-col gap-1">
-        <label className="text-xs text-[hsl(var(--muted-foreground))]">Name *</label>
-        <input
-          className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1.5 text-sm text-[hsl(var(--foreground))] focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="My Project"
-          required
-          autoFocus
+    <Form {...form}>
+      <form
+        onSubmit={handleSubmit}
+        className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 flex flex-col gap-3"
+      >
+        <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">New Project</h3>
+        <FormField
+          control={form.control}
+          name="name"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-xs text-[hsl(var(--muted-foreground))]">Name *</FormLabel>
+              <FormControl>
+                <Input {...field} placeholder="My Project" autoFocus />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
         />
-      </div>
-      <div className="flex flex-col gap-1">
-        <label className="text-xs text-[hsl(var(--muted-foreground))]">Description</label>
-        <textarea
-          className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1.5 text-sm text-[hsl(var(--foreground))] focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))] resize-none"
-          rows={2}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="What is this project about?"
+        <FormField
+          control={form.control}
+          name="description"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-xs text-[hsl(var(--muted-foreground))]">Description</FormLabel>
+              <FormControl>
+                <Textarea
+                  {...field}
+                  rows={2}
+                  placeholder="What is this project about?"
+                  className="resize-none"
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
         />
-      </div>
-      <div className="flex flex-col gap-1">
-        <label className="text-xs text-[hsl(var(--muted-foreground))]">Path (optional — auto-generated if empty)</label>
-        <input
-          className="w-full rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1.5 text-sm text-[hsl(var(--foreground))] font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          placeholder="/path/to/workspace"
+        <FormField
+          control={form.control}
+          name="path"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-xs text-[hsl(var(--muted-foreground))]">Path</FormLabel>
+              <FormControl>
+                <Input
+                  {...field}
+                  placeholder="/path/to/workspace"
+                  className="font-mono"
+                />
+              </FormControl>
+              <FormDescription className="text-[10px]">
+                Optional — auto-generated if empty.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
         />
-      </div>
-      {error && (
-        <p className="text-xs text-red-400">{error}</p>
-      )}
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={busy || !name.trim()}>
-          {busy ? 'Creating…' : 'Create Project'}
-        </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={onCancel} disabled={busy}>
-          Cancel
-        </Button>
-      </div>
-    </form>
+        {submitError && <p className="text-xs text-red-400">{submitError}</p>}
+        <div className="flex gap-2">
+          <Button type="submit" size="sm" disabled={submitting}>
+            {submitting ? 'Creating…' : 'Create Project'}
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+    </Form>
   );
 }

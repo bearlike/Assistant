@@ -43,6 +43,7 @@ class TestServerDef:
 
     def test_available_servers_returns_installed(self):
         """Servers whose binary is found on PATH are returned."""
+
         def fake_which(cmd: str) -> str | None:
             return "/usr/bin/pyright-langserver" if "pyright" in cmd else None
 
@@ -53,6 +54,7 @@ class TestServerDef:
 
     def test_available_servers_with_overrides_disable(self):
         """Overrides can disable built-in servers."""
+
         def fake_which(cmd: str) -> str | None:
             return f"/usr/bin/{cmd}"
 
@@ -63,17 +65,20 @@ class TestServerDef:
 
     def test_available_servers_with_custom_server(self):
         """User-defined servers are included if binary is found."""
+
         def fake_which(cmd: str) -> str | None:
             return f"/usr/bin/{cmd}" if cmd == "my-lsp" else None
 
         with patch.object(shutil, "which", side_effect=fake_which):
-            result = available_servers({
-                "my-lang": {
-                    "command": ["my-lsp", "--stdio"],
-                    "extensions": [".xyz"],
-                    "language_id": "xyzlang",
+            result = available_servers(
+                {
+                    "my-lang": {
+                        "command": ["my-lsp", "--stdio"],
+                        "extensions": [".xyz"],
+                        "language_id": "xyzlang",
+                    }
                 }
-            })
+            )
         assert len(result) == 1
         assert result[0].id == "my-lang"
         assert result[0].extensions == (".xyz",)
@@ -242,6 +247,7 @@ class TestLSPToolFormatting:
             ),
         ]
         from unittest.mock import MagicMock
+
         manager = MagicMock()
         manager.server_for_file.return_value = MagicMock(id="pyright")
 
@@ -261,6 +267,7 @@ class TestLSPToolRegistration:
         """lsp_tool is registered in the default tool registry."""
         monkeypatch.setenv("MEESEEKS_HOME", "/tmp/meeseeks-test-lsp")
         from meeseeks_core.config import reset_config
+
         reset_config()
 
         from meeseeks_core.tool_registry import _default_registry
@@ -274,6 +281,7 @@ class TestLSPToolRegistration:
         """lsp_tool is read-only (safe for plan mode)."""
         monkeypatch.setenv("MEESEEKS_HOME", "/tmp/meeseeks-test-lsp")
         from meeseeks_core.config import reset_config
+
         reset_config()
 
         from meeseeks_core.tool_registry import _default_registry

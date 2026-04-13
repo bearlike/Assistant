@@ -97,6 +97,64 @@ def test_runtime_start_async_and_cancel(tmp_path):
     assert runtime.is_running(session_id) is False
 
 
+def test_enqueue_message_persists_user_event(tmp_path):
+    """Steering messages enqueued mid-run are persisted as user events."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+
+    def fake_run_sync(*, session_id, user_query, should_cancel=None, **_kwargs):
+        while should_cancel and not should_cancel():
+            time.sleep(0.01)
+
+    runtime.run_sync = fake_run_sync
+    session_id = runtime.resolve_session()
+    runtime.start_async(session_id=session_id, user_query="initial")
+    try:
+        assert runtime.enqueue_message(session_id, "steer me") is True
+        events = store.load_transcript(session_id)
+        user_events = [e for e in events if e["type"] == "user_steer"]
+        assert any(e["payload"]["text"] == "steer me" for e in user_events)
+    finally:
+        runtime.cancel(session_id)
+        deadline = time.time() + 2.0
+        while time.time() < deadline and runtime.is_running(session_id):
+            time.sleep(0.01)
+
+
+def test_enqueue_message_returns_false_when_idle(tmp_path):
+    """enqueue_message returns False when no run is active."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    assert runtime.enqueue_message(session_id, "nobody home") is False
+    events = store.load_transcript(session_id)
+    assert not any(e.get("payload", {}).get("text") == "nobody home" for e in events)
+
+
+def test_interrupt_step_persists_user_event(tmp_path):
+    """Interrupting a step records a user event in the transcript."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+
+    def fake_run_sync(*, session_id, user_query, should_cancel=None, **_kwargs):
+        while should_cancel and not should_cancel():
+            time.sleep(0.01)
+
+    runtime.run_sync = fake_run_sync
+    session_id = runtime.resolve_session()
+    runtime.start_async(session_id=session_id, user_query="initial")
+    try:
+        assert runtime.interrupt_step(session_id) is True
+        events = store.load_transcript(session_id)
+        user_events = [e for e in events if e["type"] == "user_steer"]
+        assert any("Interrupted" in str(e["payload"]["text"]) for e in user_events)
+    finally:
+        runtime.cancel(session_id)
+        deadline = time.time() + 2.0
+        while time.time() < deadline and runtime.is_running(session_id):
+            time.sleep(0.01)
+
+
 def test_runtime_list_sessions_skips_empty(tmp_path):
     """Exclude sessions with no events from list output."""
     store = SessionStore(root_dir=str(tmp_path))
@@ -156,8 +214,10 @@ def test_resolve_recovery_query_retry_truncates_failed_turn(tmp_path):
     store.append_event(session_id, {"type": "user", "payload": {"text": "second"}})
     store.append_event(
         session_id,
-        {"type": "tool_result", "payload": {"tool_id": "x", "operation": "get",
-                                             "tool_input": "", "result": "ok"}},
+        {
+            "type": "tool_result",
+            "payload": {"tool_id": "x", "operation": "get", "tool_input": "", "result": "ok"},
+        },
     )
     store.append_event(
         session_id,
@@ -196,9 +256,7 @@ def test_resolve_recovery_query_continue_generic_prompt(tmp_path):
     runtime = SessionRuntime(session_store=store)
     session_id = runtime.resolve_session()
     original_task = "build a KISS-compliant auth layer"
-    store.append_event(
-        session_id, {"type": "user", "payload": {"text": original_task}}
-    )
+    store.append_event(session_id, {"type": "user", "payload": {"text": original_task}})
 
     query = runtime.resolve_recovery_query(session_id, "continue")
     assert "interrupted" in query.lower()
@@ -216,9 +274,7 @@ def test_resolve_recovery_query_continue_falls_back_without_original(tmp_path):
     session_id = runtime.resolve_session()
     # Whitespace-only original user event — retry would refuse this but
     # continue must degrade gracefully to a generic recovery prompt.
-    store.append_event(
-        session_id, {"type": "user", "payload": {"text": "   "}}
-    )
+    store.append_event(session_id, {"type": "user", "payload": {"text": "   "}})
 
     query = runtime.resolve_recovery_query(session_id, "continue")
     assert "interrupted" in query.lower()
@@ -235,9 +291,7 @@ def test_resolve_recovery_query_rejects_unknown_action(tmp_path):
     with pytest.raises(ValueError, match="unknown recovery action"):
         runtime.resolve_recovery_query(session_id, "nuke")
     # No recovery event appended on failure.
-    assert not any(
-        e.get("type") == "recovery" for e in store.load_transcript(session_id)
-    )
+    assert not any(e.get("type") == "recovery" for e in store.load_transcript(session_id))
 
 
 def test_resolve_recovery_query_rejects_session_with_no_user_message(tmp_path):
@@ -285,13 +339,13 @@ def test_resolve_recovery_query_with_replacement_text(tmp_path):
     store.append_event(session_id, {"type": "user", "payload": {"text": "original"}})
     store.append_event(
         session_id,
-        {"type": "completion", "payload": {"done": True, "done_reason": "error",
-                                            "task_result": None, "error": "fail"}},
+        {
+            "type": "completion",
+            "payload": {"done": True, "done_reason": "error", "task_result": None, "error": "fail"},
+        },
     )
 
-    query = runtime.resolve_recovery_query(
-        session_id, "retry", replacement_text="edited prompt"
-    )
+    query = runtime.resolve_recovery_query(session_id, "retry", replacement_text="edited prompt")
     assert query == "edited prompt"
     # Transcript should be truncated (original user message removed)
     transcript = store.load_transcript(session_id)
@@ -305,9 +359,7 @@ def test_resolve_recovery_query_replacement_text_on_empty_original(tmp_path):
     session_id = runtime.resolve_session()
     store.append_event(session_id, {"type": "user", "payload": {"text": ""}})
 
-    query = runtime.resolve_recovery_query(
-        session_id, "retry", replacement_text="fixed prompt"
-    )
+    query = runtime.resolve_recovery_query(session_id, "retry", replacement_text="fixed prompt")
     assert query == "fixed prompt"
 
 

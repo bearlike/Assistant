@@ -1,5 +1,10 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -20,7 +25,87 @@ export default defineConfig(({ mode }) => {
   );
 
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      VitePWA({
+        registerType: "prompt",
+        injectRegister: null,
+        includeAssets: [
+          "favicon.ico",
+          "favicon-16x16.png",
+          "favicon-32x32.png",
+          "apple-touch-icon.png",
+          "android-chrome-192x192.png",
+          "android-chrome-512x512.png",
+          "logo-bg.svg",
+          "logo-icon.svg",
+          "logo-transparent.svg",
+          "session-ide-floral-background-animation.svg"
+        ],
+        manifest: {
+          name: "Meeseeks",
+          short_name: "Meeseeks",
+          start_url: "/",
+          display: "standalone",
+          theme_color: "#0a0a0a",
+          background_color: "#0a0a0a",
+          icons: [
+            { src: "/favicon.ico", sizes: "48x48", type: "image/x-icon" },
+            {
+              src: "/android-chrome-192x192.png",
+              sizes: "192x192",
+              type: "image/png"
+            },
+            {
+              src: "/android-chrome-512x512.png",
+              sizes: "512x512",
+              type: "image/png",
+              purpose: "any maskable"
+            }
+          ]
+        },
+        workbox: {
+          globPatterns: ["**/*.{js,css,html,ico,png,svg,woff,woff2}"],
+          // runtime-config.js is rendered at container start; never precache
+          globIgnores: ["**/runtime-config.js"],
+          navigateFallback: "index.html",
+          navigateFallbackDenylist: [/^\/api/, /^\/runtime-config\.js$/],
+          cleanupOutdatedCaches: true,
+          clientsClaim: false,
+          skipWaiting: false,
+          runtimeCaching: [
+            {
+              // HTML shell: network-first so users pick up new hashed asset
+              // URLs as soon as they're online. Cache only as an offline fallback.
+              urlPattern: ({ request }) => request.mode === "navigate",
+              handler: "NetworkFirst",
+              options: {
+                cacheName: "meeseeks-html",
+                networkTimeoutSeconds: 3,
+                expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 }
+              }
+            },
+            {
+              urlPattern: /\/runtime-config\.js$/,
+              handler: "NetworkOnly"
+            },
+            {
+              urlPattern: /\/api\//,
+              handler: "NetworkOnly"
+            }
+          ]
+        },
+        devOptions: {
+          enabled: false,
+          type: "module"
+        }
+      })
+    ],
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, './src')
+      }
+    },
     server: {
       allowedHosts,
       proxy: {

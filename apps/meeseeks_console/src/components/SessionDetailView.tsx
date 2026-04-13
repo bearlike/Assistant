@@ -4,21 +4,29 @@ import { ConversationTimeline } from "./ConversationTimeline";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { InputBar } from "./InputBar";
 import { useSessionEvents } from "../hooks/useSessionEvents";
+import { useSessionUsage } from "../hooks/useSessionUsage";
 import { useSessionQuery } from "../hooks/useSessionQuery";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { SessionContext, SessionSummary, TurnMeta } from "../types";
+import { SessionContext, SessionSummary, SessionUsage, TurnMeta } from "../types";
 import { buildTimeline, getActiveTurn } from "../utils/timeline";
 import { mergeDiffFiles } from "../utils/diff";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { extractSummaryTesting } from "../utils/logs";
 import { approvePlan, recoverSession, forkSession } from "../api/client";
 import { RotateCcw, Play } from "lucide-react";
-import { Button } from "./ui/Button";
+import { Button } from "./ui/button";
+// Kept for backward-compat with App.tsx's session-header slot. The shape is
+// now the full `SessionUsage | null` from the /usage endpoint so the header
+// can render root-only context-window info and compaction count without
+// re-computing anything client-side.
+export type SessionTokenTotals = SessionUsage | null;
+
 interface SessionDetailViewProps {
   session: SessionSummary;
   onTitleUpdate?: (sessionId: string, title: string) => void;
   onSessionChange?: () => void;
   onSelectSession?: (sessionId: string) => void;
+  onTokenTotalsChange?: (totals: SessionTokenTotals) => void;
 }
 
 export function SessionDetailView({
@@ -26,6 +34,7 @@ export function SessionDetailView({
   onTitleUpdate,
   onSessionChange,
   onSelectSession,
+  onTokenTotalsChange,
 }: SessionDetailViewProps) {
   const isMobile = useIsMobile();
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
@@ -39,6 +48,7 @@ export function SessionDetailView({
     resume,
     reset: resetEvents,
   } = useSessionEvents(session.session_id);
+  const { usage: sessionUsage } = useSessionUsage(session.session_id, running);
   const {
     send,
     stop,
@@ -46,6 +56,12 @@ export function SessionDetailView({
     submitting
   } = useSessionQuery(session.session_id, session.context, running);
   const timeline = useMemo(() => buildTimeline(events), [events]);
+  // Forward the full session usage snapshot to the header. The backend is
+  // the source of truth — no re-summing from events — so root vs sub-agent
+  // split and compaction count stay consistent everywhere.
+  useEffect(() => {
+    onTokenTotalsChange?.(sessionUsage);
+  }, [sessionUsage, onTokenTotalsChange]);
   const sessionFiles = useMemo(
     () => mergeDiffFiles(timeline.flatMap((e) => e.turn?.files ?? [])),
     [timeline]
@@ -234,6 +250,7 @@ export function SessionDetailView({
         onEditAndRegenerate={handleEditAndRegenerate}
         events={events}
         model={effectiveContext?.model}
+        sessionUsage={sessionUsage}
         systemBlock={summaryData.summary.length || summaryData.testing.length ? {
           summary: {
             text: summaryData.summary,

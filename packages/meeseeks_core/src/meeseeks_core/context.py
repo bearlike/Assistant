@@ -171,8 +171,15 @@ class ContextBuilder:
         recent_limit = int(get_config_value("context", "recent_event_limit", default=8))
         recent_events = context_events[-recent_limit:] if recent_limit > 0 else []
         candidate_events = context_events[:-recent_limit] if recent_limit > 0 else context_events
-        overhead = int(get_config_value("token_budget", "overhead_estimate", default=25000))
-        budget = get_token_budget(events, summary, model_name, overhead_tokens=overhead)
+        from meeseeks_core.token_budget import read_last_input_tokens
+
+        last_input_tokens = read_last_input_tokens(list(events))
+        budget = get_token_budget(
+            events,
+            summary,
+            model_name,
+            last_input_tokens=last_input_tokens,
+        )
         selected_events: list[EventRecord] | None = None
         selection_threshold = float(get_config_value("context", "selection_threshold", default=0.8))
         if (
@@ -244,7 +251,7 @@ class ContextBuilder:
         handler = build_langfuse_handler(
             user_id="meeseeks-context",
             session_id=f"context-{os.getpid()}-{os.urandom(4).hex()}",
-            trace_name="meeseeks-context",
+            trace_name="context-select",
             version=get_version(),
             release=get_config_value("runtime", "envmode", default="Not Specified"),
         )
@@ -255,17 +262,17 @@ class ContextBuilder:
             if isinstance(metadata, dict) and metadata:
                 config["metadata"] = metadata
         try:
-            with langfuse_trace_span("context-select") as span:
-                if span is not None:
-                    try:
-                        span.update_trace(
-                            input={
-                                "user_query": user_query.strip(),
-                                "candidate_count": len(lines),
-                            }
-                        )
-                    except Exception:
-                        pass
+            with langfuse_trace_span(
+                "context-select",
+                metadata={
+                    "model": selector_model,
+                    "candidates": str(len(lines)),
+                },
+                input_data={
+                    "user_query": user_query.strip()[:200],
+                    "candidate_count": len(lines),
+                },
+            ) as span:
                 selection = (prompt | model | parser).invoke(
                     {"user_query": user_query.strip(), "candidates": candidates_text},
                     config=config or None,

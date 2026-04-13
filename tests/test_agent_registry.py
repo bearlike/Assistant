@@ -194,9 +194,20 @@ def test_map_cc_tool_names_passthrough():
 def test_cc_tool_map_has_expected_keys():
     """CC_TOOL_MAP should contain all expected Claude Code tool names."""
     expected_keys = {
-        "Read", "Glob", "Grep", "Bash", "BashOutput", "KillShell",
-        "Edit", "Write", "LS", "NotebookRead", "NotebookEdit",
-        "WebFetch", "WebSearch", "TodoWrite",
+        "Read",
+        "Glob",
+        "Grep",
+        "Bash",
+        "BashOutput",
+        "KillShell",
+        "Edit",
+        "Write",
+        "LS",
+        "NotebookRead",
+        "NotebookEdit",
+        "WebFetch",
+        "WebSearch",
+        "TodoWrite",
     }
     for key in expected_keys:
         assert key in CC_TOOL_MAP, f"Missing key: {key}"
@@ -216,6 +227,7 @@ def test_agent_def_frozen():
 
 def test_spawn_agent_schema_has_agent_type():
     from meeseeks_core.spawn_agent import SPAWN_AGENT_SCHEMA
+
     props = SPAWN_AGENT_SCHEMA["function"]["parameters"]["properties"]
     assert "agent_type" in props
     assert "string" in str(props["agent_type"]["type"])

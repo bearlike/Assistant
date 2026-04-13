@@ -166,7 +166,7 @@ def parse_agent_file(path: Path, source: str) -> AgentDef | None:
         model = model_raw.strip()
 
     # Body: everything after the closing frontmatter ---
-    body = raw[match.end():]
+    body = raw[match.end() :]
 
     return AgentDef(
         name=name,

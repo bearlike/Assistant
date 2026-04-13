@@ -41,7 +41,9 @@ def _get_lsp_loop() -> asyncio.AbstractEventLoop:
         if _lsp_loop is None or _lsp_loop.is_closed():
             _lsp_loop = asyncio.new_event_loop()
             _lsp_thread = threading.Thread(
-                target=_lsp_loop.run_forever, daemon=True, name="lsp-event-loop",
+                target=_lsp_loop.run_forever,
+                daemon=True,
+                name="lsp-event-loop",
             )
             _lsp_thread.start()
     return _lsp_loop
@@ -102,18 +104,22 @@ def get_passive_diagnostics(file_path: str, cwd: str) -> str | None:
         run_lsp_async(manager.open_file(client, file_path))
         # Brief pause for the server to re-analyze
         import time
+
         time.sleep(1.5)
         diags = manager.get_cached_diagnostics(file_path)
         # Only surface errors and warnings
         from lsprotocol.types import DiagnosticSeverity
+
         errors = [
-            d for d in diags
+            d
+            for d in diags
             if d.severity in (DiagnosticSeverity.Error, DiagnosticSeverity.Warning, None)
         ]
         if not errors:
             return None
         # Format concisely
         from meeseeks_tools.integration.lsp.tool import LSPTool
+
         return LSPTool._format_diagnostics(file_path, diags, manager)
     except Exception:
         return None

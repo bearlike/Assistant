@@ -1,5 +1,9 @@
 # Nextcloud Talk
 
+<div style="display: flex; justify-content: center;">
+  <img src="../meeseeks-nctalk-01.jpg" alt="Meeseeks replying to an @Meeseeks mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
+</div>
+
 The Nextcloud Talk integration allows users to interact with Meeseeks directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Meeseeks session visible in the web console and Langfuse traces.
 
 ## How it works
@@ -121,36 +125,11 @@ In any Nextcloud Talk conversation where the bot is enabled:
 
 The bot responds with the orchestration result. Subsequent @mentions in the same room continue the conversation with full context. Use `/new` to reset.
 
-## Architecture
-
-The adapter lives in `apps/meeseeks_api/src/meeseeks_api/channels/`:
-
-| File | Purpose |
-|------|---------|
-| `base.py` | `ChannelAdapter` Protocol, `InboundMessage`, `ChannelRegistry`, `DeduplicationGuard` |
-| `nextcloud_talk.py` | HMAC verification, ActivityStreams parsing, OCS Bot API response, `system_context` for LLM awareness |
-| `email_adapter.py` | Email adapter (IMAP polling + SMTP reply with markdown-to-HTML rendering), `EmailPoller` daemon thread |
-| `routes.py` | Flask Blueprint, shared `_process_inbound()` pipeline, `@command` registry, completion callback, `init_channels()` |
-
-Commands use a decorator-based registry — adding a new command is one `@command` decorator and one function. Help text auto-generates from the registry.
-
-The adapter provides a `system_context` property injected into the LLM system prompt, making the model aware it's communicating through Nextcloud Talk.
-
-Channel sessions are standard API sessions — they use existing `create_session()`, `tag_session()`, `start_async()`, and `enqueue_message()`. No custom session infrastructure.
-
 ## Limitations
 
 - **File attachments**: the bot receives file metadata but cannot download file content (requires Nextcloud user auth, not bot auth). File sending is not supported by the NC Talk Bot API.
 - **DM auto-respond**: the bot requires @mention in all rooms (no automatic DM detection yet).
 - **Emoji reactions for status**: not yet implemented.
 
-## Adding other chat platforms
-
-The `ChannelAdapter` protocol is designed to be extended. Email is the second adapter (see [Email](clients-email.md)). To add Slack or Discord:
-
-1. Create `channels/slack.py` implementing `verify_request`, `parse_inbound`, `send_response`, and `system_context`
-2. Add the platform config to `config.channels` in `app.json`
-3. Register the adapter in `init_channels()` — the webhook route `POST /api/webhooks/slack` works automatically
-4. For non-webhook channels (like IMAP email), use a poller that calls `_process_inbound()` directly
-5. Optionally implement `requires_mention(message)` for per-message mention gating logic
-6. Add platform-specific commands if needed via the `@command` decorator in `routes.py`
+> [!NOTE] How it works internally
+> See [Architecture Overview → Channel adapters](core-orchestration.md#channel-adapters).

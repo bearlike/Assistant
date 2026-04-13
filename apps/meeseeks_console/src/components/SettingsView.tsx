@@ -6,7 +6,7 @@ import type { RJSFSchema } from "@rjsf/utils";
 import { useConfig } from "../hooks/useConfig";
 import { rjsfTemplates, rjsfWidgets } from "./settings/RjsfTheme";
 import { AlertTriangle, Loader2, Save, CheckCircle2 } from "lucide-react";
-import { Button } from "./ui/Button";
+import { Button } from "./ui/button";
 
 export function SettingsView() {
   const { schema, config, loading, saving, error, save } = useConfig();

@@ -111,12 +111,14 @@ def _make_webhook_payload(
     }
     if thread_id is not None:
         obj["threadId"] = thread_id
-    return json.dumps({
-        "type": event_type,
-        "actor": {"type": "Person", "id": sender_id, "name": sender_name},
-        "object": obj,
-        "target": {"type": "Collection", "id": room_token, "name": room_name},
-    })
+    return json.dumps(
+        {
+            "type": event_type,
+            "actor": {"type": "Person", "id": sender_id, "name": sender_name},
+            "object": obj,
+            "target": {"type": "Collection", "id": room_token, "name": room_name},
+        }
+    )
 
 
 class TestNextcloudTalkVerify:
@@ -205,8 +207,11 @@ class TestNextcloudTalkParse:
     def test_parse_create_message(self) -> None:
         adapter = self._adapter()
         body = _make_webhook_payload(
-            message_text="Help me", message_id="42",
-            sender_name="Bob", room_token="room1", room_name="Dev",
+            message_text="Help me",
+            message_id="42",
+            sender_name="Bob",
+            room_token="room1",
+            room_name="Dev",
         )
         msg = adapter.parse_inbound({}, body.encode())
         assert msg is not None
@@ -241,25 +246,36 @@ class TestNextcloudTalkParse:
 
     def test_rich_object_placeholders_stripped(self) -> None:
         adapter = self._adapter()
-        content = json.dumps({
-            "message": "Hello {mention-user1}, check {file-1}",
-            "parameters": {
-                "mention-user1": {"type": "user", "id": "alice", "name": "Alice"},
-                "file-1": {
-                    "type": "file", "id": "55", "name": "report.pdf",
-                    "mimetype": "application/pdf", "size": "1024", "link": "/f/55",
+        content = json.dumps(
+            {
+                "message": "Hello {mention-user1}, check {file-1}",
+                "parameters": {
+                    "mention-user1": {"type": "user", "id": "alice", "name": "Alice"},
+                    "file-1": {
+                        "type": "file",
+                        "id": "55",
+                        "name": "report.pdf",
+                        "mimetype": "application/pdf",
+                        "size": "1024",
+                        "link": "/f/55",
+                    },
                 },
-            },
-        })
-        payload = json.dumps({
-            "type": "Create",
-            "actor": {"type": "Person", "id": "users/alice", "name": "Alice"},
-            "object": {
-                "type": "Note", "id": "200", "name": "message",
-                "content": content, "mediaType": "text/markdown",
-            },
-            "target": {"type": "Collection", "id": "room1", "name": "Room"},
-        })
+            }
+        )
+        payload = json.dumps(
+            {
+                "type": "Create",
+                "actor": {"type": "Person", "id": "users/alice", "name": "Alice"},
+                "object": {
+                    "type": "Note",
+                    "id": "200",
+                    "name": "message",
+                    "content": content,
+                    "mediaType": "text/markdown",
+                },
+                "target": {"type": "Collection", "id": "room1", "name": "Room"},
+            }
+        )
         msg = adapter.parse_inbound({}, payload.encode())
         assert msg is not None
         assert msg.text == "Hello , check"
@@ -307,10 +323,7 @@ class TestCommandRegex:
 
     def test_command_without_args_in_email_reply(self) -> None:
         text = (
-            "/help\n"
-            "\n"
-            "On Mon, Apr 7, 2026 at 5:53 PM, Meeseeks wrote:\n"
-            "> Commands: /help, /usage\n"
+            "/help\n\nOn Mon, Apr 7, 2026 at 5:53 PM, Meeseeks wrote:\n> Commands: /help, /usage\n"
         )
         m = _COMMAND_RE.match(text.strip())
         assert m is not None

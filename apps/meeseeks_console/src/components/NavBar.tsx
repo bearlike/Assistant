@@ -1,4 +1,4 @@
-import { useCallback, useState, useRef, useEffect } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ArrowLeft,
   Archive,
@@ -18,21 +18,45 @@ import {
   Square,
   FolderOpen } from
 'lucide-react';
-import { NotificationItem, SessionSummary } from '../types';
+import { NotificationItem, SessionSummary, SessionUsage } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { formatSessionTime } from '../utils/time';
 import { ModelLabel } from './ModelLabel';
+import { ContextWindowBar } from './ContextWindowBar';
 import { NotificationPanel } from './NotificationPanel';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { cn } from '../utils/cn';
 import { LangfuseIcon } from './LangfuseIcon';
 import { EditableTitle } from './EditableTitle';
-import { Popover } from './Popover';
-import { Button } from './ui/Button';
-import { SiCoder } from '@icons-pack/react-simple-icons';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
+import { Button } from './ui/button';
 import { useIdeStatus } from '../hooks/useIdeStatus';
 import { useWebIdeEnabled } from '../hooks/useWebIdeEnabled';
 import { extendIde, stopIde, IdeApiError } from '../api/ide';
+
+/** Coder brand mark, inlined from simple-icons (slug: coder, MIT/CC0) so we
+ * avoid pulling the full @icons-pack/react-simple-icons dependency for one
+ * glyph used in the IDE capsule. */
+function SiCoder({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M14.862 6.67H24v10.663h-9.138zM6.945 15.304c-1.934 0-3.366-1.264-3.366-3.305s1.432-3.323 3.366-3.365c1.411-.03 2.787.99 2.878 2.543l3.472-.106c-.076-2.802-2.33-4.706-6.35-4.706S0 8.558 0 12c0 3.426 3.046 5.635 6.945 5.635 3.898 0 6.29-1.935 6.38-4.782l-3.472-.077c-.152 1.553-1.497 2.528-2.908 2.528Z" />
+    </svg>
+  );
+}
+
 export interface NavBarProps {
   mode: 'home' | 'detail';
   session?: SessionSummary;
@@ -52,6 +76,7 @@ export interface NavBarProps {
   onPluginsClick?: () => void;
   onProjectsClick?: () => void;
   langfuseUrl?: string | null;
+  sessionTokenTotals?: SessionUsage | null;
 }
 const GITHUB_URL = 'https://github.com/bearlike/Assistant';
 
@@ -84,16 +109,13 @@ export function NavBar({
   onSettingsClick,
   onPluginsClick,
   onProjectsClick,
-  langfuseUrl
+  langfuseUrl,
+  sessionTokenTotals
 }: NavBarProps) {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
-  const [isOverflowOpen, setIsOverflowOpen] = useState(false);
-  const [isAvatarOpen, setIsAvatarOpen] = useState(false);
   const isMobile = useIsMobile();
   const unreadCount = notifications.length;
   const isArchived = Boolean(session?.archived);
-  const overflowRef = useRef<HTMLDivElement>(null);
-  const avatarRef = useRef<HTMLDivElement>(null);
 
   // IDE state lives here so the header owns the capsule control. Both hooks
   // are safe to call unconditionally — `useIdeStatus(null)` no-ops and
@@ -163,52 +185,30 @@ export function NavBar({
     </a>;
 
   const NotificationButton = () =>
-  <div className="relative">
+  <NotificationPanel
+    notifications={notifications}
+    onDismiss={(id) => onDismissNotification?.(id)}
+    onClearAll={() => onClearNotifications?.()}
+    open={isNotifOpen}
+    onOpenChange={setIsNotifOpen}
+    trigger={
       <Button
-      variant="ghost"
-      size="sm"
-      iconOnly
-      onClick={() => setIsNotifOpen(!isNotifOpen)}
-      aria-label="Notifications"
-      className={cn(
-        "relative",
-        isNotifOpen && "text-[hsl(var(--foreground))] bg-[hsl(var(--accent))]"
-      )}>
-
+        variant="ghost"
+        size="sm"
+        iconOnly
+        aria-label="Notifications"
+        className={cn(
+          "relative",
+          isNotifOpen && "text-[hsl(var(--foreground))] bg-[hsl(var(--accent))]"
+        )}>
         <Bell className="w-3.5 h-3.5" />
         {unreadCount > 0 &&
-      <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-[9px] font-bold flex items-center justify-center leading-none">
-            {unreadCount > 9 ? '9+' : unreadCount}
-          </span>
-      }
+        <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-[9px] font-bold flex items-center justify-center leading-none">
+          {unreadCount > 9 ? '9+' : unreadCount}
+        </span>
+        }
       </Button>
-      {isNotifOpen &&
-    <NotificationPanel
-      notifications={notifications}
-      onDismiss={(id) => onDismissNotification?.(id)}
-      onClearAll={() => onClearNotifications?.()}
-      onClose={() => setIsNotifOpen(false)} />
-
-    }
-    </div>;
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      const target = event.target as Node;
-      if (overflowRef.current && !overflowRef.current.contains(target)) {
-        setIsOverflowOpen(false);
-      }
-      if (avatarRef.current && !avatarRef.current.contains(target)) {
-        setIsAvatarOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Shared row style for items inside Popover dropdowns. One constant, ~10 call
-  // sites — strictly DRY-ier than inlining. Popover owns container styling.
-  const menuItemClass = "w-full text-left px-3 py-2 text-xs text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] transition-colors flex items-center gap-2";
+    } />;
 
   // --- IDE capsule ----------------------------------------------------------
   // Single compound control replacing the old three-button toolbar. Two states:
@@ -292,110 +292,102 @@ export function NavBar({
   //   session actions: Archive / Copy share link / Download export
   //   external links:  Langfuse (optional) / GitHub
   const OverflowMenu = () =>
-  <Popover direction="down" width="w-56" className="!left-auto right-0">
-      <button
-      onClick={() => {
-        if (!session?.session_id) return;
-        if (isArchived) { onUnarchiveSession?.(session.session_id); }
-        else { onArchiveSession?.(session.session_id); }
-        setIsOverflowOpen(false);
-      }}
-      className={menuItemClass}>
-        {isArchived ? <RotateCcw className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
-        {isArchived ? 'Restore' : 'Archive'}
-      </button>
-      <button
-      onClick={() => {
-        if (!session?.session_id) return;
-        onShareSession?.(session.session_id);
-        setIsOverflowOpen(false);
-      }}
-      className={menuItemClass}>
-        <Share className="w-3.5 h-3.5" />
-        Copy share link
-      </button>
-      <button
-      onClick={() => {
-        if (!session?.session_id) return;
-        onExportSession?.(session.session_id);
-        setIsOverflowOpen(false);
-      }}
-      className={menuItemClass}>
-        <Download className="w-3.5 h-3.5" />
-        Download export
-      </button>
-      <div className="h-px bg-[hsl(var(--border))] my-1" />
-      {langfuseUrl &&
-      <a href={langfuseUrl} target="_blank" rel="noopener noreferrer"
-        className={menuItemClass}
-        onClick={() => setIsOverflowOpen(false)}>
-          <LangfuseIcon className="w-3.5 h-3.5" />
-          Open in Langfuse
-          <ExternalLink className="w-3 h-3 ml-auto text-[hsl(var(--muted-foreground))]" />
-        </a>
-      }
-      <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer"
-        className={menuItemClass}
-        onClick={() => setIsOverflowOpen(false)}>
-        <Github className="w-3.5 h-3.5" />
-        View on GitHub
-        <ExternalLink className="w-3 h-3 ml-auto text-[hsl(var(--muted-foreground))]" />
-      </a>
-    </Popover>;
+  <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          iconOnly
+          aria-label="More actions">
+          <EllipsisVertical className="w-3.5 h-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem
+          onSelect={() => {
+            if (!session?.session_id) return;
+            if (isArchived) { onUnarchiveSession?.(session.session_id); }
+            else { onArchiveSession?.(session.session_id); }
+          }}>
+          {isArchived ? <RotateCcw className="w-3.5 h-3.5 mr-2" /> : <Archive className="w-3.5 h-3.5 mr-2" />}
+          {isArchived ? 'Restore' : 'Archive'}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => {
+            if (!session?.session_id) return;
+            onShareSession?.(session.session_id);
+          }}>
+          <Share className="w-3.5 h-3.5 mr-2" />
+          Copy share link
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => {
+            if (!session?.session_id) return;
+            onExportSession?.(session.session_id);
+          }}>
+          <Download className="w-3.5 h-3.5 mr-2" />
+          Download export
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {langfuseUrl &&
+        <DropdownMenuItem asChild>
+          <a href={langfuseUrl} target="_blank" rel="noopener noreferrer">
+            <LangfuseIcon className="w-3.5 h-3.5 mr-2" />
+            Open in Langfuse
+            <ExternalLink className="w-3 h-3 ml-auto text-[hsl(var(--muted-foreground))]" />
+          </a>
+        </DropdownMenuItem>
+        }
+        <DropdownMenuItem asChild>
+          <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
+            <Github className="w-3.5 h-3.5 mr-2" />
+            View on GitHub
+            <ExternalLink className="w-3 h-3 ml-auto text-[hsl(var(--muted-foreground))]" />
+          </a>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>;
 
   // --- Avatar menu ----------------------------------------------------------
   // Three rows above a single hairline (navigation + docs), then the theme
   // toggle as a standalone preference action. Grouping isolates the toggle
   // from the nav items — the ticket's core complaint about this menu.
-  const AvatarMenu = () =>
-  <Popover direction="down" width="w-56" className="!left-auto right-0">
-      <button
-      onClick={() => { onProjectsClick?.(); setIsAvatarOpen(false); }}
-      className={menuItemClass}>
-        <FolderOpen className="w-3.5 h-3.5" />
-        Projects
-      </button>
-      <button
-      onClick={() => { onPluginsClick?.(); setIsAvatarOpen(false); }}
-      className={menuItemClass}>
-        <Puzzle className="w-3.5 h-3.5" />
-        Plugins
-      </button>
-      <button
-      onClick={() => { onSettingsClick?.(); setIsAvatarOpen(false); }}
-      className={menuItemClass}>
-        <Settings className="w-3.5 h-3.5" />
-        Settings
-      </button>
-      <a
-      href="https://kanth.tech/assistant"
-      target="_blank"
-      rel="noopener noreferrer"
-      className={menuItemClass}
-      onClick={() => setIsAvatarOpen(false)}>
-        <BookOpen className="w-3.5 h-3.5" />
-        Docs
-        <ExternalLink className="w-3 h-3 ml-auto text-[hsl(var(--muted-foreground))]" />
-      </a>
-      <div className="h-px bg-[hsl(var(--border))] my-1" />
-      <button
-      onClick={() => { onToggleTheme?.(); setIsAvatarOpen(false); }}
-      className={menuItemClass}>
-        {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-        {theme === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode'}
-      </button>
-    </Popover>;
-
   const AvatarButton = () =>
-  <div className="relative" ref={avatarRef}>
-      <button
-      onClick={() => setIsAvatarOpen(!isAvatarOpen)}
-      aria-label="User menu"
-      className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] font-bold text-white ml-0.5 cursor-pointer hover:ring-2 hover:ring-[hsl(var(--primary))]/50 transition-all">
-        JP
-      </button>
-      {isAvatarOpen && <AvatarMenu />}
-    </div>;
+  <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          aria-label="User menu"
+          className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] font-bold text-white ml-0.5 cursor-pointer hover:ring-2 hover:ring-[hsl(var(--primary))]/50 transition-all">
+          JP
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onSelect={() => onProjectsClick?.()}>
+          <FolderOpen className="w-3.5 h-3.5 mr-2" />
+          Projects
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onPluginsClick?.()}>
+          <Puzzle className="w-3.5 h-3.5 mr-2" />
+          Plugins
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onSettingsClick?.()}>
+          <Settings className="w-3.5 h-3.5 mr-2" />
+          Settings
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <a href="https://kanth.tech/assistant" target="_blank" rel="noopener noreferrer">
+            <BookOpen className="w-3.5 h-3.5 mr-2" />
+            Docs
+            <ExternalLink className="w-3 h-3 ml-auto text-[hsl(var(--muted-foreground))]" />
+          </a>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => onToggleTheme?.()}>
+          {theme === 'dark' ? <Sun className="w-3.5 h-3.5 mr-2" /> : <Moon className="w-3.5 h-3.5 mr-2" />}
+          {theme === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode'}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>;
 
   const VersionBadge = () =>
   <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold leading-none bg-[hsl(var(--primary))]/15 text-[hsl(var(--primary))] border border-[hsl(var(--primary))]/20">
@@ -462,6 +454,16 @@ export function NavBar({
                       className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] truncate" />
                   </>
                 }
+                {sessionTokenTotals && sessionTokenTotals.root_max_input_tokens > 0 &&
+                  <>
+                    <span aria-hidden className="shrink-0">·</span>
+                    {/* Visual context-window bar — replaces the old text "peak X/Y · Z out".
+                        Reads `root_last_input_tokens` (size of the most recent prompt)
+                        as the canonical "current fill" signal; peak / billed / cache
+                        savings / compactions all live in the click-to-expand popover. */}
+                    <ContextWindowBar usage={sessionTokenTotals} compact />
+                  </>
+                }
               </div>
             </div>
 
@@ -480,20 +482,7 @@ export function NavBar({
 
             <NotificationButton />
 
-            <div className="relative" ref={overflowRef}>
-              <Button
-              variant="ghost"
-              size="sm"
-              iconOnly
-              onClick={() => setIsOverflowOpen(!isOverflowOpen)}
-              aria-label="More actions"
-              className={cn(
-                isOverflowOpen && "text-[hsl(var(--foreground))] bg-[hsl(var(--accent))]"
-              )}>
-                <EllipsisVertical className="w-3.5 h-3.5" />
-              </Button>
-              {isOverflowOpen && <OverflowMenu />}
-            </div>
+            <OverflowMenu />
 
             <div className="w-px h-4 bg-[hsl(var(--border))] mx-0.5" />
             <AvatarButton />

@@ -3,14 +3,14 @@ import { Plus, FolderOpen, Loader2 } from 'lucide-react';
 import { useVirtualProjects } from '../hooks/useVirtualProjects';
 import { ProjectCard } from './ProjectCard';
 import { NewProjectForm } from './NewProjectForm';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
 
 export function ProjectsView() {
   const { projects, loading, error, create, update, remove } = useVirtualProjects();
   const [showForm, setShowForm] = useState(false);
 
-  const handleCreate = async (name: string, description: string, path?: string) => {
-    await create(name, description, path);
+  const handleCreate = async ({ name, description, path }: { name: string; description?: string; path?: string }) => {
+    await create(name, description ?? '', path);
     setShowForm(false);
   };
 

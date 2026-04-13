@@ -1,5 +1,9 @@
 
-<h1 align="center">Meeseeks: The Personal Assistant 👋</h1>
+<p align="center">
+  <img src="docs/logos/logo-transparent.svg" alt="Meeseeks logo" width="96" />
+</p>
+
+<h1 align="center">Meeseeks: The Personal Assistant</h1>
 
 <p align="center">
     <a href="https://deepwiki.com/bearlike/Assistant"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg"></a>
@@ -32,6 +36,27 @@ The web console provides a task orchestration frontend backed by the REST API. I
     <tr>
         <td align="center"><img src="docs/meeseeks-console-02-tasks.jpg" alt="Meeseeks task detail page" height="360px"></td>
         <td align="center"><img src="docs/meeseeks-console-01-front.jpg" alt="Meeseeks console landing page" height="360px"></td>
+    </tr>
+</table>
+
+### Capabilities at a glance
+
+<table align="center">
+    <tr>
+        <th>Plan mode approval</th>
+        <th>Live diff on every edit</th>
+    </tr>
+    <tr>
+        <td align="center"><img src="docs/meeseeks-console-03-plan-approval.jpg" alt="Plan approval in the Meeseeks console" height="300px"></td>
+        <td align="center"><img src="docs/meeseeks-console-04-file-edit.jpg" alt="File-edit diff card in the Meeseeks console" height="300px"></td>
+    </tr>
+    <tr>
+        <th>Plugin marketplace</th>
+        <th>Virtual projects</th>
+    </tr>
+    <tr>
+        <td align="center"><img src="docs/meeseeks-console-05-plugins.jpg" alt="Plugins page with installed plugins and marketplace listings" height="300px"></td>
+        <td align="center"><img src="docs/meeseeks-console-06-projects.jpg" alt="Projects page showing virtual workspaces shared across sessions" height="300px"></td>
     </tr>
 </table>
 
@@ -170,25 +195,9 @@ See [docs/index.md](docs/index.md) for the full architecture diagram.
 
 ## Documentation
 
-**Overview**
-- [docs/index.md](docs/index.md) — product overview and architecture
+Full docs live at **[kanth.tech/Assistant](https://kanth.tech/Assistant/)** — including setup, every client surface, the capability reference, deployment guides, and the internals/SDK track. The source lives under [`docs/`](docs/) and is published with MkDocs.
 
-**Setup and configuration**
-- [docs/getting-started.md](docs/getting-started.md) — setup guide (env, MCP, configs, run paths)
-
-**Repository map**
-- [docs/components.md](docs/components.md) — monorepo map
-
-**Clients**
-- [docs/clients-cli.md](docs/clients-cli.md) — terminal CLI
-- [docs/clients-web-api.md](docs/clients-web-api.md) — web console and REST API
-- [docs/clients-home-assistant.md](docs/clients-home-assistant.md) — Home Assistant voice integration
-- [docs/clients-nextcloud-talk.md](docs/clients-nextcloud-talk.md) — Nextcloud Talk chat integration
-- [docs/clients-email.md](docs/clients-email.md) — email channel (IMAP/SMTP)
-
-**Reference**
-- [docs/reference.md](docs/reference.md) — API reference (mkdocstrings)
-- [docs/session-runtime.md](docs/session-runtime.md) — shared session runtime used by CLI + API
+If you are just getting started, jump to [Get Started](https://kanth.tech/Assistant/getting-started/).
 
 ## Development principles
 

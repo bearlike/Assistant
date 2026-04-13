@@ -62,9 +62,7 @@ class MCPConnectionPool:
         try:
             from langchain_mcp_adapters.client import MultiServerMCPClient
         except Exception as exc:  # pragma: no cover - runtime dependency
-            raise RuntimeError(
-                "langchain-mcp-adapters is required for MCP tools."
-            ) from exc
+            raise RuntimeError("langchain-mcp-adapters is required for MCP tools.") from exc
 
         client = MultiServerMCPClient({name: config})  # type: ignore[dict-item]
         tools = await client.get_tools(server_name=name)
@@ -91,9 +89,7 @@ class MCPConnectionPool:
     # Public API
     # ------------------------------------------------------------------
 
-    async def connect_all(
-        self, mcp_config: dict[str, Any]
-    ) -> dict[str, list[str]]:
+    async def connect_all(self, mcp_config: dict[str, Any]) -> dict[str, list[str]]:
         """Connect to all configured servers concurrently.
 
         Returns a mapping of ``{server_name: [tool_names]}`` on success,
@@ -118,16 +114,12 @@ class MCPConnectionPool:
                     )
                     async with self._lock:
                         self._servers[name] = state
-                    results[name] = [
-                        getattr(t, "name", str(t)) for t in state.tools
-                    ]
+                    results[name] = [getattr(t, "name", str(t)) for t in state.tools]
                 except Exception as exc:
                     logger.warning("Failed to connect to MCP server '{}': {}", name, exc)
                     results[name] = [f"ERROR: {exc}"]
 
-        await asyncio.gather(
-            *[_try_connect(name, cfg) for name, cfg in servers.items()]
-        )
+        await asyncio.gather(*[_try_connect(name, cfg) for name, cfg in servers.items()])
         return results
 
     async def get_or_connect(self, server_name: str) -> ServerState:
@@ -158,9 +150,7 @@ class MCPConnectionPool:
 
         config = servers.get(server_name)
         if config is None:
-            raise ValueError(
-                f"MCP server '{server_name}' not found in configuration."
-            )
+            raise ValueError(f"MCP server '{server_name}' not found in configuration.")
 
         state = await asyncio.wait_for(
             self._connect_single(server_name, config),
@@ -189,9 +179,7 @@ class MCPConnectionPool:
             return f"Tool '{tool_name}' not found on server '{server_name}'."
 
         try:
-            result = await asyncio.wait_for(
-                tool.ainvoke(input_payload), timeout=CALL_TIMEOUT
-            )
+            result = await asyncio.wait_for(tool.ainvoke(input_payload), timeout=CALL_TIMEOUT)
             state.consecutive_errors = 0
             return str(result)
         except Exception as exc:
@@ -217,12 +205,9 @@ class MCPConnectionPool:
                 tool = tool_map.get(tool_name)
                 if tool is None:
                     return (
-                        f"Tool '{tool_name}' not found on server "
-                        f"'{server_name}' after reconnect."
+                        f"Tool '{tool_name}' not found on server '{server_name}' after reconnect."
                     )
-                result = await asyncio.wait_for(
-                    tool.ainvoke(input_payload), timeout=CALL_TIMEOUT
-                )
+                result = await asyncio.wait_for(tool.ainvoke(input_payload), timeout=CALL_TIMEOUT)
                 state.consecutive_errors = 0
                 return str(result)
             raise
@@ -234,9 +219,7 @@ class MCPConnectionPool:
         if state is not None:
             await self._disconnect_server(state)
 
-    async def refresh_if_config_changed(
-        self, mcp_config: dict[str, Any]
-    ) -> bool:
+    async def refresh_if_config_changed(self, mcp_config: dict[str, Any]) -> bool:
         """Compare config hash; reconnect changed/new servers, drop removed ones.
 
         Returns ``True`` if the config changed and connections were refreshed.
@@ -282,13 +265,9 @@ class MCPConnectionPool:
                         async with self._lock:
                             self._servers[name] = state
                     except Exception as exc:
-                        logger.warning(
-                            "Failed to reconnect MCP server '{}': {}", name, exc
-                        )
+                        logger.warning("Failed to reconnect MCP server '{}': {}", name, exc)
 
-            await asyncio.gather(
-                *[_reconn(n, c) for n, c in to_connect.items()]
-            )
+            await asyncio.gather(*[_reconn(n, c) for n, c in to_connect.items()])
 
         return True
 

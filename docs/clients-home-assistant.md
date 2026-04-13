@@ -7,12 +7,25 @@
 
 The Home Assistant integration lives in `meeseeks_ha_conversation/` and proxies voice requests to the API. It is designed for hands-free voice control: HA handles wake words and intent capture, then forwards the request to the API for orchestration and responses.
 
-## Setup (uv)
-```bash
-uv sync --extra api --extra ha
+See [Get Started](getting-started.md#ha-setup) for installation prerequisites.
+
+## How it works
+
+Voice requests flow through the HA Assist pipeline, which forwards the transcript to the Meeseeks API. The API runs the orchestration loop and returns a text response that HA Assist reads aloud.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant HA as Home Assistant
+    participant API as Meeseeks API
+
+    User->>HA: voice utterance (wake word + query)
+    HA->>API: POST /api/sessions/{id}/query
+    API-->>HA: session events (streamed)
+    HA-->>User: TTS response
 ```
 
-Before running, complete [Installation](getting-started.md) and [LLM setup](llm-setup.md).
+The custom component handles session creation and maps HA conversation threads to Meeseeks sessions via session tags.
 
 ## Install the custom component
 1. Ensure the API is running (see [Web + API](clients-web-api.md)).

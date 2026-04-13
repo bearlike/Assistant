@@ -5,7 +5,6 @@ import shutil
 from unittest.mock import patch
 
 import pytest
-from meeseeks_core.compaction import should_compact, summarize_events
 from meeseeks_core.config import StorageConfig
 from meeseeks_core.session_store import SessionStore, SessionStoreBase, create_session_store
 from pydantic import ValidationError
@@ -212,11 +211,3 @@ def test_create_session_store_mongodb_unreachable(tmp_path):
     ):
         with pytest.raises(RuntimeError, match="not available"):
             create_session_store(root_dir=str(tmp_path))
-
-
-def test_compaction_helpers():
-    """Verify compaction helpers summarize and detect thresholds."""
-    events = [{"type": "user", "payload": {"text": "hello"}}]
-    summary = summarize_events(events)
-    assert "user" in summary
-    assert should_compact(events, threshold=1) is True

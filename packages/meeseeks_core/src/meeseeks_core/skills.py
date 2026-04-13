@@ -149,7 +149,7 @@ def _parse_skill_file(
     elif isinstance(allowed_tools_raw, list):
         allowed_tools = [str(t) for t in allowed_tools_raw if t]
 
-    body = raw[match.end():]
+    body = raw[match.end() :]
 
     try:
         mtime = path.stat().st_mtime
@@ -192,7 +192,9 @@ def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
                 spec = _parse_skill_file(
-                    skill_file, source="personal", default_name=child.name,
+                    skill_file,
+                    source="personal",
+                    default_name=child.name,
                 )
                 if spec is not None:
                     skills[spec.name] = spec
@@ -205,7 +207,9 @@ def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
                 spec = _parse_skill_file(
-                    skill_file, source="project", default_name=child.name,
+                    skill_file,
+                    source="project",
+                    default_name=child.name,
                 )
                 if spec is not None:
                     skills[spec.name] = spec  # project overrides personal
@@ -231,7 +235,8 @@ def _discover_subtree_skills(
         depth = len(rel.parts)
         # Prune non-project dirs (must happen before any continue)
         dirnames[:] = [
-            d for d in dirnames
+            d
+            for d in dirnames
             if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
         ]
         if depth > max_depth:
@@ -247,7 +252,9 @@ def _discover_subtree_skills(
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
                 spec = _parse_skill_file(
-                    skill_file, source="project", default_name=child.name,
+                    skill_file,
+                    source="project",
+                    default_name=child.name,
                 )
                 if spec is not None:
                     # Subtree skills DON'T override project-root or personal skills
@@ -298,9 +305,7 @@ class SkillRegistry:
         auto = self.list_auto_invocable()
         if not auto:
             return ""
-        lines = [
-            "Available skills (use activate_skill to load instructions when relevant):"
-        ]
+        lines = ["Available skills (use activate_skill to load instructions when relevant):"]
         for skill in auto:
             lines.append(f"- {skill.name}: {skill.description}")
         return "\n".join(lines)
@@ -348,7 +353,9 @@ class SkillRegistry:
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
                 spec = _parse_skill_file(
-                    skill_file, source=source, default_name=child.name,
+                    skill_file,
+                    source=source,
+                    default_name=child.name,
                 )
                 if spec is not None and spec.name not in self._skills:
                     self._skills[spec.name] = spec
@@ -386,9 +393,13 @@ def _preprocess_shell(body: str) -> str:
                 text=True,
                 timeout=30,
             )
-            return result.stdout.strip() if result.returncode == 0 else (
-                f"[ERROR: command exited {result.returncode}: "
-                f"{result.stderr.strip() or result.stdout.strip()}]"
+            return (
+                result.stdout.strip()
+                if result.returncode == 0
+                else (
+                    f"[ERROR: command exited {result.returncode}: "
+                    f"{result.stderr.strip() or result.stdout.strip()}]"
+                )
             )
         except subprocess.TimeoutExpired:
             return f"[ERROR: command timed out after 30s: {cmd}]"

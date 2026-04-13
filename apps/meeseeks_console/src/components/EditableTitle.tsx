@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Pencil, Sparkles } from 'lucide-react';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
 
 /**
  * Inline-editable title with optional AI regeneration.

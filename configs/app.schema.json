@@ -89,9 +89,10 @@
           "type": "array"
         },
         "edit_tool": {
-          "default": "search_replace_block",
-          "description": "File editing mechanism: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement).",
+          "default": "",
+          "description": "File editing mechanism override: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement). Leave empty (default) to auto-select based on the active model via llm.structured_patch_models.",
           "examples": [
+            "",
             "search_replace_block",
             "structured_patch"
           ],
@@ -123,6 +124,9 @@
           ],
           "default": null,
           "description": "Optional 'Open in Web IDE' feature config (code-server containers)."
+        },
+        "lsp": {
+          "$ref": "#/$defs/LSPConfig"
         }
       },
       "title": "AgentConfig",
@@ -173,6 +177,22 @@
         }
       },
       "title": "ChatConfig",
+      "type": "object"
+    },
+    "CompactionConfig": {
+      "description": "Summarization prompt selection for conversation compaction.\n\n``caveman_mode`` enables a rule-augmented prompt (inspired by the\n``JuliusBrussee/caveman`` Claude Code skill) that instructs the\nsummarizer LLM to drop articles, filler, pleasantries, and hedging\nwhile preserving code, paths, URLs, and error strings verbatim.\nReduces output tokens in the compaction summary without changing the\n``<analysis>/<summary>`` response structure downstream parsers expect.",
+      "properties": {
+        "caveman_mode": {
+          "default": false,
+          "description": "Enable caveman-style terse summarization prompt. Drops articles, filler, pleasantries, and hedging in the compacted summary while preserving code, file paths, URLs, and error strings verbatim. Reduces compaction output tokens without changing the response structure downstream parsers expect.",
+          "examples": [
+            false
+          ],
+          "title": "Caveman Mode",
+          "type": "boolean"
+        }
+      },
+      "title": "CompactionConfig",
       "type": "object"
     },
     "ContextConfig": {
@@ -400,6 +420,20 @@
           "title": "Title Model",
           "type": "string"
         },
+        "compact_models": {
+          "description": "Priority-ordered list of models for context compaction. On failure, the next model in the list is tried. The keyword \"default\" resolves to the running agent's model. Example: [\"anthropic/claude-haiku-4-5-20251001\", \"default\"]",
+          "examples": [
+            [
+              "anthropic/claude-haiku-4-5-20251001",
+              "default"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Compact Models",
+          "type": "array"
+        },
         "fallback_models": {
           "description": "Ordered list of fallback model IDs. On retryable LLM failure, the system tries each in order after exhausting retries on the primary model. Empty = no fallback.",
           "examples": [
@@ -413,6 +447,17 @@
           },
           "title": "Fallback Models",
           "type": "array"
+        },
+        "proxy_model_prefix": {
+          "default": "openai",
+          "description": "LiteLLM provider prefix prepended to model names when api_base is set. LiteLLM strips this prefix before forwarding the model name to the proxy, so the proxy receives the model ID it advertises in /v1/models. Leave as 'openai' for LiteLLM proxy, Bifrost, and OpenRouter. Only relevant when api_base is configured.",
+          "examples": [
+            "openai",
+            "azure",
+            "vertex_ai"
+          ],
+          "title": "Proxy Model Prefix",
+          "type": "string"
         },
         "reasoning_effort": {
           "default": "",
@@ -430,9 +475,40 @@
           },
           "title": "Reasoning Effort Models",
           "type": "array"
+        },
+        "structured_patch_models": {
+          "description": "Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; only set this to override or extend.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Structured Patch Models",
+          "type": "array"
         }
       },
       "title": "LLMConfig",
+      "type": "object"
+    },
+    "LSPConfig": {
+      "additionalProperties": false,
+      "description": "Language Server Protocol integration settings.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable native LSP tool.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "servers": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "description": "Override or extend built-in server definitions. Set {\"pyright\": {\"disabled\": true}} to disable a built-in, or add custom servers with command/extensions/root_markers.",
+          "title": "Servers",
+          "type": "object"
+        }
+      },
+      "title": "LSPConfig",
       "type": "object"
     },
     "LangfuseConfig": {
@@ -695,6 +771,16 @@
           ],
           "title": "Result Export Dir",
           "type": "string"
+        },
+        "projects_home": {
+          "default": "",
+          "description": "Directory for virtual project folders. Defaults to $MEESEEKS_HOME/projects.",
+          "examples": [
+            "~/.meeseeks/projects"
+          ],
+          "title": "Projects Home",
+          "type": "string",
+          "x-protected": true
         }
       },
       "title": "RuntimeConfig",
@@ -746,7 +832,7 @@
           "additionalProperties": {
             "type": "integer"
           },
-          "description": "Per-model context window overrides. Keys are model names, values are token counts.",
+          "description": "Override only: per-model context window in tokens. Keys are model names (with or without provider prefix). The authoritative source is LiteLLM's model catalogue; populate this only to cap below the model's real max, or for models LiteLLM doesn't know yet.",
           "title": "Model Context Windows",
           "type": "object"
         }
@@ -835,6 +921,10 @@
     },
     "token_budget": {
       "$ref": "#/$defs/TokenBudgetConfig"
+    },
+    "compaction": {
+      "$ref": "#/$defs/CompactionConfig",
+      "description": "Conversation compaction prompt selection (caveman mode)."
     },
     "reflection": {
       "$ref": "#/$defs/ReflectionConfig"

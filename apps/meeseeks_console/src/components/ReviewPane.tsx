@@ -7,9 +7,9 @@ import { DiffStats } from './DiffStats';
 import { FileDiffSection } from './DiffCard';
 import { fileIconClass, basename } from '../utils/diffCard';
 
-// ── Always-dark body background (matches DiffCard) ──
-const BODY_BG = 'bg-[hsl(220_4%_10%)]';
-const TITLE_BG = 'bg-[hsl(220_5%_12%)]';
+// Theme-aware code surfaces — see --code-chrome / --code-body in src/index.css.
+const BODY_BG = 'bg-[hsl(var(--code-body))]';
+const TITLE_BG = 'bg-[hsl(var(--code-chrome))]';
 
 type ReviewScope = 'last_turn' | 'uncommitted' | 'branch';
 
@@ -42,29 +42,29 @@ function FileEntry({ file, expanded, onToggle }: FileEntryProps) {
   }, [parsed]);
 
   return (
-    <div className={`border-b border-white/8 last:border-b-0`}>
+    <div className={`border-b border-[hsl(var(--code-border))] last:border-b-0`}>
       {/* Header */}
       <button
         onClick={onToggle}
         className={`w-full flex items-center gap-2 px-3 py-2 ${TITLE_BG} hover:brightness-110 transition-[filter] text-left`}
       >
         <span className={`${fileIconClass(file.path)} shrink-0`} style={{ fontSize: '16px' }} />
-        <span className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={file.path}>
+        <span className="text-[11px] text-[hsl(var(--code-fg))] truncate flex-1 min-w-0" title={file.path}>
           {basename(file.path)}
         </span>
         <DiffStats additions={file.additions} deletions={file.deletions} className="shrink-0" />
         <ChevronRight
-          className={`w-3 h-3 shrink-0 text-white/25 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          className={`w-3 h-3 shrink-0 text-[hsl(var(--code-fg-subtle))] transition-transform ${expanded ? 'rotate-90' : ''}`}
         />
       </button>
 
       {/* Body */}
       {expanded && (
-        <div className={`${BODY_BG} max-h-[500px] overflow-y-auto border-t border-white/[0.06]`}>
+        <div className={`${BODY_BG} max-h-[500px] overflow-y-auto border-t border-[hsl(var(--code-border))]`}>
           {parsed ? (
             <FileDiffSection file={parsed} expanded gutterWidth={gutterWidth} />
           ) : (
-            <div className="px-3 py-2 text-xs text-white/40 font-mono">No diff data.</div>
+            <div className="px-3 py-2 text-xs text-[hsl(var(--code-fg-subtle))] font-mono">No diff data.</div>
           )}
         </div>
       )}

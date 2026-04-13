@@ -6,9 +6,9 @@ import { parseDiffHunks } from '../utils/diff';
 import { fileIconClass, basename, lineStyles } from '../utils/diffCard';
 import { ParsedDiffFile, ParsedLine } from '../types';
 
-// ── Always-dark backgrounds (matches TerminalCard — never changes with theme) ──
-const TITLE_BG = 'bg-[hsl(220_5%_12%)]';  // ~#1c1d1e — dark chrome bar
-const BODY_BG  = 'bg-[hsl(220_4%_10%)]';   // slightly lighter than terminal body
+// Theme-aware code surfaces — see --code-chrome / --code-body in src/index.css.
+const TITLE_BG = 'bg-[hsl(var(--code-chrome))]';
+const BODY_BG  = 'bg-[hsl(var(--code-body))]';
 
 /** Max lines shown in collapsed preview per file section. */
 const COLLAPSED_LINE_LIMIT = 8;
@@ -30,14 +30,14 @@ export function DiffLine({ line, gutterWidth }: { line: ParsedLine; gutterWidth:
     <div className={`flex ${bg} hover:brightness-110 transition-[filter]`}>
       {/* Old line number */}
       <span
-        className="shrink-0 text-right text-[11px] text-white/25 select-none border-r border-white/5 pr-1"
+        className="shrink-0 text-right text-[11px] text-[hsl(var(--code-fg-subtle))] select-none border-r border-[hsl(var(--code-border))] pr-1"
         style={{ width: padW }}
       >
         {line.oldNumber ?? ''}
       </span>
       {/* New line number */}
       <span
-        className="shrink-0 text-right text-[11px] text-white/25 select-none border-r border-white/5 pr-1 mr-2"
+        className="shrink-0 text-right text-[11px] text-[hsl(var(--code-fg-subtle))] select-none border-r border-[hsl(var(--code-border))] pr-1 mr-2"
         style={{ width: padW }}
       >
         {line.newNumber ?? ''}
@@ -89,7 +89,7 @@ export function FileDiffSection({
         )
       )}
       {!expanded && hiddenLines > 0 && (
-        <div className="px-3 py-2 text-center text-[11px] text-white/30 select-none">
+        <div className="px-3 py-2 text-center text-[11px] text-[hsl(var(--code-fg-subtle))] select-none">
           ⋯ {hiddenLines} more line{hiddenLines !== 1 ? 's' : ''} changed · Click to expand
         </div>
       )}
@@ -120,7 +120,7 @@ export function DiffCard({
     return (
       <div className={`rounded-lg overflow-hidden font-mono border border-[hsl(var(--border))] border-l-[3px] border-l-agent-4 ${TITLE_BG}`}>
         <div className="flex items-center gap-2 px-3 py-1.5">
-          <span className="text-[11px] text-white/50 flex-1 truncate">{title || 'Edit'}</span>
+          <span className="text-[11px] text-[hsl(var(--code-fg-muted))] flex-1 truncate">{title || 'Edit'}</span>
           {success ? (
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500/70 shrink-0" />
           ) : (
@@ -128,7 +128,7 @@ export function DiffCard({
           )}
         </div>
         <div className={`${BODY_BG} px-3 py-2`}>
-          <pre className="text-xs text-white/60 whitespace-pre-wrap">{diffText || 'No changes'}</pre>
+          <pre className="text-xs text-[hsl(var(--code-fg-muted))] whitespace-pre-wrap">{diffText || 'No changes'}</pre>
         </div>
       </div>
     );
@@ -163,12 +163,12 @@ export function DiffCard({
       {files.map((file, fi) => (
         <div key={`${file.path}-${fi}`}>
           {/* File header bar */}
-          <div className={`flex items-center gap-2 px-3 py-1.5 ${TITLE_BG} ${fi > 0 ? 'border-t border-white/5' : ''}`}>
+          <div className={`flex items-center gap-2 px-3 py-1.5 ${TITLE_BG} ${fi > 0 ? 'border-t border-[hsl(var(--code-border))]' : ''}`}>
             {/* File icon */}
             <span className={`${fileIconClass(file.path)} shrink-0`} style={{ fontSize: '16px' }} />
 
             {/* Filename (basename visible, full path on hover) */}
-            <span className="text-[11px] text-white/80 truncate flex-1 min-w-0" title={file.path}>
+            <span className="text-[11px] text-[hsl(var(--code-fg))] truncate flex-1 min-w-0" title={file.path}>
               {basename(file.path)}
             </span>
 
@@ -187,7 +187,7 @@ export function DiffCard({
             {/* Expand chevron */}
             {hasExpandableContent && (
               <ChevronRight
-                className={`w-3 h-3 shrink-0 text-white/25 transition-transform ${expanded ? 'rotate-90' : ''}`}
+                className={`w-3 h-3 shrink-0 text-[hsl(var(--code-fg-subtle))] transition-transform ${expanded ? 'rotate-90' : ''}`}
               />
             )}
 
@@ -195,7 +195,7 @@ export function DiffCard({
             <div className="group/copy relative">
               <CopyButton
                 text={diffText}
-                className="p-1 rounded text-white/40 hover:text-white/80 transition-all opacity-50 group-hover/copy:opacity-100 focus:opacity-100"
+                className="p-1 rounded text-[hsl(var(--code-fg-subtle))] hover:text-[hsl(var(--code-fg))] transition-all opacity-50 group-hover/copy:opacity-100 focus:opacity-100"
               />
             </div>
           </div>
@@ -209,8 +209,8 @@ export function DiffCard({
 
       {/* Collapse footer when expanded */}
       {expanded && hasExpandableContent && (
-        <div className={`${BODY_BG} border-t border-white/5 px-3 py-1.5 text-center`}>
-          <span className="text-[11px] text-white/30 select-none">Collapse ▲</span>
+        <div className={`${BODY_BG} border-t border-[hsl(var(--code-border))] px-3 py-1.5 text-center`}>
+          <span className="text-[11px] text-[hsl(var(--code-fg-subtle))] select-none">Collapse ▲</span>
         </div>
       )}
     </div>

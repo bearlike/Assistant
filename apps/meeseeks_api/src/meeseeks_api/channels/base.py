@@ -40,9 +40,7 @@ class ChannelAdapter(Protocol):
         """Return True if the webhook request is authentic."""
         ...
 
-    def parse_inbound(
-        self, headers: dict[str, str], body: bytes
-    ) -> InboundMessage | None:
+    def parse_inbound(self, headers: dict[str, str], body: bytes) -> InboundMessage | None:
         """Parse a raw webhook payload into an InboundMessage.
 
         Return ``None`` for non-message events (e.g. Update, Delete,
@@ -108,9 +106,7 @@ class DeduplicationGuard:
             # Prune expired entries lazily (keep it simple)
             if len(self._seen) > 10_000:
                 cutoff = now - self._ttl
-                self._seen = {
-                    k: v for k, v in self._seen.items() if v > cutoff
-                }
+                self._seen = {k: v for k, v in self._seen.items() if v > cutoff}
             if key in self._seen and (now - self._seen[key]) < self._ttl:
                 return True
             self._seen[key] = now

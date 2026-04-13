@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { GitFork } from 'lucide-react';
-import { Button } from './ui/Button';
+import { Button } from './ui/button';
 
 export function ForkFromHereButton({
   onConfirm,

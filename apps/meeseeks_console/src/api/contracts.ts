@@ -7,6 +7,7 @@ import {
   SessionContext,
   SessionExport,
   SessionSummary,
+  SessionUsage,
   ShareRecord,
   VirtualProject
 } from "../types";
@@ -57,6 +58,8 @@ export type AgentSummary = {
   action: "start" | "stop";
   status: string;
   steps_completed: number;
+  input_tokens?: number;
+  output_tokens?: number;
   detail: string;
   ts: string;
 };
@@ -75,6 +78,7 @@ export type ApiClient = {
     sessionId: string,
     after?: string
   ) => Promise<{ events: EventRecord[]; running: boolean }>;
+  fetchUsage: (sessionId: string) => Promise<SessionUsage>;
   archiveSession: (sessionId: string) => Promise<void>;
   unarchiveSession: (sessionId: string) => Promise<void>;
   updateSessionTitle: (
@@ -120,6 +124,8 @@ export type ApiClient = {
     agents: AgentSummary[];
     running: boolean;
     total_steps: number;
+    total_input_tokens: number;
+    total_output_tokens: number;
   }>;
   getConfigSchema: () => Promise<Record<string, unknown>>;
   getConfig: () => Promise<Record<string, unknown>>;

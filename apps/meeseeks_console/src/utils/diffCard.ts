@@ -19,13 +19,14 @@ export function basename(path: string): string {
   return path.split('/').pop() || path;
 }
 
+// Theme-aware via --diff-add-* / --diff-del-* / --code-fg-muted (see src/index.css).
 export function lineStyles(type: ParsedLine['type']): { bg: string; text: string; prefix: string } {
   switch (type) {
     case 'insert':
-      return { bg: 'bg-emerald-500/[0.12]', text: 'text-emerald-300', prefix: '+' };
+      return { bg: 'bg-[hsl(var(--diff-add-bg))]', text: 'text-[hsl(var(--diff-add-text))]', prefix: '+' };
     case 'delete':
-      return { bg: 'bg-red-500/[0.12]', text: 'text-red-300', prefix: '-' };
+      return { bg: 'bg-[hsl(var(--diff-del-bg))]', text: 'text-[hsl(var(--diff-del-text))]', prefix: '-' };
     default:
-      return { bg: '', text: 'text-white/60', prefix: ' ' };
+      return { bg: '', text: 'text-[hsl(var(--code-fg-muted))]', prefix: ' ' };
   }
 }

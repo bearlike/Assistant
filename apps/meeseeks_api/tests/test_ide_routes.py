@@ -67,9 +67,7 @@ def client(
     class FakeCfg:
         projects = {"demo": FakeProject()}
 
-    monkeypatch.setattr(
-        "meeseeks_core.config.get_config", lambda: FakeCfg()
-    )
+    monkeypatch.setattr("meeseeks_core.config.get_config", lambda: FakeCfg())
 
     app = Flask("ide-test")
     api = Api(app)
@@ -105,20 +103,14 @@ def test_post_rejects_invalid_session_id(client: Any) -> None:
     assert resp.status_code == 404
 
 
-def test_post_404_when_session_unknown(
-    client: Any, fake_runtime: MagicMock
-) -> None:
+def test_post_404_when_session_unknown(client: Any, fake_runtime: MagicMock) -> None:
     fake_runtime.session_store.list_sessions.return_value = []
     resp = client.post(f"/api/sessions/{VALID_SID}/ide")
     assert resp.status_code == 404
 
 
-def test_post_409_when_session_has_no_project(
-    client: Any, fake_runtime: MagicMock
-) -> None:
-    fake_runtime.session_store.load_transcript.return_value = [
-        {"type": "context", "payload": {}}
-    ]
+def test_post_409_when_session_has_no_project(client: Any, fake_runtime: MagicMock) -> None:
+    fake_runtime.session_store.load_transcript.return_value = [{"type": "context", "payload": {}}]
     resp = client.post(f"/api/sessions/{VALID_SID}/ide")
     assert resp.status_code == 409
 
@@ -229,9 +221,7 @@ def test_extend_rejects_neither(client: Any) -> None:
 
 
 def test_extend_409_at_cap(client: Any, fake_manager: MagicMock) -> None:
-    fake_manager.extend.side_effect = MaxLifetimeReached(
-        datetime.now(UTC) + timedelta(hours=8)
-    )
+    fake_manager.extend.side_effect = MaxLifetimeReached(datetime.now(UTC) + timedelta(hours=8))
     resp = client.post(
         f"/api/sessions/{VALID_SID}/ide/extend",
         data=json.dumps({"hours": 100}),

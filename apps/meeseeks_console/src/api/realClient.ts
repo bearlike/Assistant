@@ -7,6 +7,7 @@ import {
   SessionContext,
   SessionExport,
   SessionSummary,
+  SessionUsage,
   ShareRecord
 } from "../types";
 import { AgentSummary, ApiClient, ApiConfig, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, SkillSummary, ToolSummary, VirtualProject } from "./contracts";
@@ -126,6 +127,14 @@ export function createRealClient(config: ApiConfig): ApiClient {
         running: boolean;
       }>(response);
       return payload;
+    },
+
+    async fetchUsage(sessionId: string): Promise<SessionUsage> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/usage`),
+        { headers: headers(apiKey) }
+      );
+      return handleJson<SessionUsage>(response);
     },
 
     async archiveSession(sessionId: string): Promise<void> {
@@ -407,6 +416,8 @@ export function createRealClient(config: ApiConfig): ApiClient {
       agents: AgentSummary[];
       running: boolean;
       total_steps: number;
+      total_input_tokens: number;
+      total_output_tokens: number;
     }> {
       const response = await fetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/agents`),
@@ -416,6 +427,8 @@ export function createRealClient(config: ApiConfig): ApiClient {
         agents: AgentSummary[];
         running: boolean;
         total_steps: number;
+        total_input_tokens: number;
+        total_output_tokens: number;
       }>(response);
     },
 
