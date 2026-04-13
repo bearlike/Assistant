@@ -62,7 +62,7 @@ export function TerminalCard({
 
   return (
     <div
-      className={`rounded-lg overflow-hidden font-mono border-l-[3px] transition-colors ${
+      className={`rounded-lg overflow-hidden font-mono border border-[hsl(var(--border))] border-l-[3px] transition-colors ${
         hasOutput ? 'cursor-pointer' : ''
       } ${
         isError ? 'border-l-red-500' : 'border-l-emerald-500/60'
@@ -139,7 +139,7 @@ export function TerminalCard({
               <ChevronRight className="w-3 h-3 shrink-0 text-white/25 rotate-90 transition-transform" />
             )}
           </div>
-          <CopyButton text={command} className="absolute right-2 top-1.5 p-1 rounded text-white/40 hover:text-white/80 transition-all opacity-0 group-hover/copy:opacity-100 focus:opacity-100" />
+          <CopyButton text={command} className="absolute right-2 top-1.5 p-1 rounded text-white/40 hover:text-white/80 transition-all opacity-50 group-hover/copy:opacity-100 focus:opacity-100" />
         </div>
 
         {/* Output — expanded only */}
@@ -159,7 +159,7 @@ export function TerminalCard({
             </div>
             <CopyButton
               text={[stdout, stderr].filter(Boolean).join('\n')}
-              className="absolute right-2 top-1.5 p-1 rounded text-white/40 hover:text-white/80 transition-all opacity-0 group-hover/copy:opacity-100 focus:opacity-100"
+              className="absolute right-2 top-1.5 p-1 rounded text-white/40 hover:text-white/80 transition-all opacity-50 group-hover/copy:opacity-100 focus:opacity-100"
             />
           </div>
         )}

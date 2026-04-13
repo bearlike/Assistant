@@ -6,6 +6,7 @@ import type { RJSFSchema } from "@rjsf/utils";
 import { useConfig } from "../hooks/useConfig";
 import { rjsfTemplates, rjsfWidgets } from "./settings/RjsfTheme";
 import { AlertTriangle, Loader2, Save, CheckCircle2 } from "lucide-react";
+import { Button } from "./ui/Button";
 
 export function SettingsView() {
   const { schema, config, loading, saving, error, save } = useConfig();
@@ -78,23 +79,22 @@ export function SettingsView() {
           liveValidate={false}
           noHtml5Validate
         >
-          <button
+          <Button
             type="submit"
+            variant="primary"
+            size="md"
             disabled={saving}
-            className={
-              "mt-4 flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium " +
-              "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] " +
-              "hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] " +
-              "disabled:opacity-50 transition-opacity"
+            leadingIcon={
+              saving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )
             }
+            className="mt-4"
           >
-            {saving ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Save className="w-4 h-4" />
-            )}
             {saving ? "Saving..." : "Save Settings"}
-          </button>
+          </Button>
         </Form>
       </div>
     </div>

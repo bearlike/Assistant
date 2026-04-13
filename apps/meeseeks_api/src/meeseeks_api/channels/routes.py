@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from flask import Blueprint, Flask, request
 from meeseeks_core.common import get_logger
 from meeseeks_core.config import get_config
+from meeseeks_core.exit_plan_mode import session_temp_dir
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.token_budget import get_token_budget
 
@@ -268,7 +269,7 @@ def _process_inbound(
         _runtime.enqueue_message(session_id, user_text)
         return {}, 200
 
-    project_cwd = _get_active_project_cwd(session_id)
+    project_cwd = _get_active_project_cwd(session_id) or session_temp_dir(session_id)
     client_ctx = getattr(adapter, "system_context", None)
 
     _runtime.start_async(

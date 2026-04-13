@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { WorkspacePanel } from "./WorkspacePanel";
@@ -6,27 +6,31 @@ import { InputBar } from "./InputBar";
 import { useSessionEvents } from "../hooks/useSessionEvents";
 import { useSessionQuery } from "../hooks/useSessionQuery";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { DiffFile, SessionSummary, TurnMeta } from "../types";
+import { SessionContext, SessionSummary, TurnMeta } from "../types";
 import { buildTimeline, getActiveTurn } from "../utils/timeline";
+import { mergeDiffFiles } from "../utils/diff";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { extractSummaryTesting } from "../utils/logs";
-import { approvePlan, recoverSession } from "../api/client";
+import { approvePlan, recoverSession, forkSession } from "../api/client";
 import { RotateCcw, Play } from "lucide-react";
+import { Button } from "./ui/Button";
 interface SessionDetailViewProps {
   session: SessionSummary;
   onTitleUpdate?: (sessionId: string, title: string) => void;
   onSessionChange?: () => void;
+  onSelectSession?: (sessionId: string) => void;
 }
+
 export function SessionDetailView({
   session,
   onTitleUpdate,
   onSessionChange,
+  onSelectSession,
 }: SessionDetailViewProps) {
   const isMobile = useIsMobile();
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [activeTab, setActiveTab] = useState<"diff" | "logs">("logs");
-  const [selectedFile, setSelectedFile] = useState<DiffFile | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const {
     events,
@@ -42,6 +46,10 @@ export function SessionDetailView({
     submitting
   } = useSessionQuery(session.session_id, session.context, running);
   const timeline = useMemo(() => buildTimeline(events), [events]);
+  const sessionFiles = useMemo(
+    () => mergeDiffFiles(timeline.flatMap((e) => e.turn?.files ?? [])),
+    [timeline]
+  );
   const liveTurn = useMemo(() => getActiveTurn(events), [events]);
   const activeTurnId = liveTurn?.id ?? null;
   const selectedTurn = useMemo(() => {
@@ -58,16 +66,47 @@ export function SessionDetailView({
     }
     return null;
   }, [selectedTurnId, liveTurn, timeline]);
+  // Derive effective session context from live events. Context events are
+  // emitted before each query and on plan approval, so they carry the most
+  // recent model, mode, project, etc. Merging them keeps InputBar in sync
+  // without waiting for a full session-list refresh.
+  const effectiveContext = useMemo(() => {
+    let ctx: SessionContext | undefined = session.context;
+    for (const ev of events) {
+      if (ev.type === "context") {
+        ctx = { ...ctx, ...(ev.payload as Partial<SessionContext>) };
+      }
+    }
+    return ctx;
+  }, [events, session.context]);
   const summaryData = useMemo(() => extractSummaryTesting(events), [events]);
   const errorMessage = eventsError || queryError;
   const errorTitle = eventsError ? "Polling error" : "Request error";
+  const autoOpenedRef = useRef<string | null>(null);
   useEffect(() => {
     setSelectedTurnId(null);
-    setSelectedFile(null);
     setIsWorkspaceOpen(false);
     setIsMaximized(false);
     setActiveTab("logs");
+    autoOpenedRef.current = null;
   }, [session.session_id]);
+  // Auto-open the latest completed trace when a session first loads.
+  // Fires once per session (guarded by autoOpenedRef). Skipped on mobile
+  // where the workspace would obscure the conversation.
+  useEffect(() => {
+    if (isMobile) return;
+    if (autoOpenedRef.current === session.session_id) return;
+    if (timeline.length === 0) return;
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const turn = timeline[i].turn;
+      if (turn) {
+        setSelectedTurnId(turn.id);
+        setIsWorkspaceOpen(true);
+        autoOpenedRef.current = session.session_id;
+        return;
+      }
+    }
+  }, [timeline, session.session_id, isMobile]);
   useEffect(() => {
     if (!onTitleUpdate) return;
     for (let i = events.length - 1; i >= 0; i--) {
@@ -87,11 +126,9 @@ export function SessionDetailView({
     setActiveTab("logs");
     setIsWorkspaceOpen(true);
   };
-  const handleOpenFiles = (turn: TurnMeta, file?: DiffFile) => {
+  const handleOpenFiles = (turn: TurnMeta) => {
     setSelectedTurnId(turn.id);
     setActiveTab("diff");
-    const nextFile = file || turn.files[0] || null;
-    setSelectedFile(nextFile);
     setIsWorkspaceOpen(true);
   };
   const handleShowLiveTrace = () => {
@@ -102,21 +139,6 @@ export function SessionDetailView({
     setActiveTab("logs");
     setIsWorkspaceOpen(true);
   };
-  useEffect(() => {
-    if (!selectedTurn) {
-      setSelectedFile(null);
-      return;
-    }
-    if (selectedTurn.files.length === 0) {
-      setSelectedFile(null);
-      return;
-    }
-    const selectedKey = selectedFile?.path || selectedFile?.name;
-    const hasSelected = Boolean(selectedKey && selectedTurn.files.some((file) => (file.path || file.name) === selectedKey));
-    if (!hasSelected) {
-      setSelectedFile(selectedTurn.files[0]);
-    }
-  }, [selectedTurn, selectedFile]);
   const handleApprovePlan = useCallback(
     async (approved: boolean) => {
       try {
@@ -142,7 +164,26 @@ export function SessionDetailView({
   };
   const handleRetryFrom = async (fromTs: string) => {
     if (running || !session.session_id) return;
-    await recoverSession(session.session_id, "retry", fromTs);
+    await recoverSession(session.session_id, "retry", fromTs, undefined, effectiveContext?.model);
+    resetEvents();
+    onSessionChange?.();
+  };
+  const handleForkFrom = async (fromTs: string) => {
+    if (running || !session.session_id) return;
+    try {
+      const result = await forkSession(session.session_id, {
+        fromTs,
+        model: effectiveContext?.model ?? undefined,
+      });
+      onSessionChange?.();
+      onSelectSession?.(result.session_id);
+    } catch {
+      // fork failed — silently ignore, notification will surface via API
+    }
+  };
+  const handleEditAndRegenerate = async (fromTs: string, newText: string) => {
+    if (running || !session.session_id) return;
+    await recoverSession(session.session_id, "retry", fromTs, newText, effectiveContext?.model);
     resetEvents();
     onSessionChange?.();
   };
@@ -170,6 +211,7 @@ export function SessionDetailView({
     }
     return null;
   }, [events, running, submitting]);
+
   const conversationPanel = (
     <>
       {errorMessage && <div className="px-6 pt-4">
@@ -188,8 +230,10 @@ export function SessionDetailView({
         onShowActiveTrace={handleShowLiveTrace}
         onApprovePlan={handleApprovePlan}
         onRetryFrom={handleRetryFrom}
+        onForkFrom={handleForkFrom}
+        onEditAndRegenerate={handleEditAndRegenerate}
         events={events}
-        model={session.context?.model}
+        model={effectiveContext?.model}
         systemBlock={summaryData.summary.length || summaryData.testing.length ? {
           summary: {
             text: summaryData.summary,
@@ -214,22 +258,26 @@ export function SessionDetailView({
                 )}
               </div>
               <div className="flex gap-2 shrink-0">
-                <button
+                <Button
+                  variant="neutral"
+                  size="sm"
+                  tone="info"
+                  leadingIcon={<RotateCcw className="w-3 h-3" />}
                   onClick={() => triggerRecover("retry")}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"
                   title="Re-run the last user query"
                 >
-                  <RotateCcw className="w-3 h-3" />
                   Retry
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="neutral"
+                  size="sm"
+                  tone="warn"
+                  leadingIcon={<Play className="w-3 h-3" />}
                   onClick={() => triggerRecover("continue")}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
                   title="Resume the session and let the agent recover"
                 >
-                  <Play className="w-3 h-3" />
                   Continue
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -237,8 +285,8 @@ export function SessionDetailView({
       )}
 
       <div className="relative z-10">
-        <InputBar mode="detail" sessionContext={session.context} onSubmit={async (query, newContext, mode, attachments) => {
-          const mergedContext = { ...session.context, ...newContext };
+        <InputBar mode="detail" sessionContext={effectiveContext} onSubmit={async (query, newContext, mode, attachments) => {
+          const mergedContext = { ...effectiveContext, ...newContext };
           await send(query, mergedContext, mode, attachments);
           resume();
         }} onStop={async () => {
@@ -254,8 +302,9 @@ export function SessionDetailView({
     activeTab,
     onTabChange: setActiveTab,
     events: selectedTurn ? selectedTurn.events : events,
-    diffContent: selectedFile?.diff,
-    filename: selectedFile?.path || selectedFile?.name,
+    sessionId: session.session_id,
+    selectedTurn: selectedTurn ?? null,
+    sessionFiles,
     onRetry: !running ? () => triggerRecover("retry") : undefined,
     onContinue: !running ? () => triggerRecover("continue") : undefined,
   };

@@ -43,7 +43,7 @@ class HookManager:
     on_agent_stop: list[Callable[[AgentHandle], None]] = field(default_factory=list)
     on_session_start: list[Callable[[str], None]] = field(default_factory=list)
     on_session_end: list[Callable[[str, str | None], None]] = field(default_factory=list)
-    on_compact: list[Callable[..., None]] = field(default_factory=list)
+    on_compact: list[Callable[[str], None]] = field(default_factory=list)
 
     def run_pre_tool_use(self, action_step: ActionStep) -> ActionStep:
         """Apply pre-tool hooks to an action step.
@@ -146,11 +146,11 @@ class HookManager:
             except Exception:
                 logger.warning("on_session_end hook failed", exc_info=True)
 
-    def run_on_compact(self, *args: Any, **kwargs: Any) -> None:
+    def run_on_compact(self, session_id: str) -> None:
         """Notify hooks that compaction occurred."""
         for hook in self.on_compact:
             try:
-                hook(*args, **kwargs)
+                hook(session_id)
             except Exception:
                 logger.warning("on_compact hook failed", exc_info=True)
 
@@ -350,7 +350,53 @@ def default_hook_manager() -> HookManager:
     return HookManager()
 
 
+_PLUGIN_HOOK_MAP: dict[str, tuple[str, Callable]] = {
+    "PreToolUse": ("pre_tool_use", _make_command_hook),
+    "PostToolUse": ("post_tool_use", _make_post_tool_hook),
+    "SessionStart": ("on_session_start", _make_session_hook),
+    "SessionEnd": ("on_session_end", _make_session_end_hook),
+}
+
+
+def merge_plugin_hooks(
+    manager: HookManager,
+    hooks_json: dict[str, Any],
+    plugin_root: str,
+) -> None:
+    """Translate Claude Code plugin hooks.json into HookManager callbacks.
+
+    Supports: PreToolUse, PostToolUse, SessionStart, SessionEnd.
+    Substitutes ${CLAUDE_PLUGIN_ROOT} in command strings.
+    """
+    from meeseeks_core.config import HookEntry
+    from meeseeks_core.plugins import substitute_plugin_vars
+
+    raw_hooks = hooks_json.get("hooks", {})
+    for cc_event, entry_groups in raw_hooks.items():
+        mapping = _PLUGIN_HOOK_MAP.get(cc_event)
+        if mapping is None:
+            continue
+        slot_name, factory = mapping
+        for group in entry_groups:
+            matcher = group.get("matcher")
+            for hook_def in group.get("hooks", []):
+                if hook_def.get("type") != "command":
+                    continue
+                command = hook_def.get("command")
+                if not command:
+                    continue
+                command = substitute_plugin_vars(command, plugin_root)
+                entry = HookEntry(
+                    type="command",
+                    command=command,
+                    matcher=matcher,
+                    timeout=hook_def.get("timeout", 30),
+                )
+                getattr(manager, slot_name).append(factory(entry))
+
+
 __all__ = [
     "HookManager",
     "default_hook_manager",
+    "merge_plugin_hooks",
 ]

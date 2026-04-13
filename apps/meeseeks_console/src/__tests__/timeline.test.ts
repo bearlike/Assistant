@@ -144,6 +144,51 @@ describe("buildTimeline — completion fallback materialisation", () => {
   });
 });
 
+describe("buildTimeline — per-turn model from context events", () => {
+  test("each turn carries the model from its preceding context event", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "context", { model: "openai/gpt-4o" }),
+      ev("2026-04-05T10:00:01Z", "user", { text: "first" }),
+      ev("2026-04-05T10:00:05Z", "assistant", { text: "reply 1" }),
+      ev("2026-04-05T10:01:00Z", "context", { model: "anthropic/claude-sonnet" }),
+      ev("2026-04-05T10:01:01Z", "user", { text: "second" }),
+      ev("2026-04-05T10:01:05Z", "assistant", { text: "reply 2" }),
+    ]);
+    expect(entries).toHaveLength(4);
+    expect(entries[1].turn?.model).toBe("openai/gpt-4o");
+    expect(entries[3].turn?.model).toBe("anthropic/claude-sonnet");
+  });
+
+  test("turn without preceding context event has undefined model", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:00:05Z", "assistant", { text: "hello" }),
+    ]);
+    expect(entries[1].turn?.model).toBeUndefined();
+  });
+
+  test("completion fallback turn also carries per-turn model", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "context", { model: "openai/gpt-4o" }),
+      ev("2026-04-05T10:00:01Z", "user", { text: "do it" }),
+      ev("2026-04-05T10:00:05Z", "completion", { done: true, done_reason: "error" }),
+    ]);
+    expect(entries[1].turn?.model).toBe("openai/gpt-4o");
+  });
+});
+
+describe("getActiveTurn — per-turn model from context events", () => {
+  test("active turn carries model from preceding context event", () => {
+    const active = getActiveTurn([
+      ev("2026-04-05T10:00:00Z", "context", { model: "openai/gpt-4o" }),
+      ev("2026-04-05T10:00:01Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:00:02Z", "tool_result", { tool_id: "shell" }),
+    ]);
+    expect(active).not.toBeNull();
+    expect(active?.model).toBe("openai/gpt-4o");
+  });
+});
+
 describe("getActiveTurn — completion closes the active turn", () => {
   test("completion event clears active turn state", () => {
     const events: EventRecord[] = [

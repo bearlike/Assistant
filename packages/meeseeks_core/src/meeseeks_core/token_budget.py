@@ -24,6 +24,7 @@ class TokenBudget:
     remaining_tokens: int
     utilization: float
     threshold: float
+    overhead_tokens: int = 0
 
     @property
     def needs_compact(self) -> bool:
@@ -97,16 +98,35 @@ def estimate_summary_tokens(summary: str | None) -> int:
     return num_tokens_from_string(summary)
 
 
+def estimate_overhead_tokens(
+    tool_schemas: list[dict[str, object]] | None = None,
+    system_prompt: str | None = None,
+) -> int:
+    """Estimate tokens consumed by tool schemas and system prompt.
+
+    These are invisible to event/summary counting but count against
+    the model's context window at API call time.
+    """
+    total = 0
+    if tool_schemas:
+        schema_text = json.dumps(tool_schemas, ensure_ascii=False, default=str)
+        total += num_tokens_from_string(schema_text)
+    if system_prompt:
+        total += num_tokens_from_string(system_prompt)
+    return total
+
+
 def get_token_budget(
     events: Iterable[EventRecord],
     summary: str | None,
     model_name: str | None,
     threshold: float | None = None,
+    overhead_tokens: int = 0,
 ) -> TokenBudget:
     """Calculate token utilization and remaining context budget."""
     event_tokens = estimate_event_tokens(events)
     summary_tokens = estimate_summary_tokens(summary)
-    total_tokens = event_tokens + summary_tokens
+    total_tokens = event_tokens + summary_tokens + overhead_tokens
     context_window = get_context_window(model_name)
     remaining_tokens = max(context_window - total_tokens, 0)
     if threshold is None:
@@ -120,4 +140,5 @@ def get_token_budget(
         remaining_tokens=remaining_tokens,
         utilization=utilization,
         threshold=threshold,
+        overhead_tokens=overhead_tokens,
     )

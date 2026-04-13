@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
+  <style>
+    @keyframes cw  { to { transform: rotate(360deg);  } }
+    @keyframes ccw { to { transform: rotate(-360deg); } }
+    .cw  { animation: cw  linear infinite; transform-box: fill-box; transform-origin: center; }
+    .ccw { animation: ccw linear infinite; transform-box: fill-box; transform-origin: center; }
+  </style>
+  <defs>
+    <path id="logo" transform="translate(-240,-240)"
+      d="M480 240c0-29.1-20.7-55.8-55.2-76.5 9.7-39.1 5.5-72.6-15-93.2-20.7-20.6-54.2-24.8-93.3-15.1C295.8 20.7 269.1 0 240 0s-55.8 20.7-76.5 55.2c-39.1-9.7-72.6-5.5-93.2 15s-24.8 54.2-15.1 93.2C20.7 184.3 0 211 0 240s20.7 55.8 55.2 76.5c-9.7 39.1-5.5 72.6 15 93.2 20.7 20.6 54.2 24.8 93.2 15.1C184.2 459.3 211 480 240 480s55.8-20.7 76.5-55.2c39.1 9.7 72.6 5.5 93.2-15s24.8-54.2 15-93.2C459.4 295.8 480 269 480 240Zm-240 60a60 60 0 1 1 0-120 60 60 0 0 1 0 120Z"/>
+  </defs>
+
+  <!-- XL — dominant anchors -->
+  <g transform="translate(160,155) scale(0.62)">
+    <use href="#logo" class="cw"  style="animation-duration:54s;animation-delay:-8s"  fill="#C15F3C" opacity="0.07"/>
+  </g>
+  <g transform="translate(1290,758) scale(0.58)">
+    <use href="#logo" class="ccw" style="animation-duration:66s;animation-delay:-22s" fill="#C15F3C" opacity="0.07"/>
+  </g>
+  <g transform="translate(720,448) scale(0.65)">
+    <use href="#logo" class="cw"  style="animation-duration:82s;animation-delay:-35s" fill="#C15F3C" opacity="0.06"/>
+  </g>
+
+  <!-- Large -->
+  <g transform="translate(1262,118) scale(0.42)">
+    <use href="#logo" class="cw"  style="animation-duration:38s;animation-delay:-5s"  fill="#C15F3C" opacity="0.08"/>
+  </g>
+  <g transform="translate(148,776) scale(0.44)">
+    <use href="#logo" class="ccw" style="animation-duration:44s;animation-delay:-17s" fill="#C15F3C" opacity="0.08"/>
+  </g>
+  <g transform="translate(488,270) scale(0.40)">
+    <use href="#logo" class="ccw" style="animation-duration:40s;animation-delay:-12s" fill="#C15F3C" opacity="0.08"/>
+  </g>
+  <g transform="translate(958,630) scale(0.38)">
+    <use href="#logo" class="cw"  style="animation-duration:36s;animation-delay:-3s"  fill="#C15F3C" opacity="0.08"/>
+  </g>
+  <g transform="translate(1380,350) scale(0.42)">
+    <use href="#logo" class="cw"  style="animation-duration:42s;animation-delay:-19s" fill="#C15F3C" opacity="0.08"/>
+  </g>
+  <g transform="translate(66,290) scale(0.40)">
+    <use href="#logo" class="ccw" style="animation-duration:46s;animation-delay:-7s"  fill="#C15F3C" opacity="0.08"/>
+  </g>
+
+  <!-- Medium -->
+  <g transform="translate(68,438) scale(0.30)">
+    <use href="#logo" class="cw"  style="animation-duration:29s;animation-delay:-3s"  fill="#C15F3C" opacity="0.10"/>
+  </g>
+  <g transform="translate(1394,448) scale(0.32)">
+    <use href="#logo" class="ccw" style="animation-duration:33s;animation-delay:-13s" fill="#C15F3C" opacity="0.10"/>
+  </g>
+  <g transform="translate(378,520) scale(0.28)">
+    <use href="#logo" class="cw"  style="animation-duration:27s;animation-delay:-6s"  fill="#C15F3C" opacity="0.10"/>
+  </g>
+  <g transform="translate(1058,210) scale(0.30)">
+    <use href="#logo" class="ccw" style="animation-duration:31s;animation-delay:-21s" fill="#C15F3C" opacity="0.10"/>
+  </g>
+  <g transform="translate(778,118) scale(0.28)">
+    <use href="#logo" class="cw"  style="animation-duration:26s;animation-delay:-9s"  fill="#C15F3C" opacity="0.10"/>
+  </g>
+  <g transform="translate(678,802) scale(0.30)">
+    <use href="#logo" class="ccw" style="animation-duration:34s;animation-delay:-15s" fill="#C15F3C" opacity="0.10"/>
+  </g>
+  <g transform="translate(1178,560) scale(0.28)">
+    <use href="#logo" class="cw"  style="animation-duration:28s;animation-delay:-4s"  fill="#C15F3C" opacity="0.10"/>
+  </g>
+  <g transform="translate(258,338) scale(0.30)">
+    <use href="#logo" class="ccw" style="animation-duration:32s;animation-delay:-24s" fill="#C15F3C" opacity="0.10"/>
+  </g>
+
+  <!-- Small -->
+  <g transform="translate(688,62) scale(0.22)">
+    <use href="#logo" class="ccw" style="animation-duration:22s;animation-delay:-7s"  fill="#C15F3C" opacity="0.11"/>
+  </g>
+  <g transform="translate(736,862) scale(0.20)">
+    <use href="#logo" class="cw"  style="animation-duration:20s;animation-delay:-2s"  fill="#C15F3C" opacity="0.11"/>
+  </g>
+  <g transform="translate(382,194) scale(0.18)">
+    <use href="#logo" class="cw"  style="animation-duration:17s;animation-delay:-9s"  fill="#C15F3C" opacity="0.12"/>
+  </g>
+  <g transform="translate(1076,486) scale(0.20)">
+    <use href="#logo" class="ccw" style="animation-duration:25s;animation-delay:-6s"  fill="#C15F3C" opacity="0.12"/>
+  </g>
+  <g transform="translate(426,692) scale(0.18)">
+    <use href="#logo" class="ccw" style="animation-duration:19s;animation-delay:-11s" fill="#C15F3C" opacity="0.11"/>
+  </g>
+  <g transform="translate(1098,298) scale(0.18)">
+    <use href="#logo" class="cw"  style="animation-duration:21s;animation-delay:-4s"  fill="#C15F3C" opacity="0.12"/>
+  </g>
+  <g transform="translate(538,440) scale(0.20)">
+    <use href="#logo" class="cw"  style="animation-duration:23s;animation-delay:-16s" fill="#C15F3C" opacity="0.11"/>
+  </g>
+  <g transform="translate(898,338) scale(0.18)">
+    <use href="#logo" class="ccw" style="animation-duration:18s;animation-delay:-8s"  fill="#C15F3C" opacity="0.12"/>
+  </g>
+  <g transform="translate(1238,638) scale(0.20)">
+    <use href="#logo" class="cw"  style="animation-duration:24s;animation-delay:-18s" fill="#C15F3C" opacity="0.11"/>
+  </g>
+  <g transform="translate(198,578) scale(0.18)">
+    <use href="#logo" class="ccw" style="animation-duration:16s;animation-delay:-1s"  fill="#C15F3C" opacity="0.12"/>
+  </g>
+
+  <!-- Tiny — texture layer -->
+  <g transform="translate(946,186) scale(0.14)">
+    <use href="#logo" class="cw"  style="animation-duration:15s;animation-delay:-4s"  fill="#C15F3C" opacity="0.13"/>
+  </g>
+  <g transform="translate(304,590) scale(0.14)">
+    <use href="#logo" class="ccw" style="animation-duration:14s;animation-delay:-11s" fill="#C15F3C" opacity="0.13"/>
+  </g>
+  <g transform="translate(1138,678) scale(0.14)">
+    <use href="#logo" class="cw"  style="animation-duration:16s;animation-delay:-6s"  fill="#C15F3C" opacity="0.13"/>
+  </g>
+  <g transform="translate(468,842) scale(0.12)">
+    <use href="#logo" class="ccw" style="animation-duration:13s;animation-delay:-20s" fill="#C15F3C" opacity="0.13"/>
+  </g>
+  <g transform="translate(1338,178) scale(0.12)">
+    <use href="#logo" class="cw"  style="animation-duration:12s;animation-delay:-5s"  fill="#C15F3C" opacity="0.13"/>
+  </g>
+  <g transform="translate(858,742) scale(0.14)">
+    <use href="#logo" class="ccw" style="animation-duration:15s;animation-delay:-14s" fill="#C15F3C" opacity="0.13"/>
+  </g>
+  <g transform="translate(618,298) scale(0.12)">
+    <use href="#logo" class="cw"  style="animation-duration:13s;animation-delay:-2s"  fill="#C15F3C" opacity="0.13"/>
+  </g>
+  <g transform="translate(148,98) scale(0.12)">
+    <use href="#logo" class="ccw" style="animation-duration:11s;animation-delay:-8s"  fill="#C15F3C" opacity="0.13"/>
+  </g>
+  <g transform="translate(1098,822) scale(0.12)">
+    <use href="#logo" class="cw"  style="animation-duration:14s;animation-delay:-17s" fill="#C15F3C" opacity="0.13"/>
+  </g>
+</svg>

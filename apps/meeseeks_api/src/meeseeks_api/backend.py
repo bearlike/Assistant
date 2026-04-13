@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 import uuid
 from copy import deepcopy
@@ -29,13 +30,14 @@ from meeseeks_core.config import (
     reset_config,
     start_preflight,
 )
-from meeseeks_core.exit_plan_mode import PLAN_DIR_ROOT, plan_file_for
+from meeseeks_core.exit_plan_mode import PLAN_DIR_ROOT, plan_file_for, session_temp_dir
 from meeseeks_core.notifications import NotificationStore
 from meeseeks_core.permissions import auto_approve
+from meeseeks_core.project_store import VirtualProject, create_project_store
 from meeseeks_core.session_runtime import SessionRuntime, parse_core_command
 from meeseeks_core.session_store import SessionStoreBase, create_session_store
 from meeseeks_core.share_store import ShareStore
-from meeseeks_core.tool_registry import load_registry
+from meeseeks_core.tool_registry import ToolSpec, load_registry
 from pydantic import ValidationError
 from werkzeug.utils import secure_filename
 
@@ -160,6 +162,7 @@ _hook_manager = _HookManager.load_from_config(_config.hooks)
 # Create Flask application
 app = Flask(__name__)
 session_store = create_session_store()
+project_store = create_project_store()
 runtime = SessionRuntime(session_store=session_store)
 notification_store = NotificationStore(root_dir=session_store.root_dir)
 share_store = ShareStore(root_dir=session_store.root_dir)
@@ -177,6 +180,10 @@ api = Api(
 )
 
 ns = api.namespace("api", description="Meeseeks operations")
+
+# Web IDE (code-server) namespace. Actually initialized further down, once
+# ``_require_api_key`` is defined.
+_ide_manager = None
 
 task_queue_model = api.model(
     "TaskQueue",
@@ -261,6 +268,32 @@ def _require_api_key() -> tuple[dict, int] | None:
     return None
 
 
+# -- Web IDE (code-server) namespace --------------------------------------
+# Wire up only when enabled and only if the session store exposes a Mongo
+# database (the feature needs a real Mongo backend for the IdeStore).
+_web_ide_cfg = _config.agent.web_ide
+if _web_ide_cfg is not None and _web_ide_cfg.enabled:
+    _mongo_db = getattr(session_store, "_db", None)
+    if _mongo_db is None:
+        logging.warning(
+            "web_ide enabled but session store has no MongoDB backend; "
+            "IDE namespace will not be registered."
+        )
+    else:
+        try:
+            from meeseeks_api.ide import IdeManager, IdeStore
+            from meeseeks_api.ide_routes import ide_ns, init_ide
+
+            _ide_store = IdeStore(_mongo_db)
+            _ide_manager = IdeManager(_web_ide_cfg, _ide_store)
+            init_ide(_ide_manager, runtime, _require_api_key)
+            api.add_namespace(ide_ns, path="/api")
+            logging.info("web_ide namespace registered at /api")
+        except Exception as exc:  # pragma: no cover - startup fail-soft
+            logging.warning("web_ide namespace failed to initialize: {}", exc)
+            _ide_manager = None
+
+
 def _handle_slash_command(session_id: str, user_query: str) -> tuple[dict, int] | None:
     """Handle session slash commands like /terminate and /status."""
     command = parse_core_command(user_query)
@@ -331,14 +364,14 @@ def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | No
 
 
 def _resolve_project_cwd(request_data: dict[str, object]) -> str | None:
-    """Resolve a project name from the request to its filesystem path.
+    """Resolve a project from the request to its filesystem path.
 
-    Returns the project path as ``cwd``, or ``None`` if no project is specified.
-    Raises ``ValueError`` when a project name is given but not configured.
+    Handles both config projects (by name) and managed projects
+    (``managed:<project_id>``). Returns ``None`` if no project is specified.
+    Raises ``ValueError`` when a project identifier is given but invalid.
     """
     project_name = request_data.get("project")
     if not project_name or not isinstance(project_name, str):
-        # Also check inside context payload
         ctx = request_data.get("context")
         if isinstance(ctx, dict):
             project_name = ctx.get("project")
@@ -347,6 +380,18 @@ def _resolve_project_cwd(request_data: dict[str, object]) -> str | None:
     project_name = project_name.strip()
     if not project_name:
         return None
+
+    # Managed (virtual) project: "managed:<uuid>"
+    if project_name.startswith("managed:"):
+        vpid = project_name[len("managed:"):]
+        proj = project_store.get_project(vpid)
+        if proj is None:
+            raise ValueError(f"Managed project '{vpid}' not found.")
+        if not os.path.isdir(proj.path):
+            os.makedirs(proj.path, exist_ok=True)
+        return proj.path
+
+    # Config-defined project
     projects = get_config().projects
     project = projects.get(project_name)
     if project is None:
@@ -427,26 +472,113 @@ class Models(Resource):
 
 @ns.route("/projects")
 class Projects(Resource):
-    """List configured projects."""
+    """List all projects (config-defined + managed)."""
 
     @api.doc(security="apikey")
     def get(self) -> tuple[dict, int]:
-        """Return configured projects for the UI."""
+        """Return unified project list for the UI."""
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
-        projects = get_config().projects
-        result = [
+        # Config-defined projects
+        result: list[dict] = [
             {
                 "name": name,
                 "path": cfg.path,
                 "description": cfg.description,
                 "available": os.path.isdir(cfg.path),
+                "source": "config",
             }
-            for name, cfg in projects.items()
+            for name, cfg in get_config().projects.items()
             if cfg.path
         ]
+        # Managed (virtual) projects
+        for vp in project_store.list_projects():
+            result.append({
+                "name": vp.name,
+                "project_id": vp.project_id,
+                "path": vp.path,
+                "description": vp.description,
+                "available": os.path.isdir(vp.path),
+                "source": "managed",
+            })
         return {"projects": result}, 200
+
+
+def _vproject_to_dict(p: VirtualProject) -> dict:
+    return {
+        "project_id": p.project_id,
+        "name": p.name,
+        "description": p.description,
+        "path": p.path,
+        "path_source": p.path_source,
+        "folder_created": p.folder_created,
+        "created_at": p.created_at,
+        "updated_at": p.updated_at,
+    }
+
+
+@ns.route("/v_projects")
+class VirtualProjects(Resource):
+    """Create managed projects."""
+
+    @api.doc(security="apikey")
+    def post(self) -> tuple[dict, int]:
+        """Create a new managed project."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        payload = request.get_json(silent=True) or {}
+        name = payload.get("name", "").strip()
+        if not name:
+            return {"message": "Invalid input: 'name' is required"}, 400
+        description = payload.get("description", "").strip()
+        path = payload.get("path", "").strip() or None
+        proj = project_store.create_project(name=name, description=description, path=path)
+        return _vproject_to_dict(proj), 201
+
+
+@ns.route("/v_projects/<string:project_id>")
+class VirtualProject_(Resource):
+    """Get, update, or delete a single virtual project."""
+
+    @api.doc(security="apikey")
+    def get(self, project_id: str) -> tuple[dict, int]:
+        """Get a virtual project by ID."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        proj = project_store.get_project(project_id)
+        if proj is None:
+            return {"message": f"Project '{project_id}' not found"}, 404
+        return _vproject_to_dict(proj), 200
+
+    @api.doc(security="apikey")
+    def patch(self, project_id: str) -> tuple[dict, int]:
+        """Update name or description of a virtual project."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        payload = request.get_json(silent=True) or {}
+        name = payload.get("name")
+        description = payload.get("description")
+        try:
+            proj = project_store.update_project(project_id, name=name, description=description)
+        except KeyError:
+            return {"message": f"Project '{project_id}' not found"}, 404
+        return _vproject_to_dict(proj), 200
+
+    @api.doc(security="apikey")
+    def delete(self, project_id: str) -> tuple[dict, int]:
+        """Delete a virtual project."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        proj = project_store.get_project(project_id)
+        if proj is None:
+            return {"message": f"Project '{project_id}' not found"}, 404
+        project_store.delete_project(project_id)
+        return {}, 204
 
 
 @ns.route("/sessions")
@@ -535,9 +667,9 @@ class SessionQuery(Resource):
         # Skill activation: resolve from top-level "skill" field or context.skill.
         skill_instructions = _resolve_skill_instructions(request_data, user_query, context_payload)
 
-        # Resolve project → cwd
+        # Resolve project → cwd, falling back to a per-session temp dir
         try:
-            project_cwd = _resolve_project_cwd(request_data)
+            project_cwd = _resolve_project_cwd(request_data) or session_temp_dir(session_id)
         except ValueError as exc:
             return {"message": str(exc)}, 400
 
@@ -698,11 +830,14 @@ class SessionRecovery(Resource):
                 "message": "'action' must be 'retry' or 'continue'"
             }, 400
         from_ts: str | None = body.get("from_ts")
+        edited_text: str | None = body.get("edited_text")
+        model_override: str | None = body.get("model")
         if runtime.is_running(session_id):
             return {"message": "Session is already running."}, 409
         try:
             user_query = runtime.resolve_recovery_query(
-                session_id, action, from_ts=from_ts
+                session_id, action, from_ts=from_ts,
+                replacement_text=edited_text,
             )
         except ValueError as exc:
             return {"message": str(exc)}, 400
@@ -725,7 +860,9 @@ class SessionRecovery(Resource):
             project_cwd = _resolve_project_cwd({"context": last_context})
         except ValueError as exc:
             return {"message": str(exc)}, 400
-        model_name = str(last_context.get("model", "")) or None
+        model_name = model_override or str(last_context.get("model", "")) or None
+        if model_override:
+            runtime.append_context_event(session_id, {"model": model_override})
         budget = int(get_config_value("agent", "session_step_budget", default=0))
         max_iters = int(get_config_value("agent", "max_iters", default=30))
         started = runtime.start_async(
@@ -748,6 +885,59 @@ class SessionRecovery(Resource):
             "action": action,
             "accepted": True,
         }, 202
+
+
+@ns.route("/sessions/<string:session_id>/fork")
+class SessionFork(Resource):
+    """Fork a session, optionally from a specific message timestamp."""
+
+    @api.doc(security="apikey")
+    def post(self, session_id: str) -> tuple[dict, int]:
+        """Create a new session by forking from a point in this session."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        if runtime.is_running(session_id):
+            return {"message": "Cannot fork a running session."}, 409
+        body = request.get_json(silent=True) or {}
+        from_ts: str | None = body.get("from_ts")
+        model: str | None = body.get("model")
+        compact: bool = _parse_bool(body.get("compact"))
+        tag: str | None = body.get("tag")
+
+        store = runtime.session_store
+        try:
+            if from_ts:
+                new_session_id = store.fork_session_at(session_id, from_ts)
+            else:
+                new_session_id = store.fork_session(session_id)
+        except Exception as exc:
+            return {"message": f"Fork failed: {exc}"}, 400
+
+        if tag:
+            store.tag_session(new_session_id, tag)
+        # Record provenance + optional model override as a context event.
+        ctx: dict[str, object] = {"forked_from": session_id}
+        if from_ts:
+            ctx["forked_at"] = from_ts
+        if model:
+            ctx["model"] = model
+        runtime.append_context_event(new_session_id, ctx)
+
+        if compact:
+            import asyncio
+
+            try:
+                asyncio.run(store.compact_session(new_session_id, mode="partial"))
+            except Exception:
+                pass  # best-effort; fork succeeded even if compaction fails
+
+        notification_service.emit_session_created(new_session_id)
+        return {
+            "session_id": new_session_id,
+            "forked_from": session_id,
+            "forked_at": from_ts,
+        }, 201
 
 
 @ns.route("/sessions/<string:session_id>/plan/approve")
@@ -1038,6 +1228,90 @@ class SessionExport(Resource):
         }, 200
 
 
+def _resolve_session_cwd(session_id: str) -> str | None:
+    """Return the project filesystem path for a session, or None if unresolvable."""
+    events = runtime.session_store.load_transcript(session_id)
+    # Walk backwards to find the most recent context event that names a project.
+    project_name: str | None = None
+    for event in reversed(events):
+        if event.get("type") == "context":
+            payload = event.get("payload", {})
+            if isinstance(payload, dict) and payload.get("project"):
+                project_name = str(payload["project"])
+                break
+    if not project_name:
+        return None
+    try:
+        return _resolve_project_cwd({"project": project_name})
+    except ValueError:
+        return None
+
+
+@ns.route("/sessions/<string:session_id>/git-diff")
+class SessionGitDiff(Resource):
+    """Read-only git diff for a session's project."""
+
+    @api.doc(security="apikey")
+    def get(self, session_id: str) -> tuple[dict, int]:
+        """Return a unified diff for the session's project (scope: uncommitted|branch)."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        if session_id not in runtime.session_store.list_sessions():
+            return {"message": "Session not found."}, 404
+
+        scope = request.args.get("scope", "uncommitted")
+        if scope not in ("uncommitted", "branch"):
+            return {"message": "scope must be 'uncommitted' or 'branch'"}, 400
+
+        cwd = _resolve_session_cwd(session_id)
+        if not cwd:
+            return {"git_repo": False, "reason": "no_project"}, 200
+
+        # Check git presence
+        check = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+        )
+        if check.returncode != 0:
+            return {"git_repo": False, "reason": "not_git"}, 200
+
+        if scope == "uncommitted":
+            result = subprocess.run(
+                ["git", "-C", cwd, "diff", "HEAD"],
+                capture_output=True,
+                text=True,
+            )
+        else:
+            # Branch: diff since divergence from origin/main (fallback to origin/master)
+            merge_base = subprocess.run(
+                ["git", "-C", cwd, "merge-base", "HEAD", "origin/main"],
+                capture_output=True,
+                text=True,
+            )
+            if merge_base.returncode != 0:
+                merge_base = subprocess.run(
+                    ["git", "-C", cwd, "merge-base", "HEAD", "origin/master"],
+                    capture_output=True,
+                    text=True,
+                )
+            if merge_base.returncode != 0:
+                err = merge_base.stderr.strip()
+                return {"git_repo": False, "reason": "git_error", "error": err}, 200
+            base_commit = merge_base.stdout.strip()
+            result = subprocess.run(
+                ["git", "-C", cwd, "diff", f"{base_commit}...HEAD"],
+                capture_output=True,
+                text=True,
+            )
+
+        if result.returncode != 0:
+            return {"git_repo": False, "reason": "git_error", "error": result.stderr.strip()}, 200
+
+        return {"git_repo": True, "diff": result.stdout}, 200
+
+
 @ns.route("/share/<string:token>")
 class ShareLookup(Resource):
     """Resolve a share token to a session export."""
@@ -1131,7 +1405,14 @@ class Tools(Resource):
             proj = projects.get(project_name)
             if proj and proj.path:
                 project_cwd = proj.path
-        registry = load_registry(cwd=project_cwd)
+        # Include plugin MCP servers so they appear in the integrations list
+        from meeseeks_core.plugins import load_all_plugin_components
+
+        fan_out = load_all_plugin_components()
+        registry = load_registry(
+            cwd=project_cwd,
+            extra_mcp_servers=fan_out.mcp_servers or None,
+        )
         specs = registry.list_specs(include_disabled=True)
 
         # Determine scope: compare against global-only servers
@@ -1145,6 +1426,18 @@ class Tools(Resource):
         except Exception:
             pass
 
+        plugin_servers = set(fan_out.mcp_servers.keys())
+
+        def _tool_scope(spec: ToolSpec) -> str:
+            if spec.kind != "mcp":
+                return "global"
+            server = spec.metadata.get("server", "")
+            if server in plugin_servers:
+                return "plugin"
+            if server in global_servers:
+                return "global"
+            return "project"
+
         tools = [
             {
                 "tool_id": spec.tool_id,
@@ -1154,11 +1447,7 @@ class Tools(Resource):
                 "description": spec.description,
                 "disabled_reason": spec.metadata.get("disabled_reason"),
                 "server": spec.metadata.get("server"),
-                "scope": (
-                    "global"
-                    if spec.kind != "mcp" or spec.metadata.get("server") in global_servers
-                    else "project"
-                ),
+                "scope": _tool_scope(spec),
             }
             for spec in specs
         ]
@@ -1186,6 +1475,20 @@ class Skills(Resource):
                 project_cwd = proj.path
         registry = SkillRegistry()
         registry.load(project_cwd)
+
+        # Include plugin skills/commands so they appear in the skills list
+        from meeseeks_core.plugins import load_all_plugin_components
+
+        fan_out = load_all_plugin_components()
+        for pc in fan_out.components:
+            if pc.manifest is None:
+                continue
+            plugin_source = f"plugin:{pc.manifest.name}"
+            for sd in pc.skill_dirs:
+                registry.load_extra_dir(sd, source=plugin_source)
+            for cf in pc.command_files:
+                registry.load_command_file(cf, source=plugin_source)
+
         skills = [
             {
                 "name": s.name,
@@ -1249,9 +1552,9 @@ class MeeseeksQuery(Resource):
 
         allowed_tools = _extract_allowed_tools(context_payload)
 
-        # Resolve project → cwd
+        # Resolve project → cwd, falling back to a per-session temp dir
         try:
-            project_cwd = _resolve_project_cwd(request_data)
+            project_cwd = _resolve_project_cwd(request_data) or session_temp_dir(session_id)
         except ValueError as exc:
             return {"message": str(exc)}, 400
 
@@ -1408,6 +1711,110 @@ class ConfigResource(Resource):
         data = validated.model_dump()
         _strip_protected_values(data, protected)
         return {"config": data}, 200
+
+
+@ns.route("/plugins")
+class PluginList(Resource):
+    """List installed plugins and their components."""
+
+    @api.doc(security="apikey")
+    def get(self) -> tuple[dict, int]:
+        """List installed plugins and their components."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        from meeseeks_core.config import get_config
+        from meeseeks_core.plugins import discover_installed_plugins
+
+        cfg = get_config().plugins
+        plugins = discover_installed_plugins(registry_paths=cfg.resolve_registry_paths())
+        return {
+            "plugins": [
+                {
+                    "name": pc.manifest.name if pc.manifest else "unknown",
+                    "description": pc.manifest.description if pc.manifest else "",
+                    "version": pc.manifest.version if pc.manifest else "",
+                    "marketplace": pc.manifest.marketplace if pc.manifest else "",
+                    "scope": pc.manifest.scope if pc.manifest else "user",
+                    "skills": len(pc.skill_dirs),
+                    "agents": len(pc.agent_files),
+                    "commands": len(pc.command_files),
+                    "mcp_servers": len(pc.mcp_config or {}),
+                    "has_hooks": pc.hooks_config is not None,
+                }
+                for pc in plugins
+                if pc.manifest is not None
+            ]
+        }, 200
+
+
+@ns.route("/plugins/marketplace")
+class PluginMarketplace(Resource):
+    """List and install plugins from configured marketplaces."""
+
+    @api.doc(security="apikey")
+    def get(self) -> tuple[dict, int]:
+        """List available plugins from configured marketplaces."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        from meeseeks_core.config import get_config
+        from meeseeks_core.plugins import discover_marketplace_plugins
+
+        cfg = get_config().plugins
+        return {
+            "plugins": discover_marketplace_plugins(
+                marketplace_dirs=cfg.resolve_marketplace_dirs()
+            )
+        }, 200
+
+    @api.doc(security="apikey")
+    def post(self) -> tuple[dict, int]:
+        """Install a plugin from a marketplace."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        data = request.get_json(silent=True) or {}
+        name = data.get("name")
+        marketplace = data.get("marketplace")
+        if not name or not marketplace:
+            return {"error": "name and marketplace required"}, 400
+
+        from meeseeks_core.config import get_config
+        from meeseeks_core.plugins import install_plugin
+
+        cfg = get_config().plugins
+        try:
+            manifest = install_plugin(
+                name,
+                marketplace,
+                marketplace_dirs=cfg.resolve_marketplace_dirs(),
+                install_base=cfg.resolve_install_dir(),
+            )
+            return {"installed": manifest.name, "version": manifest.version}, 200
+        except ValueError as exc:
+            return {"error": str(exc)}, 400
+        except Exception as exc:
+            return {"error": str(exc)}, 500
+
+
+@ns.route("/plugins/<string:plugin_name>")
+class PluginDetail(Resource):
+    """Manage a specific installed plugin."""
+
+    @api.doc(security="apikey")
+    def delete(self, plugin_name: str) -> tuple[dict, int]:
+        """Uninstall a plugin."""
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        from meeseeks_core.config import get_config
+        from meeseeks_core.plugins import uninstall_plugin
+
+        cfg = get_config().plugins
+        if uninstall_plugin(plugin_name, install_base=cfg.resolve_install_dir()):
+            return {"uninstalled": plugin_name}, 200
+        return {"error": "Plugin not found"}, 404
 
 
 def main() -> None:

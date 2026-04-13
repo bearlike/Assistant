@@ -177,6 +177,37 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         continue;
       }
 
+      // File edit tools without a structured diff result (typically failed
+      // edits where result is null). Synthesize a diff from tool_input so
+      // they render as DiffCard instead of a generic fallback.
+      if (/edit|write|patch/i.test(toolId) && parsedResult.kind === "raw") {
+        const inp = payload.tool_input as Record<string, unknown> | undefined;
+        const filePath = typeof inp?.file_path === "string" ? inp.file_path : "";
+        if (filePath) {
+          const oldStr = typeof inp?.old_string === "string" ? inp.old_string : "";
+          const newStr = typeof inp?.new_string === "string" ? inp.new_string : "";
+          let diffText = "";
+          if (oldStr || newStr) {
+            const oldLines = oldStr ? oldStr.split("\n").map((l: string) => `-${l}`).join("\n") : "";
+            const newLines = newStr ? newStr.split("\n").map((l: string) => `+${l}`).join("\n") : "";
+            diffText = `--- ${filePath}\n+++ ${filePath}\n@@ edit @@\n${[oldLines, newLines].filter(Boolean).join("\n")}`;
+          }
+          const errorMsg = typeof payload.error === "string" ? payload.error : "";
+          logs.push({
+            id: `diff-${idx++}`,
+            type: "diff",
+            content: "",
+            timestamp: event.ts,
+            diffTitle: errorMsg ? `${filePath} — ${errorMsg}` : filePath,
+            diffText: diffText || `(no diff available)`,
+            diffSuccess: success,
+            agentId: eventAgentId,
+            model: eventModel,
+          });
+          continue;
+        }
+      }
+
       // Try to parse structured shell result
       let shellData: {
         command?: string; cwd?: string; exit_code?: number;
@@ -287,6 +318,21 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         type: "system",
         content: String(event.payload?.notes ?? "Step reflection updated."),
         timestamp: event.ts
+      });
+    }
+    if (event.type === "context_compacted") {
+      const p = event.payload || {};
+      const saved = typeof p.tokens_saved === "number" ? p.tokens_saved : 0;
+      const mode = typeof p.mode === "string" ? p.mode : "auto";
+      const agentId = typeof p.agent_id === "string" ? p.agent_id : undefined;
+      const label = agentId
+        ? `Agent [${agentId.slice(0, 8)}] context compacted (${mode})`
+        : `Context compacted (${mode})`;
+      logs.push({
+        id: `compact-${idx++}`,
+        type: "system",
+        content: saved > 0 ? `${label} — ${saved.toLocaleString()} tokens freed` : label,
+        timestamp: event.ts,
       });
     }
     if (event.type === "completion") {

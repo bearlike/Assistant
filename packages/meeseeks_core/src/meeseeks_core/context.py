@@ -171,7 +171,8 @@ class ContextBuilder:
         recent_limit = int(get_config_value("context", "recent_event_limit", default=8))
         recent_events = context_events[-recent_limit:] if recent_limit > 0 else []
         candidate_events = context_events[:-recent_limit] if recent_limit > 0 else context_events
-        budget = get_token_budget(events, summary, model_name)
+        overhead = int(get_config_value("token_budget", "overhead_estimate", default=25000))
+        budget = get_token_budget(events, summary, model_name, overhead_tokens=overhead)
         selected_events: list[EventRecord] | None = None
         selection_threshold = float(get_config_value("context", "selection_threshold", default=0.8))
         if (

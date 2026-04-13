@@ -188,3 +188,7 @@ docker/init.d/*
 !docker/init.d/10-git-setup.sh
 /.claude/settings.json
 /.playwright-mcp
+
+# meeseeks_console build cache + runtime session state
+apps/meeseeks_console/.vite/
+apps/meeseeks_console/data/

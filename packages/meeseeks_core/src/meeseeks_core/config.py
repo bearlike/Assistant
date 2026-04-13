@@ -133,6 +133,12 @@ class RuntimeConfig(BaseModel):
         description="Directory for large tool result exports. Empty to disable.",
         examples=["/tmp/meeseeks-results"],
     )
+    projects_home: str = Field(
+        "",
+        description="Directory for virtual project folders. Defaults to $MEESEEKS_HOME/projects.",
+        examples=["~/.meeseeks/projects"],
+        json_schema_extra={"x-protected": True},
+    )
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -154,6 +160,14 @@ class RuntimeConfig(BaseModel):
             "config_dir": str(home),
         }
         return defaults.get(info.field_name or "", str(home))
+
+    @field_validator("projects_home", mode="before")
+    @classmethod
+    def _normalize_projects_home(cls, value: Any) -> str:
+        raw = str(value).strip() if value is not None else ""
+        if raw:
+            return str(Path(raw).expanduser())
+        return str(resolve_meeseeks_home() / "projects")
 
     @field_validator("preflight_enabled", mode="before")
     @classmethod
@@ -219,6 +233,17 @@ class LLMConfig(BaseModel):
         ),
         examples=[["gpt-5.4", "gemini-2.5-pro"]],
     )
+    proxy_model_prefix: str = Field(
+        "openai",
+        description=(
+            "LiteLLM provider prefix prepended to model names when api_base is set. "
+            "LiteLLM strips this prefix before forwarding the model name to the proxy, "
+            "so the proxy receives the model ID it advertises in /v1/models. "
+            "Leave as 'openai' for LiteLLM proxy, Bifrost, and OpenRouter. "
+            "Only relevant when api_base is configured."
+        ),
+        examples=["openai", "azure", "vertex_ai"],
+    )
     reasoning_effort: str = Field(
         "",
         description=(
@@ -229,6 +254,15 @@ class LLMConfig(BaseModel):
     reasoning_effort_models: list[str] = Field(
         default_factory=list,
         description="Model name patterns that support the reasoning_effort parameter.",
+    )
+    structured_patch_models: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Model IDs (or glob prefixes ending in '*') that prefer the "
+            "structured_patch edit tool over search_replace_block. "
+            "Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; "
+            "only set this to override or extend."
+        ),
     )
 
     @field_validator("reasoning_effort", mode="before")
@@ -245,6 +279,17 @@ class LLMConfig(BaseModel):
     @classmethod
     def _normalize_reasoning_effort_models(cls, value: Any) -> list[str]:
         return [entry.lower() for entry in _coerce_list(value)]
+
+    @field_validator("structured_patch_models", mode="before")
+    @classmethod
+    def _normalize_structured_patch_models(cls, value: Any) -> list[str]:
+        return [entry.lower() for entry in _coerce_list(value)]
+
+    @field_validator("proxy_model_prefix", mode="before")
+    @classmethod
+    def _normalize_proxy_model_prefix(cls, value: Any) -> str:
+        normalized = str(value).strip().strip("/") if value is not None else ""
+        return normalized or "openai"
 
     def _resolve_api_base(self) -> str | None:
         base = self.api_base.strip()
@@ -391,6 +436,15 @@ class TokenBudgetConfig(BaseModel):
         ),
         examples=[0.8],
     )
+    overhead_estimate: int = Field(
+        25000,
+        description=(
+            "Estimated token overhead for system prompt and tool schemas. "
+            "Used by the orchestrator's coarse budget check when exact "
+            "tool schemas are not available."
+        ),
+        examples=[25000],
+    )
     model_context_windows: dict[str, int] = Field(
         default_factory=dict,
         description=(
@@ -415,6 +469,15 @@ class TokenBudgetConfig(BaseModel):
         except (TypeError, ValueError):
             return 0.8
         return min(max(parsed, 0.0), 1.0)
+
+    @field_validator("overhead_estimate", mode="before")
+    @classmethod
+    def _normalize_overhead_estimate(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 25000
+        return max(parsed, 0)
 
     @field_validator("model_context_windows", mode="before")
     @classmethod
@@ -703,6 +766,103 @@ class HooksConfig(BaseModel):
     )
 
 
+class PluginsConfig(BaseModel):
+    """Plugin system configuration."""
+
+    model_config = ConfigDict(validate_default=True)
+
+    enabled: bool = Field(True, description="Enable the plugin system.")
+    enabled_plugins: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Plugin names to enable. Empty = all installed plugins. "
+            "Format: 'plugin-name' or 'plugin-name@marketplace'."
+        ),
+    )
+    marketplaces: list[str] = Field(
+        default_factory=lambda: ["anthropics/claude-plugins-official"],
+        description="GitHub repos containing marketplace.json plugin indexes.",
+    )
+    install_path: str = Field(
+        "",
+        description=(
+            "Override install path for Meeseeks-managed plugins. "
+            "Defaults to $MEESEEKS_HOME/plugins/ (via resolve_meeseeks_home)."
+        ),
+    )
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _normalize_enabled(cls, value: Any) -> bool:
+        return _coerce_bool(value, default=True)
+
+    @field_validator("enabled_plugins", "marketplaces", mode="before")
+    @classmethod
+    def _normalize_string_lists(cls, value: Any) -> list[str]:
+        return _coerce_list(value)
+
+    @field_validator("install_path", mode="before")
+    @classmethod
+    def _normalize_install_path(cls, value: Any) -> str:
+        raw = str(value).strip() if value else ""
+        if raw:
+            return str(Path(raw).expanduser().resolve())
+        return ""
+
+    def resolve_install_dir(self) -> Path:
+        """Uses install_path if set, otherwise resolve_meeseeks_home() / 'plugins'."""
+        if self.install_path:
+            return Path(self.install_path)
+        return resolve_meeseeks_home() / "plugins"
+
+    def resolve_registry_paths(self) -> list[Path]:
+        """Paths to search for installed_plugins.json: CC cache + our own."""
+        paths = [
+            Path.home() / ".claude" / "plugins" / "installed_plugins.json",
+            self.resolve_install_dir() / "installed_plugins.json",
+        ]
+        return [p for p in paths if p.parent.is_dir()]
+
+    def resolve_marketplace_dirs(self, *, sync: bool = True) -> list[Path]:
+        """Paths to search for marketplace.json caches.
+
+        Scans both Claude Code's and our own marketplace directories.
+        When *sync* is True and ``self.marketplaces`` lists repos that aren't
+        yet cloned locally, ``sync_marketplaces`` clones them first.
+        """
+        dirs: list[Path] = []
+        # 1. Check Claude Code's cache (read-only)
+        cc_base = Path.home() / ".claude" / "plugins" / "marketplaces"
+        if cc_base.is_dir():
+            dirs.extend(sorted(d for d in cc_base.iterdir() if d.is_dir()))
+
+        # 2. Check our own cache
+        own_base = self.resolve_install_dir() / "marketplaces"
+        if own_base.is_dir():
+            dirs.extend(sorted(d for d in own_base.iterdir() if d.is_dir()))
+
+        # 3. If nothing found and we have marketplace repos configured, sync them
+        if sync and not dirs and self.marketplaces:
+            from meeseeks_core.plugins import sync_marketplaces
+
+            synced = sync_marketplaces(self.marketplaces, self.resolve_install_dir())
+            dirs.extend(synced)
+        elif sync and self.marketplaces:
+            # Even with existing dirs, ensure all configured repos are cloned
+            existing_names = {d.name for d in dirs}
+            missing = [
+                r for r in self.marketplaces
+                if (r.split("/")[-1] if "/" in r else r) not in existing_names
+            ]
+            if missing:
+                from meeseeks_core.plugins import sync_marketplaces
+
+                synced = sync_marketplaces(missing, self.resolve_install_dir())
+                dirs.extend(synced)
+
+        return dirs
+
+
 class ProjectConfig(BaseModel):
     """A project directory exposed to the REST API for session scoping."""
 
@@ -722,6 +882,38 @@ class ProjectConfig(BaseModel):
 
 def _projects_config_default() -> dict[str, ProjectConfig]:
     return {}
+
+
+class WebIdeConfig(BaseModel):
+    """Config for the per-session code-server "Open in Web IDE" feature."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    image: str = "codercom/code-server:latest"
+    default_lifetime_hours: int = Field(default=1, ge=1, le=24)
+    max_lifetime_hours: int = Field(default=8, ge=1, le=168)
+    cpus: float = Field(default=1.0, ge=0.1, le=16.0)
+    memory: str = Field(default="1g", pattern=r"^\d+[mgMG]$")
+    pids_limit: int = Field(default=512, ge=64, le=4096)
+    network: str = Field(default="meeseeks-ide", pattern=r"^[a-zA-Z0-9_-]+$")
+    state_dir: str = Field(default="/tmp/meeseeks-ide")
+
+
+class LSPConfig(BaseModel):
+    """Language Server Protocol integration settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(True, description="Enable native LSP tool.")
+    servers: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description=(
+            "Override or extend built-in server definitions. "
+            "Set {\"pyright\": {\"disabled\": true}} to disable a built-in, "
+            "or add custom servers with command/extensions/root_markers."
+        ),
+    )
 
 
 class AgentConfig(BaseModel):
@@ -788,13 +980,14 @@ class AgentConfig(BaseModel):
         description="Tool IDs denied to all sub-agents by default (e.g. spawn_agent).",
     )
     edit_tool: str = Field(
-        "search_replace_block",
+        "",
         description=(
-            "File editing mechanism: 'search_replace_block' (Aider-style "
+            "File editing mechanism override: 'search_replace_block' (Aider-style "
             "SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact "
-            "string replacement)."
+            "string replacement). Leave empty (default) to auto-select based on "
+            "the active model via llm.structured_patch_models."
         ),
-        examples=["search_replace_block", "structured_patch"],
+        examples=["", "search_replace_block", "structured_patch"],
     )
     plan_mode_shell_allowlist: list[str] = Field(
         default_factory=lambda: [
@@ -829,16 +1022,24 @@ class AgentConfig(BaseModel):
             "tools in plan mode regardless of their read-only status."
         ),
     )
+    web_ide: WebIdeConfig | None = Field(
+        default=None,
+        description="Optional 'Open in Web IDE' feature config (code-server containers).",
+    )
+    lsp: LSPConfig = Field(
+        default_factory=lambda: LSPConfig.model_validate({}),
+        description="Language Server Protocol integration settings.",
+    )
 
     @field_validator("edit_tool", mode="before")
     @classmethod
     def _normalize_edit_tool(cls, value: Any) -> str:
         if value is None:
-            return "search_replace_block"
+            return ""
         normalized = str(value).strip().lower()
-        if normalized in {"search_replace_block", "structured_patch"}:
+        if normalized in {"", "search_replace_block", "structured_patch"}:
             return normalized
-        return "search_replace_block"
+        return ""
 
     @field_validator("enabled", mode="before")
     @classmethod
@@ -1013,6 +1214,10 @@ def _hooks_config_default() -> HooksConfig:
     return HooksConfig.model_validate({})
 
 
+def _plugins_config_default() -> PluginsConfig:
+    return PluginsConfig.model_validate({})
+
+
 class AppConfig(BaseModel):
     """Typed configuration for the Meeseeks runtime."""
 
@@ -1070,6 +1275,10 @@ class AppConfig(BaseModel):
     hooks: HooksConfig = Field(
         default_factory=_hooks_config_default,
         description="External hooks fired during the session lifecycle (command or http).",
+    )
+    plugins: PluginsConfig = Field(
+        default_factory=_plugins_config_default,
+        description="Plugin system configuration.",
     )
     channels: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
@@ -1406,6 +1615,7 @@ def _example_app_payload() -> dict[str, Any]:
     payload["runtime"]["config_dir"] = ""
     # Sensible placeholders for the LLM section
     payload["llm"]["api_base"] = ""
+    payload["llm"]["proxy_model_prefix"] = "openai"
     payload["llm"]["api_key"] = "sk-ant-xxxxxxxx"
     payload["llm"]["default_model"] = "anthropic/claude-sonnet-4-6"
     # Placeholder credentials for optional integrations
@@ -1532,15 +1742,24 @@ def _discover_cwd_mcp_json(cwd: str | None = None) -> dict[str, Any] | None:
     return raw
 
 
-def get_merged_mcp_config(cwd: str | None = None) -> dict[str, Any]:
-    """Load and merge MCP configs: global + subtree + CWD ``.mcp.json``.
+def get_merged_mcp_config(
+    cwd: str | None = None,
+    *,
+    extra_servers: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Load and merge MCP configs: plugin extras + global + subtree + CWD ``.mcp.json``.
 
-    Priority (lowest → highest): global < subtree (deep→shallow) < CWD.
+    Priority (lowest → highest): extra_servers < global < subtree (deep→shallow) < CWD.
     Returns the merged config dict with a ``servers`` key.
     When MCP is disabled (via ``set_mcp_config_path(None)``), returns ``{}``.
     """
     if _MCP_CONFIG_DISABLED:
         return {}
+
+    # 0. Plugin MCP servers (lowest priority — user/project configs override)
+    merged: dict[str, Any] = {}
+    if extra_servers:
+        merged = {"servers": dict(extra_servers)}
 
     # 1. Load global config
     global_config: dict[str, Any] = {}
@@ -1561,8 +1780,8 @@ def get_merged_mcp_config(cwd: str | None = None) -> dict[str, Any]:
     # 3. Discover CWD .mcp.json
     cwd_config = _discover_cwd_mcp_json(cwd)
 
-    # 4. Merge: global ← subtree (deep→shallow) ← CWD
-    merged = dict(global_config)
+    # 4. Merge: extra_servers ← global ← subtree (deep→shallow) ← CWD
+    merged = _deep_merge(merged, global_config)
     for sub_cfg in subtree_configs:
         merged = _deep_merge(merged, sub_cfg)
     if cwd_config:

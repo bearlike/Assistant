@@ -1,15 +1,17 @@
 import { X, Maximize2, Minimize2 } from 'lucide-react';
-import { DiffView } from './DiffView';
+import { ReviewPane } from './ReviewPane';
 import { LogsView } from './LogsView';
-import { EventRecord } from '../types';
+import { DiffFile, EventRecord, TurnMeta } from '../types';
 import { cn } from '../utils/cn';
+import { Button } from './ui/Button';
 interface WorkspacePanelProps {
   onClose: () => void;
   activeTab: 'diff' | 'logs';
   onTabChange: (tab: 'diff' | 'logs') => void;
   events: EventRecord[];
-  diffContent?: string;
-  filename?: string;
+  sessionId: string;
+  selectedTurn: TurnMeta | null;
+  sessionFiles: DiffFile[];
   onRetry?: () => void;
   onContinue?: () => void;
   isMaximized?: boolean;
@@ -20,8 +22,9 @@ export function WorkspacePanel({
   activeTab,
   onTabChange,
   events,
-  diffContent,
-  filename,
+  sessionId,
+  selectedTurn,
+  sessionFiles,
   onRetry,
   onContinue,
   isMaximized,
@@ -29,10 +32,10 @@ export function WorkspacePanel({
 }: WorkspacePanelProps) {
   return (
     <div className={cn(
-      "flex flex-col h-full bg-[hsl(var(--background))]",
+      "flex flex-col h-full bg-[hsl(var(--surface))]",
       !isMaximized && "border-l border-[hsl(var(--border-strong))]"
     )}>
-      <div className="flex items-center justify-between px-4 h-10 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]">
+      <div className="flex items-center justify-between px-4 h-10 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--surface))]">
         <div className="flex gap-6 h-full">
           <button
             onClick={() => onTabChange('diff')}
@@ -47,23 +50,30 @@ export function WorkspacePanel({
             Logs
           </button>
         </div>
-        <div className="flex items-center gap-3 text-[hsl(var(--muted-foreground))]">
+        <div className="flex items-center gap-1 text-[hsl(var(--muted-foreground))]">
           {onToggleMaximize && (
-            <button onClick={onToggleMaximize} aria-label={isMaximized ? "Minimize panel" : "Maximize panel"} className="hover:text-[hsl(var(--foreground))] transition-colors">
+            <Button
+              variant="ghost"
+              size="sm"
+              iconOnly
+              onClick={onToggleMaximize}
+              aria-label={isMaximized ? "Minimize panel" : "Maximize panel"}>
               {isMaximized ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
+            iconOnly
             onClick={onClose}
-            aria-label="Close panel"
-            className="hover:text-[hsl(var(--foreground))] transition-colors">
+            aria-label="Close panel">
             <X className="w-4 h-4" />
-          </button>
+          </Button>
         </div>
       </div>
       <div className="flex-1 overflow-hidden">
         {activeTab === 'diff' ?
-        <DiffView diffContent={diffContent} filename={filename} /> :
+        <ReviewPane sessionId={sessionId} selectedTurn={selectedTurn} sessionFiles={sessionFiles} /> :
 
         <LogsView events={events} onRetry={onRetry} onContinue={onContinue} />
         }

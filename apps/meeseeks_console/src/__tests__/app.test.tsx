@@ -31,7 +31,12 @@ vi.mock("../api/client", () => ({
   patchConfig: vi.fn(),
   approvePlan: vi.fn(),
   recoverSession: vi.fn(),
-  fetchPlanMarkdown: vi.fn()
+  forkSession: vi.fn().mockResolvedValue({ session_id: 'fork-1', forked_from: 's1', forked_at: null }),
+  fetchPlanMarkdown: vi.fn(),
+  listPlugins: vi.fn().mockResolvedValue([]),
+  listMarketplacePlugins: vi.fn().mockResolvedValue([]),
+  installPlugin: vi.fn().mockResolvedValue(undefined),
+  uninstallPlugin: vi.fn().mockResolvedValue(undefined),
 }));
 const listSessions = vi.mocked(client.listSessions);
 const createSession = vi.mocked(client.createSession);

@@ -75,13 +75,30 @@
     "allowed_models": [],
     "sub_agent_max_steps": 10,
     "default_denied_tools": [],
-    "edit_tool": "search_replace_block"
+    "edit_tool": "search_replace_block",
+    "web_ide": {
+      "enabled": false,
+      "image": "codercom/code-server:latest",
+      "default_lifetime_hours": 1,
+      "max_lifetime_hours": 8,
+      "cpus": 1.0,
+      "memory": "1g",
+      "pids_limit": 512,
+      "network": "meeseeks-ide",
+      "state_dir": "/tmp/meeseeks-ide"
+    }
   },
   "hooks": {
     "pre_tool_use": [],
     "post_tool_use": [],
     "on_session_start": [],
     "on_session_end": []
+  },
+  "plugins": {
+    "enabled": true,
+    "enabled_plugins": [],
+    "marketplaces": ["anthropics/claude-plugins-official"],
+    "install_path": ""
   },
   "channels": {
     "nextcloud-talk": {

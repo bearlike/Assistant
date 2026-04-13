@@ -251,6 +251,66 @@ def test_resolve_recovery_query_rejects_session_with_no_user_message(tmp_path):
         runtime.resolve_recovery_query(session_id, "retry")
 
 
+def test_resolve_session_fork_at_ts(tmp_path):
+    """``fork_at_ts`` creates a session with only events up to the cutoff."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    source = runtime.resolve_session()
+    store.append_event(source, {"type": "user", "payload": {"text": "q1"}})
+    store.append_event(source, {"type": "assistant", "payload": {"text": "a1"}})
+    store.append_event(source, {"type": "user", "payload": {"text": "q2"}})
+    events = store.load_transcript(source)
+    cutoff = events[1]["ts"]  # after first assistant response
+
+    forked = runtime.resolve_session(fork_from=source, fork_at_ts=cutoff)
+    assert forked != source
+    forked_events = store.load_transcript(forked)
+    assert len(forked_events) == 2
+    assert forked_events[-1]["payload"]["text"] == "a1"
+
+
+def test_resolve_session_fork_at_ts_ignored_without_fork_from(tmp_path):
+    """``fork_at_ts`` without ``fork_from`` creates a fresh session."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session = runtime.resolve_session(fork_at_ts="2099-01-01T00:00:00+00:00")
+    assert store.load_transcript(session) == []
+
+
+def test_resolve_recovery_query_with_replacement_text(tmp_path):
+    """``replacement_text`` overrides the original user message on retry."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "original"}})
+    store.append_event(
+        session_id,
+        {"type": "completion", "payload": {"done": True, "done_reason": "error",
+                                            "task_result": None, "error": "fail"}},
+    )
+
+    query = runtime.resolve_recovery_query(
+        session_id, "retry", replacement_text="edited prompt"
+    )
+    assert query == "edited prompt"
+    # Transcript should be truncated (original user message removed)
+    transcript = store.load_transcript(session_id)
+    assert not any(e["type"] == "user" for e in transcript)
+
+
+def test_resolve_recovery_query_replacement_text_on_empty_original(tmp_path):
+    """``replacement_text`` works even when the original message was empty."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": ""}})
+
+    query = runtime.resolve_recovery_query(
+        session_id, "retry", replacement_text="fixed prompt"
+    )
+    assert query == "fixed prompt"
+
+
 def test_resolve_recovery_query_refuses_running_session(tmp_path):
     """Attempting recovery on a running session raises RuntimeError."""
     store = SessionStore(root_dir=str(tmp_path))

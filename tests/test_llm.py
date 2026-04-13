@@ -4,7 +4,7 @@ import sys
 import types
 
 from meeseeks_core import llm as llm_module
-from meeseeks_core.config import set_config_override
+from meeseeks_core.config import LLMConfig, set_config_override
 from meeseeks_core.llm import (
     build_chat_model,
     model_supports_reasoning_effort,
@@ -218,6 +218,75 @@ def test_model_supports_reasoning_effort_o3():
     assert model_supports_reasoning_effort("o3-mini") is True
 
 
-def test_resolve_litellm_model_keeps_prefixed_name():
-    """Avoid prefixing models that already include a provider."""
-    assert llm_module._resolve_litellm_model("openai/gpt-4o", "http://host/v1") == "openai/gpt-4o"
+def test_resolve_litellm_model_proxy_prepends_configured_prefix():
+    """Prepend the configured proxy prefix when routing through a proxy.
+
+    LiteLLM strips exactly the leading 'prefix/' before sending the model
+    name in the HTTP request, so the proxy receives its own model ID intact.
+    """
+    base = "http://host/v1"
+    # Default openai prefix
+    assert llm_module._resolve_litellm_model("z-ai/glm-5", base, "openai") == (
+        "openai/z-ai/glm-5"
+    )
+    assert llm_module._resolve_litellm_model("gpt-4o", base, "openai") == "openai/gpt-4o"
+    # Idempotent when already prefixed
+    assert llm_module._resolve_litellm_model("openai/claude-sonnet-4-6", base, "openai") == (
+        "openai/claude-sonnet-4-6"
+    )
+    # Custom prefix (e.g. azure)
+    assert llm_module._resolve_litellm_model("gpt-4o", base, "azure") == "azure/gpt-4o"
+    assert llm_module._resolve_litellm_model("azure/gpt-4o", base, "azure") == "azure/gpt-4o"
+    # No proxy: pass through unchanged regardless of prefix
+    assert llm_module._resolve_litellm_model("z-ai/glm-5", None, "openai") == "z-ai/glm-5"
+    assert llm_module._resolve_litellm_model("anthropic/claude-3-5-sonnet", None, "openai") == (
+        "anthropic/claude-3-5-sonnet"
+    )
+
+
+def test_build_chat_model_reads_proxy_prefix_from_config(monkeypatch):
+    """build_chat_model reads proxy_model_prefix from config."""
+    set_config_override(
+        {
+            "llm": {
+                "api_base": "https://proxy.example/v1",
+                "api_key": "sk-test",
+                "proxy_model_prefix": "azure",
+                "reasoning_effort": "",
+                "reasoning_effort_models": [],
+            }
+        }
+    )
+    captured: dict[str, object] = {}
+
+    class DummyChatLiteLLM:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    module = types.ModuleType("langchain_litellm")
+    module.ChatLiteLLM = DummyChatLiteLLM
+    monkeypatch.setitem(sys.modules, "langchain_litellm", module)
+
+    build_chat_model(model_name="gpt-4o")
+    assert captured["model"] == "azure/gpt-4o"
+
+
+def test_llm_config_proxy_model_prefix_default():
+    """proxy_model_prefix defaults to 'openai'."""
+    cfg = LLMConfig()
+    assert cfg.proxy_model_prefix == "openai"
+
+
+def test_llm_config_proxy_model_prefix_strips_slash():
+    """Trailing/leading slashes are stripped from proxy_model_prefix."""
+    cfg = LLMConfig(proxy_model_prefix="openai/")
+    assert cfg.proxy_model_prefix == "openai"
+    cfg2 = LLMConfig(proxy_model_prefix="/azure/")
+    assert cfg2.proxy_model_prefix == "azure"
+
+
+def test_llm_config_proxy_model_prefix_empty_falls_back_to_default():
+    """Empty or whitespace proxy_model_prefix falls back to 'openai'."""
+    assert LLMConfig(proxy_model_prefix="").proxy_model_prefix == "openai"
+    assert LLMConfig(proxy_model_prefix="   ").proxy_model_prefix == "openai"
+    assert LLMConfig(proxy_model_prefix="///").proxy_model_prefix == "openai"

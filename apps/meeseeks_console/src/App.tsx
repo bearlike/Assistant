@@ -10,6 +10,9 @@ import { AppLayout } from './components/AppLayout';
 import { HomeView } from './components/HomeView';
 import { SessionDetailView } from './components/SessionDetailView';
 const SettingsView = lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
+const PluginsView = lazy(() => import('./components/PluginsView'));
+const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })));
+const IdeLoader = lazy(() => import('./components/IdeLoader'));
 import {
   createShare,
   exportSession,
@@ -22,9 +25,25 @@ import { AttachmentPayload, QueryMode, SessionContext } from './types';
 import { logApiError } from './utils/errors';
 import { useNotifications } from './hooks/useNotifications';
 const SESSION_PATH_PREFIX = '/s/';
+const IDE_LOADER_PATH_PREFIX = '/ide-loader/';
 function parseRoute(pathname: string) {
   if (pathname === '/settings') {
     return { view: 'settings' as const, sessionId: null };
+  }
+  if (pathname === '/plugins') {
+    return { view: 'plugins' as const, sessionId: null };
+  }
+  if (pathname === '/projects') {
+    return { view: 'projects' as const, sessionId: null };
+  }
+  if (pathname.startsWith(IDE_LOADER_PATH_PREFIX)) {
+    const rawId = pathname.slice(IDE_LOADER_PATH_PREFIX.length).replace(/\/$/, '');
+    if (rawId) {
+      return {
+        view: 'ide-loader' as const,
+        sessionId: decodeURIComponent(rawId)
+      };
+    }
   }
   if (pathname.startsWith(SESSION_PATH_PREFIX)) {
     const rawId = pathname.slice(SESSION_PATH_PREFIX.length);
@@ -47,7 +66,7 @@ function pushRoute(path: string) {
 }
 export function App() {
   const initialRoute = useMemo(() => parseRoute(window.location.pathname), []);
-  const [activeView, setActiveView] = useState<'home' | 'detail' | 'settings'>(
+  const [activeView, setActiveView] = useState<'home' | 'detail' | 'settings' | 'plugins' | 'projects' | 'ide-loader'>(
     initialRoute.view
   );
   const [activeSessionId, setActiveSessionId] = useState<string | null>(
@@ -177,6 +196,18 @@ export function App() {
     setActionError(null);
     pushRoute('/settings');
   };
+  const handlePluginsClick = () => {
+    setActiveView('plugins');
+    setActiveSessionId(null);
+    setActionError(null);
+    pushRoute('/plugins');
+  };
+  const handleProjectsClick = () => {
+    setActiveView('projects');
+    setActiveSessionId(null);
+    setActionError(null);
+    pushRoute('/projects');
+  };
   const handleShareSession = useCallback(async (sessionId: string) => {
     try {
       const record = await createShare(sessionId);
@@ -213,6 +244,12 @@ export function App() {
   useEffect(() => {
     if (activeView === 'settings') {
       document.title = 'Meeseeks | Settings';
+    } else if (activeView === 'plugins') {
+      document.title = 'Meeseeks | Plugins';
+    } else if (activeView === 'projects') {
+      document.title = 'Meeseeks | Projects';
+    } else if (activeView === 'ide-loader') {
+      document.title = 'Meeseeks | Opening Web IDE';
     } else if (activeView === 'home') {
       document.title = 'Meeseeks';
     } else {
@@ -220,9 +257,20 @@ export function App() {
       document.title = title ? `Meeseeks | ${title}` : 'Meeseeks | Session';
     }
   }, [activeView, activeSession]);
+
+  // The IDE loader is a standalone full-screen page with no chrome — render
+  // it outside the AppLayout so it can't be mistaken for a session view.
+  if (activeView === 'ide-loader' && activeSessionId) {
+    return (
+      <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><span className="text-sm text-[hsl(var(--muted-foreground))]">Loading…</span></div>}>
+        <IdeLoader sessionId={activeSessionId} />
+      </Suspense>
+    );
+  }
+
   return (
     <AppLayout
-      mode={activeView === 'settings' ? 'home' : activeView}
+      mode={activeView === 'settings' || activeView === 'plugins' || activeView === 'projects' ? 'home' : activeView === 'ide-loader' ? 'home' : activeView}
       session={activeSession}
       onBack={handleBack}
       theme={theme}
@@ -237,10 +285,20 @@ export function App() {
       onShareSession={handleShareSession}
       onExportSession={handleExportSession}
       onSettingsClick={handleSettingsClick}
+      onPluginsClick={handlePluginsClick}
+      onProjectsClick={handleProjectsClick}
       langfuseUrl={langfuseBaseUrl && activeSessionId ? `${langfuseBaseUrl}/${activeSessionId}` : null}>
       {activeView === 'settings' ?
       <Suspense fallback={<div className="flex-1 flex items-center justify-center"><span className="text-sm text-[hsl(var(--muted-foreground))]">Loading…</span></div>}>
           <SettingsView />
+        </Suspense> :
+      activeView === 'plugins' ?
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center"><span className="text-sm text-[hsl(var(--muted-foreground))]">Loading…</span></div>}>
+          <PluginsView />
+        </Suspense> :
+      activeView === 'projects' ?
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center"><span className="text-sm text-[hsl(var(--muted-foreground))]">Loading…</span></div>}>
+          <ProjectsView />
         </Suspense> :
       activeView === 'home' ?
       <div className="flex-1 overflow-y-auto">
@@ -264,7 +322,7 @@ export function App() {
 
       <>
           {activeSession ?
-        <SessionDetailView session={activeSession} onTitleUpdate={applyTitle} onSessionChange={refresh} /> :
+        <SessionDetailView session={activeSession} onTitleUpdate={applyTitle} onSessionChange={refresh} onSelectSession={handleSessionSelect} /> :
 
         <div className="flex-1 overflow-y-auto p-6">
               {loading ?

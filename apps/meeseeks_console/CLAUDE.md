@@ -38,6 +38,7 @@ All dropdown popups use `<Popover>` from `components/Popover.tsx`. Do not duplic
 - `useMcpTools(project?)` — re-fetches when project changes
 - `useSkills(project?)` — re-fetches when project changes
 - `useProjects()` — no project scope (global list)
+- `useWebIdeEnabled()` — checks if Web IDE feature is available
 - All hooks expose `refresh()` for manual cache invalidation.
 
 ### TTL cache in `api/client.ts`
@@ -62,6 +63,18 @@ All dropdown popups use `<Popover>` from `components/Popover.tsx`. Do not duplic
 - Agent activity indicator in `ConversationTimeline` tracks active agents with task descriptions (not just count)
 - Permission events rendered with icons: ⛔ deny, ✓ allow
 - Sub-agent logs show lifecycle status and step count (▶ start, ■ stop with status)
+
+### `<Button>` primitive (`components/ui/Button.tsx`)
+All buttons use the shared `<Button>` component. Supports variants (`primary`, `secondary`, `ghost`, `danger`), sizes (`sm`, `md`, `lg`), and `iconOnly` mode. Never create ad-hoc button styles — use `<Button>` with the appropriate variant.
+
+### ReviewPane (`components/ReviewPane.tsx`)
+Accordion-style file review that replaces the old single-file diff tab. Shows all edited files in a collapsible list with unified diffs.
+
+### PluginsView (`components/PluginsView.tsx`)
+Plugin discovery and management page. Displays installed plugins and marketplace browsing. Uses `/api/plugins` and `/api/plugins/marketplace` endpoints.
+
+### Web IDE (`components/IdeLoader.tsx`, `hooks/useWebIdeEnabled.ts`)
+"Open in Web IDE" launches per-session code-server containers via the API. `useWebIdeEnabled()` checks whether the feature is available. IDE loader shows a floral background animation during container startup.
 
 ## Dependency Selection — KISS/DRY Policy
 

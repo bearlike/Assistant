@@ -3,49 +3,19 @@ import { CheckCircle2, XCircle, ChevronRight } from 'lucide-react';
 import { CopyButton } from './CopyButton';
 import { DiffStats } from './DiffStats';
 import { parseDiffHunks } from '../utils/diff';
+import { fileIconClass, basename, lineStyles } from '../utils/diffCard';
 import { ParsedDiffFile, ParsedLine } from '../types';
 
 // ── Always-dark backgrounds (matches TerminalCard — never changes with theme) ──
 const TITLE_BG = 'bg-[hsl(220_5%_12%)]';  // ~#1c1d1e — dark chrome bar
 const BODY_BG  = 'bg-[hsl(220_4%_10%)]';   // slightly lighter than terminal body
 
-// ── File icon allowlist (file-icon-vectors vivid CDN) ──
-const KNOWN_EXTENSIONS = new Set([
-  'js','ts','jsx','tsx','py','rb','go','rs','java','kt','swift',
-  'c','cpp','h','cs','php','html','css','scss','json','yaml','yml',
-  'toml','xml','sql','sh','bash','zsh','md','txt','env','dockerfile',
-  'vue','svelte',
-]);
-
-function fileIconClass(filename: string): string {
-  const base = (filename.split('/').pop() || filename).toLowerCase();
-  if (base === 'dockerfile') return 'fiv-viv fiv-icon-dockerfile';
-  const ext = base.includes('.') ? base.split('.').pop() || '' : '';
-  return `fiv-viv fiv-icon-${KNOWN_EXTENSIONS.has(ext) ? ext : 'blank'}`;
-}
-
-function basename(path: string): string {
-  return path.split('/').pop() || path;
-}
-
 /** Max lines shown in collapsed preview per file section. */
 const COLLAPSED_LINE_LIMIT = 8;
 
-// ── Line type → style mapping (always-dark colors) ──
-function lineStyles(type: ParsedLine['type']): { bg: string; text: string; prefix: string } {
-  switch (type) {
-    case 'insert':
-      return { bg: 'bg-emerald-500/[0.12]', text: 'text-emerald-300', prefix: '+' };
-    case 'delete':
-      return { bg: 'bg-red-500/[0.12]', text: 'text-red-300', prefix: '-' };
-    default:
-      return { bg: '', text: 'text-white/60', prefix: ' ' };
-  }
-}
-
 // ── Sub-components ──
 
-function HunkHeader({ header }: { header: string }) {
+export function HunkHeader({ header }: { header: string }) {
   return (
     <div className="px-3 py-0.5 bg-blue-500/[0.06] text-blue-400/70 text-[11px] select-none">
       {header}
@@ -53,7 +23,7 @@ function HunkHeader({ header }: { header: string }) {
   );
 }
 
-function DiffLine({ line, gutterWidth }: { line: ParsedLine; gutterWidth: number }) {
+export function DiffLine({ line, gutterWidth }: { line: ParsedLine; gutterWidth: number }) {
   const { bg, text, prefix } = lineStyles(line.type);
   const padW = `${gutterWidth}ch`;
   return (
@@ -84,7 +54,7 @@ function DiffLine({ line, gutterWidth }: { line: ParsedLine; gutterWidth: number
   );
 }
 
-function FileDiffSection({
+export function FileDiffSection({
   file,
   expanded,
   gutterWidth,
@@ -148,7 +118,7 @@ export function DiffCard({
   if (files.length === 0) {
     // No parseable diff — fall back to raw text display
     return (
-      <div className={`rounded-lg overflow-hidden font-mono border-l-[3px] border-l-agent-4 ${TITLE_BG}`}>
+      <div className={`rounded-lg overflow-hidden font-mono border border-[hsl(var(--border))] border-l-[3px] border-l-agent-4 ${TITLE_BG}`}>
         <div className="flex items-center gap-2 px-3 py-1.5">
           <span className="text-[11px] text-white/50 flex-1 truncate">{title || 'Edit'}</span>
           {success ? (
@@ -185,7 +155,7 @@ export function DiffCard({
 
   return (
     <div
-      className={`rounded-lg overflow-hidden font-mono border-l-[3px] transition-colors ${
+      className={`rounded-lg overflow-hidden font-mono border border-[hsl(var(--border))] border-l-[3px] transition-colors ${
         hasExpandableContent ? 'cursor-pointer' : ''
       } ${success ? 'border-l-agent-4' : 'border-l-red-500'}`}
       onClick={() => hasExpandableContent && setExpanded(p => !p)}
@@ -225,7 +195,7 @@ export function DiffCard({
             <div className="group/copy relative">
               <CopyButton
                 text={diffText}
-                className="p-1 rounded text-white/40 hover:text-white/80 transition-all opacity-0 group-hover/copy:opacity-100 focus:opacity-100"
+                className="p-1 rounded text-white/40 hover:text-white/80 transition-all opacity-50 group-hover/copy:opacity-100 focus:opacity-100"
               />
             </div>
           </div>

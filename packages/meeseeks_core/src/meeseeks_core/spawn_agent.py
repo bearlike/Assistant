@@ -108,6 +108,15 @@ SPAWN_AGENT_SCHEMA: dict[str, object] = {
                         "Ref: [DeepMind-Delegation §4.1] Contract-first decomposition."
                     ),
                 },
+                "agent_type": {
+                    "type": "string",
+                    "description": (
+                        "Name of a registered agent type to use "
+                        "(e.g. 'feature-dev:code-reviewer'). "
+                        "Loads pre-defined system prompt, tool scope, and model "
+                        "from the agent registry."
+                    ),
+                },
             },
             "required": ["task"],
         },
@@ -207,6 +216,7 @@ class SpawnAgentTool:
         hook_manager: HookManager,
         project_instructions: str | None = None,
         cwd: str | None = None,
+        agent_registry: Any = None,
     ) -> None:
         """Initialize with parent context and shared registries."""
         self._agent_context = agent_context
@@ -216,6 +226,7 @@ class SpawnAgentTool:
         self._hook_manager = hook_manager
         self._project_instructions = project_instructions
         self._cwd = cwd
+        self._agent_registry = agent_registry
         # Plan-mode context — set by ToolUseLoop.run() so children
         # inherit the session's plan path and mode.
         self.session_id: str | None = None
@@ -237,6 +248,24 @@ class SpawnAgentTool:
             # delegation is contingent upon the outcome having precise verification.
             task_desc += f"\n\nAcceptance criteria: {acceptance_criteria}"
         model_override = args.get("model")
+
+        # agent_type: look up registered agent definition and apply its config.
+        agent_type = args.get("agent_type")
+        if agent_type and self._agent_registry:
+            agent_def = self._agent_registry.get(agent_type)
+            if agent_def is None:
+                return MockSpeaker(content=f"ERROR: Unknown agent type '{agent_type}'")
+            # Prepend agent system prompt to task
+            task_desc = f"{agent_def.body}\n\n---\n\nTask: {task_desc}"
+            # Apply agent's tool scope if specified and not overridden by caller
+            if agent_def.allowed_tools and "allowed_tools" not in args:
+                args["allowed_tools"] = agent_def.allowed_tools
+            if agent_def.denied_tools and "denied_tools" not in args:
+                args["denied_tools"] = agent_def.denied_tools
+            # Apply agent's model if specified and not overridden
+            if agent_def.model and not model_override:
+                model_override = agent_def.model
+
         registry = self._agent_context.registry
 
         # 1. Resolve and validate model.

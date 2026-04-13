@@ -6,14 +6,14 @@ const PHRASES = [
   'build Rome in a day.',
   'set up a new service.',
   'make it more reliable.',
-  "make the intern's job obsolete.",
+  'make interns obsolete.',
   'dig into those logs.',
   'break something on purpose.',
 ];
 
 const JOKE_SET = new Set([
   'build Rome in a day.',
-  "make the intern's job obsolete.",
+  'make interns obsolete.',
   'break something on purpose.',
 ]);
 
@@ -165,7 +165,7 @@ export function TypewriterGreeting({ paused }: TypewriterGreetingProps) {
   }, [paused, nextPhrase]);
 
   return (
-    <h1 className="text-3xl font-medium text-[hsl(var(--foreground))] mb-8">
+    <h1 className="text-2xl sm:text-3xl font-medium text-[hsl(var(--foreground))] mb-8 whitespace-nowrap">
       {"Let's "}<span>{text}</span><span style={{ opacity: cursorOn ? 0.7 : 0 }}>|</span>
     </h1>
   );

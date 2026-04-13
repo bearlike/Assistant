@@ -466,6 +466,45 @@ class TestHypervisorGlobalEye:
         asyncio.run(_test())
 
 
+class TestHypervisorCompaction:
+    """Compaction tracking on AgentHandle and visibility in agent tree."""
+
+    def test_record_compaction_increments_count(self):
+        async def _test():
+            reg = AgentHypervisor()
+            h = AgentHandle(agent_id="agent123", parent_id=None, depth=0,
+                            model_name="m", task_description="t", status="running")
+            await reg.register(h)
+            assert h.compaction_count == 0
+            await reg.record_compaction("agent123")
+            assert h.compaction_count == 1
+            assert h.last_compacted_at is not None
+            await reg.record_compaction("agent123")
+            assert h.compaction_count == 2
+        asyncio.run(_test())
+
+    def test_tree_shows_compaction_marker(self):
+        async def _test():
+            reg = AgentHypervisor()
+            h = AgentHandle(agent_id="compact1", parent_id=None, depth=0,
+                            model_name="m", task_description="task", status="running")
+            await reg.register(h)
+            await reg.record_compaction("compact1")
+            tree = await reg.render_agent_tree()
+            assert "compacted x1" in tree
+        asyncio.run(_test())
+
+    def test_tree_hides_marker_when_no_compaction(self):
+        async def _test():
+            reg = AgentHypervisor()
+            h = AgentHandle(agent_id="nocomp12", parent_id=None, depth=0,
+                            model_name="m", task_description="task", status="running")
+            await reg.register(h)
+            tree = await reg.render_agent_tree()
+            assert "compacted" not in tree
+        asyncio.run(_test())
+
+
 class TestAgentResultStructure:
     """Ref: [CoA §3.1] Communication Units enable structured inter-agent context."""
 

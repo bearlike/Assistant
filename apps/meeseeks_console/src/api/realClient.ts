@@ -9,7 +9,7 @@ import {
   SessionSummary,
   ShareRecord
 } from "../types";
-import { AgentSummary, ApiClient, ApiConfig, ModelInfo, ProjectSummary, SkillSummary, ToolSummary } from "./contracts";
+import { AgentSummary, ApiClient, ApiConfig, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, SkillSummary, ToolSummary, VirtualProject } from "./contracts";
 
 function withBase(baseUrl: string, path: string) {
   if (!baseUrl) {
@@ -252,10 +252,14 @@ export function createRealClient(config: ApiConfig): ApiClient {
     async recoverSession(
       sessionId: string,
       action: "retry" | "continue",
-      fromTs?: string
+      fromTs?: string,
+      editedText?: string,
+      model?: string
     ): Promise<void> {
-      const body: Record<string, string> = { action };
+      const body: Record<string, unknown> = { action };
       if (fromTs) body.from_ts = fromTs;
+      if (editedText) body.edited_text = editedText;
+      if (model) body.model = model;
       const response = await fetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/recover`),
         {
@@ -265,6 +269,26 @@ export function createRealClient(config: ApiConfig): ApiClient {
         }
       );
       await handleJson(response);
+    },
+
+    async forkSession(
+      sessionId: string,
+      opts?: { fromTs?: string; model?: string; compact?: boolean; tag?: string }
+    ): Promise<{ session_id: string; forked_from: string; forked_at: string | null }> {
+      const body: Record<string, unknown> = {};
+      if (opts?.fromTs) body.from_ts = opts.fromTs;
+      if (opts?.model) body.model = opts.model;
+      if (opts?.compact) body.compact = true;
+      if (opts?.tag) body.tag = opts.tag;
+      const response = await fetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/fork`),
+        {
+          method: "POST",
+          headers: headers(apiKey),
+          body: JSON.stringify(body)
+        }
+      );
+      return handleJson(response);
     },
 
     async fetchPlanMarkdown(sessionId: string): Promise<string> {
@@ -418,6 +442,68 @@ export function createRealClient(config: ApiConfig): ApiClient {
       });
       const payload = await handleJson<{ config: Record<string, unknown> }>(response);
       return payload.config;
+    },
+
+    async listPlugins(): Promise<PluginSummary[]> {
+      const response = await fetch(withBase(baseUrl, "/api/plugins"), {
+        headers: headers(apiKey)
+      });
+      const payload = await handleJson<{ plugins: PluginSummary[] }>(response);
+      return payload.plugins || [];
+    },
+
+    async listMarketplacePlugins(): Promise<MarketplacePlugin[]> {
+      const response = await fetch(withBase(baseUrl, "/api/plugins/marketplace"), {
+        headers: headers(apiKey)
+      });
+      const payload = await handleJson<{ plugins: MarketplacePlugin[] }>(response);
+      return payload.plugins || [];
+    },
+
+    async installPlugin(name: string, marketplace: string): Promise<void> {
+      const response = await fetch(withBase(baseUrl, "/api/plugins/marketplace"), {
+        method: "POST",
+        headers: headers(apiKey),
+        body: JSON.stringify({ name, marketplace })
+      });
+      await handleJson(response);
+    },
+
+    async uninstallPlugin(name: string): Promise<void> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/plugins/${encodeURIComponent(name)}`),
+        { method: "DELETE", headers: headers(apiKey) }
+      );
+      await handleJson(response);
+    },
+
+    async createVirtualProject(name: string, description: string, path?: string): Promise<VirtualProject> {
+      const response = await fetch(withBase(baseUrl, "/api/v_projects"), {
+        method: "POST",
+        headers: headers(apiKey),
+        body: JSON.stringify({ name, description, path })
+      });
+      return handleJson<VirtualProject>(response);
+    },
+
+    async updateVirtualProject(id: string, data: Partial<Pick<VirtualProject, "name" | "description">>): Promise<VirtualProject> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/v_projects/${encodeURIComponent(id)}`),
+        {
+          method: "PATCH",
+          headers: headers(apiKey),
+          body: JSON.stringify(data)
+        }
+      );
+      return handleJson<VirtualProject>(response);
+    },
+
+    async deleteVirtualProject(id: string): Promise<void> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/v_projects/${encodeURIComponent(id)}`),
+        { method: "DELETE", headers: headers(apiKey) }
+      );
+      await handleJson(response);
     },
   };
 }

@@ -20,6 +20,22 @@ import { useContainerCompact } from '../hooks/useContainerCompact';
 import { ConfigMenu, McpOption, McpStatus } from './ConfigMenu';
 import { Popover } from './Popover';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Button } from './ui/Button';
+
+/** Container base — shared by home & detail mode outer wrapper. */
+const INPUT_CONTAINER_BASE =
+  'bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-1 shadow-lg ' +
+  'transition-all duration-200 ease-out';
+
+/** Container glow — applied via JS state so it stays stable during menu interactions. */
+const INPUT_CONTAINER_GLOW =
+  'ring-2 ring-[hsl(var(--ring))]/40 ' +
+  'shadow-[0_0_20px_hsl(var(--ring)/0.15)] ' +
+  'border-[hsl(var(--ring))]/30';
+
+/** Textarea min-height transition — actual min-h toggled via JS state, not CSS focus. */
+const TEXTAREA_TRANSITION = 'transition-[min-height] duration-200 ease-out';
+
 type McpToolOption = McpOption & {
   server?: string;
   disabled_reason?: string;
@@ -52,6 +68,8 @@ export function InputBar({
   const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const isExpanded = isFocused || isConfigOpen || isPlusMenuOpen;
   const [activeSkill, setActiveSkill] = useState<string | null>(sessionContext?.skill ?? null);
   const [activeProject, setActiveProject] = useState<string | null>(sessionContext?.project ?? null);
   const [activeModel, setActiveModel] = useState<string | null>(sessionContext?.model ?? null);
@@ -366,13 +384,14 @@ export function InputBar({
           <span className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wider">
             Compose prompt
           </span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
+            iconOnly
             onClick={() => setIsFullScreen(false)}
-            aria-label="Minimize editor"
-            className="p-1 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] transition-colors">
-            <Minimize2 className="w-4 h-4" />
-          </button>
+            aria-label="Minimize editor">
+            <Minimize2 className="w-3.5 h-3.5" />
+          </Button>
         </div>
         {attachedFiles.length > 0 &&
         <div className="px-4 pt-3 pb-0">
@@ -407,34 +426,40 @@ export function InputBar({
         <div className="flex items-center justify-between px-3 py-2 border-t border-[hsl(var(--border))]">
           <div className="flex items-center gap-2 min-w-0 flex-nowrap">
             <div className="relative" ref={overlayMenuRef}>
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
                 onClick={() => {
                   setIsPlusMenuOpen(!isPlusMenuOpen);
                   setIsConfigOpen(false);
                 }}
-                className={`p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
-                <Plus className="w-4 h-4" />
-              </button>
+                className={isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}
+                aria-label="Open menu">
+                <Plus className="w-3.5 h-3.5" />
+              </Button>
               {isPlusMenuOpen && <PlusMenu direction="up" />}
             </div>
             {queryMode === 'plan' &&
-            <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
-                Plan
-              </span>
+            <Button variant="neutral" size="sm" className="uppercase tracking-wide text-[10px]">
+              Plan
+            </Button>
             }
             {renderConfigMenu(overlayConfigRef, 'up')}
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            <button
+            <Button
+              variant="primary"
+              size="md"
+              iconOnly
               onClick={handleSubmit}
               aria-label="Send query"
-              disabled={isSubmitting || !inputValue.trim()}
-              className={`p-2 rounded-full transition-colors ${isSubmitting || !inputValue.trim() ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90'}`}>
+              disabled={isSubmitting || !inputValue.trim()}>
               {isSubmitting ?
               <Loader2 className="w-4 h-4 animate-spin" /> :
               <ArrowUp className="w-4 h-4" />
               }
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -453,8 +478,8 @@ export function InputBar({
           className="hidden"
           aria-hidden="true" />
 
-        <div className="relative group">
-          <div ref={containerRef} className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-1 shadow-lg transition-all focus-within:ring-1 focus-within:ring-[hsl(var(--ring))]/30">
+        <div className="relative">
+          <div ref={containerRef} className={`${INPUT_CONTAINER_BASE} ${isExpanded ? INPUT_CONTAINER_GLOW : ''}`}>
             {attachedFiles.length > 0 &&
             <div className="px-4 pt-3 pb-0 flex items-center gap-2">
                 <div className="bg-[hsl(var(--accent))] rounded px-2 py-1 text-xs text-[hsl(var(--foreground))] flex items-center gap-2">
@@ -481,64 +506,70 @@ export function InputBar({
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                onFocus={() => onFocusChange?.(true, !inputValue.trim())}
-                onBlur={() => onFocusChange?.(false, !inputValue.trim())}
+                onFocus={() => { setIsFocused(true); onFocusChange?.(true, !inputValue.trim()); }}
+                onBlur={() => { setIsFocused(false); onFocusChange?.(false, !inputValue.trim()); }}
                 placeholder="Describe a task..."
                 aria-label="Task description"
                 disabled={isSubmitting}
                 rows={1}
-                className="w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-base resize-none min-h-[24px] max-h-[200px] pr-7" />
-              <button
-                type="button"
+                className={`w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-base resize-none max-h-[200px] pr-7 ${TEXTAREA_TRANSITION} ${isExpanded ? 'min-h-[72px]' : 'min-h-[24px]'}`} />
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
                 onClick={() => setIsFullScreen(true)}
                 aria-label="Expand editor"
-                className="absolute top-2 right-2 p-1 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] opacity-60 hover:opacity-100 transition-opacity">
+                className="absolute top-2 right-2 opacity-60 hover:opacity-100">
                 <Maximize2 className="w-3.5 h-3.5" />
-              </button>
+              </Button>
             </div>
 
             <div className="flex items-center justify-between px-2 pb-1">
               <div className="flex items-center gap-2 min-w-0 flex-nowrap">
                 <div className="relative" ref={menuRef}>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    iconOnly
                     onClick={() => {
                       setIsPlusMenuOpen(!isPlusMenuOpen);
                       setIsConfigOpen(false);
                     }}
-                    className={`p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
-
-                    <Plus className="w-4 h-4" />
-                  </button>
+                    className={isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}
+                    aria-label="Open menu">
+                    <Plus className="w-3.5 h-3.5" />
+                  </Button>
                   {isPlusMenuOpen && <PlusMenu direction={popupDirection} />}
                 </div>
                 {queryMode === 'plan' &&
-                <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
-                    Plan
-                  </span>
+                <Button variant="neutral" size="sm" className="uppercase tracking-wide text-[10px]">
+                  Plan
+                </Button>
                 }
 
                 {renderConfigMenu(configRef, popupDirection)}
               </div>
 
               <div className="flex items-center gap-2 flex-shrink-0">
-                <button
-                  aria-label="Voice input"
-                  className="p-2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-full transition-colors">
-
+                <Button
+                  variant="ghost"
+                  size="md"
+                  iconOnly
+                  aria-label="Voice input">
                   <Mic className="w-4 h-4" />
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="primary"
+                  size="md"
+                  iconOnly
                   onClick={handleSubmit}
                   aria-label="Send query"
-                  disabled={isSubmitting || !inputValue.trim()}
-                  className={`p-2 rounded-full transition-colors ${isSubmitting || !inputValue.trim() ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90'}`}>
-
+                  disabled={isSubmitting || !inputValue.trim()}>
                   {isSubmitting ?
                   <Loader2 className="w-4 h-4 animate-spin" /> :
-
                   <ArrowUp className="w-4 h-4" />
                   }
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -575,7 +606,7 @@ export function InputBar({
             </Alert>
           </div>
         }
-        <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-1 shadow-lg">
+        <div className={`${INPUT_CONTAINER_BASE} ${isExpanded ? INPUT_CONTAINER_GLOW : ''}`}>
           {attachedFiles.length > 0 &&
           <div className="px-3 pt-2 pb-0">
               <div className="bg-[hsl(var(--accent))] rounded px-2 py-0.5 text-xs text-[hsl(var(--foreground))] inline-flex items-center gap-2 w-fit">
@@ -601,66 +632,81 @@ export function InputBar({
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
               placeholder={detailPlaceholder}
               aria-label="Session query"
               disabled={isSubmitting}
               rows={1}
-              className="w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-sm resize-none min-h-[24px] max-h-[200px] pr-7" />
-            <button
-              type="button"
+              className={`w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] text-sm resize-none max-h-[200px] pr-7 ${TEXTAREA_TRANSITION} ${isExpanded ? 'min-h-[72px]' : 'min-h-[24px]'}`} />
+            <Button
+              variant="ghost"
+              size="sm"
+              iconOnly
               onClick={() => setIsFullScreen(true)}
               aria-label="Expand editor"
-              className="absolute top-1 right-1 p-1 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] opacity-60 hover:opacity-100 transition-opacity">
+              className="absolute top-1 right-1 opacity-60 hover:opacity-100">
               <Maximize2 className="w-3.5 h-3.5" />
-            </button>
+            </Button>
           </div>
 
           <div className="flex items-center justify-between px-1 pb-1">
             <div className="flex items-center gap-1 min-w-0 flex-nowrap">
               <div className="relative" ref={menuRef}>
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  iconOnly
                   onClick={() => {
                     setIsPlusMenuOpen(!isPlusMenuOpen);
                     setIsConfigOpen(false);
                   }}
-                  className={`p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-lg transition-colors ${isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}`}>
-                  <Plus className="w-4 h-4" />
-                </button>
+                  className={isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}
+                  aria-label="Open menu">
+                  <Plus className="w-3.5 h-3.5" />
+                </Button>
                 {isPlusMenuOpen && <PlusMenu direction={popupDirection} />}
               </div>
               {queryMode === 'plan' &&
-              <span className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 border border-[hsl(var(--primary))]/30 px-2 py-0.5 rounded-full">
-                  Plan
-                </span>
+              <Button variant="neutral" size="sm" className="uppercase tracking-wide text-[10px]">
+                Plan
+              </Button>
               }
 
               {renderConfigMenu(configRef, popupDirection)}
             </div>
 
             <div className="flex items-center gap-1 flex-shrink-0">
-              <button
-                aria-label="Voice input"
-                className="p-1.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] rounded-full transition-colors">
+              <Button
+                variant="ghost"
+                size="md"
+                iconOnly
+                aria-label="Voice input">
                 <Mic className="w-4 h-4" />
-              </button>
+              </Button>
               {isRunning &&
-              <button
+              <Button
+                variant="ghost"
+                size="md"
+                iconOnly
+                tone="danger"
                 onClick={onStop}
-                aria-label="Stop run"
-                className="p-1.5 bg-red-600/30 text-red-300 rounded-full hover:bg-red-600/50 transition-colors">
-                  <Square className="w-4 h-4" />
-                </button>
+                aria-label="Stop run">
+                <Square className="w-4 h-4" />
+              </Button>
               }
-              <button
+              <Button
+                variant="primary"
+                size="md"
+                iconOnly
                 onClick={handleSubmit}
                 aria-label="Send query"
-                disabled={isSubmitting || !inputValue.trim()}
-                className={`p-1.5 rounded-full transition-colors ${isSubmitting || !inputValue.trim() ? 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]' : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90'}`}>
-                  {isSubmitting ?
+                disabled={isSubmitting || !inputValue.trim()}>
+                {isSubmitting ?
                 <Loader2 className="w-4 h-4 animate-spin" /> :
                 <ArrowUp className="w-4 h-4" />
                 }
-              </button>
+              </Button>
             </div>
           </div>
         </div>

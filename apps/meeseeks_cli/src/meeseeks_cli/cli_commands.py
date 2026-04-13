@@ -233,10 +233,27 @@ def _cmd_tag(context: CommandContext, args: list[str]) -> bool:
     return True
 
 
-@REGISTRY.command("/fork", "Fork current session: /fork [TAG]")
+@REGISTRY.command(
+    "/fork",
+    "Fork current session: /fork [TAG] [--at TS] [--compact]",
+)
 def _cmd_fork(context: CommandContext, args: list[str]) -> bool:
-    tag = args[0] if args else None
-    if not args and context.prompt_func is not None:
+    at_ts: str | None = None
+    compact = False
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--at" and i + 1 < len(args):
+            at_ts = args[i + 1]
+            i += 2
+        elif args[i] == "--compact":
+            compact = True
+            i += 1
+        else:
+            positional.append(args[i])
+            i += 1
+    tag = positional[0] if positional else None
+    if not positional and not at_ts and context.prompt_func is not None:
         dialogs = DialogFactory(console=context.console, prompt_func=context.prompt_func)
         tag = dialogs.prompt_text(
             "Fork Session",
@@ -248,11 +265,62 @@ def _cmd_fork(context: CommandContext, args: list[str]) -> bool:
             context.console.print("Fork cancelled.")
             return True
         tag = tag.strip() or None
-    new_session_id = context.store.fork_session(context.state.session_id)
+    if at_ts:
+        new_session_id = context.store.fork_session_at(
+            context.state.session_id, at_ts
+        )
+    else:
+        new_session_id = context.store.fork_session(context.state.session_id)
     context.state.session_id = new_session_id
     if tag:
         context.store.tag_session(context.state.session_id, tag)
+    if compact:
+        import asyncio
+
+        try:
+            asyncio.run(context.store.compact_session(new_session_id, mode="partial"))
+            context.console.print("Compacted forked session context.", style="dim")
+        except Exception as exc:
+            context.console.print(f"Compaction skipped: {exc}", style="yellow")
     context.console.print(f"Forked session: {context.state.session_id}")
+    return True
+
+
+@REGISTRY.command("/edit", "Edit the last user message and re-run: /edit [TEXT]")
+def _cmd_edit(context: CommandContext, args: list[str]) -> bool:
+    replacement = " ".join(args) if args else None
+    if not replacement and context.prompt_func is not None:
+        dialogs = DialogFactory(console=context.console, prompt_func=context.prompt_func)
+        replacement = dialogs.prompt_text(
+            "Edit Message",
+            "Enter the replacement text for the last user message.",
+        )
+        if replacement is None:
+            context.console.print("Edit cancelled.")
+            return True
+        replacement = replacement.strip()
+    if not replacement:
+        context.console.print("No replacement text provided.", style="yellow")
+        return True
+    try:
+        query = context.runtime.resolve_recovery_query(
+            context.state.session_id, "retry", replacement_text=replacement
+        )
+    except (ValueError, RuntimeError) as exc:
+        context.console.print(f"Cannot edit: {exc}", style="yellow")
+        return True
+    context.console.print("Re-running with edited prompt...", style="cyan")
+    task_queue = context.runtime.run_sync(
+        user_query=query,
+        session_id=context.state.session_id,
+        model_name=context.state.model_name,
+        tool_registry=context.tool_registry,
+        mode=context.state.mode,
+    )
+    if task_queue.task_result:
+        context.console.print(Panel(task_queue.task_result, title="Response"))
+    elif task_queue.last_error:
+        context.console.print(f"Edit failed: {task_queue.last_error}", style="red")
     return True
 
 
@@ -339,6 +407,104 @@ def _cmd_skills(context: CommandContext, args: list[str]) -> bool:
         rows.append(f"  [{', '.join(badges)}]", style="dim italic")
         rows.append("\n")
     context.console.print(Panel(rows, title="Skills", border_style="cyan"))
+    return True
+
+
+@REGISTRY.command("/plugins", "Manage plugins (/plugins marketplace|install|uninstall)")
+def _cmd_plugins(context: CommandContext, args: list[str]) -> bool:
+    from meeseeks_core.config import get_config
+    from meeseeks_core.plugins import (
+        discover_installed_plugins,
+        discover_marketplace_plugins,
+        install_plugin,
+        uninstall_plugin,
+    )
+
+    cfg = get_config().plugins
+    sub = args[0] if args else ""
+
+    if sub == "marketplace":
+        available = discover_marketplace_plugins(marketplace_dirs=cfg.resolve_marketplace_dirs())
+        if not available:
+            context.console.print("[dim]No marketplace plugins available.[/dim]")
+            return True
+        table = Table(title="Marketplace Plugins", box=box.SIMPLE_HEAVY)
+        table.add_column("Name", style="cyan")
+        table.add_column("Description")
+        table.add_column("Category", style="dim")
+        table.add_column("Marketplace", style="dim")
+        for p in available:
+            table.add_row(
+                p["name"],
+                p.get("description", ""),
+                p.get("category", ""),
+                p.get("marketplace", ""),
+            )
+        context.console.print(table)
+        return True
+
+    if sub == "install":
+        name = args[1] if len(args) > 1 else ""
+        if not name:
+            context.console.print("[red]Usage: /plugins install <name>[/red]")
+            return True
+        available = discover_marketplace_plugins(marketplace_dirs=cfg.resolve_marketplace_dirs())
+        match = next((p for p in available if p["name"] == name), None)
+        if not match:
+            context.console.print(f"[red]Plugin '{name}' not found in any marketplace.[/red]")
+            return True
+        try:
+            manifest = install_plugin(
+                name,
+                match["marketplace"],
+                marketplace_dirs=cfg.resolve_marketplace_dirs(),
+                install_base=cfg.resolve_install_dir(),
+            )
+            context.console.print(f"[green]Installed {manifest.name} v{manifest.version}[/green]")
+        except Exception as exc:
+            context.console.print(f"[red]Install failed: {exc}[/red]")
+        return True
+
+    if sub == "uninstall":
+        name = args[1] if len(args) > 1 else ""
+        if not name:
+            context.console.print("[red]Usage: /plugins uninstall <name>[/red]")
+            return True
+        if uninstall_plugin(name, install_base=cfg.resolve_install_dir()):
+            context.console.print(f"[green]Uninstalled '{name}'.[/green]")
+        else:
+            context.console.print(f"[red]Plugin '{name}' not found.[/red]")
+        return True
+
+    # Default: list installed plugins
+    plugins = discover_installed_plugins(registry_paths=cfg.resolve_registry_paths())
+    if not plugins:
+        context.console.print("[dim]No plugins installed.[/dim]")
+        return True
+
+    table = Table(title="Installed Plugins", box=box.SIMPLE_HEAVY)
+    table.add_column("Name", style="cyan")
+    table.add_column("Version", style="dim")
+    table.add_column("Marketplace", style="dim")
+    table.add_column("Skills", justify="right")
+    table.add_column("Agents", justify="right")
+    table.add_column("Cmds", justify="right")
+    table.add_column("MCP", justify="right")
+    table.add_column("Hooks")
+    for pc in plugins:
+        if pc.manifest is None:
+            continue
+        table.add_row(
+            pc.manifest.name,
+            pc.manifest.version or "-",
+            pc.manifest.marketplace or "-",
+            str(len(pc.skill_dirs)),
+            str(len(pc.agent_files)),
+            str(len(pc.command_files)),
+            str(len(pc.mcp_config or {})),
+            "✓" if pc.hooks_config else "-",
+        )
+    context.console.print(table)
     return True
 
 

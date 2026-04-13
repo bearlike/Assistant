@@ -42,6 +42,7 @@ The web console provides a task orchestration frontend backed by the REST API. I
 - (✅) **Sub-agent spawning:** Subtasks can be delegated to parallel sub-agents via `spawn_agent`, managed by the `AgentHypervisor` control plane.
 - (✅) **Tool scoping & permissions:** Sub-agents receive scoped tool access (allowlist/denylist filtered before binding). Permission policies gate all tool execution.
 - (✅) **Concurrency-aware execution:** Tools are partitioned into concurrent-safe (parallel) and exclusive (sequential) batches with per-tool timeouts.
+- (✅) **Conversation fork & edit:** Fork a session from any message (`fork_at_ts`), edit and regenerate past turns, and override the model per-message.
 
 ### Memory and context management
 - (✅) **Session transcripts:** Writes tool activity and responses to disk for continuity.
@@ -54,12 +55,16 @@ The web console provides a task orchestration frontend backed by the REST API. I
 ### Tooling and integrations
 - (✅) **Tool registry:** Discovers local tools and MCP tools via persistent connection pool with automatic reconnection and config change detection.
 - (✅) **Skills:** Supports the [Agent Skills](https://agentskills.io) open standard. Place `SKILL.md` files in `~/.claude/skills/` or `.claude/skills/` to teach the assistant reusable workflows. Skills can be invoked via `/skill-name` slash commands or auto-activated by the LLM.
-- (✅) **Configurable file editing:** Two built-in edit mechanisms — Aider-style SEARCH/REPLACE blocks and per-file structured patch (`file_path` / `old_string` / `new_string`). Select via `agent.edit_tool` in config. Different models perform better with different formats; the choice is transparent to the rest of the stack.
+- (✅) **Configurable file editing:** Two built-in edit mechanisms — Aider-style SEARCH/REPLACE blocks and per-file structured patch (`file_path` / `old_string` / `new_string`). Select via `agent.edit_tool` in config, or let the system auto-select based on model identity. Different models perform better with different formats; the choice is transparent to the rest of the stack.
+- (✅) **Plugin system:** Discover, install, and manage plugins from configured marketplaces. Plugins can provide agent definitions, skills, hooks, and MCP tool integrations. Managed via the CLI (`/plugins`), console UI, or REST API.
+- (✅) **Native LSP integration:** Opt-in code intelligence via `lsp_tool` (pygls/lsprotocol). Supports diagnostics, go-to-definition, find-references, and hover. Built-in servers: pyright (Python), typescript-language-server (TS/JS), gopls (Go), rust-analyzer (Rust) — auto-discovered on the PATH. Passive diagnostics inject automatically after file edits. Configure via `agent.lsp` in config.
+- (✅) **Web IDE:** Opt-in per-session code-server containers for browser-based editing, accessible from the console via "Open in Web IDE".
 - (✅) **Local file + shell tools:** Built-in tools for file reads, directory listing, and shell commands (approval-gated).
+- (✅) **Chat platform adapters:** `ChannelAdapter` protocol with shared `_process_inbound()` pipeline. Adapters for [Nextcloud Talk](docs/clients-nextcloud-talk.md) (webhook-driven, HMAC-SHA256, ActivityStreams 2.0) and [Email](docs/clients-email.md) (IMAP polling with SMTP replies rendered as HTML from markdown). Session tag mapping, deduplication guard, and slash commands (`/help`, `/usage`, `/new`, `/switch-project`).
 - (✅) **REST API:** Exposes the assistant over HTTP for third-party integration.
 - (✅) **Web console:** Task orchestration frontend backed by the REST API.
 - (✅) **Terminal CLI:** Fast interactive shell with plan visibility and tool result cards.
-- (✅) **Model routing:** Supports provider-qualified model names and a configurable API base URL.
+- (✅) **Model routing:** Supports provider-qualified model names, a configurable API base URL, and `proxy_model_prefix` for proxy routing.
 
 ### Safety and observability
 - (✅) **Permission gate:** Uses approval callbacks and hooks to control tool execution.
@@ -70,7 +75,7 @@ The web console provides a task orchestration frontend backed by the REST API. I
 - **CLI layout adapts to terminal width.** Headers and tool result cards adjust to small and wide shells.
 - **Interactive CLI controls.** Use a model picker, MCP browser, session summary, and token budget commands.
 - **Inline approvals.** Rich-based approval prompts render with padded, dotted borders and clear after input.
-- **Unified experience.** Console, API, Home Assistant, and CLI interfaces share the same core engine to reduce duplicated maintenance.
+- **Unified experience.** Console, API, Home Assistant, Nextcloud Talk, Email, and CLI interfaces share the same core engine to reduce duplicated maintenance.
 - **Shared session runtime.** The API exposes polling endpoints; the CLI runs the same runtime in-process for sync execution, cancellation, and summaries.
 - **Event payloads.** `action_plan` steps are `{title, description}`; `tool_result`/`permission` use `tool_id`, `operation`, and `tool_input`.
 
@@ -86,6 +91,12 @@ The web console provides a task orchestration frontend backed by the REST API. I
         <td align="center"><img src="docs/screenshot_ha_assist_2.png" alt="Home Assistant device control" height="360px"></td>
     </tr>
 </table>
+
+### Email integration
+
+<p align="center">
+    <img src="docs/meeseeks-email-01.jpg" alt="Meeseeks email thread in Gmail" height="480px">
+</p>
 
 ## Installation
 
@@ -121,7 +132,7 @@ cp configs/mcp.json ~/.meeseeks/mcp.json
 # Or run `meeseeks` and use /init to scaffold example configs
 ```
 
-Config discovery priority: `CWD/configs/` → `$MEESEEKS_HOME/` → `~/.meeseeks/`. Use `--config /path/to/app.json` for explicit override, or set `MEESEEKS_HOME` in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to permanently point to a custom config directory:
+Config discovery priority: `CWD/configs/`, then `$MEESEEKS_HOME/`, then `~/.meeseeks/`. Use `--config /path/to/app.json` for explicit override, or set `MEESEEKS_HOME` in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to permanently point to a custom config directory:
 ```bash
 export MEESEEKS_HOME="/path/to/your/config"
 ```
@@ -149,10 +160,10 @@ See [docs/index.md](docs/index.md) for the full architecture diagram.
 
 ## Monorepo layout
 
-- `packages/meeseeks_core/`: orchestration loop, schemas, session storage, two-mode compaction, tool registry, hook system, hierarchical instruction discovery.
+- `packages/meeseeks_core/`: orchestration loop, schemas, session storage, two-mode compaction, tool registry, hook system, hierarchical instruction discovery, plugin system, agent registry.
 - `packages/meeseeks_tools/`: tool implementations and integrations (including Home Assistant and MCP).
-- `apps/meeseeks_api/`: Flask REST API for programmatic access.
-- `apps/meeseeks_console/`: Web console for task orchestration.
+- `apps/meeseeks_api/`: Flask REST API for programmatic access, plugin management endpoints, Web IDE lifecycle, channel adapters (Nextcloud Talk, Email).
+- `apps/meeseeks_console/`: Web console for task orchestration, plugin management, and Web IDE access.
 - `apps/meeseeks_cli/`: Terminal CLI frontend for interactive sessions.
 - `meeseeks_ha_conversation/`: Home Assistant integration that routes voice to the API.
 - `packages/meeseeks_core/src/meeseeks_core/prompts/`: planner prompts and tool instructions.
@@ -167,6 +178,13 @@ See [docs/index.md](docs/index.md) for the full architecture diagram.
 
 **Repository map**
 - [docs/components.md](docs/components.md) — monorepo map
+
+**Clients**
+- [docs/clients-cli.md](docs/clients-cli.md) — terminal CLI
+- [docs/clients-web-api.md](docs/clients-web-api.md) — web console and REST API
+- [docs/clients-home-assistant.md](docs/clients-home-assistant.md) — Home Assistant voice integration
+- [docs/clients-nextcloud-talk.md](docs/clients-nextcloud-talk.md) — Nextcloud Talk chat integration
+- [docs/clients-email.md](docs/clients-email.md) — email channel (IMAP/SMTP)
 
 **Reference**
 - [docs/reference.md](docs/reference.md) — API reference (mkdocstrings)

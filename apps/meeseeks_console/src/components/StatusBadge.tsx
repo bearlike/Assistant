@@ -46,9 +46,9 @@ function resolveStatus(status: string, doneReason?: string | null): StatusConfig
   if (status === 'incomplete')
     return { icon: AlertCircle, label: 'Incomplete', style: `${PILL} border-amber-500/30 bg-amber-500/10 text-amber-600`, padding: PAD_STD };
   if (status === 'idle')
-    return { icon: Circle, label: 'Idle', style: `${PILL_MUTED} text-[hsl(var(--muted-foreground))]`, padding: PAD_STD };
+    return { icon: Circle, label: 'Idle', style: `${PILL} border-stone-400/30 bg-stone-400/10 text-stone-500`, padding: PAD_STD };
   if (status === 'open')
-    return { icon: Circle, label: 'Open', style: `${PILL_MUTED} text-[hsl(var(--foreground))]`, padding: PAD_STD };
+    return { icon: Circle, label: 'Open', style: `${PILL} border-lime-600/30 bg-lime-600/10 text-lime-700`, padding: PAD_STD };
   if (status === 'failed')
     return { icon: AlertCircle, label: 'Failed', style: `${PILL} border-red-500/30 bg-red-500/10 text-red-600`, padding: PAD_STD };
 

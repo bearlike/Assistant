@@ -2,7 +2,11 @@
 
 from meeseeks_core import token_budget as token_budget_module
 from meeseeks_core.config import set_config_override
-from meeseeks_core.token_budget import get_context_window, get_token_budget
+from meeseeks_core.token_budget import (
+    estimate_overhead_tokens,
+    get_context_window,
+    get_token_budget,
+)
 
 
 def test_get_context_window_from_model_name():
@@ -58,3 +62,29 @@ def test_event_to_text_non_dict_payload():
 def test_estimate_event_tokens_empty():
     """Return zero tokens for empty events."""
     assert token_budget_module.estimate_event_tokens([]) == 0
+
+
+def test_estimate_overhead_tokens_with_schemas():
+    """Estimate overhead from tool schemas and system prompt."""
+    schemas = [{"type": "function", "function": {"name": "test_tool", "parameters": {}}}]
+    overhead = estimate_overhead_tokens(schemas, "You are a helpful assistant.")
+    assert overhead > 0
+
+
+def test_estimate_overhead_tokens_empty():
+    """Return zero when no schemas or prompt provided."""
+    assert estimate_overhead_tokens(None, None) == 0
+    assert estimate_overhead_tokens([], "") == 0
+
+
+def test_overhead_tokens_included_in_budget():
+    """Overhead tokens increase total and utilization."""
+    events = [{"type": "user", "payload": {"text": "hello"}}]
+    budget_no_overhead = get_token_budget(events, None, "gpt-3.5-turbo-16k")
+    budget_with_overhead = get_token_budget(
+        events, None, "gpt-3.5-turbo-16k", overhead_tokens=10000,
+    )
+    assert budget_with_overhead.total_tokens > budget_no_overhead.total_tokens
+    assert budget_with_overhead.utilization > budget_no_overhead.utilization
+    assert budget_with_overhead.overhead_tokens == 10000
+    assert budget_no_overhead.overhead_tokens == 0

@@ -43,6 +43,13 @@ Core endpoints:
 - `POST /api/sessions/{session_id}/export` export session payload
 - `GET /api/share/{token}` fetch shared session data
 - `POST /api/webhooks/<platform>` inbound webhook for chat platforms (HMAC auth, not API key). See [Nextcloud Talk](clients-nextcloud-talk.md) and [Email](clients-email.md) for setup. Slash commands: `/help`, `/usage`, `/new`, `/switch-project`.
+- `GET /api/plugins` list installed plugins and their components
+- `GET /api/plugins/marketplace` list available plugins from configured marketplaces
+- `POST /api/plugins/marketplace` install a plugin from a marketplace
+- `DELETE /api/plugins/<name>` uninstall a plugin
+- `POST /api/sessions/{session_id}/ide` launch a Web IDE (code-server) container for a session
+- `DELETE /api/sessions/{session_id}/ide` stop the Web IDE container
+- `POST /api/sessions/{session_id}/ide/extend` extend the IDE session TTL
 
 ## Run the Console
 ```bash

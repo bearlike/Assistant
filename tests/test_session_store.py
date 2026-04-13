@@ -135,6 +135,37 @@ def test_base_class_template_fork(tmp_path):
     assert store.load_title(forked_id) == "my title"
 
 
+def test_fork_session_at(tmp_path):
+    """Fork only events up to cutoff_ts and clear stale summary."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "q1"}})
+    store.append_event(session_id, {"type": "assistant", "payload": {"text": "a1"}})
+    store.append_event(session_id, {"type": "user", "payload": {"text": "q2"}})
+    store.append_event(session_id, {"type": "assistant", "payload": {"text": "a2"}})
+    store.save_summary(session_id, "full session summary")
+    store.save_title(session_id, "my title")
+
+    events = store.load_transcript(session_id)
+    assert len(events) == 4
+    # Fork at the first assistant response (keep first 2 events)
+    cutoff_ts = events[1]["ts"]
+    forked_id = store.fork_session_at(session_id, cutoff_ts)
+
+    assert forked_id != session_id
+    forked_events = store.load_transcript(forked_id)
+    assert len(forked_events) == 2
+    assert forked_events[0]["payload"]["text"] == "q1"
+    assert forked_events[1]["payload"]["text"] == "a1"
+    # Summary should be cleared (stale after truncation)
+    assert store.load_summary(forked_id) == ""
+    # Title is preserved
+    assert store.load_title(forked_id) == "my title"
+    # Source session is unmodified
+    assert len(store.load_transcript(session_id)) == 4
+    assert store.load_summary(session_id) == "full session summary"
+
+
 def test_session_store_title_roundtrip(tmp_path):
     """Persist and reload session titles."""
     store = SessionStore(root_dir=str(tmp_path))

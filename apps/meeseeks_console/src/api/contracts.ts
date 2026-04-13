@@ -7,8 +7,13 @@ import {
   SessionContext,
   SessionExport,
   SessionSummary,
-  ShareRecord
+  ShareRecord,
+  VirtualProject
 } from "../types";
+
+export type { VirtualProject };
+
+export type ProjectSource = "config" | "managed";
 
 export type ToolSummary = {
   tool_id: string;
@@ -35,6 +40,8 @@ export type ProjectSummary = {
   name: string;
   path: string;
   description?: string;
+  source?: ProjectSource;
+  project_id?: string;  // only for managed projects
 };
 
 export type ModelInfo = {
@@ -88,8 +95,14 @@ export type ApiClient = {
   recoverSession: (
     sessionId: string,
     action: "retry" | "continue",
-    fromTs?: string
+    fromTs?: string,
+    editedText?: string,
+    model?: string
   ) => Promise<void>;
+  forkSession: (
+    sessionId: string,
+    opts?: { fromTs?: string; model?: string; compact?: boolean; tag?: string }
+  ) => Promise<{ session_id: string; forked_from: string; forked_at: string | null }>;
   fetchPlanMarkdown: (sessionId: string) => Promise<string>;
   listTools: (project?: string) => Promise<ToolSummary[]>;
   listSkills: (project?: string) => Promise<SkillSummary[]>;
@@ -111,6 +124,34 @@ export type ApiClient = {
   getConfigSchema: () => Promise<Record<string, unknown>>;
   getConfig: () => Promise<Record<string, unknown>>;
   patchConfig: (patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  listPlugins: () => Promise<PluginSummary[]>;
+  listMarketplacePlugins: () => Promise<MarketplacePlugin[]>;
+  installPlugin: (name: string, marketplace: string) => Promise<void>;
+  uninstallPlugin: (name: string) => Promise<void>;
+  createVirtualProject: (name: string, description: string, path?: string) => Promise<VirtualProject>;
+  updateVirtualProject: (id: string, data: Partial<Pick<VirtualProject, "name" | "description">>) => Promise<VirtualProject>;
+  deleteVirtualProject: (id: string) => Promise<void>;
+};
+
+export type PluginSummary = {
+  name: string;
+  description: string;
+  version: string;
+  marketplace: string;
+  scope: string;
+  skills: number;
+  agents: number;
+  commands: number;
+  mcp_servers: number;
+  has_hooks: boolean;
+};
+
+export type MarketplacePlugin = {
+  name: string;
+  description: string;
+  category: string;
+  marketplace: string;
+  installed: boolean;
 };
 
 export type ApiConfig = {

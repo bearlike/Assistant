@@ -1,5 +1,9 @@
 # Email
 
+<div style="display: flex; justify-content: center;">
+  <img src="../meeseeks-email-01.jpg" alt="Meeseeks email thread in Gmail" style="width: 100%; max-width: 520px; height: auto;" />
+</div>
+
 Meeseeks can be reached via email. Send a message to the configured mailbox and the agent replies with a styled HTML email. Thread replies continue the same session.
 
 ## How it works
@@ -81,7 +85,7 @@ The HTML uses inline CSS for compatibility with Gmail, Outlook, and Apple Mail.
 
 | File | Purpose |
 |------|---------|
-| `email_adapter.py` | `EmailAdapter` (parse, send, mention logic), `EmailPoller` (IMAP daemon), markdown→HTML rendering |
+| `email_adapter.py` | `EmailAdapter` (parse, send, mention logic), `EmailPoller` (IMAP daemon), markdown-to-HTML rendering |
 | `email_template.html.j2` | Jinja2 HTML email wrapper with inline CSS |
 | `routes.py` | Shared `_process_inbound()` pipeline, adapter registration in `init_channels()` |
 | `base.py` | `ChannelAdapter` Protocol (shared with all adapters) |

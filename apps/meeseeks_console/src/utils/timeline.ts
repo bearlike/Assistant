@@ -8,13 +8,21 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
   let turnEvents: EventRecord[] = [];
   let turnStart: string | undefined;
   let diffFiles: DiffFile[] = [];
+  let lastModel: string | undefined;
+  let turnModel: string | undefined;
   for (const event of events) {
+    if (event.type === "context") {
+      const payload = event.payload as { model?: string } | undefined;
+      if (payload?.model) lastModel = payload.model;
+      continue;
+    }
     if (event.type === "user") {
       turnIndex += 1;
       currentTurnId = `turn-${turnIndex}`;
       turnEvents = [event];
       diffFiles = [];
       turnStart = event.ts;
+      turnModel = lastModel;
       entries.push({
         id: `user-${turnIndex}`,
         role: "user",
@@ -75,7 +83,8 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
         id: currentTurnId,
         events: turnEvents,
         duration,
-        files: mergeDiffFiles(diffFiles)
+        files: mergeDiffFiles(diffFiles),
+        model: turnModel,
       };
       entries.push({
         id: `assistant-${turnIndex}`,
@@ -109,7 +118,8 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
         id: currentTurnId,
         events: turnEvents,
         duration,
-        files: mergeDiffFiles(diffFiles)
+        files: mergeDiffFiles(diffFiles),
+        model: turnModel,
       };
       entries.push({
         id: `completion-${turnIndex}`,
@@ -132,12 +142,20 @@ export function getActiveTurn(events: EventRecord[]): TurnMeta | null {
   let currentTurnId: string | null = null;
   let turnEvents: EventRecord[] = [];
   let diffFiles: DiffFile[] = [];
+  let lastModel: string | undefined;
+  let turnModel: string | undefined;
   for (const event of events) {
+    if (event.type === "context") {
+      const payload = event.payload as { model?: string } | undefined;
+      if (payload?.model) lastModel = payload.model;
+      continue;
+    }
     if (event.type === "user") {
       turnIndex += 1;
       currentTurnId = `turn-${turnIndex}`;
       turnEvents = [event];
       diffFiles = [];
+      turnModel = lastModel;
       continue;
     }
     if (!currentTurnId) {
@@ -172,7 +190,8 @@ export function getActiveTurn(events: EventRecord[]): TurnMeta | null {
   return {
     id: currentTurnId,
     events: turnEvents,
-    files: mergeDiffFiles(diffFiles)
+    files: mergeDiffFiles(diffFiles),
+    model: turnModel,
   };
 }
 function formatDuration(start?: string, end?: string): string | undefined {

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useMemo, useState } from 'react';
+import { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Blocks,
   ChevronDown,
@@ -9,8 +9,10 @@ import {
   Cpu,
   FolderOpen,
   RefreshCw,
+  Search,
   RotateCcw,
   Sliders,
+  X,
   Zap,
 } from 'lucide-react';
 import { ProjectSummary, SkillSummary } from '../api/client';
@@ -83,6 +85,13 @@ function shortModel(id: string): string {
   return slash >= 0 ? id.slice(slash + 1) : id;
 }
 
+/** Case-insensitive substring match across one or more fields. */
+function matchesSearch(query: string, ...fields: (string | undefined | null)[]): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return fields.some(f => f?.toLowerCase().includes(q));
+}
+
 function StatusDot({ status, active }: { status: McpStatus; active: boolean }) {
   if (status === 'active' && !active) {
     return <Circle className="w-2 h-2 shrink-0 fill-[hsl(var(--muted))] text-[hsl(var(--border))]" />;
@@ -146,6 +155,43 @@ function EmptyState({ message }: { message: string }) {
   );
 }
 
+function SearchInput({
+  value,
+  onChange,
+  placeholder = 'Filter...',
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  return (
+    <div className="px-2 pt-1.5 pb-1">
+      <div className="relative">
+        <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[hsl(var(--muted-foreground))]" />
+        <input
+          ref={ref}
+          type="text"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="w-full pl-7 pr-7 py-1.5 text-xs bg-[hsl(var(--muted))] rounded border border-[hsl(var(--border))] text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]/30"
+        />
+        {value && (
+          <button
+            onClick={() => onChange('')}
+            aria-label="Clear filter"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export const ConfigMenu = forwardRef<HTMLDivElement, ConfigMenuProps>(
   (
     {
@@ -200,7 +246,10 @@ export const ConfigMenu = forwardRef<HTMLDivElement, ConfigMenuProps>(
       activeMcpCount;
 
     // Inline summaries for root view rows
-    const projectLabel = activeProject ?? 'Default';
+    const activeProjectEntry = projects.find(
+      (p) => p.project_id ? `managed:${p.project_id}` === activeProject : p.name === activeProject
+    );
+    const projectLabel = activeProjectEntry?.name ?? (activeProject ? activeProject : 'Temporary directory');
     const modelLabel = activeModel ? shortModel(activeModel) : 'Default';
     const skillLabel = activeSkill ? `/${activeSkill}` : 'None';
     const mcpLabel = activeMcpCount > 0 ? `${activeMcpCount} active` : 'None';
@@ -216,15 +265,10 @@ export const ConfigMenu = forwardRef<HTMLDivElement, ConfigMenuProps>(
         >
           <Sliders className={`w-3.5 h-3.5 ${hasAnyActive ? '' : 'opacity-50'}`} />
           {compact ? (
-            hasAnyActive && <span className="text-[10px] font-medium">{totalActive}</span>
+            <span className="text-[10px] font-medium truncate max-w-[80px]">{projectLabel}</span>
           ) : (
             <>
-              <span>Configure</span>
-              {hasAnyActive && (
-                <span className="text-[10px] font-medium bg-[hsl(var(--muted))] text-[hsl(var(--foreground))] px-1.5 py-0.5 rounded">
-                  {totalActive}
-                </span>
-              )}
+              <span className="truncate max-w-[160px]">{projectLabel}</span>
               {isOpen ? (
                 <ChevronUp className="w-3 h-3 opacity-50" />
               ) : (
@@ -260,8 +304,8 @@ export const ConfigMenu = forwardRef<HTMLDivElement, ConfigMenuProps>(
                 error={projectsError}
                 onRefresh={onRefreshProjects}
                 onBack={() => setView('root')}
-                onSelect={(name) => {
-                  onSelectProject(name);
+                onSelect={(key) => {
+                  onSelectProject(key);
                   setView('root');
                 }}
               />
@@ -432,6 +476,13 @@ function CategoryRow({
 
 // ---------- Category views ----------
 
+/** Return the selection key for a project entry. */
+function projectKey(p: ProjectSummary): string {
+  return p.source === 'managed' && p.project_id
+    ? `managed:${p.project_id}`
+    : p.name;
+}
+
 function ProjectView({
   projects,
   activeProject,
@@ -447,8 +498,15 @@ function ProjectView({
   error: string | null;
   onRefresh?: () => void;
   onBack: () => void;
-  onSelect: (name: string | null) => void;
+  onSelect: (key: string | null) => void;
 }) {
+  const [query, setQuery] = useState('');
+  const configProjects = projects.filter((p) => p.source !== 'managed');
+  const managedProjects = projects.filter((p) => p.source === 'managed');
+  const filteredConfig = configProjects.filter(p => matchesSearch(query, p.name, p.description));
+  const filteredManaged = managedProjects.filter(p => matchesSearch(query, p.name, p.description));
+  const noMatches = query && filteredConfig.length === 0 && filteredManaged.length === 0;
+
   return (
     <>
       <CategoryHeader
@@ -457,31 +515,65 @@ function ProjectView({
         onRefresh={onRefresh}
         refreshLabel="Refresh projects"
       />
+      <SearchInput value={query} onChange={setQuery} placeholder="Filter projects..." />
       <ErrorBanner error={error} />
       {projects.length === 0 && !loading && <EmptyState message="No projects available." />}
+      {noMatches && <EmptyState message="No matches." />}
       <div className="py-1">
         <button
           onClick={() => onSelect(null)}
           className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left transition-colors hover:bg-[hsl(var(--accent))] ${!activeProject ? 'text-[hsl(var(--foreground))] font-medium' : 'text-[hsl(var(--muted-foreground))]'}`}
         >
-          <span>Default (server CWD)</span>
+          <span>Temporary directory</span>
         </button>
-        {projects.map((project) => (
-          <button
-            key={project.name}
-            onClick={() => onSelect(project.name)}
-            className={`w-full flex flex-col items-start px-3 py-2 text-xs text-left transition-colors hover:bg-[hsl(var(--accent))] ${activeProject === project.name ? 'text-[hsl(var(--foreground))] font-medium' : 'text-[hsl(var(--foreground))]'}`}
-          >
-            <span>{project.name}</span>
-            {project.description && (
-              <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
-                {project.description}
-              </span>
-            )}
-          </button>
-        ))}
+        {filteredConfig.length > 0 && (
+          <>
+            <ScopeHeader label="Configured" />
+            {filteredConfig.map((project) => {
+              const key = projectKey(project);
+              return (
+                <ProjectRow key={key} project={project} active={activeProject === key} onSelect={() => onSelect(key)} />
+              );
+            })}
+          </>
+        )}
+        {filteredManaged.length > 0 && (
+          <>
+            <ScopeHeader label="Managed" />
+            {filteredManaged.map((project) => {
+              const key = projectKey(project);
+              return (
+                <ProjectRow key={key} project={project} active={activeProject === key} onSelect={() => onSelect(key)} />
+              );
+            })}
+          </>
+        )}
       </div>
     </>
+  );
+}
+
+function ProjectRow({
+  project,
+  active,
+  onSelect,
+}: {
+  project: ProjectSummary;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      onClick={onSelect}
+      className={`w-full flex flex-col items-start px-3 py-2 text-xs text-left transition-colors hover:bg-[hsl(var(--accent))] ${active ? 'text-[hsl(var(--foreground))] font-medium' : 'text-[hsl(var(--foreground))]'}`}
+    >
+      <span>{project.name}</span>
+      {project.description && (
+        <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
+          {project.description}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -504,6 +596,7 @@ function ModelView({
 }) {
   // Push unsupported models (whisper/embedding) to the bottom; stable sort
   // preserves original order within each group.
+  const [query, setQuery] = useState('');
   const orderedModels = useMemo(
     () =>
       [...models].sort((a, b) => {
@@ -513,6 +606,7 @@ function ModelView({
       }),
     [models],
   );
+  const filteredModels = orderedModels.filter(m => matchesSearch(query, m));
   return (
     <>
       <CategoryHeader
@@ -521,8 +615,10 @@ function ModelView({
         onRefresh={onRefresh}
         refreshLabel="Refresh models"
       />
+      <SearchInput value={query} onChange={setQuery} placeholder="Filter models..." />
       <ErrorBanner error={error} />
       {models.length === 0 && !loading && <EmptyState message="No models available." />}
+      {filteredModels.length === 0 && query && <EmptyState message="No matches." />}
       <div className="py-1">
         <button
           onClick={() => onSelect(null)}
@@ -530,7 +626,7 @@ function ModelView({
         >
           <span>Default</span>
         </button>
-        {orderedModels.map((model) => {
+        {filteredModels.map((model) => {
           const unsupported = isUnsupportedModel(model);
           const isActive = activeModel === model;
           return (
@@ -585,6 +681,8 @@ function SkillsView({
   onBack: () => void;
   onSelect: (name: string | null) => void;
 }) {
+  const [query, setQuery] = useState('');
+  const filteredSkills = skills.filter(s => matchesSearch(query, s.name, s.description));
   return (
     <>
       <CategoryHeader
@@ -593,8 +691,10 @@ function SkillsView({
         onRefresh={onRefresh}
         refreshLabel="Refresh skills"
       />
+      <SearchInput value={query} onChange={setQuery} placeholder="Filter skills..." />
       <ErrorBanner error={error} />
       {skills.length === 0 && !loading && <EmptyState message="No skills available." />}
+      {filteredSkills.length === 0 && query && <EmptyState message="No matches." />}
       <div className="py-1">
         <button
           onClick={() => onSelect(null)}
@@ -602,7 +702,7 @@ function SkillsView({
         >
           <span>None</span>
         </button>
-        {skills.map((skill) => (
+        {filteredSkills.map((skill) => (
           <button
             key={skill.name}
             onClick={() => onSelect(skill.name)}
@@ -639,8 +739,18 @@ function McpsView({
   onBack: () => void;
   onToggle: (id: string) => void;
 }) {
-  const globalOptions = options.filter((o) => o.scope !== 'project');
+  const [query, setQuery] = useState('');
+  const pluginOptions = options.filter((o) => o.scope === 'plugin');
+  const globalOptions = options.filter((o) => o.scope !== 'project' && o.scope !== 'plugin');
   const projectOptions = options.filter((o) => o.scope === 'project');
+  const sections = [
+    { label: 'Global', items: globalOptions },
+    { label: 'Plugin', items: pluginOptions },
+    { label: 'Project', items: projectOptions },
+  ].filter((s) => s.items.length > 0);
+  const filteredSections = sections
+    .map(s => ({ ...s, items: s.items.filter(o => matchesSearch(query, o.name)) }))
+    .filter(s => s.items.length > 0);
   return (
     <>
       <CategoryHeader
@@ -649,23 +759,17 @@ function McpsView({
         onRefresh={onRefresh}
         refreshLabel="Refresh MCP tools"
       />
+      <SearchInput value={query} onChange={setQuery} placeholder="Filter integrations..." />
       <ErrorBanner error={error} />
       {options.length === 0 && !loading && <EmptyState message="No MCP servers available." />}
-      {globalOptions.length > 0 && (
-        <>
-          <ScopeHeader label="Global" />
-          <McpOptionList options={globalOptions} onToggle={onToggle} />
-        </>
-      )}
-      {projectOptions.length > 0 && (
-        <>
-          {globalOptions.length > 0 && (
-            <div className="h-px bg-[hsl(var(--border))] mx-2 my-1" />
-          )}
-          <ScopeHeader label="Project" />
-          <McpOptionList options={projectOptions} onToggle={onToggle} />
-        </>
-      )}
+      {filteredSections.length === 0 && query && <EmptyState message="No matches." />}
+      {filteredSections.map((section, i) => (
+        <div key={section.label}>
+          {i > 0 && <div className="h-px bg-[hsl(var(--border))] mx-2 my-1" />}
+          <ScopeHeader label={section.label} />
+          <McpOptionList options={section.items} onToggle={onToggle} />
+        </div>
+      ))}
     </>
   );
 }

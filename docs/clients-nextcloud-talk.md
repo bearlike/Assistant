@@ -129,7 +129,7 @@ The adapter lives in `apps/meeseeks_api/src/meeseeks_api/channels/`:
 |------|---------|
 | `base.py` | `ChannelAdapter` Protocol, `InboundMessage`, `ChannelRegistry`, `DeduplicationGuard` |
 | `nextcloud_talk.py` | HMAC verification, ActivityStreams parsing, OCS Bot API response, `system_context` for LLM awareness |
-| `email_adapter.py` | Email adapter (IMAP polling + SMTP reply with markdown→HTML), `EmailPoller` daemon thread |
+| `email_adapter.py` | Email adapter (IMAP polling + SMTP reply with markdown-to-HTML rendering), `EmailPoller` daemon thread |
 | `routes.py` | Flask Blueprint, shared `_process_inbound()` pipeline, `@command` registry, completion callback, `init_channels()` |
 
 Commands use a decorator-based registry — adding a new command is one `@command` decorator and one function. Help text auto-generates from the registry.

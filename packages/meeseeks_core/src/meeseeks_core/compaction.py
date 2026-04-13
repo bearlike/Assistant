@@ -3,12 +3,40 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from meeseeks_core.common import get_logger
 from meeseeks_core.types import EventRecord
 
 logging = get_logger(name="core.compaction")
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_MAX_RESULT_CHARS = 2000
+
+
+def micro_compact_events(events: list[EventRecord]) -> list[EventRecord]:
+    """Lossless pre-compaction: strip ANSI escapes and truncate large tool outputs.
+
+    Intended for use as a ``pre_compact`` hook — no LLM call, zero cost.
+    """
+    compacted: list[EventRecord] = []
+    for event in events:
+        if event.get("type") != "tool_result":
+            compacted.append(event)
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            compacted.append(event)
+            continue
+        result = payload.get("result")
+        if not isinstance(result, str) or len(result) <= _MAX_RESULT_CHARS:
+            compacted.append(event)
+            continue
+        payload = dict(payload)
+        payload["result"] = _ANSI_RE.sub("", result[:_MAX_RESULT_CHARS]) + "\n[truncated]"
+        compacted.append({**event, "payload": payload})
+    return compacted
 
 
 def summarize_events(events: Iterable[EventRecord], max_items: int = 20) -> str:

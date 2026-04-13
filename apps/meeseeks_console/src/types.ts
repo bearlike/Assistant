@@ -29,6 +29,17 @@ export type NotificationItem = {
   metadata?: Record<string, unknown> | null;
 };
 
+export type VirtualProject = {
+  project_id: string;
+  name: string;
+  description: string;
+  path: string;
+  path_source: string;
+  folder_created: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type SessionContext = {
   repo?: string;
   branch?: string;
@@ -80,6 +91,7 @@ export type TurnMeta = {
   events: EventRecord[];
   duration?: string;
   files: DiffFile[];
+  model?: string;
 };
 export type PlanStatus = "pending" | "approved" | "rejected";
 export type PlanMeta = {

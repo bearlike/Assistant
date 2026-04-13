@@ -54,6 +54,36 @@ def _matches_model_list(model_name: str, entries: Iterable[str]) -> bool:
     return False
 
 
+def model_prefers_structured_patch(model_name: str | None) -> bool:
+    """Return True if the model works better with the per-file structured_patch tool.
+
+    GPT-5-class, o3/o4, and Codex models use structured JSON tool calls that
+    map naturally to ``file_edit_tool`` (structured_patch).  Claude and Gemini
+    are trained on diff/patch text formats and work better with
+    ``aider_edit_block_tool`` (search_replace_block).
+
+    The config key ``llm.structured_patch_models`` overrides the built-in list.
+    """
+    if not model_name:
+        return False
+    normalized = _strip_provider(model_name)
+    raw = model_name.lower()
+    allowlist = _normalize_model_list(
+        get_config_value("llm", "structured_patch_models", default=[])
+    )
+    if _matches_model_list(raw, allowlist) or _matches_model_list(normalized, allowlist):
+        return True
+    # Built-in: GPT-5+, o3/o4 class, Codex models → structured_patch
+    # Claude, Gemini, other open-weights → search_replace_block (aider-style)
+    return (
+        normalized.startswith("gpt-5")
+        or normalized.startswith("o3")
+        or normalized.startswith("o4")
+        or normalized.startswith("codex")
+        or "gpt-4" in normalized
+    )
+
+
 def model_supports_reasoning_effort(model_name: str | None) -> bool:
     """Return True if the model is known to support reasoning_effort.
 
@@ -101,12 +131,17 @@ def resolve_reasoning_effort(model_name: str | None) -> str | None:
     return None
 
 
-def _resolve_litellm_model(model_name: str, openai_api_base: str | None) -> str:
-    if "/" in model_name:
+def _resolve_litellm_model(
+    model_name: str,
+    openai_api_base: str | None,
+    proxy_prefix: str = "openai",
+) -> str:
+    if not openai_api_base:
         return model_name
-    if openai_api_base:
-        return f"openai/{model_name}"
-    return model_name
+    prefix = proxy_prefix.strip().strip("/") or "openai"
+    if model_name.startswith(f"{prefix}/"):
+        return model_name
+    return f"{prefix}/{model_name}"
 
 
 def build_chat_model(
@@ -130,6 +165,12 @@ def build_chat_model(
         openai_api_base = str(get_config_value("llm", "api_base", default="") or "")
     if api_key is None:
         api_key = str(get_config_value("llm", "api_key", default="") or "")
+    proxy_prefix = (
+        str(get_config_value("llm", "proxy_model_prefix", default="openai") or "openai")
+        .strip()
+        .strip("/")
+        or "openai"
+    )
 
     reasoning_effort = resolve_reasoning_effort(model_name)
 
@@ -141,7 +182,7 @@ def build_chat_model(
         model_kwargs["reasoning_effort"] = reasoning_effort
 
     kwargs: dict[str, Any] = {
-        "model": _resolve_litellm_model(model_name, openai_api_base),
+        "model": _resolve_litellm_model(model_name, openai_api_base, proxy_prefix),
         # Disable LiteLLM's built-in retries — the ToolUseLoop manages
         # retries itself with per-attempt timeouts and visible retry events.
         "request_timeout": float(
@@ -195,6 +236,7 @@ def specs_to_langchain_tools(specs: list[object]) -> list[dict[str, Any]]:
 __all__ = [
     "build_chat_model",
     "ChatModel",
+    "model_prefers_structured_patch",
     "model_supports_reasoning_effort",
     "resolve_reasoning_effort",
     "specs_to_langchain_tools",

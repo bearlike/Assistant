@@ -1035,12 +1035,16 @@ def _build_cli_hook_manager(
 ) -> HookManager:
     # When agent display is active, the live tree + integrated spinner
     # replace the per-tool console.status() spinner.
+    def _on_compact(session_id: str) -> None:
+        console.print("[dim blue]Context compacted[/dim blue]")
+
     if agent_display is not None:
         return HookManager(
             on_agent_start=[agent_display.on_start],
             on_agent_stop=[agent_display.on_stop],
             pre_tool_use=[agent_display.on_tool_start],
             post_tool_use=[agent_display.on_tool_end],
+            on_compact=[_on_compact],
         )
 
     # Fallback: original spinner behavior (no agent tree).
@@ -1066,6 +1070,7 @@ def _build_cli_hook_manager(
     return HookManager(
         pre_tool_use=[_start_spinner],
         post_tool_use=[_stop_spinner],
+        on_compact=[_on_compact],
     )
 
 

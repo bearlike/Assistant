@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { SummaryBlock } from './SummaryBlock';
 import { MarkdownContent } from './MessageBubble';
+import { Button } from './ui/Button';
 import { LogEventCard, AccentColor } from './LogEventCard';
 import { ModelLabel } from './ModelLabel';
 import { TerminalCard } from './TerminalCard';
@@ -256,22 +257,26 @@ function renderCompletion(
       )}
       {showRecovery && (
         <div className="mt-2 flex gap-2">
-          <button
+          <Button
+            variant="neutral"
+            size="sm"
+            tone="info"
+            leadingIcon={<RotateCcw className="w-3 h-3" />}
             onClick={onRetry}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"
             title="Re-run the last user query from where it was submitted"
           >
-            <RotateCcw className="w-3 h-3" />
             Retry
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="neutral"
+            size="sm"
+            tone="warn"
+            leadingIcon={<Play className="w-3 h-3" />}
             onClick={onContinue}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
             title="Resume the session and let the agent recover from where it left off"
           >
-            <Play className="w-3 h-3" />
             Continue
-          </button>
+          </Button>
         </div>
       )}
     </LogEventCard>
@@ -405,7 +410,7 @@ export function LogsView({
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="h-full overflow-y-auto bg-[hsl(var(--background))] p-4 space-y-2"
+        className="h-full overflow-y-auto p-5 space-y-4"
       >
         {logs.map((log) => {
           if (log.type === 'plan') {

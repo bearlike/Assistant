@@ -5,6 +5,7 @@ import { InputBar } from './InputBar';
 import { TypewriterGreeting } from './TypewriterGreeting';
 import { QueryMode, SessionContext, SessionSummary } from '../types';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Button } from './ui/Button';
 import { formatSessionTime } from '../utils/time';
 interface HomeViewProps {
   sessions: SessionSummary[];
@@ -93,7 +94,7 @@ export function HomeView({
       <div className="flex-none flex flex-col items-center pt-16 pb-6 px-4 w-full z-20 bg-[hsl(var(--background))]">
         <TypewriterGreeting paused={animPaused} />
 
-        <div className="w-full max-w-3xl">
+        <div className="w-full max-w-4xl">
           {(actionError || (listError && !apiUnavailable)) &&
           <div className="mb-4">
               <Alert variant="destructive">
@@ -119,7 +120,7 @@ export function HomeView({
 
       {/* Scrollable Bottom Section */}
       <div className="flex-1 overflow-y-auto w-full">
-        <div className="max-w-3xl mx-auto px-4 pb-20">
+        <div className="max-w-4xl mx-auto px-4 pb-20">
           {apiUnavailable ?
           <div className="flex flex-col items-center justify-center py-24 text-center">
               <AlertCircle className="w-10 h-10 text-red-500 mb-4" />
@@ -130,11 +131,9 @@ export function HomeView({
                 {listError}
               </p>
               {onRetry &&
-              <button
-                  onClick={onRetry}
-                  className="px-4 py-2 text-sm rounded-lg transition-colors bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]">
+              <Button variant="neutral" size="md" onClick={onRetry}>
                   Try Again
-                </button>
+                </Button>
               }
             </div> :
           <>
@@ -210,12 +209,14 @@ export function HomeView({
               'Search archived sessions' :
               'Search sessions'}
               </h2>
-              <button
+              <Button
+              variant="ghost"
+              size="sm"
+              iconOnly
               onClick={() => setIsSearchOpen(false)}
-              className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
-
+              aria-label="Close search">
                 <X className="w-4 h-4" />
-              </button>
+              </Button>
             </div>
 
             <div className="p-2">
@@ -230,12 +231,15 @@ export function HomeView({
                 placeholder="Search..." />
 
                 {searchQuery &&
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
                 onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-2.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
-
+                aria-label="Clear search"
+                className="absolute right-1 top-1/2 -translate-y-1/2">
                     <X className="w-3 h-3" />
-                  </button>
+                  </Button>
               }
               </div>
 
@@ -315,7 +319,7 @@ function SessionSection({
       <h3 className="text-xs font-medium text-[hsl(var(--muted-foreground))] mb-3 uppercase tracking-wider pl-2">
         {title}
       </h3>
-      <div className="space-y-1">
+      <div className="divide-y divide-[hsl(var(--border))]">
         {loading &&
         <div className="text-sm text-[hsl(var(--muted-foreground))] pl-2">
             Loading sessions...

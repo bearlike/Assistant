@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Pencil, Sparkles } from 'lucide-react';
+import { Button } from './ui/Button';
 
 /**
  * Inline-editable title with optional AI regeneration.
@@ -117,16 +118,19 @@ export function EditableTitle({
           className={`${className} bg-transparent border-b border-[hsl(var(--border))] focus:border-[hsl(var(--ring))] outline-none flex-1 min-w-0 px-0.5 disabled:opacity-60`}
         />
         {onRegenerate && (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
+            iconOnly
             onClick={(e) => { e.stopPropagation(); void handleRegenerate(); }}
             onMouseDown={(e) => e.preventDefault()}
             disabled={regenerating}
             aria-label="Regenerate title with AI"
-            className="shrink-0 p-0.5 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] transition-colors">
+            className="shrink-0">
             {regenerating
               ? <Loader2 className="w-3 h-3 animate-spin" />
               : <Sparkles className="w-3 h-3" />}
-          </button>
+          </Button>
         )}
       </div>
     );
@@ -140,12 +144,15 @@ export function EditableTitle({
         title={value}>
         {value}
       </h2>
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
+        iconOnly
         onClick={startEdit}
         aria-label="Edit title"
-        className="shrink-0 p-0.5 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">
+        className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">
         <Pencil className="w-3 h-3" />
-      </button>
+      </Button>
     </div>
   );
 }

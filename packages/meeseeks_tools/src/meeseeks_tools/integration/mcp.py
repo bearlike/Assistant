@@ -77,13 +77,26 @@ def _normalize_mcp_config(config: dict[str, Any]) -> dict[str, Any]:
     """Normalize legacy MCP config keys for adapter compatibility."""
     # Expand env vars first
     config = _expand_env_vars(config)
+    # Normalize top-level mcpServers → servers (Claude Code format)
+    if "mcpServers" in config and "servers" not in config:
+        config["servers"] = config.pop("mcpServers")
+    elif "mcpServers" in config:
+        config.pop("mcpServers")
     servers = config.get("servers", {})
     for server_config in servers.values():
         if "http_headers" in server_config and "headers" not in server_config:
             server_config["headers"] = server_config.pop("http_headers")
-        # Rename "type" → "transport" (Claude Code / VS Code .mcp.json schema)
-        if "type" in server_config and "transport" not in server_config:
-            server_config["transport"] = server_config.pop("type")
+        # Rename "type" → "transport" (Claude Code / VS Code .mcp.json schema).
+        # Always pop "type" to avoid it leaking into **kwargs during session
+        # creation (deep-merge can produce configs with both keys).
+        if "type" in server_config:
+            if "transport" not in server_config:
+                server_config["transport"] = server_config.pop("type")
+            else:
+                server_config.pop("type")
+        # Infer transport from config shape when neither key is present
+        if "transport" not in server_config and "command" in server_config:
+            server_config["transport"] = "stdio"
         if server_config.get("transport") == "http":
             server_config["transport"] = "streamable_http"
     return config

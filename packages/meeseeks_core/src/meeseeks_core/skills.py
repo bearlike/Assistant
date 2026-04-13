@@ -95,7 +95,9 @@ ACTIVATE_SKILL_SCHEMA: dict[str, object] = {
 # ------------------------------------------------------------------
 
 
-def _parse_skill_file(path: Path, source: str) -> SkillSpec | None:
+def _parse_skill_file(
+    path: Path, source: str, *, default_name: str | None = None
+) -> SkillSpec | None:
     """Parse a SKILL.md file into a SkillSpec, or ``None`` on failure."""
     try:
         raw = path.read_text(encoding="utf-8")
@@ -118,7 +120,7 @@ def _parse_skill_file(path: Path, source: str) -> SkillSpec | None:
         logging.warning("Frontmatter is not a mapping in {}", path)
         return None
 
-    name = meta.get("name")
+    name = meta.get("name") or default_name
     description = meta.get("description")
 
     if not name or not isinstance(name, str):
@@ -189,7 +191,9 @@ def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
         for child in sorted(personal_dir.iterdir()):
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
-                spec = _parse_skill_file(skill_file, source="personal")
+                spec = _parse_skill_file(
+                    skill_file, source="personal", default_name=child.name,
+                )
                 if spec is not None:
                     skills[spec.name] = spec
 
@@ -200,7 +204,9 @@ def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
         for child in sorted(project_dir.iterdir()):
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
-                spec = _parse_skill_file(skill_file, source="project")
+                spec = _parse_skill_file(
+                    skill_file, source="project", default_name=child.name,
+                )
                 if spec is not None:
                     skills[spec.name] = spec  # project overrides personal
 
@@ -240,7 +246,9 @@ def _discover_subtree_skills(
         for child in sorted(skills_dir.iterdir()):
             skill_file = child / "SKILL.md"
             if child.is_dir() and skill_file.is_file():
-                spec = _parse_skill_file(skill_file, source="project")
+                spec = _parse_skill_file(
+                    skill_file, source="project", default_name=child.name,
+                )
                 if spec is not None:
                     # Subtree skills DON'T override project-root or personal skills
                     if spec.name not in skills:
@@ -330,6 +338,29 @@ class SkillRegistry:
         if changed:
             logging.info("Skills reloaded ({} active)", len(self._skills))
         return changed
+
+    def load_extra_dir(self, skills_dir: str, source: str = "plugin") -> None:
+        """Load skills from an extra directory. Does NOT override existing."""
+        base = Path(skills_dir)
+        if not base.is_dir():
+            return
+        for child in sorted(base.iterdir()):
+            skill_file = child / "SKILL.md"
+            if child.is_dir() and skill_file.is_file():
+                spec = _parse_skill_file(
+                    skill_file, source=source, default_name=child.name,
+                )
+                if spec is not None and spec.name not in self._skills:
+                    self._skills[spec.name] = spec
+
+    def load_command_file(self, path: str, source: str = "plugin") -> None:
+        """Load a flat commands/*.md file as a skill."""
+        p = Path(path)
+        if not p.is_file():
+            return
+        spec = _parse_skill_file(p, source=source, default_name=p.stem)
+        if spec is not None and spec.name not in self._skills:
+            self._skills[spec.name] = spec
 
 
 # ------------------------------------------------------------------

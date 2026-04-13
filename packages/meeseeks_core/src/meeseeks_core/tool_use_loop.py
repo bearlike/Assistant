@@ -102,6 +102,15 @@ def _extract_retry_after(exc: Exception) -> float | None:
     return None
 
 
+def _is_context_overflow(exc: Exception) -> bool:
+    """Return True if the exception is a context window exceeded error."""
+    try:
+        import litellm.exceptions as litellm_exc
+    except ImportError:
+        return False
+    return isinstance(exc, litellm_exc.ContextWindowExceededError)
+
+
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 # Matches Claude Code's ``NO_CONTENT_MESSAGE`` (src/constants/messages.ts).
@@ -196,6 +205,7 @@ class ToolUseLoop:
         project_instructions: str | None = None,
         skill_instructions: str | None = None,
         skill_registry: Any = None,
+        agent_registry: Any = None,
         cwd: str | None = None,
         session_id: str | None = None,
     ) -> None:
@@ -210,6 +220,7 @@ class ToolUseLoop:
             project_instructions: CLAUDE.md / AGENTS.md content discovered at session start.
             skill_instructions: Pre-rendered skill body (from user /skill invocation).
             skill_registry: SkillRegistry for auto-invocation catalog + activate_skill handling.
+            agent_registry: AgentRegistry for agent type catalog + spawn_agent type lookup.
             cwd: Working directory for this agent (project root).
             session_id: Session identifier — used for plan-mode path scoping.
         """
@@ -221,6 +232,7 @@ class ToolUseLoop:
         self._project_instructions = project_instructions
         self._skill_instructions = skill_instructions
         self._skill_registry = skill_registry
+        self._agent_registry = agent_registry
         self._cwd = cwd
         self._session_id = session_id
 
@@ -231,6 +243,8 @@ class ToolUseLoop:
         # Plan-mode state (mutable across the loop's lifetime).
         self._current_mode: str = "act"
         self._full_tool_specs: list[ToolSpec] = []
+        # Overhead tokens from tool schemas + system prompt (computed at bind time).
+        self._overhead_tokens: int = 0
 
         # Create SpawnAgentTool when this agent can spawn children.
         self._spawn_agent_tool: Any = None
@@ -247,6 +261,7 @@ class ToolUseLoop:
                 hook_manager=hook_manager,
                 project_instructions=project_instructions,
                 cwd=cwd,
+                agent_registry=agent_registry,
             )
 
         # Create ExitPlanModeTool for root agents with a session id.
@@ -328,6 +343,15 @@ class ToolUseLoop:
             )
             model = self._bind_model(tool_schemas)
 
+            # Compute overhead once — tool schemas + system prompt tokens
+            # that are invisible to event-based budget calculations.
+            from meeseeks_core.token_budget import estimate_overhead_tokens
+
+            system_text = messages[0].content if messages else ""
+            self._overhead_tokens = estimate_overhead_tokens(
+                tool_schemas, system_text if isinstance(system_text, str) else "",
+            )
+
             langfuse_handler = build_langfuse_handler(
                 user_id="meeseeks-tool-use",
                 session_id=f"tool-use-{self._ctx.agent_id}",
@@ -343,7 +367,9 @@ class ToolUseLoop:
                     invoke_config["metadata"] = metadata
 
             turns = 0
+            compacted_this_turn = False
             while not state.done:
+                compacted_this_turn = False
                 # Check cancellation.
                 if self._ctx.should_cancel is not None and self._ctx.should_cancel():
                     state.done = True
@@ -451,6 +477,26 @@ class ToolUseLoop:
                                 last_exc = exc
                                 should_retry, delay = _classify_llm_error(exc)
                                 if not should_retry:
+                                    # Reactive fallback: compact on context overflow.
+                                    if (
+                                        _is_context_overflow(exc)
+                                        and not compacted_this_turn
+                                        and await self._compact_messages(messages)
+                                    ):
+                                        compacted_this_turn = True
+                                        await self._ctx.registry.record_compaction(
+                                            self._ctx.agent_id,
+                                        )
+                                        self._emit_event({
+                                            "type": "context_compacted",
+                                            "payload": {
+                                                "agent_id": self._ctx.agent_id,
+                                                "depth": self._ctx.depth,
+                                                "mode": "reactive",
+                                                "turn": turns,
+                                            },
+                                        })
+                                        continue  # Retry with compacted messages
                                     non_retryable = True
                                     break  # Don't cascade non-retryable errors
                                 if attempt == retries:
@@ -642,6 +688,22 @@ class ToolUseLoop:
                             content=f"{len(failures)}/{len(results)} tool call(s)"
                             " failed this step — adapt your approach."
                         ))
+
+                    # Proactive mid-loop compaction check.
+                    if self._should_compact_messages(messages):
+                        if await self._compact_messages(messages):
+                            await self._ctx.registry.record_compaction(
+                                self._ctx.agent_id,
+                            )
+                            self._emit_event({
+                                "type": "context_compacted",
+                                "payload": {
+                                    "agent_id": self._ctx.agent_id,
+                                    "depth": self._ctx.depth,
+                                    "mode": "mid_loop",
+                                    "turn": turns,
+                                },
+                            })
 
                     if span is not None:
                         try:
@@ -882,6 +944,12 @@ class ToolUseLoop:
             catalog = self._skill_registry.render_catalog()
             if catalog:
                 system_parts.append(catalog)
+
+        # Registered agent types catalog (for spawn_agent agent_type selection).
+        if self._agent_registry is not None:
+            agent_catalog = self._agent_registry.render_catalog()
+            if agent_catalog:
+                system_parts.append(agent_catalog)
 
         # Session context.
         if context and context.summary:
@@ -1163,14 +1231,24 @@ class ToolUseLoop:
     # ------------------------------------------------------------------
 
     def _configured_edit_tool_id(self) -> str:
-        """Return the tool_id for the edit tool selected in ``agent.edit_tool``.
+        """Return the tool_id for the edit tool appropriate for the active model.
 
-        Maps the config value to the registered ``tool_id`` so plan-mode
-        filtering and path-scope permission checks can identify the single
-        edit tool the model may use.
+        Prefers model-derived capability detection (via
+        ``llm.model_prefers_structured_patch``).  The ``agent.edit_tool``
+        config value is honoured as an explicit override when non-empty.
         """
-        mechanism = get_config_value("agent", "edit_tool", default="search_replace_block")
-        if mechanism == "structured_patch":
+        from meeseeks_core.llm import model_prefers_structured_patch
+
+        # Explicit user override always wins
+        override = get_config_value("agent", "edit_tool", default="")
+        if override == "structured_patch":
+            return "file_edit_tool"
+        if override == "search_replace_block":
+            return "aider_edit_block_tool"
+
+        # Derive from model identity
+        model_name: str | None = getattr(self._ctx, "model_name", None)
+        if model_prefers_structured_patch(model_name):
             return "file_edit_tool"
         return "aider_edit_block_tool"
 
@@ -1199,6 +1277,85 @@ class ToolUseLoop:
         if isinstance(raw, str):
             return raw.strip().lower() in {"1", "true", "yes", "on"}
         return bool(raw)
+
+    # ------------------------------------------------------------------
+    # Mid-loop context compaction
+    # ------------------------------------------------------------------
+
+    def _should_compact_messages(self, messages: list[BaseMessage]) -> bool:
+        """Cheap check: are in-flight messages approaching the context window?"""
+        # Rough estimate: ~3 chars per token, plus computed overhead.
+        char_total = sum(
+            len(m.content) if isinstance(m.content, str) else len(str(m.content))
+            for m in messages
+        )
+        estimated_tokens = char_total // 3 + self._overhead_tokens
+        from meeseeks_core.token_budget import get_context_window
+
+        context_window = get_context_window(self._ctx.model_name)
+        threshold = float(get_config_value(
+            "token_budget", "auto_compact_threshold", default=0.8,
+        ))
+        return estimated_tokens >= context_window * threshold
+
+    async def _compact_messages(self, messages: list[BaseMessage]) -> bool:
+        """Compact the in-flight message list by summarizing older messages.
+
+        Keeps messages[0] (system prompt) and the last ``recent_keep``
+        messages, summarizing everything in between via the structured
+        compaction prompt.  Returns True if compaction was performed.
+        """
+        recent_keep = 6  # ~3 turn pairs (AI + Tool)
+        if len(messages) <= recent_keep + 2:
+            return False  # Not enough to compact
+
+        to_summarize = messages[1:-recent_keep]
+        kept_tail = messages[-recent_keep:]
+
+        # Build text representation for the summarizer.
+        lines: list[str] = []
+        for m in to_summarize:
+            role = getattr(m, "type", "unknown")
+            text = m.content if isinstance(m.content, str) else str(m.content)
+            lines.append(f"[{role}] {text[:2000]}")
+        summary_input = "\n".join(lines)
+
+        # If root agent, include agent tree so delegation context survives.
+        if self._ctx.depth == 0:
+            tree = await self._ctx.registry.render_agent_tree(
+                exclude_agent_id=self._ctx.agent_id,
+            )
+            if tree:
+                summary_input += f"\n\n# Active agent tree at compaction:\n{tree}"
+
+        # Invoke the compaction LLM.
+        from meeseeks_core.compact import COMPACT_PROMPT, _extract_summary
+
+        llm = build_chat_model(model_name=self._ctx.model_name)
+        try:
+            response = await llm.ainvoke([
+                SystemMessage(content=COMPACT_PROMPT),
+                HumanMessage(content=f"Summarize this conversation:\n\n{summary_input}"),
+            ])
+        except Exception:
+            logging.warning("Mid-loop compaction LLM call failed", exc_info=True)
+            return False
+
+        raw = response.content if hasattr(response, "content") else str(response)
+        if isinstance(raw, list):
+            raw = next(
+                (b["text"] for b in raw if isinstance(b, dict) and b.get("type") == "text"),
+                "",
+            )
+        summary = _extract_summary(raw)
+
+        # Rebuild messages in-place.
+        system_msg = messages[0]
+        messages.clear()
+        messages.append(system_msg)
+        messages.append(SystemMessage(content=f"[Compacted context]\n{summary}"))
+        messages.extend(kept_tail)
+        return True
 
     def _build_tool_schemas_for_mode(
         self, specs: list[ToolSpec], mode: str,
@@ -1467,6 +1624,10 @@ class ToolUseLoop:
             if edited_path:
                 norm = os.path.normpath(edited_path)
                 self._file_read_cache.pop(norm, None)
+                # Passive LSP diagnostics: surface errors after edits.
+                content_str = _append_lsp_feedback(
+                    content_str, norm, self._cwd or "",
+                )
 
         self._emit_tool_result_event(action_step, event_str, result_file=result_file)
         return ToolCallResult(
@@ -1795,6 +1956,19 @@ class ToolUseLoop:
 # ------------------------------------------------------------------
 # Standalone helpers
 # ------------------------------------------------------------------
+
+
+def _append_lsp_feedback(content: str, file_path: str, cwd: str) -> str:
+    """Append passive LSP diagnostics to an edit tool result (if available)."""
+    try:
+        from meeseeks_tools.integration.lsp import get_passive_diagnostics
+
+        feedback = get_passive_diagnostics(file_path, cwd)
+        if feedback:
+            return f"{content}\n\n--- Passive Feedback (LSP) ---\n{feedback}"
+    except Exception:
+        pass  # LSP not installed or not running — silently skip
+    return content
 
 
 def _infer_operation(tool_id: str) -> str:

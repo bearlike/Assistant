@@ -29,6 +29,11 @@ services:
         BASE_IMAGE: ghcr.io/bearlike/meeseeks-base:latest
     network_mode: host
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    # Supplementary group so the api process can reach /var/run/docker.sock
+    # (needed by the Web IDE feature's Docker SDK calls). Set DOCKER_GID in
+    # docker.env to your host's docker group GID (`stat -c '%g' /var/run/docker.sock`).
+    group_add:
+      - "${DOCKER_GID:-999}"
     env_file: docker.env
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
@@ -43,10 +48,16 @@ services:
       # files across restarts. Survives ``docker compose down``; cleared
       # only by ``docker compose down -v`` or ``docker volume rm``.
       - plans-data:/tmp/meeseeks/plans
+      # Web IDE: Docker SDK needs write access to the socket to create
+      # code-server sibling containers. Deadline files bind-mounted into
+      # each IDE container live under /tmp/meeseeks-ide.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/meeseeks-ide:/tmp/meeseeks-ide
       # Project directories and init scripts — add in docker-compose.override.yml
       # (see docker-compose.override.example.yml for the template)
     environment:
       - MEESEEKS_HOME=/app/data
+      - MEESEEKS_IDE_STATE_DIR=/tmp/meeseeks-ide
 
   console:
     image: ghcr.io/bearlike/meeseeks-console:latest
@@ -58,6 +69,24 @@ services:
     env_file: docker.env
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
+
+  ide-proxy:
+    image: nginx:1.27-alpine
+    container_name: meeseeks-ide-proxy
+    networks: [meeseeks-ide]
+    # Loopback-only by default for safety. If an upstream edge proxy /
+    # L7 gateway sits on a different host on your LAN, publish this on
+    # the right interface via docker-compose.override.yml — see
+    # docker-compose.override.example.yml for the pattern.
+    ports: ["127.0.0.1:5126:8080"]
+    volumes:
+      - ./docker/nginx-ide-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+networks:
+  meeseeks-ide:
+    driver: bridge
+    name: meeseeks-ide
 
 volumes:
   api-data:

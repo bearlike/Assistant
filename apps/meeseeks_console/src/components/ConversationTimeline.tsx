@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { ChevronRight, Loader2 } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { ChevronRight, Info, Loader2, Pencil } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { CopyButton } from './CopyButton';
 import { ScrollToBottom } from './ScrollToBottom';
@@ -8,8 +8,10 @@ import { FileList } from './FileList';
 import { PlanCard } from './PlanCard';
 import { SummaryBlock } from './SummaryBlock';
 import { RetryFromHereButton } from './RetryFromHereButton';
+import { ForkFromHereButton } from './ForkFromHereButton';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import { ModelLabel } from './ModelLabel';
+import { Button } from './ui/Button';
 interface ConversationTimelineProps {
   timeline: TimelineEntry[];
   onShowTrace: (turn: TurnMeta) => void;
@@ -19,6 +21,8 @@ interface ConversationTimelineProps {
   onShowActiveTrace?: () => void;
   onApprovePlan?: (approved: boolean) => void;
   onRetryFrom?: (fromTs: string) => void;
+  onForkFrom?: (fromTs: string) => void;
+  onEditAndRegenerate?: (fromTs: string, newText: string) => void;
   events?: EventRecord[];
   model?: string;
   systemBlock?: {
@@ -40,10 +44,31 @@ export function ConversationTimeline({
   onShowActiveTrace,
   onApprovePlan,
   onRetryFrom,
+  onForkFrom,
+  onEditAndRegenerate,
   events = [],
   model,
   systemBlock
 }: ConversationTimelineProps) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+
+  const startEdit = useCallback((id: string, content: string) => {
+    setEditingId(id);
+    setEditText(content);
+  }, []);
+
+  const submitEdit = useCallback((fromTs: string) => {
+    if (!editText.trim() || !onEditAndRegenerate) return;
+    onEditAndRegenerate(fromTs, editText.trim());
+    setEditingId(null);
+    setEditText('');
+  }, [editText, onEditAndRegenerate]);
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setEditText('');
+  }, []);
   const awaitingPlanApproval = useMemo(() => {
     if (timeline.length === 0) return false;
     const last = timeline[timeline.length - 1];
@@ -77,8 +102,46 @@ export function ConversationTimeline({
         entry.plan && <PlanCard plan={entry.plan} onApprove={onApprovePlan} /> :
           entry.role === 'user' ?
         <div className="flex justify-end">
-              <div className="inline-flex flex-col items-end max-w-[85%]">
+              <div className={`${editingId === entry.id ? 'flex w-full' : 'inline-flex'} flex-col items-end max-w-[85%]`}>
+                {editingId === entry.id ? (
+                  <div className="w-full space-y-2">
+                    <div className="w-full bg-user-msg/80 text-[hsl(var(--card-foreground))] px-4 py-3 rounded-lg text-sm border border-dashed border-[hsl(var(--ring))]/50">
+                      <textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        className="w-full min-h-[80px] bg-transparent text-sm leading-relaxed text-[hsl(var(--card-foreground))] resize-y focus:outline-none"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') cancelEdit();
+                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                            const fromTs = entry.turn?.events[0]?.ts;
+                            if (fromTs) submitEdit(fromTs);
+                          }
+                        }}
+                      />
+                      <div className="flex justify-end gap-2 mt-2 pt-2 border-t border-[hsl(var(--border))]">
+                        <Button variant="ghost" size="sm" onClick={cancelEdit}>Cancel</Button>
+                        <Button
+                          variant="neutral"
+                          size="sm"
+                          tone="info"
+                          onClick={() => {
+                            const fromTs = entry.turn?.events[0]?.ts;
+                            if (fromTs) submitEdit(fromTs);
+                          }}
+                        >
+                          Save &amp; Regenerate
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2 px-1 text-[11px] leading-snug text-[hsl(var(--muted-foreground))]">
+                      <Info className="w-3.5 h-3.5 shrink-0 mt-px opacity-60" />
+                      <span>Regenerating from here re-runs with your edited prompt. Prior agent actions (file edits, commands) are <strong className="font-medium text-[hsl(var(--foreground))]">not reverted</strong>.</span>
+                    </div>
+                  </div>
+                ) : (
                 <MessageBubble role={entry.role} content={entry.content} />
+                )}
                 <div className="mt-2 inline-flex items-center gap-3">
                   <CopyButton
                     text={entry.content}
@@ -86,6 +149,16 @@ export function ConversationTimeline({
                   >
                     <span className="hidden text-[10px] group-hover:inline-block">Copy</span>
                   </CopyButton>
+                  {!isRunning && editingId !== entry.id && onEditAndRegenerate && (
+                    <button
+                      onClick={() => startEdit(entry.id, entry.content)}
+                      className="group inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+                      aria-label="Edit and regenerate"
+                    >
+                      <Pencil className="w-3 h-3" />
+                      <span className="hidden text-[10px] group-hover:inline-block">Edit</span>
+                    </button>
+                  )}
                   {entry.turnId === activeTurnId &&
               <div className="inline-flex flex-col text-xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-lg overflow-hidden max-w-[320px]">
                       <div className="flex items-center justify-between gap-3 px-3 py-1.5">
@@ -129,18 +202,30 @@ export function ConversationTimeline({
           content={entry.content}
           actions={(() => {
             const fromTs = entry.turn?.events[0]?.ts;
-            return !isRunning && fromTs && onRetryFrom ? (
-              <RetryFromHereButton
-                onConfirm={() => onRetryFrom(fromTs)}
-                className="group inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
-              />
-            ) : undefined;
+            if (isRunning || !fromTs) return undefined;
+            const actionClass = "group inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors";
+            return (
+              <div className="inline-flex items-center gap-3">
+                {onRetryFrom && (
+                  <RetryFromHereButton
+                    onConfirm={() => onRetryFrom(fromTs)}
+                    className={actionClass}
+                  />
+                )}
+                {onForkFrom && (
+                  <ForkFromHereButton
+                    onConfirm={() => onForkFrom(fromTs)}
+                    className={actionClass}
+                  />
+                )}
+              </div>
+            );
           })()}>
 
               {entry.role === 'assistant' && entry.turn &&
           <div className="mt-5 pt-4 border-t border-[hsl(var(--border))] space-y-4">
                   <div className="flex items-center gap-4 text-xs text-[hsl(var(--muted-foreground))]">
-                    <ModelLabel modelId={model} className="font-mono opacity-70" />
+                    <ModelLabel modelId={entry.turn?.model ?? model} className="font-mono opacity-70" />
                     {entry.turn.duration &&
               <span className="font-mono opacity-70">
                         {entry.turn.duration}

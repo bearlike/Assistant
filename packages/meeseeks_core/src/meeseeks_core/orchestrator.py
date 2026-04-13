@@ -13,7 +13,7 @@ from meeseeks_core.classes import ActionStep, OrchestrationState, Plan, PlanStep
 from meeseeks_core.common import discover_project_instructions, get_logger, session_log_context
 from meeseeks_core.compaction import should_compact, summarize_events
 from meeseeks_core.components import langfuse_session_context
-from meeseeks_core.config import get_config_value
+from meeseeks_core.config import PluginsConfig, get_config, get_config_value
 from meeseeks_core.context import ContextBuilder
 from meeseeks_core.exit_plan_mode import ensure_plan_dir, plan_file_for
 from meeseeks_core.hooks import HookManager, default_hook_manager
@@ -89,15 +89,62 @@ class Orchestrator:
             get_config_value("llm", "fallback_models", default=[]) or []
         )
         self._session_store = session_store or create_session_store()
-        self._tool_registry = tool_registry or load_registry(cwd=cwd)
         self._permission_policy = permission_policy or load_permission_policy()
         self._approval_callback = approval_callback or approval_callback_from_config()
         self._hook_manager = hook_manager or default_hook_manager()
-        self._context_builder = ContextBuilder(self._session_store)
-        self._planner = Planner(self._tool_registry)
+
         self._project_instructions = discover_project_instructions(cwd)
         self._skill_registry = SkillRegistry()
         self._skill_registry.load(cwd)
+
+        # Plugin loading (before load_registry so MCP servers are collected first).
+        # Uses the shared load_all_plugin_components() so the same logic is
+        # reused by the API /skills and /tools endpoints (DRY).
+        self._agent_registry = None
+        plugins_cfg = get_config().plugins
+
+        if plugins_cfg.enabled:
+            # Reconcile missing plugins on fresh containers / volume wipes.
+            if plugins_cfg.enabled_plugins:
+                self._reconcile_missing_plugins(plugins_cfg)
+
+            from pathlib import Path as _Path
+
+            from meeseeks_core.agent_registry import AgentRegistry, parse_agent_file
+            from meeseeks_core.hooks import merge_plugin_hooks
+            from meeseeks_core.plugins import load_all_plugin_components
+
+            fan_out = load_all_plugin_components()
+            self._agent_registry = AgentRegistry()
+
+            for pc in fan_out.components:
+                if pc.manifest is None:
+                    continue
+                plugin_source = f"plugin:{pc.manifest.name}"
+                for sd in pc.skill_dirs:
+                    self._skill_registry.load_extra_dir(sd, source=plugin_source)
+                for cf in pc.command_files:
+                    self._skill_registry.load_command_file(cf, source=plugin_source)
+                for af in pc.agent_files:
+                    agent_def = parse_agent_file(_Path(af), source=plugin_source)
+                    if agent_def:
+                        self._agent_registry.register(agent_def)
+            for hooks_json, plugin_root in fan_out.hooks_configs:
+                merge_plugin_hooks(self._hook_manager, hooks_json, plugin_root)
+            plugin_mcp_servers = fan_out.mcp_servers
+        else:
+            plugin_mcp_servers = {}
+
+        self._tool_registry = tool_registry or load_registry(
+            cwd=cwd, extra_mcp_servers=plugin_mcp_servers or None,
+        )
+        self._context_builder = ContextBuilder(self._session_store)
+        self._planner = Planner(self._tool_registry)
+
+        # Register lossless micro-compaction as a pre_compact hook.
+        from meeseeks_core.compaction import micro_compact_events
+
+        self._hook_manager.pre_compact.append(micro_compact_events)
 
     def run(
         self,
@@ -240,6 +287,7 @@ class Orchestrator:
                 project_instructions=self._project_instructions,
                 skill_instructions=skill_instructions,
                 skill_registry=self._skill_registry,
+                agent_registry=self._agent_registry,
                 cwd=self._cwd,
                 session_id=session_id,
             )
@@ -390,8 +438,10 @@ class Orchestrator:
         events = self._session_store.load_transcript(session_id)
         events = self._hook_manager.run_pre_compact(events)
         summary = self._session_store.load_summary(session_id)
-        budget = get_token_budget(events, summary, self._model_name)
+        overhead = int(get_config_value("token_budget", "overhead_estimate", default=25000))
+        budget = get_token_budget(events, summary, self._model_name, overhead_tokens=overhead)
         if budget.needs_compact or should_compact(events):
+            tokens_saved = 0
             try:
                 from meeseeks_core.compact import CompactionMode, compact_conversation
 
@@ -403,6 +453,7 @@ class Orchestrator:
                     )
                 )
                 summary = result.summary
+                tokens_saved = result.tokens_saved
             except Exception:
                 logging.warning(
                     "Structured compaction failed, falling back to simple summary",
@@ -410,6 +461,17 @@ class Orchestrator:
                 )
                 summary = summarize_events(events)
             self._session_store.save_summary(session_id, summary)
+            self._session_store.append_event(session_id, {
+                "type": "context_compacted",
+                "payload": {
+                    "agent_id": None,
+                    "depth": 0,
+                    "mode": "auto",
+                    "tokens_before": budget.total_tokens,
+                    "tokens_saved": tokens_saved,
+                },
+            })
+            self._hook_manager.run_on_compact(session_id)
             return summary
         return None
 
@@ -418,6 +480,60 @@ class Orchestrator:
         self._session_store.append_event(
             session_id, {"type": "action_plan", "payload": {"steps": payload_steps}}
         )
+
+    @staticmethod
+    def _reconcile_missing_plugins(plugins_cfg: PluginsConfig) -> None:
+        """Ensure all ``enabled_plugins`` exist in the registry.
+
+        On a fresh container or after a volume wipe, enabled plugins may be
+        listed in the config but absent from the registry/cache.  This method
+        discovers which are missing and attempts to install them from the
+        configured marketplaces.  Errors are logged and skipped — session
+        startup should not fail because a plugin couldn't be fetched.
+        """
+        from meeseeks_core.plugins import (
+            discover_installed_plugins,
+            discover_marketplace_plugins,
+            install_plugin,
+        )
+
+        cfg = plugins_cfg
+        registry_paths = cfg.resolve_registry_paths()
+        installed = discover_installed_plugins(registry_paths=registry_paths)
+        installed_names = {
+            pc.manifest.name for pc in installed if pc.manifest is not None
+        }
+        missing = [
+            name.split("@")[0]
+            for name in cfg.enabled_plugins
+            if name.split("@")[0] not in installed_names
+        ]
+        if not missing:
+            return
+
+        from meeseeks_core.common import get_logger
+        _log = get_logger(name="core.orchestrator")
+        _log.info("Reconciling {} missing plugin(s): {}", len(missing), missing)
+
+        marketplace_dirs = cfg.resolve_marketplace_dirs()
+        available = discover_marketplace_plugins(marketplace_dirs=marketplace_dirs)
+        available_by_name = {p["name"]: p for p in available}
+
+        for name in missing:
+            match = available_by_name.get(name)
+            if match is None:
+                _log.warning("Plugin '{}' not found in any marketplace — skipping", name)
+                continue
+            try:
+                install_plugin(
+                    name,
+                    match["marketplace"],
+                    marketplace_dirs=marketplace_dirs,
+                    install_base=cfg.resolve_install_dir(),
+                )
+                _log.info("Auto-installed plugin '{}'", name)
+            except Exception as exc:
+                _log.warning("Failed to auto-install plugin '{}': {}", name, exc)
 
     @staticmethod
     def _should_update_summary(text: str) -> bool:

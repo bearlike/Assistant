@@ -20,9 +20,11 @@ For architecture details, query the wiki. Do not restate them here.
 | Agent hypervisor & handles | `packages/meeseeks_core/src/meeseeks_core/hypervisor.py` |
 | Sub-agent spawn + management tools | `packages/meeseeks_core/src/meeseeks_core/spawn_agent.py` |
 | Skills (Agent Skills standard) | `packages/meeseeks_core/src/meeseeks_core/skills.py` |
+| Plugin discovery + install | `packages/meeseeks_core/src/meeseeks_core/plugins.py` |
+| Agent definition registry | `packages/meeseeks_core/src/meeseeks_core/agent_registry.py` |
 | Session lifecycle, sync→async bridge | `packages/meeseeks_core/src/meeseeks_core/orchestrator.py` |
 | Tool registry + `filter_specs()` | `packages/meeseeks_core/src/meeseeks_core/tool_registry.py` |
-| Config (`AgentConfig`, `HooksConfig`) | `packages/meeseeks_core/src/meeseeks_core/config.py` |
+| Config (`AgentConfig`, `HooksConfig`, `PluginsConfig`) | `packages/meeseeks_core/src/meeseeks_core/config.py` |
 | Compaction (FULL/PARTIAL modes) | `packages/meeseeks_core/src/meeseeks_core/compact.py` |
 | Hook manager | `packages/meeseeks_core/src/meeseeks_core/hooks.py` |
 | Channel adapter abstraction | `apps/meeseeks_api/src/meeseeks_api/channels/base.py` |
@@ -31,6 +33,8 @@ For architecture details, query the wiki. Do not restate them here.
 | Channel routes + shared pipeline | `apps/meeseeks_api/src/meeseeks_api/channels/routes.py` |
 | MCP connection pool | `packages/meeseeks_tools/src/meeseeks_tools/integration/mcp_pool.py` |
 | File edit tools + shared utils | `packages/meeseeks_tools/src/meeseeks_tools/integration/edit_common.py` |
+| Web IDE manager + routes | `apps/meeseeks_api/src/meeseeks_api/ide.py`, `ide_routes.py` |
+| LSP tool, manager, server defs | `packages/meeseeks_tools/src/meeseeks_tools/integration/lsp/` |
 
 Use `rg` / `glob` for anything else.
 
@@ -96,7 +100,7 @@ Add `<!-- meeseeks:noload -->` on line 1 to skip a file (marker: `_NOLOAD_MARKER
 These are *rules*, not explanations. For background, query the wiki.
 
 - **Single async loop**: `ToolUseLoop.run()` is the only execution engine. No separate planner/executor/synthesizer.
-- **Edit tool is configurable**: `AgentConfig.edit_tool` selects `"search_replace_block"` or `"structured_patch"`. Both share `edit_common.py` and emit `{"kind": "diff", ...}`.
+- **Edit tool is configurable**: `AgentConfig.edit_tool` selects `"search_replace_block"` or `"structured_patch"`. Both share `edit_common.py` and emit `{"kind": "diff", ...}`. When `edit_tool` is empty (default), `ToolUseLoop._configured_edit_tool_id()` auto-selects based on model identity via `llm.model_prefers_structured_patch()`.
 - **Tool scoping**: `filter_specs()` applies allowlist/denylist. API passes `context.mcp_tools` as `allowed_tools` through `SessionRuntime` → `Orchestrator` → `ToolUseLoop`.
 - **Sub-agent spawn signature**: `spawn_agent(task, model, allowed_tools, denied_tools, acceptance_criteria)`. `max_steps` is deprecated and not enforced — agents run until natural completion. Inherits parent's `approval_callback` so write/edit/shell tools work in API/headless contexts.
 - **Non-blocking root spawn** (depth=0): returns `{agent_id, status: "submitted"}` immediately. `_run_child_lifecycle` stores `AgentResult` on the `AgentHandle` and calls `send_to_parent()`. Non-root agents use blocking spawn and return the `AgentResult` as JSON in a `ToolMessage`.
@@ -124,6 +128,11 @@ These are *rules*, not explanations. For background, query the wiki.
 - **Structured errors**: `AgentError` captures `agent_id`, `depth`, `task`, `message`, `last_tool`, `steps`. Sub-agent cleanup cascades to children before unregistering.
 - **Cleanup**: 3-phase (cancel → wait with timeout → force-mark as cancelled). `await_lifecycle_managers(timeout)` before event-loop teardown.
 - **Forced synthesis**: on root step limit with pending non-blocking children, 2s grace period, then inject completed results as `SystemMessage` for synthesis; still-running agents warned in the prompt.
+- **Fork from message**: `SessionRuntime.resolve_session(fork_from=..., fork_at_ts=...)` creates a new session with only events up to the given timestamp, enabling edit-and-regenerate from any point in the conversation.
+- **Plugins**: `PluginsConfig` in `config.py` defines `registry_paths` and `marketplaces`. `plugins.py` handles discovery, install, uninstall, and marketplace reading. Plugins contribute agent definitions (via `agent_registry.py`), skills, hooks (format-translated to `HooksConfig`), and MCP tools. `load_all_plugin_components()` is called during session init in the orchestrator. CLI: `/plugins`. API: `GET/POST /api/plugins`, `GET/POST /api/plugins/marketplace`, `DELETE /api/plugins/<name>`. Console: `PluginsView`.
+- **Web IDE**: opt-in per-session code-server containers managed by `IdeManager` / `IdeStore` in the API. Config: `agent.web_ide` (`WebIdeConfig`). Requires MongoDB. API: `POST/DELETE /api/sessions/{id}/ide`, `POST /api/sessions/{id}/ide/extend`. Console shows an "Open in Web IDE" button when enabled.
+- **Proxy model prefix**: `LLMConfig.proxy_model_prefix` (default `"openai"`) is prepended to model names when routing through a proxy. Read by `build_chat_model()` in `llm.py`.
+- **LSP**: `lsp_tool` (backed by pygls/lsprotocol, gracefully absent when not installed). Operations: `diagnostics`, `definition`, `references`, `hover`. Servers auto-discovered via `shutil.which`; spawned lazily per-session; passive diagnostics injected as a `_append_lsp_feedback` hook in `ToolUseLoop` after every file edit. Config: `agent.lsp.enabled` (default `true`) + `agent.lsp.servers` (per-server overrides or custom server definitions). Built-ins: pyright (Python), typescript-language-server (TS/JS), gopls (Go), rust-analyzer (Rust). Per-session shutdown via `shutdown_lsp_managers()`.
 
 ## Running, testing, linting
 

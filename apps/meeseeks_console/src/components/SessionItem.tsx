@@ -1,5 +1,5 @@
 import React from 'react';
-import { Archive, RotateCcw } from 'lucide-react';
+import { Archive, GitFork, RotateCcw } from 'lucide-react';
 import { SessionSummary } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { formatSessionTime } from '../utils/time';
@@ -27,9 +27,9 @@ export function SessionItem({
   return (
     <div
       onClick={() => onClick(session.session_id)}
-      className="group flex items-start gap-4 py-3 px-2 -mx-2 rounded-lg hover:bg-[hsl(var(--accent))] cursor-pointer transition-colors">
+      className="group flex items-start gap-4 py-3.5 px-3 hover:bg-[hsl(var(--accent))] cursor-pointer transition-colors">
 
-      <div className="flex flex-col gap-1 min-w-0 flex-1">
+      <div className="flex flex-col gap-1.5 min-w-0 flex-1">
         <h3 className="text-sm font-medium text-[hsl(var(--foreground))] group-hover:opacity-90 transition-colors line-clamp-2">
           {session.title}
         </h3>
@@ -38,14 +38,12 @@ export function SessionItem({
           {(session.context?.project || session.context?.repo) && (
             <>
               <span>·</span>
+              <GitFork className="w-3 h-3 shrink-0" />
               <span className="truncate">{session.context?.project || session.context?.repo}</span>
             </>
           )}
           {session.context?.branch && (
-            <>
-              <span>·</span>
-              <span className="font-mono truncate">{session.context.branch}</span>
-            </>
+            <span className="font-mono truncate bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-[11px]">{session.context.branch}</span>
           )}
         </div>
       </div>

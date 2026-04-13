@@ -110,6 +110,9 @@ class AgentHandle:
     result: AgentResult | None = None
     # Ref: [DeepMind-Delegation §4.5] Auto-updated progress for monitoring
     progress_note: str | None = None
+    # Context compaction tracking — visible in agent tree rendering.
+    compaction_count: int = 0
+    last_compacted_at: float | None = None
     # Signaled when agent reaches a terminal state (completed/failed/cancelled).
     done_event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -321,6 +324,14 @@ class AgentHypervisor:
             handle.message_queue.put_nowait(message)
             return None
 
+    async def record_compaction(self, agent_id: str) -> None:
+        """Record that an agent compacted its context."""
+        async with self._lock:
+            handle = self._agents.get(agent_id)
+            if handle:
+                handle.compaction_count += 1
+                handle.last_compacted_at = time.monotonic()
+
     # ------------------------------------------------------------------
     # Global eye  (Ref: [DeepMind-Delegation §4.5])
     # ------------------------------------------------------------------
@@ -374,10 +385,13 @@ class AgentHypervisor:
                     extra = f" | result({h.result.status}): {h.result.summary[:120]}"
                 elif h.progress_note:
                     extra = f" | progress: {h.progress_note[:120]}"
+                compact_marker = (
+                    f" | compacted x{h.compaction_count}" if h.compaction_count else ""
+                )
                 task_preview = h.task_description[:80]
                 lines.append(
                     f"{indent}- [{h.agent_id[:8]}] {h.status}: "
-                    f"\"{task_preview}\" ({step_info}{status_marker}{extra})"
+                    f"\"{task_preview}\" ({step_info}{status_marker}{compact_marker}{extra})"
                 )
             return "\n".join(lines)
 

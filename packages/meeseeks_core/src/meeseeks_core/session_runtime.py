@@ -182,11 +182,21 @@ class SessionRuntime:
         session_id: str | None = None,
         session_tag: str | None = None,
         fork_from: str | None = None,
+        fork_at_ts: str | None = None,
     ) -> str:
-        """Resolve session identifiers, tags, and forks to a session id."""
+        """Resolve session identifiers, tags, and forks to a session id.
+
+        When *fork_at_ts* is provided alongside *fork_from*, only events up to
+        (and including) that timestamp are copied into the new session.
+        """
         if fork_from:
             source_session_id = self._session_store.resolve_tag(fork_from) or fork_from
-            session_id = self._session_store.fork_session(source_session_id)
+            if fork_at_ts:
+                session_id = self._session_store.fork_session_at(
+                    source_session_id, fork_at_ts
+                )
+            else:
+                session_id = self._session_store.fork_session(source_session_id)
         if session_tag and not session_id:
             resolved = self._session_store.resolve_tag(session_tag)
             session_id = resolved if resolved else None
@@ -223,7 +233,7 @@ class SessionRuntime:
             if event.get("type") == "context":
                 payload = event.get("payload")
                 if isinstance(payload, dict):
-                    context = payload
+                    context = {**(context or {}), **payload}
             if event.get("type") == "user":
                 has_user_event = True
                 if title is None:
@@ -396,6 +406,7 @@ class SessionRuntime:
         action: RecoveryAction,
         *,
         from_ts: str | None = None,
+        replacement_text: str | None = None,
     ) -> str:
         """Resolve the user query text for a retry/continue recovery action.
 
@@ -404,6 +415,10 @@ class SessionRuntime:
         orchestrator automatically picks up prior events via
         :class:`ContextBuilder`, so the caller does not need to trim the
         transcript.
+
+        When *replacement_text* is provided (only meaningful for ``retry``),
+        the edited text is used instead of the original user message — enabling
+        "edit and regenerate" workflows.
 
         Raises :class:`ValueError` when ``action`` is unrecognised, there is
         no prior user message to recover from, or (for ``retry``) the last
@@ -474,7 +489,7 @@ class SessionRuntime:
             # sent. ``Orchestrator.run`` re-appends the user event +
             # runs a fresh attempt. Prior successful turns stay intact.
             # ----------------------------------------------------------
-            if not original_text:
+            if not replacement_text and not original_text:
                 raise ValueError(
                     "last user message has empty text; cannot retry"
                 )
@@ -501,7 +516,7 @@ class SessionRuntime:
                     self._session_store.truncate_after(
                         session_id, "0000-00-00T00:00:00+00:00"
                     )
-            query_text = original_text
+            query_text = replacement_text or original_text
         else:
             # ----------------------------------------------------------
             # Continue = stitch: keep the failed run's traces, delete
@@ -599,6 +614,11 @@ class SessionRuntime:
                 "type": "plan_approved",
                 "payload": {"plan_path": plan_path, "revision": revision},
             },
+        )
+        # Signal mode transition so all clients pick up the change.
+        self._session_store.append_event(
+            session_id,
+            {"type": "context", "payload": {"mode": "act"}},
         )
         return True
 

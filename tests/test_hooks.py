@@ -75,11 +75,11 @@ class TestHookErrorIsolation:
         mgr.run_on_session_end("s1", None)
 
     def test_on_compact(self):
-        def bad(*a, **kw):
+        def bad(session_id: str) -> None:
             raise Exception("fail")
 
         mgr = HookManager(on_compact=[bad])
-        mgr.run_on_compact()
+        mgr.run_on_compact("test-session")
 
 
 # -- Chaining ---------------------------------------------------------------
