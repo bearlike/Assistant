@@ -59,17 +59,11 @@ def _make_orchestrator(tmp_path):
 
 
 def _assistant_events(store, session_id):
-    return [
-        e for e in store.load_transcript(session_id)
-        if e.get("type") == "assistant"
-    ]
+    return [e for e in store.load_transcript(session_id) if e.get("type") == "assistant"]
 
 
 def _completion_events(store, session_id):
-    return [
-        e for e in store.load_transcript(session_id)
-        if e.get("type") == "completion"
-    ]
+    return [e for e in store.load_transcript(session_id) if e.get("type") == "completion"]
 
 
 class TestRunFailureEmitsClosure:
@@ -88,10 +82,7 @@ class TestRunFailureEmitsClosure:
 
         transcript = store.load_transcript(session_id)
         # Find the completion event + the assistant event preceding it.
-        completion_idx = next(
-            i for i, e in enumerate(transcript)
-            if e.get("type") == "completion"
-        )
+        completion_idx = next(i for i, e in enumerate(transcript) if e.get("type") == "completion")
         # Closure assistant must exist and sit immediately before completion.
         prev = transcript[completion_idx - 1]
         assert prev["type"] == "assistant"

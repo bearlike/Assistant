@@ -1,0 +1,18 @@
+Language Server tool
+
+Query language servers for code intelligence. Use this when you need to:
+- Check a file for type errors or warnings after editing it
+- Find where a symbol (function, class, variable) is defined
+- Find all references to a symbol across the codebase
+- Get type/signature information for a symbol
+
+Tool inputs (JSON):
+- operation: "diagnostics", "definition", "references", or "hover" (required)
+- file_path: absolute path to the file (required)
+- line: 0-based line number (required for definition/references/hover)
+- character: 0-based column position (required for definition/references/hover)
+
+Notes:
+- Diagnostics are the most useful operation — use them after editing files to catch regressions.
+- The first call for a language may take a few seconds while the server starts.
+- Not all languages have servers installed — the tool will tell you if one is unavailable.

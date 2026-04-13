@@ -71,6 +71,30 @@
     --diff-del-bg: 0 77% 81% / 0.18; /* _red-200 */
     --diff-del-text: 0 78% 91%; /* _red-100 */
     --diff-hunk-text: 213 80% 79%; /* _blue-200 */
+
+    /* ── Code-surface tokens (Terminal, Diff, Review cards) — dark mode ── */
+    --code-chrome: 220 5% 12%;          /* title bar / window chrome */
+    --code-body: 220 5% 7%;             /* deep terminal body */
+    --code-fg: 60 14% 92%;              /* primary text */
+    --code-fg-muted: 60 5% 55%;         /* line numbers, hints, cwd */
+    --code-fg-subtle: 60 4% 38%;        /* placeholders, dim chevrons */
+    --code-border: 60 9% 74% / 0.06;    /* hairline inside code areas */
+    --code-prompt: 158 64% 52%;         /* the `$ ` prefix */
+    --code-stderr: 0 73% 65%;           /* stderr text */
+
+    /* ── Syntax highlighting (highlight.js) — dark mode (github-dark palette) ── */
+    --hl-keyword: 351 78% 75%;          /* if/for/function */
+    --hl-string: 26 73% 70%;            /* "string literals" */
+    --hl-comment: 220 14% 56%;          /* # comments */
+    --hl-number: 36 63% 70%;            /* 42, 3.14 */
+    --hl-builtin: 207 100% 78%;         /* echo, sudo, return */
+    --hl-variable: 207 60% 79%;         /* $var, var name */
+    --hl-function: 280 60% 78%;         /* function names */
+    --hl-meta: 220 14% 50%;             /* shebang, preprocessor */
+    --hl-attr: 207 100% 78%;            /* attributes */
+    --hl-tag: 351 78% 75%;              /* HTML tags */
+    --hl-deletion: 0 65% 70%;           /* diff -- */
+    --hl-addition: 134 50% 65%;         /* diff ++ */
   }
 
   .light {
@@ -135,6 +159,30 @@
     --diff-del-bg: 0 55% 47% / 0.12; /* _red-500 */
     --diff-del-text: 0 55% 47%; /* _red-500 */
     --diff-hunk-text: 213 77% 56%; /* _blue-400 */
+
+    /* ── Code-surface tokens — light mode ── */
+    --code-chrome: 48 25% 92.2%;        /* #f0eee6 — Anthropic accent cream */
+    --code-body: 0 0% 100%;             /* white — code on white */
+    --code-fg: 0 0% 13%;                /* near-black */
+    --code-fg-muted: 0 0% 40%;          /* gray */
+    --code-fg-subtle: 0 0% 60%;         /* lighter gray */
+    --code-border: 0 0% 0% / 0.08;      /* hairline */
+    --code-prompt: 158 73% 32%;         /* deeper green for contrast on white */
+    --code-stderr: 0 65% 47%;           /* deeper red */
+
+    /* ── Syntax highlighting — light mode (github light palette) ── */
+    --hl-keyword: 354 75% 41%;          /* #d73a49 */
+    --hl-string: 217 71% 33%;           /* #032f62 */
+    --hl-comment: 220 14% 56%;          /* #6a737d */
+    --hl-number: 26 91% 32%;            /* #b08800 darker */
+    --hl-builtin: 211 100% 38%;         /* #005cc5 */
+    --hl-variable: 8 85% 36%;           /* #b31d28 */
+    --hl-function: 273 65% 41%;         /* #6f42c1 */
+    --hl-meta: 220 14% 56%;
+    --hl-attr: 211 100% 38%;
+    --hl-tag: 134 50% 33%;              /* #22863a */
+    --hl-deletion: 0 65% 47%;
+    --hl-addition: 134 50% 33%;
   }
 }
 
@@ -158,5 +206,89 @@
   }
   code, pre, .font-mono {
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+}
+
+/* ── highlight.js theme via CSS variables — single source of truth, both
+   light and dark modes adapt automatically through the --hl-* tokens above.
+   Replaces the third-party github-dark.css import we used to ship. ── */
+.hljs {
+  color: hsl(var(--code-fg));
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote { color: hsl(var(--hl-comment)); font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst { color: hsl(var(--hl-keyword)); }
+.hljs-string,
+.hljs-meta-string,
+.hljs-regexp,
+.hljs-template-tag,
+.hljs-template-variable { color: hsl(var(--hl-string)); }
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet { color: hsl(var(--hl-number)); }
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-class .hljs-title { color: hsl(var(--hl-builtin)); }
+.hljs-variable,
+.hljs-attr { color: hsl(var(--hl-variable)); }
+.hljs-title,
+.hljs-title.function_,
+.hljs-section { color: hsl(var(--hl-function)); }
+.hljs-meta { color: hsl(var(--hl-meta)); }
+.hljs-attribute { color: hsl(var(--hl-attr)); }
+.hljs-tag,
+.hljs-name { color: hsl(var(--hl-tag)); }
+.hljs-deletion { color: hsl(var(--hl-deletion)); }
+.hljs-addition { color: hsl(var(--hl-addition)); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+
+/* Scroll-reveal rows used by HomeView session lists. One IntersectionObserver
+   at the page level toggles `.is-visible`. `--row-index` (set inline) staggers
+   siblings without per-component JS. Skipped by prefers-reduced-motion. */
+.fade-in-row {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 300ms ease-out, transform 300ms ease-out;
+  transition-delay: calc(var(--row-index, 0) * 60ms);
+  will-change: opacity, transform;
+}
+.fade-in-row.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .fade-in-row {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Soft fade at the top edge of the sessions region so rows peeking below
+   the hero bleed softly into the background — signals "there's more below"
+   without a hard seam. The mask is anchored to the element's own box so
+   it only affects the top ~72px; once scrolled past, content renders normally. */
+.sessions-peek-fade {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 72px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 72px);
+}
+
+/* Scroll affordance — chevron bobs gently at the bottom of the hero and
+   fades out once the user has scrolled past it (class toggled by HomeView). */
+@keyframes scroll-bounce {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(6px); }
+}
+.animate-scroll-bounce {
+  animation: scroll-bounce 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-scroll-bounce {
+    animation: none;
   }
 }

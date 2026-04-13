@@ -10,17 +10,22 @@ import {
   MessageSquare,
   RotateCcw,
   Play,
+  Layers,
 } from 'lucide-react';
 import { SummaryBlock } from './SummaryBlock';
 import { MarkdownContent } from './MessageBubble';
+import { Button } from './ui/button';
 import { LogEventCard, AccentColor } from './LogEventCard';
 import { ModelLabel } from './ModelLabel';
 import { TerminalCard } from './TerminalCard';
 import { DiffCard } from './DiffCard';
+import { FileReadCard } from './FileReadCard';
 import { ScrollToBottom } from './ScrollToBottom';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import { EventRecord, LogEntry } from '../types';
+import { formatTokens } from '../utils/time';
 import { buildLogs, extractSummaryTesting } from '../utils/logs';
+import { prettyJsonIfValid } from '../utils/json';
 import { formatSessionTime } from '../utils/time';
 
 function Badge({ children, color }: { children: React.ReactNode; color: string }) {
@@ -40,6 +45,14 @@ function Badge({ children, color }: { children: React.ReactNode; color: string }
 
 const MODEL_TAG_CLASS =
   'text-[10px] font-mono text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded whitespace-nowrap';
+
+const AGENT_ID_TAG_CLASS =
+  'text-[10px] font-mono px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]';
+
+function AgentIdChip({ agentId }: { agentId?: string }) {
+  if (!agentId) return null;
+  return <span className={AGENT_ID_TAG_CLASS}>{agentId.slice(0, 8)}</span>;
+}
 
 /** Hash agent ID to one of 8 cycling colors (Claude Code sub-agent palette). */
 function agentColorIndex(agentId: string): number {
@@ -118,6 +131,11 @@ function renderAgent(log: LogEntry) {
   const colorIdx = agentColorIndex(log.agentId || '');
   const agentTextColor = AGENT_COLOR_CLASSES[colorIdx];
   const stepsLabel = log.stepsCompleted ? `${log.stepsCompleted} steps` : '';
+  const inTok = log.inputTokens || 0;
+  const outTok = log.outputTokens || 0;
+  const tokensLabel = !isStart && (inTok + outTok) > 0
+    ? `${formatTokens(inTok)} in / ${formatTokens(outTok)} out`
+    : '';
   const badgeText = isStart ? 'Started' :
     status === 'completed' ? 'Completed' :
     status === 'failed' ? 'Failed' :
@@ -125,7 +143,8 @@ function renderAgent(log: LogEntry) {
     status === 'rejected' ? 'Rejected' :
     'Stopped';
 
-  const badgeWithSteps = stepsLabel && !isStart ? `${badgeText} · ${stepsLabel}` : badgeText;
+  const badgeParts = [badgeText, stepsLabel, tokensLabel].filter(Boolean);
+  const badgeWithSteps = !isStart && badgeParts.length > 1 ? badgeParts.join(' · ') : badgeText;
 
   return (
     <LogEventCard
@@ -256,22 +275,26 @@ function renderCompletion(
       )}
       {showRecovery && (
         <div className="mt-2 flex gap-2">
-          <button
+          <Button
+            variant="neutral"
+            size="sm"
+            tone="info"
+            leadingIcon={<RotateCcw className="w-3 h-3" />}
             onClick={onRetry}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"
             title="Re-run the last user query from where it was submitted"
           >
-            <RotateCcw className="w-3 h-3" />
             Retry
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="neutral"
+            size="sm"
+            tone="warn"
+            leadingIcon={<Play className="w-3 h-3" />}
             onClick={onContinue}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
             title="Resume the session and let the agent recover from where it left off"
           >
-            <Play className="w-3 h-3" />
             Continue
-          </button>
+          </Button>
         </div>
       )}
     </LogEventCard>
@@ -303,7 +326,7 @@ function renderShell(log: LogEntry) {
     <LogEventCard
       key={log.id}
       icon={<Terminal className="w-4 h-4 text-[hsl(var(--muted-foreground))]" />}
-      title={<span className="flex items-center gap-2">{log.title || 'tool'}<ModelLabel modelId={log.model} className={MODEL_TAG_CLASS} />{log.agentId && <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">{log.agentId.slice(0, 6)}</span>}</span>}
+      title={<span className="flex items-center gap-2">{log.title || 'tool'}<ModelLabel modelId={log.model} className={MODEL_TAG_CLASS} /><AgentIdChip agentId={log.agentId} /></span>}
       badge={hasError ? <Badge color="red">Error</Badge> : undefined}
       timestamp={log.timestamp}
       accent={hasError ? 'red' : toolAccent(toolName)}
@@ -313,8 +336,8 @@ function renderShell(log: LogEntry) {
           {log.shellInput && (
             <div className="px-3 py-2 bg-[hsl(var(--muted))]/20">
               <div className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider mb-1">Input</div>
-              <pre className="text-xs font-mono text-[hsl(var(--foreground))] whitespace-pre-wrap leading-relaxed opacity-80 max-h-[200px] overflow-hidden">
-                {log.shellInput}
+              <pre className="text-xs font-mono text-[hsl(var(--foreground))] whitespace-pre-wrap leading-relaxed opacity-80 max-h-[300px] overflow-y-auto">
+                {prettyJsonIfValid(log.shellInput)}
               </pre>
             </div>
           )}
@@ -324,15 +347,15 @@ function renderShell(log: LogEntry) {
           {log.shellOutput && (
             <div className="px-3 py-2">
               <div className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider mb-1">Output</div>
-              <pre className={`text-xs font-mono whitespace-pre-wrap leading-relaxed max-h-[300px] overflow-hidden ${hasError ? 'text-red-500/80' : 'text-[hsl(var(--foreground))] opacity-80'}`}>
-                {log.shellOutput}
+              <pre className={`text-xs font-mono whitespace-pre-wrap leading-relaxed max-h-[500px] overflow-y-auto ${hasError ? 'text-red-500/80' : 'text-[hsl(var(--foreground))] opacity-80'}`}>
+                {prettyJsonIfValid(log.shellOutput)}
               </pre>
             </div>
           )}
         </div>
       ) : (
-        <pre className="text-xs font-mono text-[hsl(var(--foreground))] whitespace-pre-wrap leading-relaxed opacity-80 max-h-[300px] overflow-hidden">
-          {log.content}
+        <pre className="text-xs font-mono text-[hsl(var(--foreground))] whitespace-pre-wrap leading-relaxed opacity-80 max-h-[500px] overflow-y-auto">
+          {prettyJsonIfValid(log.content)}
         </pre>
       )}
     </LogEventCard>
@@ -350,6 +373,20 @@ function renderDiff(log: LogEntry) {
   );
 }
 
+function renderFileRead(log: LogEntry) {
+  return (
+    <FileReadCard
+      key={log.id}
+      path={log.fileReadPath ?? '(unknown)'}
+      text={log.fileReadText ?? ''}
+      totalLines={log.fileReadTotalLines}
+      timestamp={log.timestamp}
+      model={log.model}
+      agentId={log.agentId}
+    />
+  );
+}
+
 function renderReflection(log: LogEntry) {
   return (
     <LogEventCard
@@ -361,6 +398,61 @@ function renderReflection(log: LogEntry) {
       defaultExpanded
     >
       <p className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed">{log.content}</p>
+    </LogEventCard>
+  );
+}
+
+function renderCompaction(log: LogEntry) {
+  const saved = log.tokensSaved ?? 0;
+  const hasSavings = saved > 0;
+  const pct = hasSavings && log.tokensBefore
+    ? Math.round((saved / log.tokensBefore) * 100)
+    : null;
+  const hasSummary = log.compactSummary != null && log.compactSummary.length > 0;
+
+  // Build badge: show token savings when meaningful, otherwise event count
+  const badgeText = hasSavings
+    ? `${saved.toLocaleString()} tokens freed`
+    : log.eventsSummarized
+      ? `${log.eventsSummarized} events`
+      : log.compactMode || 'auto';
+
+  // Build metrics parts for the detail line
+  const metricParts: string[] = [];
+  if (hasSavings && log.tokensBefore != null && log.tokensAfter != null) {
+    metricParts.push(`${log.tokensBefore.toLocaleString()} → ${log.tokensAfter.toLocaleString()} tokens${pct != null ? ` (${pct}% reduction)` : ''}`);
+  } else if (log.tokensBefore != null) {
+    metricParts.push(`${log.tokensBefore.toLocaleString()} tokens in context`);
+  }
+  if (log.eventsSummarized != null) {
+    metricParts.push(`${log.eventsSummarized} events summarized`);
+  }
+
+  return (
+    <LogEventCard
+      key={log.id}
+      icon={<Layers className="w-4 h-4 text-blue-400" />}
+      title={<span className="flex items-center gap-2">Context compacted<ModelLabel modelId={log.model} className={MODEL_TAG_CLASS} /><AgentIdChip agentId={log.agentId} /></span>}
+      badge={<Badge color={hasSavings ? 'blue' : 'muted'}>{badgeText}</Badge>}
+      timestamp={log.timestamp}
+      accent="blue"
+    >
+      <div className="space-y-2">
+        {metricParts.length > 0 && (
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">
+            {metricParts.join(' · ')}
+          </p>
+        )}
+        {hasSummary ? (
+          <div className="text-xs text-[hsl(var(--foreground))] leading-relaxed opacity-90 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:mt-2 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:mt-2 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:mt-1 [&_ul]:ml-3 [&_ul]:list-disc [&_li]:mb-0.5 [&_p]:mb-1 [&_p:last-child]:mb-0">
+            <MarkdownContent content={log.compactSummary ?? ''} />
+          </div>
+        ) : (
+          <p className="text-xs text-[hsl(var(--muted-foreground))] italic">
+            Summary unavailable — structured compaction failed, using lightweight fallback.
+          </p>
+        )}
+      </div>
     </LogEventCard>
   );
 }
@@ -386,6 +478,24 @@ function renderAgentMessage(log: LogEntry) {
   );
 }
 
+function renderUserSteer(log: LogEntry) {
+  return (
+    <div key={log.id} className="flex items-start gap-2 px-1 py-1">
+      {log.timestamp && (
+        <span className="text-[10px] text-[hsl(var(--muted-foreground))] whitespace-nowrap shrink-0 font-mono pt-0.5">
+          {formatSessionTime(log.timestamp)}
+        </span>
+      )}
+      <span className="text-xs font-mono font-semibold whitespace-nowrap shrink-0 text-blue-400">
+        &lt;user&gt;
+      </span>
+      <span className="text-xs text-[hsl(var(--foreground))] leading-relaxed opacity-90">
+        {log.content}
+      </span>
+    </div>
+  );
+}
+
 export function LogsView({
   events,
   onRetry,
@@ -405,7 +515,7 @@ export function LogsView({
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="h-full overflow-y-auto bg-[hsl(var(--background))] p-4 space-y-2"
+        className="h-full overflow-y-auto p-5 space-y-4"
       >
         {logs.map((log) => {
           if (log.type === 'plan') {
@@ -468,8 +578,11 @@ export function LogsView({
           if (log.type === 'agent_result') return renderAgentResult(log);
           if (log.type === 'completion') return renderCompletion(log, onRetry, onContinue);
           if (log.type === 'diff') return renderDiff(log);
+          if (log.type === 'file_read') return renderFileRead(log);
           if (log.type === 'shell') return renderShell(log);
           if (log.type === 'agent_message') return renderAgentMessage(log);
+          if (log.type === 'user_steer') return renderUserSteer(log);
+          if (log.type === 'compact') return renderCompaction(log);
           if (log.type === 'system') return renderReflection(log);
 
           // Fallback for unknown types

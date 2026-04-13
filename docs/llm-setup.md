@@ -26,6 +26,34 @@ See the optional configuration table below.
 | `llm.tool_model` | Model for tool execution. | Falls back to `llm.action_plan_model`, then `llm.default_model`. |
 | `llm.reasoning_effort` | Default reasoning effort level. | Values: `low`, `medium`, `high`, `none`. |
 | `llm.reasoning_effort_models` | Allowlist for reasoning effort. | Supports exact matches and `*` suffix wildcards. |
+| `llm.proxy_model_prefix` | Prefix prepended to model names when routing through a proxy. | Default: `"openai"`. Set to match your proxy's expected provider prefix. Falls back to `"openai"` when empty. |
+
+## Model fallback
+
+When the primary model fails with a retryable error, Meeseeks walks an ordered fallback
+list before giving up. Useful for rate-limit tolerance and provider outages.
+
+Config (in `configs/app.json`):
+
+```json
+{
+  "llm": {
+    "default_model": "anthropic/claude-sonnet-4-6",
+    "fallback_models": [
+      "openai/gpt-4o",
+      "anthropic/claude-haiku-4-5"
+    ]
+  }
+}
+```
+
+Each fallback gets one attempt. Error classification:
+
+- **Transient errors** (rate limits, timeouts): retry primary, then cascade
+- **Context overflow**: skip to next model
+- **Auth errors**: abort immediately (no point trying same provider)
+
+Set `agent.llm_call_retries` for how many times to retry the primary model before cascading (default: 2).
 
 ## Short walkthrough
 1. Copy the example config:
@@ -50,4 +78,4 @@ For more details, see [Installation](getting-started.md).
 The LLM layer is backed by LiteLLM via `langchain-litellm`.
 
 - Use `provider/model` syntax for model IDs (e.g. `anthropic/claude-sonnet-4-6`, `openai/gpt-4o`, `mistral/mistral-small`). LiteLLM routes to the correct API automatically.
-- `llm.api_base` is only needed when routing through a proxy. When set with no provider prefix on the model name, the system defaults to `openai/<model>` to match OpenAI-compatible endpoints.
+- `llm.api_base` is only needed when routing through a proxy. When set with no provider prefix on the model name, the system prepends `llm.proxy_model_prefix` (default `"openai"`) to match OpenAI-compatible endpoints. Override `proxy_model_prefix` if your proxy expects a different prefix.

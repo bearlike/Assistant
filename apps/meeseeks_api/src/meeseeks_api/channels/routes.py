@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from flask import Blueprint, Flask, request
 from meeseeks_core.common import get_logger
 from meeseeks_core.config import get_config
+from meeseeks_core.exit_plan_mode import session_temp_dir
 from meeseeks_core.permissions import auto_approve
 from meeseeks_core.token_budget import get_token_budget
 
@@ -90,7 +91,7 @@ def _dispatch_command(cmd: str, ctx: CommandContext) -> str | None:
 def _build_help_text() -> str:
     """Auto-generate help from the command registry."""
     lines = [
-        "**Meeseeks** — AI personal assistant",
+        "**Meeseeks** — AI assistant with a conversation state machine and agent hypervisor",
         "",
         "**Commands** (use after @mention):",
     ]
@@ -130,16 +131,19 @@ def _cmd_new(ctx: CommandContext) -> str:
     assert _runtime is not None  # noqa: S101
     new_id = _runtime.session_store.create_session()
     _runtime.session_store.tag_session(new_id, ctx.tag)
-    _runtime.session_store.append_event(new_id, {
-        "type": "context",
-        "payload": {
-            "source_platform": ctx.message.platform,
-            "channel_id": ctx.message.channel_id,
-            "thread_id": ctx.message.thread_id,
-            "sender": ctx.message.sender_name,
-            "room": ctx.message.room_name,
+    _runtime.session_store.append_event(
+        new_id,
+        {
+            "type": "context",
+            "payload": {
+                "source_platform": ctx.message.platform,
+                "channel_id": ctx.message.channel_id,
+                "thread_id": ctx.message.thread_id,
+                "sender": ctx.message.sender_name,
+                "room": ctx.message.room_name,
+            },
         },
-    })
+    )
     return "Fresh conversation started. Previous context cleared."
 
 
@@ -147,22 +151,23 @@ def _cmd_new(ctx: CommandContext) -> str:
 def _cmd_switch_project(ctx: CommandContext) -> str:
     assert _runtime is not None  # noqa: S101
     projects = get_config().projects
-    available = {
-        n: c for n, c in projects.items() if c.path and os.path.isdir(c.path)
-    }
+    available = {n: c for n, c in projects.items() if c.path and os.path.isdir(c.path)}
     if not ctx.args:
         return _format_project_list(available, "Usage: `/switch-project <name>`")
     if ctx.args not in available:
         return _format_project_list(available, f"Unknown project **{ctx.args}**.")
     chosen = available[ctx.args]
-    _runtime.session_store.append_event(ctx.session_id, {
-        "type": "context",
-        "payload": {
-            "source_platform": ctx.message.platform,
-            "active_project": ctx.args,
-            "active_project_cwd": chosen.path,
+    _runtime.session_store.append_event(
+        ctx.session_id,
+        {
+            "type": "context",
+            "payload": {
+                "source_platform": ctx.message.platform,
+                "active_project": ctx.args,
+                "active_project_cwd": chosen.path,
+            },
         },
-    })
+    )
     return f"Switched to project **{ctx.args}** (`{chosen.path}`)."
 
 
@@ -216,43 +221,53 @@ def _process_inbound(
     if session_id is None:
         session_id = _runtime.session_store.create_session()
         _runtime.session_store.tag_session(session_id, tag)
-        _runtime.session_store.append_event(session_id, {
-            "type": "context",
-            "payload": {
-                "source_platform": platform,
-                "channel_id": message.channel_id,
-                "thread_id": message.thread_id,
-                "sender": message.sender_name,
-                "room": message.room_name,
+        _runtime.session_store.append_event(
+            session_id,
+            {
+                "type": "context",
+                "payload": {
+                    "source_platform": platform,
+                    "channel_id": message.channel_id,
+                    "thread_id": message.thread_id,
+                    "sender": message.sender_name,
+                    "room": message.room_name,
+                },
             },
-        })
+        )
 
     # --- Check for slash commands (no LLM needed) ---
     cmd_match = _COMMAND_RE.match(user_text.strip())
     if cmd_match:
         ctx = CommandContext(
-            session_id=session_id, args=cmd_match.group(2).strip(),
-            message=message, tag=tag,
+            session_id=session_id,
+            args=cmd_match.group(2).strip(),
+            message=message,
+            tag=tag,
         )
         response = _dispatch_command(cmd_match.group(1), ctx)
         if response is not None:
             adapter.send_response(
-                channel_id=message.channel_id, text=response,
-                thread_id=message.thread_id, reply_to=message.message_id,
+                channel_id=message.channel_id,
+                text=response,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
             )
             return {}, 200
         # Unknown command — fall through to LLM
 
     # --- Store reply target for the completion hook ---
-    _runtime.session_store.append_event(session_id, {
-        "type": "context",
-        "payload": {
-            "source_platform": platform,
-            "reply_to_message_id": message.message_id,
-            "channel_id": message.channel_id,
-            "thread_id": message.thread_id,
+    _runtime.session_store.append_event(
+        session_id,
+        {
+            "type": "context",
+            "payload": {
+                "source_platform": platform,
+                "reply_to_message_id": message.message_id,
+                "channel_id": message.channel_id,
+                "thread_id": message.thread_id,
+            },
         },
-    })
+    )
 
     # --- Acknowledge receipt with a reaction (if adapter supports it) ---
     if hasattr(adapter, "send_reaction"):
@@ -268,7 +283,7 @@ def _process_inbound(
         _runtime.enqueue_message(session_id, user_text)
         return {}, 200
 
-    project_cwd = _get_active_project_cwd(session_id)
+    project_cwd = _get_active_project_cwd(session_id) or session_temp_dir(session_id)
     client_ctx = getattr(adapter, "system_context", None)
 
     _runtime.start_async(
@@ -368,9 +383,7 @@ def _get_active_project_cwd(session_id: str) -> str | None:
 # ------------------------------------------------------------------
 
 
-def _channel_completion_hook(
-    session_id: str, error: str | None = None
-) -> None:
+def _channel_completion_hook(session_id: str, error: str | None = None) -> None:
     """Send the final answer back to the originating chat thread."""
     if _runtime is None:
         return
@@ -392,8 +405,10 @@ def _channel_completion_hook(
     thread_id = ctx.get("thread_id")
     reply_to = ctx.get("reply_to_message_id") or thread_id
     adapter.send_response(
-        channel_id=channel_id, text=final_text,
-        thread_id=thread_id, reply_to=reply_to,
+        channel_id=channel_id,
+        text=final_text,
+        thread_id=thread_id,
+        reply_to=reply_to,
     )
 
 
@@ -410,9 +425,7 @@ def _find_channel_context(
     return None
 
 
-def _extract_final_answer(
-    events: list[EventRecord], error: str | None
-) -> str:
+def _extract_final_answer(events: list[EventRecord], error: str | None) -> str:
     """Walk the transcript backwards to find the final answer text."""
     if error:
         return f"Session ended with an error: {error}"

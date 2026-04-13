@@ -5,14 +5,9 @@
   <img src="../meeseeks-console-02-tasks.jpg" alt="Meeseeks Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-The REST API lives in `apps/meeseeks_api/` and the web console lives in `apps/meeseeks_console/`. The console is built for asynchronous delegation: requests flow through the API and the console polls events for status and output. The API runs tools through the core orchestration loop while the console provides session management, event timelines, execution traces, and tool output visualization.
+The REST API is the programmable surface for Meeseeks. You send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration. The console gives you session management, an event timeline, and rich visualization of tool output.
 
-## Setup (uv)
-```bash
-uv sync --extra api
-```
-
-Before running, complete [Installation](getting-started.md) and [LLM setup](llm-setup.md).
+See [Get Started](getting-started.md#api-setup) for installation and [Docker Compose](deployment-docker.md) for container deployment.
 
 ## Run the REST API
 ```bash
@@ -43,6 +38,13 @@ Core endpoints:
 - `POST /api/sessions/{session_id}/export` export session payload
 - `GET /api/share/{token}` fetch shared session data
 - `POST /api/webhooks/<platform>` inbound webhook for chat platforms (HMAC auth, not API key). See [Nextcloud Talk](clients-nextcloud-talk.md) and [Email](clients-email.md) for setup. Slash commands: `/help`, `/usage`, `/new`, `/switch-project`.
+- `GET /api/plugins` list installed plugins and their components
+- `GET /api/plugins/marketplace` list available plugins from configured marketplaces
+- `POST /api/plugins/marketplace` install a plugin from a marketplace
+- `DELETE /api/plugins/<name>` uninstall a plugin
+- `POST /api/sessions/{session_id}/ide` launch a Web IDE (code-server) container for a session
+- `DELETE /api/sessions/{session_id}/ide` stop the Web IDE container
+- `POST /api/sessions/{session_id}/ide/extend` extend the IDE session TTL
 
 ## Run the Console
 ```bash
@@ -59,16 +61,76 @@ Console notes:
 
 ## Docker Compose deployment
 
-Both the API and console are available as pre-built container images:
+For container-based deployment, including the full environment variable reference and production reverse proxy setup, see [Docker Compose](deployment-docker.md).
+
+## Session management
+
+### Fork from message / edit and regenerate
+
+Any message in a session can be used as a branch point. In the console, hover a message
+and click "Fork from here" to create a new session with history up to that point.
+The API equivalent:
 
 ```bash
-# From the repo root
-cp docker.example.env docker.env
-# Edit docker.env — set MASTER_API_TOKEN, VITE_API_KEY, HOST_UID/GID
-
-docker compose pull && docker compose up -d
+POST /api/sessions
+{
+  "fork_from": "<session_id>",
+  "fork_at_ts": <timestamp>
+}
 ```
 
-The console's nginx proxies `/api/` to the API at `127.0.0.1:5125` (host networking), so no separate CORS or URL config is needed in the default setup. Runtime environment variables (`VITE_API_BASE_URL`, `VITE_API_KEY`, etc.) are injected at container startup via `runtime-config.js` — no image rebuild required.
+### Per-message model override
 
-See [Installation](getting-started.md#docker-compose-deployment) for the full environment variable reference and production reverse proxy setup.
+In the console, each message input has a model selector. Submit with a different model
+to use it for that turn only. The session's default model is unchanged.
+
+## Sharing and export
+
+```
+POST /api/sessions/{id}/share     → returns { token }
+GET  /api/share/{token}           → fetch shared session data (read-only)
+POST /api/sessions/{id}/export    → download full session payload
+```
+
+Shared sessions are read-only and accessible without authentication.
+
+## Attachments
+
+Upload files to inject their content into the LLM context:
+
+```
+POST /api/sessions/{id}/attachments   (multipart/form-data)
+```
+
+Uploaded text files are read from disk and injected into the system prompt for that session.
+
+## Mid-session steering
+
+While a session is running, you can send messages or interrupt:
+
+```
+POST /api/sessions/{id}/message     { "text": "..." }    → queued as HumanMessage
+POST /api/sessions/{id}/interrupt   → signals the current step to pause
+```
+
+In the console, the InputBar shows a steering mode UI while a run is in progress.
+
+## Multi-project support
+
+The console supports multiple projects that appear as virtual workspaces shared across sessions. Each project has its own working directory, its own `.mcp.json`, and its own `.claude/skills/` directory, so tools and skills scope cleanly to the project you are in.
+
+<div style="display: flex; justify-content: center;">
+  <img src="../meeseeks-console-06-projects.jpg" alt="The Projects page in the Meeseeks console showing two virtual workspaces with their paths" style="width: 100%; max-width: 720px; height: auto;" />
+</div>
+
+Create and switch projects from the **Projects** page or the project selector in the ConfigMenu. In the REST API, projects are identified by the working directory path you pass in the session context.
+
+## Notifications
+
+```
+GET  /api/notifications          → list pending notifications
+POST /api/notifications/dismiss  → dismiss by ID
+POST /api/notifications/clear    → clear all
+```
+
+Notifications appear in the console bell icon for events like session errors.

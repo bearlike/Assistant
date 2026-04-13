@@ -132,6 +132,17 @@ class SessionStoreBase(abc.ABC):
             self.save_title(new_session_id, title)
         return new_session_id
 
+    def fork_session_at(self, source_session_id: str, cutoff_ts: str) -> str:
+        """Fork a session, keeping only events with ``ts <= cutoff_ts``.
+
+        Composes :meth:`fork_session` + :meth:`truncate_after` and clears the
+        copied summary (which may reference events beyond the cutoff).
+        """
+        new_id = self.fork_session(source_session_id)
+        self.truncate_after(new_id, cutoff_ts)
+        self.save_summary(new_id, "")
+        return new_id
+
     def load_recent_events(
         self,
         session_id: str,

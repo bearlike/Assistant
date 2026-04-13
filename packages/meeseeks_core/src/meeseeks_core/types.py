@@ -88,6 +88,10 @@ class SubAgentPayload(TypedDict):
     depth: int
     model: str
     detail: str
+    status: NotRequired[str]
+    steps_completed: NotRequired[int]
+    input_tokens: NotRequired[int]
+    output_tokens: NotRequired[int]
 
 
 class AgentMessagePayload(TypedDict):

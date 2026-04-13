@@ -156,7 +156,6 @@ def test_prompt_can_disable_tool_schemas():
         get_system_prompt(),
         context,
         component_status=None,
-        include_tool_schemas=False,
     )
     assert "Tool input schemas" not in prompt
 

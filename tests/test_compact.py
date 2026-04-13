@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from meeseeks_core.compact import (
+    CAVEMAN_COMPACT_PROMPT,
     COMPACT_PROMPT,
     CompactionMode,
     CompactionResult,
@@ -14,6 +16,8 @@ from meeseeks_core.compact import (
     _format_event,
     _strip_analysis,
     compact_conversation,
+    get_compact_prompt,
+    resolve_compact_models,
 )
 
 # -- Helpers ----------------------------------------------------------------
@@ -144,9 +148,12 @@ class TestCompactConversation:
             content="<analysis>draft</analysis><summary>Done.</summary>"
         )
         with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
-            r = asyncio.run(compact_conversation(
-                [_user("do X"), _assistant("done")], mode=CompactionMode.FULL,
-            ))
+            r = asyncio.run(
+                compact_conversation(
+                    [_user("do X"), _assistant("done")],
+                    mode=CompactionMode.FULL,
+                )
+            )
         assert "Done." in r.summary
         assert r.kept_events == []
         llm.ainvoke.assert_called_once()
@@ -158,13 +165,17 @@ class TestCompactConversation:
             patch("meeseeks_core.llm.build_chat_model", return_value=llm),
             patch("meeseeks_core.compact.get_config_value", return_value=2),
         ):
-            r = asyncio.run(compact_conversation(
-                [
-                    _user("old", "T1"), _assistant("old_r", "T2"),
-                    _user("new", "T3"), _assistant("new_r", "T4"),
-                ],
-                mode=CompactionMode.PARTIAL,
-            ))
+            r = asyncio.run(
+                compact_conversation(
+                    [
+                        _user("old", "T1"),
+                        _assistant("old_r", "T2"),
+                        _user("new", "T3"),
+                        _assistant("new_r", "T4"),
+                    ],
+                    mode=CompactionMode.PARTIAL,
+                )
+            )
         assert len(r.kept_events) == 2
         assert r.kept_events[0]["ts"] == "T3"
 
@@ -172,21 +183,26 @@ class TestCompactConversation:
         llm = AsyncMock()
         llm.ainvoke.return_value = MagicMock(content="<summary>s</summary>")
         with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
-            r = asyncio.run(compact_conversation(
-                [_user(f"m{i}") for i in range(5)],
-                mode=CompactionMode.PARTIAL, pivot_index=3,
-            ))
+            r = asyncio.run(
+                compact_conversation(
+                    [_user(f"m{i}") for i in range(5)],
+                    mode=CompactionMode.PARTIAL,
+                    pivot_index=3,
+                )
+            )
         assert len(r.kept_events) == 2
 
     def test_pre_compact_hook_applied(self):
         llm = AsyncMock()
         llm.ainvoke.return_value = MagicMock(content="<summary>ok</summary>")
         with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
-            r = asyncio.run(compact_conversation(
-                [_user("a"), _user("b"), _user("c")],
-                mode=CompactionMode.FULL,
-                pre_compact_hooks=[lambda evts: evts[1:]],
-            ))
+            r = asyncio.run(
+                compact_conversation(
+                    [_user("a"), _user("b"), _user("c")],
+                    mode=CompactionMode.FULL,
+                    pre_compact_hooks=[lambda evts: evts[1:]],
+                )
+            )
         assert r.summary == "ok"
 
     def test_pre_compact_hook_error_safe(self):
@@ -196,19 +212,227 @@ class TestCompactConversation:
         llm = AsyncMock()
         llm.ainvoke.return_value = MagicMock(content="<summary>fine</summary>")
         with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
-            r = asyncio.run(compact_conversation(
-                [_user("x")], mode=CompactionMode.FULL, pre_compact_hooks=[bad],
-            ))
+            r = asyncio.run(
+                compact_conversation(
+                    [_user("x")],
+                    mode=CompactionMode.FULL,
+                    pre_compact_hooks=[bad],
+                )
+            )
         assert r.summary == "fine"
 
     def test_partial_nothing_to_summarize(self):
         with patch("meeseeks_core.compact.get_config_value", return_value=10):
-            r = asyncio.run(compact_conversation(
-                [_user("recent")], mode=CompactionMode.PARTIAL,
-            ))
+            r = asyncio.run(
+                compact_conversation(
+                    [_user("recent")],
+                    mode=CompactionMode.PARTIAL,
+                )
+            )
         assert r.summary == ""
         assert len(r.kept_events) == 1
 
     def test_compact_prompt_exists(self):
         assert "Do NOT use any tools" in COMPACT_PROMPT
         assert "<summary>" in COMPACT_PROMPT
+
+
+# -- Caveman mode selector --------------------------------------------------
+
+
+class TestGetCompactPrompt:
+    """Verify compaction.caveman_mode routes to the right prompt variant
+    and that both variants preserve the <analysis>/<summary> structure
+    downstream parsers depend on.
+    """
+
+    def test_defaults_to_standard_when_config_missing(self):
+        # Unknown config key falls through to default=False -> standard prompt.
+        with patch("meeseeks_core.compact.get_config_value", return_value=False):
+            assert get_compact_prompt() is COMPACT_PROMPT
+
+    def test_caveman_mode_true_returns_caveman_prompt(self):
+        with patch("meeseeks_core.compact.get_config_value", return_value=True):
+            assert get_compact_prompt() is CAVEMAN_COMPACT_PROMPT
+
+    def test_caveman_mode_false_returns_standard_prompt(self):
+        with patch("meeseeks_core.compact.get_config_value", return_value=False):
+            assert get_compact_prompt() is COMPACT_PROMPT
+
+    def test_caveman_prompt_preserves_output_structure(self):
+        # Downstream _extract_summary regex requires these tags.
+        assert "<analysis>" in CAVEMAN_COMPACT_PROMPT
+        assert "</analysis>" in CAVEMAN_COMPACT_PROMPT
+        assert "<summary>" in CAVEMAN_COMPACT_PROMPT
+        assert "</summary>" in CAVEMAN_COMPACT_PROMPT
+
+    def test_caveman_prompt_preserves_section_headings(self):
+        # Downstream transcript formatters expect these section titles.
+        for heading in (
+            "## Primary Request",
+            "## Key Technical Concepts",
+            "## Files and Code",
+            "## Errors and Fixes",
+            "## Current State",
+            "## Pending Tasks",
+        ):
+            assert heading in CAVEMAN_COMPACT_PROMPT
+
+    def test_caveman_prompt_contains_core_compression_rules(self):
+        # Spot-check load-bearing rule markers — if these drift, the prompt
+        # has lost its compression intent.
+        assert "Drop rules:" in CAVEMAN_COMPACT_PROMPT
+        assert "Articles:" in CAVEMAN_COMPACT_PROMPT
+        assert "Preserve EXACTLY" in CAVEMAN_COMPACT_PROMPT
+        assert "Auto-Clarity" in CAVEMAN_COMPACT_PROMPT
+        assert "Persistence:" in CAVEMAN_COMPACT_PROMPT
+
+    def test_caveman_prompt_forbids_tools(self):
+        # Same safety guard as standard prompt.
+        assert "Do NOT use any tools" in CAVEMAN_COMPACT_PROMPT
+
+
+# -- asyncio.run() from background thread (regression for orchestrator) ------
+
+
+class TestCompactFromBackgroundThread:
+    """Verify compact_conversation works when called via asyncio.run()
+    from a background thread — the exact pattern used by the API server.
+
+    Root cause of the production bug: orchestrator used
+    get_event_loop().run_until_complete() which raises RuntimeError
+    in threads without a current event loop (Python 3.10+).
+    """
+
+    def test_asyncio_run_in_thread(self):
+        """asyncio.run(compact_conversation(...)) must succeed in a
+        background thread, not raise 'no current event loop in thread'."""
+        llm = AsyncMock()
+        llm.ainvoke.return_value = MagicMock(
+            content="<analysis>x</analysis><summary>Thread summary.</summary>"
+        )
+        result_holder: list[CompactionResult] = []
+        error_holder: list[Exception] = []
+
+        def run_in_thread() -> None:
+            try:
+                with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
+                    r = asyncio.run(
+                        compact_conversation(
+                            [_user("old msg"), _assistant("old reply")],
+                            mode=CompactionMode.FULL,
+                        )
+                    )
+                result_holder.append(r)
+            except Exception as exc:
+                error_holder.append(exc)
+
+        t = threading.Thread(target=run_in_thread)
+        t.start()
+        t.join(timeout=10)
+
+        assert not error_holder, f"compact_conversation failed in thread: {error_holder[0]}"
+        assert len(result_holder) == 1
+        assert "Thread summary." in result_holder[0].summary
+        llm.ainvoke.assert_called_once()
+
+    def test_tokens_saved_nonzero(self):
+        """When compaction succeeds, tokens_saved must be > 0 (not the
+        fallback zero that hid the bug in production)."""
+        llm = AsyncMock()
+        llm.ainvoke.return_value = MagicMock(content="<summary>Compact.</summary>")
+        events = [_user(f"msg {i}") for i in range(10)]
+        with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
+            r = asyncio.run(compact_conversation(events, mode=CompactionMode.FULL))
+        # The summary replaces all events, so tokens_saved should be positive
+        assert r.tokens_saved > 0, f"Expected positive tokens_saved, got {r.tokens_saved}"
+
+
+# -- resolve_compact_models -------------------------------------------------
+
+
+class TestResolveCompactModels:
+    def test_default_keyword_resolves_to_agent_model(self):
+        with patch("meeseeks_core.compact.get_config_value", return_value=["default"]):
+            assert resolve_compact_models("agent-model") == ["agent-model"]
+
+    def test_explicit_model_preserved(self):
+        with patch(
+            "meeseeks_core.compact.get_config_value",
+            return_value=["haiku", "default"],
+        ):
+            assert resolve_compact_models("sonnet") == ["haiku", "sonnet"]
+
+    def test_empty_string_treated_as_default(self):
+        with patch("meeseeks_core.compact.get_config_value", return_value=["", "haiku"]):
+            assert resolve_compact_models("sonnet") == ["sonnet", "haiku"]
+
+    def test_empty_list_falls_back_to_agent(self):
+        with patch("meeseeks_core.compact.get_config_value", return_value=[]):
+            assert resolve_compact_models("sonnet") == ["sonnet"]
+
+    def test_deduplicates(self):
+        with patch(
+            "meeseeks_core.compact.get_config_value",
+            return_value=["default", "default", "haiku"],
+        ):
+            assert resolve_compact_models("sonnet") == ["sonnet", "haiku"]
+
+    def test_non_list_config_falls_back(self):
+        """If config returns a non-list (e.g. mocked int), treat as default."""
+        with patch("meeseeks_core.compact.get_config_value", return_value=42):
+            assert resolve_compact_models("sonnet") == ["sonnet"]
+
+
+# -- Model fallback in compact_conversation ---------------------------------
+
+
+class TestCompactModelFallback:
+    def test_first_model_fails_second_succeeds(self):
+        """When the first compact model fails, the next is tried."""
+        good_llm = AsyncMock()
+        good_llm.ainvoke.return_value = MagicMock(content="<summary>Fallback worked.</summary>")
+        bad_llm = MagicMock()
+        bad_llm.ainvoke = AsyncMock(side_effect=RuntimeError("model down"))
+
+        call_count = 0
+
+        def _build(model_name: str = "", **kw):  # type: ignore[no-untyped-def]
+            nonlocal call_count
+            call_count += 1
+            return bad_llm if call_count == 1 else good_llm
+
+        with (
+            patch("meeseeks_core.llm.build_chat_model", side_effect=_build),
+            patch(
+                "meeseeks_core.compact.resolve_compact_models",
+                return_value=["cheap-model", "fallback-model"],
+            ),
+        ):
+            r = asyncio.run(
+                compact_conversation(
+                    [_user("test")],
+                    mode=CompactionMode.FULL,
+                )
+            )
+        assert "Fallback worked." in r.summary
+        assert r.model == "fallback-model"
+
+    def test_result_carries_successful_model(self):
+        """CompactionResult.model reflects which model actually succeeded."""
+        llm = AsyncMock()
+        llm.ainvoke.return_value = MagicMock(content="<summary>ok</summary>")
+        with (
+            patch("meeseeks_core.llm.build_chat_model", return_value=llm),
+            patch(
+                "meeseeks_core.compact.resolve_compact_models",
+                return_value=["my-haiku"],
+            ),
+        ):
+            r = asyncio.run(
+                compact_conversation(
+                    [_user("test")],
+                    mode=CompactionMode.FULL,
+                )
+            )
+        assert r.model == "my-haiku"

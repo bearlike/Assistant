@@ -25,7 +25,7 @@ interface PlanCardProps {
  * visible without needing to open the trace panel.
  */
 export function PlanCard({ plan, onApprove }: PlanCardProps) {
-  const [expanded, setExpanded] = useState(plan.status === 'pending');
+  const [expanded, setExpanded] = useState(false);
   const { status, revision, planContent } = plan;
 
   const StatusIcon =

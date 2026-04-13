@@ -26,6 +26,7 @@ def _isolate_personal_skills(tmp_path, monkeypatch):
 # Helpers
 # ------------------------------------------------------------------
 
+
 def _write_skill(base, name, body, *, source="project", **meta_overrides):
     """Write a SKILL.md file into the expected directory structure."""
     import yaml
@@ -88,7 +89,8 @@ class TestDiscoverSkills:
         result = discover_skills(str(tmp_path))
         assert result == []
 
-    def test_missing_name_skipped(self, tmp_path):
+    def test_missing_name_derived_from_directory(self, tmp_path):
+        """When frontmatter lacks 'name', the directory name is used."""
         skills_dir = tmp_path / ".claude" / "skills" / "no-name"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text(
@@ -96,7 +98,9 @@ class TestDiscoverSkills:
             encoding="utf-8",
         )
         result = discover_skills(str(tmp_path))
-        assert result == []
+        assert len(result) == 1
+        assert result[0].name == "no-name"
+        assert result[0].description == "has desc"
 
     def test_missing_description_skipped(self, tmp_path):
         skills_dir = tmp_path / ".claude" / "skills" / "no-desc"
@@ -350,6 +354,7 @@ class TestSkillRegistry:
         assert len(registry.list_all()) == 1
 
         import shutil
+
         shutil.rmtree(skills_dir / "deletable")
         changed = registry.maybe_reload()
         assert changed is True

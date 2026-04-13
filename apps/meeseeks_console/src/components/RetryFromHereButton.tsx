@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
+import { Button } from './ui/button';
 
 export function RetryFromHereButton({
   onConfirm,
@@ -45,21 +46,24 @@ export function RetryFromHereButton({
             the agent will not be reverted.
           </p>
           <div className="flex justify-end gap-2">
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setOpen(false)}
-              className="px-2.5 py-1 text-xs rounded-md text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] transition-colors"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="neutral"
+              size="sm"
+              tone="info"
               onClick={() => {
                 setOpen(false);
                 onConfirm();
               }}
-              className="px-2.5 py-1 text-xs font-medium rounded-md bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"
             >
               Confirm
-            </button>
+            </Button>
           </div>
         </div>
       )}

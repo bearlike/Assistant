@@ -18,9 +18,7 @@ class TestHttpHookFactory:
     """Test _make_http_hook and related factories."""
 
     def test_pre_tool_http_hook_posts_json(self) -> None:
-        config = HooksConfig(
-            pre_tool_use=[HookEntry(type="http", url="http://example.com/hook")]
-        )
+        config = HooksConfig(pre_tool_use=[HookEntry(type="http", url="http://example.com/hook")])
         manager = HookManager.load_from_config(config)
         assert len(manager.pre_tool_use) == 1
 
@@ -40,9 +38,7 @@ class TestHttpHookFactory:
 
     def test_pre_tool_http_hook_respects_matcher(self) -> None:
         config = HooksConfig(
-            pre_tool_use=[
-                HookEntry(type="http", url="http://example.com/hook", matcher="shell_*")
-            ]
+            pre_tool_use=[HookEntry(type="http", url="http://example.com/hook", matcher="shell_*")]
         )
         manager = HookManager.load_from_config(config)
 
@@ -56,9 +52,7 @@ class TestHttpHookFactory:
             mock_post.assert_called_once()
 
     def test_post_tool_http_hook(self) -> None:
-        config = HooksConfig(
-            post_tool_use=[HookEntry(type="http", url="http://example.com/post")]
-        )
+        config = HooksConfig(post_tool_use=[HookEntry(type="http", url="http://example.com/post")])
         manager = HookManager.load_from_config(config)
 
         mock_result = MagicMock()
@@ -87,9 +81,7 @@ class TestHttpHookFactory:
             assert payload["session_id"] == "sess-123"
 
     def test_session_end_http_hook_with_error(self) -> None:
-        config = HooksConfig(
-            on_session_end=[HookEntry(type="http", url="http://example.com/end")]
-        )
+        config = HooksConfig(on_session_end=[HookEntry(type="http", url="http://example.com/end")])
         manager = HookManager.load_from_config(config)
 
         with patch("meeseeks_core.hooks._post_json") as mock_post:
@@ -128,9 +120,7 @@ class TestSessionEnvEnrichment:
             assert env["MEESEEKS_SESSION_ID"] == "test-session-id"
 
     def test_session_end_passes_session_id_and_error(self) -> None:
-        config = HooksConfig(
-            on_session_end=[HookEntry(type="command", command="echo test")]
-        )
+        config = HooksConfig(on_session_end=[HookEntry(type="command", command="echo test")])
         manager = HookManager.load_from_config(config)
 
         with patch("subprocess.run") as mock_run:

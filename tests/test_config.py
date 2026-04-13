@@ -163,6 +163,7 @@ class TestResolveMeeseeksHome:
     def test_default_is_home_dot_meeseeks(self, monkeypatch):
         monkeypatch.delenv("MEESEEKS_HOME", raising=False)
         from pathlib import Path
+
         result = config_module.resolve_meeseeks_home()
         assert result == Path.home() / ".meeseeks"
 
@@ -260,7 +261,9 @@ class TestEnsureExampleConfigs:
     """ensure_example_configs respects MEESEEKS_HOME when outside project."""
 
     def test_scaffolds_to_home_when_no_configs_dir(
-        self, monkeypatch, tmp_path,
+        self,
+        monkeypatch,
+        tmp_path,
     ):
         monkeypatch.chdir(tmp_path)
         home = tmp_path / "mhome"
@@ -271,7 +274,9 @@ class TestEnsureExampleConfigs:
         assert app_p.exists() and mcp_p.exists()
 
     def test_scaffolds_to_configs_when_present(
-        self, monkeypatch, tmp_path,
+        self,
+        monkeypatch,
+        tmp_path,
     ):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "configs").mkdir()
@@ -354,9 +359,7 @@ class TestDiscoverSubtreeMcpJson:
 
     def test_skips_cwd_itself(self, tmp_path):
         """CWD's own .mcp.json is NOT included (handled by _discover_cwd_mcp_json)."""
-        (tmp_path / ".mcp.json").write_text(
-            json.dumps({"servers": {"root": {}}}), encoding="utf-8"
-        )
+        (tmp_path / ".mcp.json").write_text(json.dumps({"servers": {"root": {}}}), encoding="utf-8")
         result = _discover_subtree_mcp_json(str(tmp_path))
         assert result == []
 
@@ -373,9 +376,7 @@ class TestDiscoverSubtreeMcpJson:
         """Files beyond max_depth are not discovered."""
         deep = tmp_path / "a" / "b" / "c"
         deep.mkdir(parents=True)
-        (deep / ".mcp.json").write_text(
-            json.dumps({"servers": {"deep": {}}}), encoding="utf-8"
-        )
+        (deep / ".mcp.json").write_text(json.dumps({"servers": {"deep": {}}}), encoding="utf-8")
         assert _discover_subtree_mcp_json(str(tmp_path), max_depth=2) == []
         assert len(_discover_subtree_mcp_json(str(tmp_path), max_depth=3)) == 1
 
@@ -405,12 +406,14 @@ class TestGetMergedMcpConfig:
         # Create a global MCP config
         global_config = tmp_path / "global_mcp.json"
         global_config.write_text(
-            json.dumps({
-                "servers": {
-                    "global_srv": {"command": "global_cmd"},
-                    "shared_srv": {"command": "global_shared"},
-                },
-            }),
+            json.dumps(
+                {
+                    "servers": {
+                        "global_srv": {"command": "global_cmd"},
+                        "shared_srv": {"command": "global_shared"},
+                    },
+                }
+            ),
             encoding="utf-8",
         )
         set_mcp_config_path(str(global_config))
@@ -420,12 +423,14 @@ class TestGetMergedMcpConfig:
         cwd_dir.mkdir()
         cwd_mcp = cwd_dir / ".mcp.json"
         cwd_mcp.write_text(
-            json.dumps({
-                "servers": {
-                    "shared_srv": {"command": "cwd_override"},
-                    "local_srv": {"command": "local_cmd"},
-                },
-            }),
+            json.dumps(
+                {
+                    "servers": {
+                        "shared_srv": {"command": "cwd_override"},
+                        "local_srv": {"command": "local_cmd"},
+                    },
+                }
+            ),
             encoding="utf-8",
         )
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,10 +13,20 @@ from meeseeks_core.common import get_logger
 logger = get_logger(__name__)
 
 MAX_ERRORS_BEFORE_RECONNECT = 3
-TOOL_CACHE_TTL = 300  # seconds
 CONNECT_TIMEOUT = 30
 CALL_TIMEOUT = 60
 MAX_CONCURRENT_CONNECTS = 5
+
+
+# Servers whose config keys the MCP adapter does not accept are quarantined.
+# The warning/info pair is emitted once per (server, reason) for the process
+# lifetime so quarantine re-triggers after config changes still surface.
+_WARNED_SKIP: set[tuple[str, str]] = set()
+
+
+def _is_config_kwarg_error(exc: BaseException) -> bool:
+    """True when *exc* indicates the MCP adapter rejected an unknown config key."""
+    return isinstance(exc, TypeError) and "unexpected keyword argument" in str(exc)
 
 
 @dataclass
@@ -28,9 +37,12 @@ class ServerState:
     config: dict[str, Any]
     client: Any | None = None
     tools: list[Any] = field(default_factory=list)
-    tools_fetched_at: float = 0.0
     consecutive_errors: int = 0
     connected: bool = False
+    # Non-None when a connection attempt failed with an unrecoverable config
+    # error (e.g. unsupported OAuth schema). Cleared when the config hash
+    # changes so the user can retry by editing the config.
+    skip_reason: str | None = None
 
 
 def _config_hash(mcp_config: dict[str, Any]) -> str:
@@ -62,9 +74,7 @@ class MCPConnectionPool:
         try:
             from langchain_mcp_adapters.client import MultiServerMCPClient
         except Exception as exc:  # pragma: no cover - runtime dependency
-            raise RuntimeError(
-                "langchain-mcp-adapters is required for MCP tools."
-            ) from exc
+            raise RuntimeError("langchain-mcp-adapters is required for MCP tools.") from exc
 
         client = MultiServerMCPClient({name: config})  # type: ignore[dict-item]
         tools = await client.get_tools(server_name=name)
@@ -73,7 +83,6 @@ class MCPConnectionPool:
             config=config,
             client=client,
             tools=list(tools),
-            tools_fetched_at=time.monotonic(),
             consecutive_errors=0,
             connected=True,
         )
@@ -87,13 +96,35 @@ class MCPConnectionPool:
         state.client = None
         logger.debug("Disconnected from MCP server '{}'", state.name)
 
+    async def _quarantine(self, name: str, config: dict[str, Any], reason: str) -> None:
+        """Stash a disconnected placeholder so subsequent calls short-circuit.
+
+        The quarantined state persists until its config entry changes in
+        ``refresh_if_config_changed``. The WARNING+INFO pair is emitted
+        once per (server, reason) tuple.
+        """
+        state = ServerState(
+            name=name,
+            config=config,
+            connected=False,
+            skip_reason=reason,
+        )
+        async with self._lock:
+            self._servers[name] = state
+        key = (name, reason)
+        if key not in _WARNED_SKIP:
+            _WARNED_SKIP.add(key)
+            logger.info(
+                "MCP server '{}' skipped until config changes: {}",
+                name,
+                reason,
+            )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    async def connect_all(
-        self, mcp_config: dict[str, Any]
-    ) -> dict[str, list[str]]:
+    async def connect_all(self, mcp_config: dict[str, Any]) -> dict[str, list[str]]:
         """Connect to all configured servers concurrently.
 
         Returns a mapping of ``{server_name: [tool_names]}`` on success,
@@ -118,28 +149,28 @@ class MCPConnectionPool:
                     )
                     async with self._lock:
                         self._servers[name] = state
-                    results[name] = [
-                        getattr(t, "name", str(t)) for t in state.tools
-                    ]
+                    results[name] = [getattr(t, "name", str(t)) for t in state.tools]
                 except Exception as exc:
                     logger.warning("Failed to connect to MCP server '{}': {}", name, exc)
                     results[name] = [f"ERROR: {exc}"]
+                    if _is_config_kwarg_error(exc):
+                        await self._quarantine(name, cfg, f"adapter rejected config keys ({exc})")
 
-        await asyncio.gather(
-            *[_try_connect(name, cfg) for name, cfg in servers.items()]
-        )
+        await asyncio.gather(*[_try_connect(name, cfg) for name, cfg in servers.items()])
         return results
 
     async def get_or_connect(self, server_name: str) -> ServerState:
         """Return an existing connection or create one on demand.
 
         Raises ``ValueError`` if the server is not present in the loaded
-        MCP configuration.
+        MCP configuration or is quarantined until its config changes.
         """
         async with self._lock:
             state = self._servers.get(server_name)
             if state is not None and state.connected:
                 return state
+            if state is not None and state.skip_reason is not None:
+                raise ValueError(f"MCP server '{server_name}' unavailable: {state.skip_reason}")
 
         # Not connected yet -- try to connect
         servers = self._mcp_config.get("servers", {})
@@ -158,9 +189,7 @@ class MCPConnectionPool:
 
         config = servers.get(server_name)
         if config is None:
-            raise ValueError(
-                f"MCP server '{server_name}' not found in configuration."
-            )
+            raise ValueError(f"MCP server '{server_name}' not found in configuration.")
 
         state = await asyncio.wait_for(
             self._connect_single(server_name, config),
@@ -189,9 +218,7 @@ class MCPConnectionPool:
             return f"Tool '{tool_name}' not found on server '{server_name}'."
 
         try:
-            result = await asyncio.wait_for(
-                tool.ainvoke(input_payload), timeout=CALL_TIMEOUT
-            )
+            result = await asyncio.wait_for(tool.ainvoke(input_payload), timeout=CALL_TIMEOUT)
             state.consecutive_errors = 0
             return str(result)
         except Exception as exc:
@@ -217,12 +244,9 @@ class MCPConnectionPool:
                 tool = tool_map.get(tool_name)
                 if tool is None:
                     return (
-                        f"Tool '{tool_name}' not found on server "
-                        f"'{server_name}' after reconnect."
+                        f"Tool '{tool_name}' not found on server '{server_name}' after reconnect."
                     )
-                result = await asyncio.wait_for(
-                    tool.ainvoke(input_payload), timeout=CALL_TIMEOUT
-                )
+                result = await asyncio.wait_for(tool.ainvoke(input_payload), timeout=CALL_TIMEOUT)
                 state.consecutive_errors = 0
                 return str(result)
             raise
@@ -234,9 +258,7 @@ class MCPConnectionPool:
         if state is not None:
             await self._disconnect_server(state)
 
-    async def refresh_if_config_changed(
-        self, mcp_config: dict[str, Any]
-    ) -> bool:
+    async def refresh_if_config_changed(self, mcp_config: dict[str, Any]) -> bool:
         """Compare config hash; reconnect changed/new servers, drop removed ones.
 
         Returns ``True`` if the config changed and connections were refreshed.
@@ -282,13 +304,13 @@ class MCPConnectionPool:
                         async with self._lock:
                             self._servers[name] = state
                     except Exception as exc:
-                        logger.warning(
-                            "Failed to reconnect MCP server '{}': {}", name, exc
-                        )
+                        logger.warning("Failed to reconnect MCP server '{}': {}", name, exc)
+                        if _is_config_kwarg_error(exc):
+                            await self._quarantine(
+                                name, cfg, f"adapter rejected config keys ({exc})"
+                            )
 
-            await asyncio.gather(
-                *[_reconn(n, c) for n, c in to_connect.items()]
-            )
+            await asyncio.gather(*[_reconn(n, c) for n, c in to_connect.items()])
 
         return True
 
@@ -346,3 +368,4 @@ def reset_mcp_pool() -> None:
     """Discard the current pool singleton (useful for tests)."""
     global _pool
     _pool = None
+    _WARNED_SKIP.clear()

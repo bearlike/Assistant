@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from rich.console import RenderableType
 from rich.markdown import Markdown
 
@@ -51,11 +49,6 @@ def render_dir_payload(path: str, entries: list[str]) -> RenderableType:
         return render_markdown(f"{header}\n\n(no files)")
     items = "\n".join(f"- {entry}" for entry in entries)
     return render_markdown(f"{header}\n\n{items}")
-
-
-def render_json_payload(payload: dict[str, Any]) -> RenderableType:
-    """Render JSON payloads as a fenced code block."""
-    return render_markdown(f"```json\n{payload}\n```")
 
 
 def render_shell_payload(

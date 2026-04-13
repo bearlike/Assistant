@@ -24,3 +24,7 @@ test-results
 *.njsproj
 *.sln
 *.sw?
+
+# Re-include shadcn/ui scaffolding (root .gitignore excludes lib/ for Python packaging)
+!src/lib/
+!src/lib/**
