@@ -59,6 +59,7 @@ uv run meeseeks
 | `/config` | Manage config files. | Use `/config init`. |
 | `/init` | Scaffold app + MCP example configs. |  |
 | `/models` | Open the model selection wizard. | Interactive mode only. |
+| `/plugins [marketplace\|install\|uninstall]` | List installed plugins or manage them. | Supports marketplace browsing and install/uninstall. |
 | `/automatic [on\|off]` | Auto-approve tool actions. | Use `--yes` to confirm in non-interactive mode. |
 | `/tokens` | Show token usage and remaining context. |  |
 | `/budget` | Show token usage and remaining context. | Alias for `/tokens`. |

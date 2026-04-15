@@ -89,9 +89,10 @@
           "type": "array"
         },
         "edit_tool": {
-          "default": "search_replace_block",
-          "description": "File editing mechanism: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement).",
+          "default": "",
+          "description": "File editing mechanism override: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement). Leave empty (default) to auto-select based on the active model via llm.structured_patch_models.",
           "examples": [
+            "",
             "search_replace_block",
             "structured_patch"
           ],
@@ -111,6 +112,21 @@
           "description": "Allow ALL user-enabled MCP tools (tools with kind='mcp') during plan mode. Matches Claude Code's permissive default and trusts the user's mcp.json configuration. Set to false to block MCP tools in plan mode regardless of their read-only status.",
           "title": "Plan Mode Allow Mcp",
           "type": "boolean"
+        },
+        "web_ide": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebIdeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional 'Open in Web IDE' feature config (code-server containers)."
+        },
+        "lsp": {
+          "$ref": "#/$defs/LSPConfig"
         }
       },
       "title": "AgentConfig",
@@ -402,6 +418,17 @@
           "title": "Fallback Models",
           "type": "array"
         },
+        "proxy_model_prefix": {
+          "default": "openai",
+          "description": "LiteLLM provider prefix prepended to model names when api_base is set. LiteLLM strips this prefix before forwarding the model name to the proxy, so the proxy receives the model ID it advertises in /v1/models. Leave as 'openai' for LiteLLM proxy, Bifrost, and OpenRouter. Only relevant when api_base is configured.",
+          "examples": [
+            "openai",
+            "azure",
+            "vertex_ai"
+          ],
+          "title": "Proxy Model Prefix",
+          "type": "string"
+        },
         "reasoning_effort": {
           "default": "",
           "description": "Reasoning effort hint for supported models. One of low, medium, high, none, or empty.",
@@ -418,9 +445,40 @@
           },
           "title": "Reasoning Effort Models",
           "type": "array"
+        },
+        "structured_patch_models": {
+          "description": "Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; only set this to override or extend.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Structured Patch Models",
+          "type": "array"
         }
       },
       "title": "LLMConfig",
+      "type": "object"
+    },
+    "LSPConfig": {
+      "additionalProperties": false,
+      "description": "Language Server Protocol integration settings.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable native LSP tool.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "servers": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "description": "Override or extend built-in server definitions. Set {\"pyright\": {\"disabled\": true}} to disable a built-in, or add custom servers with command/extensions/root_markers.",
+          "title": "Servers",
+          "type": "object"
+        }
+      },
+      "title": "LSPConfig",
       "type": "object"
     },
     "LangfuseConfig": {
@@ -522,6 +580,41 @@
         }
       },
       "title": "PermissionsConfig",
+      "type": "object"
+    },
+    "PluginsConfig": {
+      "description": "Plugin system configuration.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable the plugin system.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "enabled_plugins": {
+          "description": "Plugin names to enable. Empty = all installed plugins. Format: 'plugin-name' or 'plugin-name@marketplace'.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Enabled Plugins",
+          "type": "array"
+        },
+        "marketplaces": {
+          "description": "GitHub repos containing marketplace.json plugin indexes.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Marketplaces",
+          "type": "array"
+        },
+        "install_path": {
+          "default": "",
+          "description": "Override install path for Meeseeks-managed plugins. Defaults to $MEESEEKS_HOME/plugins/ (via resolve_meeseeks_home).",
+          "title": "Install Path",
+          "type": "string"
+        }
+      },
+      "title": "PluginsConfig",
       "type": "object"
     },
     "ProjectConfig": {
@@ -648,6 +741,16 @@
           ],
           "title": "Result Export Dir",
           "type": "string"
+        },
+        "projects_home": {
+          "default": "",
+          "description": "Directory for virtual project folders. Defaults to $MEESEEKS_HOME/projects.",
+          "examples": [
+            "~/.meeseeks/projects"
+          ],
+          "title": "Projects Home",
+          "type": "string",
+          "x-protected": true
         }
       },
       "title": "RuntimeConfig",
@@ -695,6 +798,15 @@
           "title": "Auto Compact Threshold",
           "type": "number"
         },
+        "overhead_estimate": {
+          "default": 25000,
+          "description": "Estimated token overhead for system prompt and tool schemas. Used by the orchestrator's coarse budget check when exact tool schemas are not available.",
+          "examples": [
+            25000
+          ],
+          "title": "Overhead Estimate",
+          "type": "integer"
+        },
         "model_context_windows": {
           "additionalProperties": {
             "type": "integer"
@@ -705,6 +817,69 @@
         }
       },
       "title": "TokenBudgetConfig",
+      "type": "object"
+    },
+    "WebIdeConfig": {
+      "additionalProperties": false,
+      "description": "Config for the per-session code-server \"Open in Web IDE\" feature.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "image": {
+          "default": "codercom/code-server:latest",
+          "title": "Image",
+          "type": "string"
+        },
+        "default_lifetime_hours": {
+          "default": 1,
+          "maximum": 24,
+          "minimum": 1,
+          "title": "Default Lifetime Hours",
+          "type": "integer"
+        },
+        "max_lifetime_hours": {
+          "default": 8,
+          "maximum": 168,
+          "minimum": 1,
+          "title": "Max Lifetime Hours",
+          "type": "integer"
+        },
+        "cpus": {
+          "default": 1.0,
+          "maximum": 16.0,
+          "minimum": 0.1,
+          "title": "Cpus",
+          "type": "number"
+        },
+        "memory": {
+          "default": "1g",
+          "pattern": "^\\d+[mgMG]$",
+          "title": "Memory",
+          "type": "string"
+        },
+        "pids_limit": {
+          "default": 512,
+          "maximum": 4096,
+          "minimum": 64,
+          "title": "Pids Limit",
+          "type": "integer"
+        },
+        "network": {
+          "default": "meeseeks-ide",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "title": "Network",
+          "type": "string"
+        },
+        "state_dir": {
+          "default": "/tmp/meeseeks-ide",
+          "title": "State Dir",
+          "type": "string"
+        }
+      },
+      "title": "WebIdeConfig",
       "type": "object"
     }
   },
@@ -754,6 +929,9 @@
     "hooks": {
       "$ref": "#/$defs/HooksConfig",
       "description": "External hooks fired during the session lifecycle (command or http)."
+    },
+    "plugins": {
+      "$ref": "#/$defs/PluginsConfig"
     },
     "channels": {
       "additionalProperties": {

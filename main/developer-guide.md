@@ -3,11 +3,11 @@
 This page summarizes the code layout, core interfaces, and the minimal steps needed to build a new client.
 
 ## Monorepo layout
-- `packages/meeseeks_core/`: orchestration loop, session runtime, schemas, session storage, compaction, tool registry.
+- `packages/meeseeks_core/`: orchestration loop, session runtime, schemas, session storage, compaction, tool registry, plugin system (`plugins.py`), agent definition registry (`agent_registry.py`).
 - `packages/meeseeks_tools/`: tool implementations and integration glue.
 - `packages/meeseeks_tools/src/meeseeks_tools/vendor/aider`: vendored Aider utilities used by local file and shell tools.
-- `apps/meeseeks_api/`: Flask API that exposes the assistant over HTTP.
-- `apps/meeseeks_console/`: Web console for task orchestration (React + Vite).
+- `apps/meeseeks_api/`: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (`ide.py`, `ide_routes.py`).
+- `apps/meeseeks_console/`: Web console for task orchestration, plugin management, and Web IDE access (React + Vite).
 - `apps/meeseeks_cli/`: terminal CLI for interactive sessions.
 - `meeseeks_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
 
@@ -27,13 +27,15 @@ The orchestrator loads project instructions from the working directory and injec
 ## Core abstractions and interfaces
 - `AbstractTool` (`meeseeks_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
 - `ToolRunner` protocol (`meeseeks_core.tool_registry`): interface for tool runners with `run(ActionStep)`.
-- `ToolSpec` / `ToolRegistry` (`meeseeks_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config — either `aider_edit_block_tool` or `file_edit_tool`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
+- `ToolSpec` / `ToolRegistry` (`meeseeks_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config — either `aider_edit_block_tool` or `file_edit_tool`. When `edit_tool` is empty, `ToolUseLoop` auto-selects based on model identity via `model_prefers_structured_patch()`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
+- `PluginSystem` (`meeseeks_core.plugins`): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by `agent_registry.py`), skills, hooks, and MCP tool configurations. Loaded via `load_all_plugin_components()` during session init.
 - `ActionStep`, `Plan`, `TaskQueue` (`meeseeks_core.classes`): planning and tool-execution payloads.
 - `PermissionPolicy` (`meeseeks_core.permissions`): allow/deny/ask rules for tool execution.
 - `HookManager` (`meeseeks_core.hooks`): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports `"command"` (shell) and `"http"` (fire-and-forget POST) hook types via `HooksConfig`.
-- `ChannelAdapter` protocol (`meeseeks_api.channels.base`): abstraction for chat platform integrations (verify_request, parse_inbound, send_response, system_context). Shared `_process_inbound()` pipeline in `routes.py`. Adapters: Nextcloud Talk (webhook-driven) and Email (IMAP poll-driven with markdown→HTML replies).
+- `ChannelAdapter` protocol (`meeseeks_api.channels.base`): abstraction for chat platform integrations with four methods (`verify_request`, `parse_inbound`, `send_response`, `system_context`). All adapters share the `_process_inbound()` pipeline in `routes.py`. Current adapters: Nextcloud Talk (webhook-driven) and Email (IMAP polling with SMTP replies rendered as HTML from markdown).
 - `SessionStore` / `SessionRuntime` (`meeseeks_core.session_store`, `meeseeks_core.session_runtime`): transcripts and the shared runtime facade.
-- `ChatModel` protocol (`meeseeks_core.llm`): interface for LLM backends via `build_chat_model`.
+- `ChatModel` protocol (`meeseeks_core.llm`): interface for LLM backends via `build_chat_model`. Supports `proxy_model_prefix` for proxy routing and `model_prefers_structured_patch()` for edit tool auto-selection.
+- `LSPTool` (`meeseeks_tools.integration.lsp.tool`): code intelligence via pygls language servers. Operations: `diagnostics`, `definition`, `references`, `hover`. Servers are `ServerDef` instances in `lsp/servers.py`, matched by file extension and auto-discovered on the PATH. Passive diagnostics are injected after file edits via `_append_lsp_feedback` in `ToolUseLoop`. Config: `agent.lsp.enabled` and `agent.lsp.servers` (override built-ins or add custom servers). Requires the `pygls` optional dependency; silently absent when not installed.
 
 ## New client walkthrough (concrete steps)
 1. Load config and initialize core services:
@@ -114,6 +116,82 @@ registry.register(
     )
 )
 ```
+
+## New channel adapter walkthrough
+
+Channel adapters connect external chat platforms (Nextcloud Talk, Email, Slack, Discord, etc.) to Meeseeks. All adapters share the same inbound pipeline and produce standard API sessions visible in the console and Langfuse.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    A["Platform webhook or poller"] --> B["ChannelAdapter.verify_request()"]
+    B --> C["ChannelAdapter.parse_inbound()"]
+    C --> D["_process_inbound() pipeline"]
+    D --> E["DeduplicationGuard"]
+    E --> F["Mention gate"]
+    F --> G["Session resolution via tag lookup"]
+    G --> H{Slash command?}
+    H -- Yes --> I["Dispatch command, reply directly"]
+    H -- No --> J["SessionRuntime.start_async()"]
+    J --> K["Completion callback"]
+    K --> L["adapter.send_response()"]
+```
+
+Key files in `apps/meeseeks_api/src/meeseeks_api/channels/`:
+
+| File | Purpose |
+|------|---------|
+| `base.py` | `ChannelAdapter` Protocol, `InboundMessage` dataclass, `ChannelRegistry`, `DeduplicationGuard` |
+| `routes.py` | Flask Blueprint, shared `_process_inbound()` pipeline, `@command` decorator registry, `init_channels()` |
+| `nextcloud_talk.py` | Nextcloud Talk adapter (webhook-driven, HMAC-SHA256, ActivityStreams 2.0, OCS Bot API) |
+| `email_adapter.py` | Email adapter (IMAP poll-driven, SMTP reply, markdown-to-HTML rendering via mistune) |
+
+### Steps to add a new platform (e.g., Slack)
+
+1. **Create the adapter** — `channels/slack.py` implementing `ChannelAdapter`:
+   - `verify_request(headers, body)` — validate the inbound webhook signature.
+   - `parse_inbound(headers, body)` — extract an `InboundMessage` from the platform payload. Return `None` for non-message events.
+   - `send_response(channel_id, text, thread_id, reply_to)` — post the reply back to the platform.
+   - `system_context` property — brief string injected into the LLM system prompt so it knows which interface the user is on.
+
+2. **Add config** — add the platform section under `channels` in `configs/app.json`:
+   ```json
+   { "channels": { "slack": { "enabled": true, "bot_token": "xoxb-...", "signing_secret": "..." } } }
+   ```
+
+3. **Register in `init_channels()`** — instantiate the adapter and call `_registry.register()`. For webhook-driven platforms, the route `POST /api/webhooks/slack` works automatically via the shared Blueprint.
+
+4. **For poll-driven channels** (like Email's IMAP poller): create a daemon thread that polls the external source and calls `_process_inbound()` directly, bypassing the webhook route.
+
+5. **Optionally implement `requires_mention(message)`** — return `False` to skip the mention gate for specific message types (e.g., Email skips mentions for 1-to-1 but requires `@Meeseeks` in multi-party threads).
+
+6. **Add platform-specific slash commands** (optional) — use the `@command` decorator in `routes.py`. Help text auto-generates from the registry.
+
+### Session mapping
+
+Channel sessions use session tags to map platform threads to Meeseeks sessions.
+
+- **Tag format:** `"<platform>:<scope>:<id>"` (for example, `nextcloud-talk:room:abc123` or `email:thread:alice@example.com:msg-id-001`).
+- The `_process_inbound()` pipeline calls `session_store.resolve_tag(tag)` to look up an existing session. If no session exists, it creates one with `create_session()` and binds it with `tag_session()`.
+- A `context` event containing `source_platform` metadata is injected at creation. The completion callback reads this field to route the final response back through the correct adapter.
+- Channel sessions are standard API sessions. They appear in the web console, support archiving, export, and forking, and show up in Langfuse traces.
+
+### Built-in slash commands (all channels)
+
+| Command | Description |
+|---------|-------------|
+| `/help` | List available commands |
+| `/usage` | Show session token usage and context window utilization |
+| `/new` | Start a fresh conversation (new session) |
+| `/switch-project <name>` | Switch the active project context |
+
+Commands run without LLM invocation. Adding a new command is one `@command` decorator and one function.
+
+### Existing adapters
+
+- **Nextcloud Talk** — see [docs/clients-nextcloud-talk.md](clients-nextcloud-talk.md)
+- **Email** — see [docs/clients-email.md](clients-email.md)
 
 ## Built-in `read_file` tool
 

@@ -81,12 +81,15 @@ Meeseeks ships two file-editing mechanisms. Set `agent.edit_tool` in `configs/ap
 
 | Value | Mechanism | Best for |
 |-------|-----------|----------|
-| `"search_replace_block"` (default) | Aider-style SEARCH/REPLACE blocks | Models trained on diff/patch formats; multi-file edits in one call |
+| `"search_replace_block"` | Aider-style SEARCH/REPLACE blocks | Models trained on diff/patch formats; multi-file edits in one call |
 | `"structured_patch"` | Per-file `file_path` + `old_string` / `new_string` | Models that perform better with explicit per-file parameters (e.g., smaller or instruction-tuned models) |
+| (empty, default) | Auto-selected based on model identity | Uses `model_prefers_structured_patch()` to pick the best format for the active model |
 
 ```json
 { "agent": { "edit_tool": "structured_patch" } }
 ```
+
+When `edit_tool` is empty (the default), the system auto-selects based on model identity. Models known to perform better with structured patch (e.g., certain instruction-tuned models) will automatically get that format. Set `edit_tool` explicitly only when you want to override the auto-selection.
 
 Research shows that edit format significantly impacts LLM coding accuracy — the same model can vary by 20+ percentage points depending on the edit schema it's given ([Aider benchmarks](https://aider.chat/docs/more/edit-formats.html), [EDIT-Bench](https://arxiv.org/abs/2511.04486)). For example, a model struggling with SEARCH/REPLACE block syntax (misplacing the filename line, botching the fence markers) may succeed immediately when given the simpler `old_string` / `new_string` interface. This setting lets you match the edit format to whatever works best for your chosen model.
 

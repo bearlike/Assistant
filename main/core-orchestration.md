@@ -23,14 +23,20 @@ This page summarizes the orchestration loop, core components, and operational fe
 
 ## Feature highlights
 - Auto-compact runs when token budget or event thresholds are reached; `/compact` forces a summary pass. Token thresholds are configured with `token_budget.auto_compact_threshold`.
+- Conversation fork-from-message via `fork_at_ts`: fork a session at any point in its history, enabling edit and regenerate workflows with per-message model override.
+- Edit tool auto-selection based on model identity (`model_prefers_structured_patch()`); explicit `agent.edit_tool` config overrides auto-selection.
+- Plugin system: discover, install, and manage plugins that contribute agent definitions, skills, hooks, and MCP tools from configured marketplaces.
 - Langfuse tracing is session-scoped when enabled, keeping multi-turn work in one trace context.
 - External MCP servers are supported via `configs/mcp.json` and auto-discovered at startup.
-- LiteLLM-backed chat models support multiple providers and model aliases; different models can be used for planning and tool execution.
+- LiteLLM-backed chat models support multiple providers and model aliases; different models can be used for planning and tool execution. `proxy_model_prefix` controls prefix prepended to model names when routing through a proxy.
 - Permission policies gate tool execution; approvals can be automatic, denied, or prompted.
 
 ## Extensibility points
 - Add tools by implementing `AbstractTool` or by registering MCP servers with schemas.
-- **Configurable file edit tool:** Set `agent.edit_tool` in config to `"search_replace_block"` (Aider-style) or `"structured_patch"` (per-file exact match). The tool schema, LLM prompt instructions, and backend implementation all switch together — they're bundled in the same `ToolSpec` registration.
+- **Configurable file edit tool:** Set `agent.edit_tool` in config to `"search_replace_block"` (Aider-style) or `"structured_patch"` (per-file exact match). Leave empty to auto-select based on model identity. The tool schema, LLM prompt instructions, and backend implementation all switch together — they're bundled in the same `ToolSpec` registration.
+- **Plugins:** Install extensions from configured marketplaces. Plugins can provide agent definitions (markdown frontmatter in `agent_registry.py`), skills, hooks, and MCP tool configurations. Managed via CLI (`/plugins`), console UI, or REST API.
+- **Web IDE:** Opt-in per-session code-server containers (`agent.web_ide` config). Managed by `IdeManager` in the API. Requires MongoDB for state persistence.
 - Add hooks through `HookManager` for pre/post events, compaction transforms, and session lifecycle notifications. Supports shell command hooks (`type: "command"`) and HTTP webhook hooks (`type: "http"`, fire-and-forget POST to external URLs).
 - Add new interfaces by reusing `SessionRuntime` and the event transcript model.
-- **Chat platform adapters**: implement the `ChannelAdapter` protocol (3 methods: `verify_request`, `parse_inbound`, `send_response`) and register in `channels/` to receive webhook-driven conversations. Channel sessions are standard API sessions using session tags for thread→session mapping. First adapter: Nextcloud Talk. See `docs/clients-nextcloud-talk.md`.
+- **Chat platform adapters**: implement the `ChannelAdapter` protocol (three methods: `verify_request`, `parse_inbound`, `send_response`) and register in `channels/` to receive webhook-driven conversations. Channel sessions are standard API sessions using session tags for thread-to-session mapping. Adapters: Nextcloud Talk and Email. See `docs/clients-nextcloud-talk.md` and `docs/clients-email.md`.
+- **LSP tool**: Enable or customize via `agent.lsp` config (`enabled` bool, `servers` dict). Built-in server definitions (pyright, typescript-language-server, gopls, rust-analyzer) are discovered via `shutil.which` and spawned lazily on first use. Disable a built-in with `{"pyright": {"disabled": true}}`; add custom servers by specifying `command`, `extensions`, and `root_markers`. Passive diagnostics fire automatically after file edits without an explicit `lsp_tool` call.
