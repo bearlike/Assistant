@@ -9,89 +9,115 @@ bearlike/Assistant (Meeseeks) is an AI task agent assistant that breaks a reques
 
 ## Documentation map
 
-**Overview**
-- [README](https://github.com/bearlike/Assistant/blob/main/README.md) - high-level product overview and feature highlights
-- [Core orchestration](core-orchestration.md) - execution flow and core features
+**Start here**
 
-**Setup and configuration**
-- [Installation](getting-started.md) - environment setup and install paths
-- [LLM setup](llm-setup.md) - minimum LLM config and LiteLLM notes
+- [Get Started](getting-started.md) — installation paths and first run
+- [README](https://github.com/bearlike/Assistant/blob/main/README.md) — product overview and feature highlights
 
-**Clients**
-- [CLI](clients-cli.md) - terminal interface
-- [Console + API](clients-web-api.md) - Web console and REST API
-- [Home Assistant voice](clients-home-assistant.md) - HA Assist integration
-- [Nextcloud Talk](clients-nextcloud-talk.md) - chat platform integration via webhook
-- [Email](clients-email.md) - email channel via IMAP/SMTP
+**Configure**
 
-**Developer**
-- [Developer guide](developer-guide.md) - core abstractions and new client walkthrough
+- [LLM Setup](llm-setup.md) — provider keys, model selection, fallback
+- [Project Setup](project-configuration.md) — `CLAUDE.md` loading and per-project `.mcp.json`
+- [Configuration Reference](configuration.md) — every key in `configs/app.json`
 
-**Reference**
-- [API reference](reference.md) - mkdocstrings reference for core modules
-- [Session runtime](session-runtime.md) - shared runtime used by CLI + API
+**Use**
 
-## Feature highlights (quick view)
-- Unified async tool-use loop where the LLM drives tool selection via native `bind_tools`.
-- Sub-agent spawning for parallel subtasks, managed by the AgentHypervisor control plane.
-- Multiple interfaces (web console, REST API, Home Assistant, Nextcloud Talk, terminal CLI) backed by one core engine.
-- Tool registry for local tools plus optional MCP tools.
-- Built-in local file and shell tools — native `read_file` with line-windowing and dedup cache, plus edit, list, and shell execution.
-- Configurable file editing with auto-selection based on model identity (Aider SEARCH/REPLACE or structured patch).
-- Session transcripts with auto-compact for long runs and token budget awareness.
-- Conversation fork-from-message, edit and regenerate, per-message model override.
-- Context snapshots built from recent turns plus summaries of prior activity.
-- Session listings filter empty sessions and support archiving via the API.
-- Permission gate with approval callbacks plus bidirectional hooks (command + HTTP) around tool execution and session lifecycle.
-- Plugin system for discovering, installing, and managing extensions (agent definitions, skills, hooks, MCP tools) from configured marketplaces.
-- Native LSP code intelligence via `lsp_tool` (pygls-backed): diagnostics, go-to-definition, find-references, hover. Built-in servers for Python (pyright), TypeScript/JS (typescript-language-server), Go (gopls), Rust (rust-analyzer) — auto-discovered on PATH. Passive diagnostics inject after file edits.
-- Opt-in per-session Web IDE (code-server containers) accessible from the console.
-- Chat platform adapter framework (`ChannelAdapter` protocol) with shared `_process_inbound()` pipeline. Supports webhook-driven (Nextcloud Talk) and poll-driven (Email via IMAP) channels. Slack/Discord follow the same pattern.
-- Shared session runtime; API exposes polling endpoints while the CLI runs the runtime in-process for sync execution, cancellation, and summaries.
-- External MCP servers can be added via `configs/mcp.json` with schema-aware tool inputs.
-- Model routing with provider-qualified names and `proxy_model_prefix` for proxy routing.
-- Optional components (Langfuse, Home Assistant) auto-disable when not configured.
-- Langfuse tracing is session-scoped when enabled, grouping multi-turn runs.
+- [CLI](clients-cli.md) — terminal interface
+- [Web Console + API](clients-web-api.md) — web console and REST API
+- [Home Assistant](clients-home-assistant.md) — smart-home voice integration
+- [Nextcloud Talk](clients-nextcloud-talk.md) — chat integration via webhook
+- [Email](clients-email.md) — email channel via IMAP/SMTP
 
-## Repo map (short)
-- `packages/meeseeks_core/`: orchestration loop, schemas, session storage, compaction, tool registry, plugin system, agent registry.
-- `packages/meeseeks_tools/`: tool implementations and integrations.
-- `apps/meeseeks_api/`: Flask API that exposes the assistant over HTTP, plugin management, Web IDE lifecycle.
-- `apps/meeseeks_console/`: Web console for task orchestration, plugin management, and Web IDE access.
-- `apps/meeseeks_cli/`: terminal CLI for interactive sessions.
-- `meeseeks_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
+**Capabilities**
 
-Prompts are packaged under `packages/meeseeks_core/src/meeseeks_core/prompts/`.
+*Workspace & Execution*
 
-## Architecture in a glance
-- The UI or API sends a user request into the core orchestrator.
-- The orchestrator runs a single async `ToolUseLoop` — the LLM decides which tools to call.
-- The LLM can spawn sub-agents for parallel work, managed by the `AgentHypervisor`.
-- Tool results and summaries are stored in a session transcript for continuity.
+- [Built-in Tools](features-builtin-tools.md) — read, edit, shell, and list
+- [Web IDE](features-web-ide.md) — per-session code-server in the browser
+- [Code Intelligence (LSP)](features-lsp.md) — diagnostics, definitions, references
+- [External Tools (MCP)](features-mcp.md) — connect external tool servers
+
+*Composition & Delegation*
+
+- [Sub-agents](features-agents.md) — parallel delegation to child agents
+- [Skills](features-skills.md) — reusable instruction sets
+- [Plugins & Marketplace](features-plugins.md) — installable extensions
+
+*Control & Safety*
+
+- [Plan Mode](features-plan-mode.md) — propose before acting, with approval
+- [Permissions & Hooks](features-permissions-hooks.md) — tool gates and lifecycle events
+
+*Session & Context*
+
+- [Token Usage](features-token-usage.md) — usage tracking and prompt caching
+- [Compaction](features-compaction.md) — automatic context-window management
+
+**Deploy**
+
+- [Docker Compose](deployment-docker.md) — container stack and env vars
+- [Storage Backends](deployment-storage.md) — JSON vs MongoDB
+- [Production Setup](deployment-production.md) — TLS, Langfuse, token rotation
+
+**Develop**
+
+- [Architecture Overview](core-orchestration.md) — internals, data flow, and subsystem reference
+- [Session Runtime](session-runtime.md) — shared runtime used by CLI + API
+- [Building a Client](developer-guide.md) — core abstractions and integration walkthrough
+- [API Reference](reference.md) — mkdocstrings reference for core modules
+
+**Help**
+
+- [Troubleshooting](troubleshooting.md) — common errors and fixes
+
+## What you can do with Meeseeks
+
+- Hand it a task in natural language and watch it work through the steps in your terminal, browser, or inbox.
+- Delegate independent sub-tasks to parallel sub-agents so long-running work finishes in less wall-clock time.
+- Reach the assistant from the surface that suits the moment: a web console, a CLI, a Home Assistant voice flow, a Nextcloud Talk room, or an email thread.
+- Edit code, read files, and run shell commands directly from the chat — with approval gates you control.
+- Plug in external tools via the Model Context Protocol (MCP) and wrap your own workflows as reusable skills or installable plugins.
+- Open a full-featured browser IDE (code-server) alongside the assistant for any session, with a per-session container.
+- See real code diagnostics, go-to-definition, and hover types inline as the assistant edits (powered by the Language Server Protocol).
+- Run long sessions past the model's context limit — compaction summarises older turns automatically.
+- Track token usage, prompt-cache savings, and cost separately for root and sub-agents.
+
+## Already using Claude Code, Codex, or other agent tools?
+
+Meeseeks is deliberately cross-compatible with the ecosystem you already know. Your existing configs drop in unchanged:
+
+- **MCP servers** — [`mcp.json`](features-mcp.md) accepts both the Meeseeks `servers` key and the Claude Code / VS Code `mcpServers` key. Based on the open [Model Context Protocol](https://modelcontextprotocol.io).
+- **Skills** — `SKILL.md` files in `~/.claude/skills/` or `.claude/skills/` follow the [Agent Skills](https://docs.claude.com/en/api/agent-skills) standard. Anything you wrote for Claude Code works here.
+- **Plugins & marketplaces** — Uses the [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins) manifest and marketplace schema. The default marketplace is [`anthropics/claude-plugins-official`](https://github.com/anthropics/claude-plugins-official). Private marketplaces that follow the same schema load without translation.
+- **Project instructions** — Reads both [`CLAUDE.md`](https://docs.claude.com/en/docs/claude-code/memory) and the open [`AGENTS.md`](https://agents.md) convention.
+
+## How requests flow
+
+A user query arrives from one of the supported surfaces, gets routed through the session runtime, and is handled by the core orchestrator. The orchestrator drives a single tool-use loop — the model decides which tools to call, tools run (including spawning sub-agents when useful), and results flow back into the conversation until the model produces a final answer.
 
 ```mermaid
 flowchart LR
   User --> CLI
   User --> Console
   User --> API
-  HA --> API
-  NCTalk["Nextcloud Talk"] -->|"webhook"| API
-  Email["Email"] -->|"IMAP poll"| API
-  CLI --> Runtime
+  HA["Home Assistant"] --> API
+  NCTalk["Nextcloud Talk"] -->|webhook| API
+  Email -->|IMAP poll| API
+  CLI --> Runtime[Session runtime]
   Console --> API
   API --> Runtime
-  Runtime --> Orchestrator
-  Runtime --> SessionStore
-  Orchestrator --> ToolUseLoop
-  ToolUseLoop --> Tools
-  ToolUseLoop -->|"spawn_agent"| ToolUseLoop
-  Tools --> LocalTools
-  Tools --> MCP
+  Runtime --> Orchestrator[Core orchestrator]
+  Orchestrator --> Loop[Tool-use loop]
+  Loop --> Tools
+  Loop -->|spawn_agent| Loop
+  Tools --> LocalTools[Built-in tools]
+  Tools --> MCP[MCP servers]
   Tools --> HomeAssistant
-  Runtime --> Events["Session events (JSONL)"]
-  Events --> Polling["Event polling (API only)"]
+  Runtime --> Events[Session transcript]
   Orchestrator --> Langfuse
 ```
+
+Developers who want the full internals — the single async execution engine, the hypervisor that governs the agent tree, compaction, plugins, and channel adapters — should read [Architecture Overview](core-orchestration.md).
 
 ## Getting started
 See [Installation](getting-started.md) for setup, and [CLI](clients-cli.md) for command reference.

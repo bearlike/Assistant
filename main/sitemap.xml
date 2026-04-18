@@ -1,55 +1,119 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
-         <loc>https://thekrishna.in/Assistant/main/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/clients-cli/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/clients-cli/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/clients-email/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/clients-email/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/clients-home-assistant/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/clients-home-assistant/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/clients-nextcloud-talk/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/clients-nextcloud-talk/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/clients-web-api/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/clients-web-api/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/components/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/configuration/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/core-orchestration/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/core-orchestration/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/developer-guide/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/deployment-docker/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/getting-started/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/deployment-production/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/llm-setup/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/deployment-storage/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/reference/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/developer-guide/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/main/session-runtime/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/main/features-agents/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-builtin-tools/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-compaction/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-lsp/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-mcp/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-permissions-hooks/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-plan-mode/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-plugins/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-skills/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-token-usage/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/features-web-ide/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/getting-started/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/llm-setup/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/project-configuration/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/reference/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/session-runtime/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/main/troubleshooting/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
 </urlset>

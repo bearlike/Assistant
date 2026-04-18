@@ -8,7 +8,7 @@ Meeseeks can be reached via email. Send a message to the configured mailbox and 
 
 ## How it works
 
-An `EmailPoller` daemon thread polls an IMAP mailbox for unread messages. Each new email is parsed and fed through the shared `_process_inbound()` pipeline — the same session resolution, slash commands, and LLM invocation used by all channel adapters. Responses are sent back via SMTP as `multipart/alternative` emails (plain text + styled HTML).
+Meeseeks checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel — session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.
 
 ## Access control
 
@@ -81,17 +81,10 @@ Agent responses are markdown. The email adapter converts them to styled HTML:
 
 The HTML uses inline CSS for compatibility with Gmail, Outlook, and Apple Mail.
 
-## Architecture
-
-| File | Purpose |
-|------|---------|
-| `email_adapter.py` | `EmailAdapter` (parse, send, mention logic), `EmailPoller` (IMAP daemon), markdown-to-HTML rendering |
-| `email_template.html.j2` | Jinja2 HTML email wrapper with inline CSS |
-| `routes.py` | Shared `_process_inbound()` pipeline, adapter registration in `init_channels()` |
-| `base.py` | `ChannelAdapter` Protocol (shared with all adapters) |
-
 ## Limitations
 
 - **Attachments**: Inbound email attachments are not yet processed (file metadata is ignored).
-- **Rate limiting**: No built-in rate limiting on the IMAP poller — relies on `allowed_senders` for access control.
-- **IMAP IDLE**: The poller uses periodic polling, not IMAP IDLE push. This means up to `poll_interval_seconds` latency.
+- **Rate limiting**: There is no built-in rate limit on the poller — the `allowed_senders` list is the primary access control.
+- **Polling latency**: The poller checks the mailbox on the interval you configure. Latency is bounded by `poll_interval_seconds` — IMAP IDLE push is not yet supported.
+
+> **How it works internally:** See [Architecture Overview → Channel adapters](core-orchestration.md#channel-adapters).

@@ -179,6 +179,22 @@
       "title": "ChatConfig",
       "type": "object"
     },
+    "CompactionConfig": {
+      "description": "Summarization prompt selection for conversation compaction.\n\n``caveman_mode`` enables a rule-augmented prompt (inspired by the\n``JuliusBrussee/caveman`` Claude Code skill) that instructs the\nsummarizer LLM to drop articles, filler, pleasantries, and hedging\nwhile preserving code, paths, URLs, and error strings verbatim.\nReduces output tokens in the compaction summary without changing the\n``<analysis>/<summary>`` response structure downstream parsers expect.",
+      "properties": {
+        "caveman_mode": {
+          "default": false,
+          "description": "Enable caveman-style terse summarization prompt. Drops articles, filler, pleasantries, and hedging in the compacted summary while preserving code, file paths, URLs, and error strings verbatim. Reduces compaction output tokens without changing the response structure downstream parsers expect.",
+          "examples": [
+            false
+          ],
+          "title": "Caveman Mode",
+          "type": "boolean"
+        }
+      },
+      "title": "CompactionConfig",
+      "type": "object"
+    },
     "ContextConfig": {
       "description": "Context window selection and event filtering.",
       "properties": {
@@ -403,6 +419,20 @@
           ],
           "title": "Title Model",
           "type": "string"
+        },
+        "compact_models": {
+          "description": "Priority-ordered list of models for context compaction. On failure, the next model in the list is tried. The keyword \"default\" resolves to the running agent's model. Example: [\"anthropic/claude-haiku-4-5-20251001\", \"default\"]",
+          "examples": [
+            [
+              "anthropic/claude-haiku-4-5-20251001",
+              "default"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Compact Models",
+          "type": "array"
         },
         "fallback_models": {
           "description": "Ordered list of fallback model IDs. On retryable LLM failure, the system tries each in order after exhausting retries on the primary model. Empty = no fallback.",
@@ -798,20 +828,11 @@
           "title": "Auto Compact Threshold",
           "type": "number"
         },
-        "overhead_estimate": {
-          "default": 25000,
-          "description": "Estimated token overhead for system prompt and tool schemas. Used by the orchestrator's coarse budget check when exact tool schemas are not available.",
-          "examples": [
-            25000
-          ],
-          "title": "Overhead Estimate",
-          "type": "integer"
-        },
         "model_context_windows": {
           "additionalProperties": {
             "type": "integer"
           },
-          "description": "Per-model context window overrides. Keys are model names, values are token counts.",
+          "description": "Override only: per-model context window in tokens. Keys are model names (with or without provider prefix). The authoritative source is LiteLLM's model catalogue; populate this only to cap below the model's real max, or for models LiteLLM doesn't know yet.",
           "title": "Model Context Windows",
           "type": "object"
         }
@@ -900,6 +921,10 @@
     },
     "token_budget": {
       "$ref": "#/$defs/TokenBudgetConfig"
+    },
+    "compaction": {
+      "$ref": "#/$defs/CompactionConfig",
+      "description": "Conversation compaction prompt selection (caveman mode)."
     },
     "reflection": {
       "$ref": "#/$defs/ReflectionConfig"
