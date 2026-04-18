@@ -1,55 +1,119 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/clients-cli/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/clients-cli/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/clients-email/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/clients-email/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/clients-home-assistant/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/clients-home-assistant/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/clients-nextcloud-talk/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/clients-nextcloud-talk/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/clients-web-api/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/clients-web-api/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/components/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/configuration/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/core-orchestration/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/core-orchestration/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/developer-guide/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/deployment-docker/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/getting-started/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/deployment-production/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/llm-setup/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/deployment-storage/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/reference/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/developer-guide/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
     <url>
-         <loc>https://thekrishna.in/Assistant/pr-131/session-runtime/</loc>
-         <lastmod>2026-04-15</lastmod>
+         <loc>https://kanth.tech/Assistant/pr-131/features-agents/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-builtin-tools/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-compaction/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-lsp/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-mcp/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-permissions-hooks/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-plan-mode/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-plugins/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-skills/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-token-usage/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/features-web-ide/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/getting-started/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/llm-setup/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/project-configuration/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/reference/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/session-runtime/</loc>
+         <lastmod>2026-04-18</lastmod>
+    </url>
+    <url>
+         <loc>https://kanth.tech/Assistant/pr-131/troubleshooting/</loc>
+         <lastmod>2026-04-18</lastmod>
     </url>
 </urlset>

@@ -1,0 +1,133 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Meeseeks console color palette — ported here so the docs site shares the
+   same visual identity. Source: apps/meeseeks_console/src/index.css.
+   Aesthetic: Anthropic cream (light) / warm carbon (dark) with clay primary.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --background: hsl(45 28.6% 97.3%);
+  --foreground: hsl(0 0% 4%);
+
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(0 0% 4%);
+
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(0 0% 4%);
+
+  --primary: hsl(14.8 63.1% 59.6%);
+  --primary-foreground: hsl(0 0% 100%);
+
+  --secondary: hsl(48 25% 92.2%);
+  --secondary-foreground: hsl(60 3% 21%);
+
+  --muted: hsl(48 25% 92.2%);
+  --muted-foreground: hsl(45 3% 52%);
+
+  --accent: hsl(48 25% 92.2%);
+  --accent-foreground: hsl(60 3% 21%);
+
+  --destructive: hsl(0 55% 47%);
+  --destructive-foreground: hsl(0 0% 100%);
+
+  --border: hsl(53 12% 74% / 0.55);
+  --input: hsl(48 25% 92.2%);
+  --ring: hsl(14.8 63.1% 59.6%);
+
+  --sidebar: hsl(45 28.6% 97.3%);
+  --sidebar-foreground: hsl(0 0% 4%);
+  --sidebar-primary: hsl(14.8 63.1% 59.6%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(48 25% 92.2%);
+  --sidebar-accent-foreground: hsl(60 3% 21%);
+  --sidebar-border: hsl(53 12% 74% / 0.5);
+  --sidebar-ring: hsl(14.8 63.1% 59.6%);
+}
+
+.dark {
+  --background: hsl(60 2.7% 14.5%);
+  --foreground: hsl(60 14% 97%);
+
+  --card: hsl(60 2% 17%);
+  --card-foreground: hsl(60 14% 97%);
+
+  --popover: hsl(60 2.7% 14.5%);
+  --popover-foreground: hsl(60 14% 97%);
+
+  --primary: hsl(14.8 63.1% 59.6%);
+  --primary-foreground: hsl(0 0% 100%);
+
+  --secondary: hsl(60 3% 11%);
+  --secondary-foreground: hsl(55 9% 74%);
+
+  --muted: hsl(60 3% 21%);
+  --muted-foreground: hsl(48 5% 57%);
+
+  --accent: hsl(60 3% 21%);
+  --accent-foreground: hsl(60 14% 97%);
+
+  --destructive: hsl(0 73% 59%);
+  --destructive-foreground: hsl(0 0% 100%);
+
+  --border: hsl(55 9% 74% / 0.35);
+  --input: hsl(60 2% 17%);
+  --ring: hsl(14.8 63.1% 59.6%);
+
+  --sidebar: hsl(60 2% 12%);
+  --sidebar-foreground: hsl(60 14% 97%);
+  --sidebar-primary: hsl(14.8 63.1% 59.6%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(60 3% 21%);
+  --sidebar-accent-foreground: hsl(60 14% 97%);
+  --sidebar-border: hsl(55 9% 74% / 0.2);
+  --sidebar-ring: hsl(14.8 63.1% 59.6%);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Fenced code blocks: subtle border, rounded corners, horizontal scroll
+   when long so code doesn't bleed into the sidebar or the viewport.
+   ───────────────────────────────────────────────────────────────────────── */
+
+div.codehilite,
+div.highlight {
+  border: 1px solid var(--border, rgba(120, 120, 120, 0.2));
+  border-radius: 0.5rem;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+div.codehilite pre,
+div.highlight pre {
+  margin: 0;
+  overflow-x: auto;
+  max-width: 100%;
+  white-space: pre;
+  word-wrap: normal;
+  box-sizing: border-box;
+}
+
+div.codehilite code,
+div.highlight code {
+  white-space: pre;
+  word-wrap: normal;
+}
+
+article pre:not(.mermaid),
+.md-content pre:not(.mermaid) {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Inline code: keep it flexible so long identifiers can wrap with surrounding text. */
+article p code,
+article li code,
+article td code {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* Mermaid containers: keep the diagram within the column width. */
+.mermaid,
+div.mermaid {
+  max-width: 100%;
+  overflow-x: auto;
+}

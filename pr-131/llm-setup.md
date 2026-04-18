@@ -28,6 +28,33 @@ See the optional configuration table below.
 | `llm.reasoning_effort_models` | Allowlist for reasoning effort. | Supports exact matches and `*` suffix wildcards. |
 | `llm.proxy_model_prefix` | Prefix prepended to model names when routing through a proxy. | Default: `"openai"`. Set to match your proxy's expected provider prefix. Falls back to `"openai"` when empty. |
 
+## Model fallback
+
+When the primary model fails with a retryable error, Meeseeks walks an ordered fallback
+list before giving up. Useful for rate-limit tolerance and provider outages.
+
+Config (in `configs/app.json`):
+
+```json
+{
+  "llm": {
+    "default_model": "anthropic/claude-sonnet-4-6",
+    "fallback_models": [
+      "openai/gpt-4o",
+      "anthropic/claude-haiku-4-5"
+    ]
+  }
+}
+```
+
+Each fallback gets one attempt. Error classification:
+
+- **Transient errors** (rate limits, timeouts): retry primary, then cascade
+- **Context overflow**: skip to next model
+- **Auth errors**: abort immediately (no point trying same provider)
+
+Set `agent.llm_call_retries` for how many times to retry the primary model before cascading (default: 2).
+
 ## Short walkthrough
 1. Copy the example config:
 
