@@ -58,7 +58,7 @@ occ talk:bot:install "Meeseeks" \
   "<shared-secret-at-least-40-chars>" \
   "https://<meeseeks-api-host>/api/webhooks/nextcloud-talk" \
   --feature webhook --feature response \
-  "AI assistant powered by Meeseeks"
+  "AI assistant with a conversation state machine and agent hypervisor"
 ```
 
 Note the shared secret — it must match the `bot_secret` in the Meeseeks config.
