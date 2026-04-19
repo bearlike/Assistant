@@ -1220,7 +1220,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Meeseeks ships a native Language Server Protocol tool that gives the AI real code intelligence — diagnostics, go-to-definition, find-references, and hover information. Servers are auto-discovered on your <code>PATH</code> and start lazily on first use. After every file edit, diagnostics run automatically and land in the AI's context so it sees compile errors and type issues in the same turn it made the change.</p>
+    <p>Meeseeks ships a native Language Server Protocol tool that gives the AI real code intelligence. It covers diagnostics, go-to-definition, find-references, and hover information. Servers are auto-discovered on your <code>PATH</code> and start lazily on first use. After every file edit, diagnostics run automatically and land in the AI's context. It sees compile errors and type issues in the same turn it made the change.</p>
 <h2 id="built-in-language-servers">Built-in language servers</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1287,13 +1287,13 @@
 </tbody>
 </table></div>
 <p><code>line</code> and <code>character</code> are <strong>0-based</strong> (first line = 0, first column = 0).</p>
-<p><strong>Example — ask for diagnostics in a Python file:</strong></p>
+<p><strong>Example.</strong> Ask for diagnostics in a Python file:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;diagnostics&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;file_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/project/main.py&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p><strong>Example — jump to definition at line 42, column 12:</strong></p>
+<p><strong>Example.</strong> Jump to definition at line 42, column 12:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;definition&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;file_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/home/user/project/main.py&quot;</span><span class="p">,</span>
@@ -1383,7 +1383,7 @@
 <tr>
 <td><code>command</code></td>
 <td>Yes</td>
-<td>List — binary and arguments (must be on <code>PATH</code>).</td>
+<td>List of binary and arguments (must be on <code>PATH</code>).</td>
 </tr>
 <tr>
 <td><code>extensions</code></td>
@@ -1434,7 +1434,7 @@
 <p>The LSP tool depends on optional packages. Install them with:</p>
 <div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span>lsp
 </code></pre></div>
-<p>When those dependencies are absent, the LSP tool is silently disabled — no crash, no error on startup.</p>
+<p>When those dependencies are absent, the LSP tool is silently disabled. There is no crash and no error on startup.</p>
 <hr />
 <div class="admonition note">
 <p class="admonition-title">How it works internally</p>

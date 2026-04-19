@@ -1230,14 +1230,14 @@
 <li>A Nextcloud Talk bot is registered on the server pointing to the Meeseeks API webhook endpoint.</li>
 <li>When a user @mentions the bot, Nextcloud POSTs an ActivityStreams 2.0 webhook to <code>POST /api/webhooks/nextcloud-talk</code>.</li>
 <li>The adapter verifies the HMAC-SHA256 signature, parses the message, and creates or continues a session.</li>
-<li>Non-mentioned messages are silently ignored — the bot only responds when triggered.</li>
+<li>Non-mentioned messages are silently ignored. The bot only responds when triggered.</li>
 <li>When the session completes, the final answer is sent back via the Nextcloud OCS Bot API with <code>replyTo</code> (creating a visual quote link).</li>
 </ol>
 <h3 id="session-model">Session model</h3>
 <ul>
 <li><strong>Room-scoped</strong>: All @mentions in the same room share one persistent session. Tag format: <code>nextcloud-talk:room:&lt;room_token&gt;</code>.</li>
 <li><strong>Thread-scoped</strong>: Messages with a <code>threadId</code> (explicit NC Talk thread) get their own session. Tag format: <code>nextcloud-talk:thread:&lt;room_token&gt;:&lt;thread_id&gt;</code>.</li>
-<li>Sessions are standard API sessions — stored in MongoDB/JSON, visible in the console, support forking/archiving/export.</li>
+<li>Sessions are standard API sessions. They are stored in MongoDB/JSON, visible in the console, and support forking, archiving, and export.</li>
 </ul>
 <h2 id="slash-commands">Slash commands</h2>
 <p>Commands are available after the @mention keyword. They run without invoking the LLM.</p>
@@ -1289,7 +1289,7 @@
 <span class="w">  </span>--feature<span class="w"> </span>webhook<span class="w"> </span>--feature<span class="w"> </span>response<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span><span class="s2">&quot;AI assistant with a conversation state machine and agent hypervisor&quot;</span>
 </code></pre></div>
-<p>Note the shared secret — it must match the <code>bot_secret</code> in the Meeseeks config.</p>
+<p>Note the shared secret. It must match the <code>bot_secret</code> in the Meeseeks config.</p>
 <h3 id="2-enable-the-bot-in-conversations">2. Enable the bot in conversations</h3>
 <p>Either via the admin CLI:</p>
 <div class="codehilite"><pre><span></span><code>occ<span class="w"> </span>talk:bot:setup<span class="w"> </span>&lt;bot-id&gt;<span class="w"> </span>&lt;conversation-token&gt;

@@ -1225,7 +1225,7 @@
 </div>
 
 <p>By default Meeseeks runs in <strong>act mode</strong>: the model calls tools as soon as it decides to, and each call executes immediately. That is usually what you want for quick, low-risk work. For anything destructive, complex, or unfamiliar, switch to <strong>plan mode</strong>. In plan mode the assistant explores your workspace with read-only tools, drafts a step-by-step plan to a session-scoped file you can inspect, and then pauses for your approval before a single write or shell command runs. It gives you a checkpoint between "I want this done" and "the agent is changing my files."</p>
-<p><strong>Quick example — switch the CLI to plan mode:</strong></p>
+<p><strong>Quick example.</strong> Switch the CLI to plan mode:</p>
 <div class="codehilite"><pre><span></span><code>/mode plan
 </code></pre></div>
 <p>Then send your request. Meeseeks drafts the plan and waits for you to type <code>/approve</code> (or click the Approve button in the console) before it starts executing.</p>
@@ -1233,7 +1233,7 @@
 <h2 id="switching-modes">Switching modes</h2>
 <p>You can change mode from the CLI, the web console, or the REST API. The mode is per-session state and resets to <code>act</code> when you start a new session.</p>
 <h3 id="cli">CLI</h3>
-<div class="codehilite"><pre><span></span><code>/mode act      # default — tools run immediately
+<div class="codehilite"><pre><span></span><code>/mode act      # default; tools run immediately
 /mode plan     # explore then wait for approval
 </code></pre></div>
 <p>Running <code>/mode</code> on its own prints the current mode.</p>
@@ -1253,7 +1253,7 @@
 <ol>
 <li><strong>Exploration.</strong> The model reads files, lists directories, and runs read-only shell commands to build up an understanding of the task. Write tools are blocked during this phase, so nothing on disk changes.</li>
 <li><strong>Proposal.</strong> The model drafts the plan to a session-scoped scratch file (you can open it from the console or read it from the session directory) and then signals that it is ready for review. The CLI and the console show you the plan and wait.</li>
-<li><strong>Decision.</strong> You either approve the plan — in which case Meeseeks switches to act mode and carries it out — or you reject it. When rejecting you can add free-text feedback; the model receives it as context and produces a revised plan.</li>
+<li><strong>Decision.</strong> You either approve or reject the plan. On approval, Meeseeks switches to act mode and carries it out. On rejection you can add free-text feedback. The model receives that feedback as context and produces a revised plan.</li>
 </ol>
 <pre class="mermaid"><code>flowchart LR
     A[You send request&lt;br/&gt;in plan mode] --&gt; B[Model explores&lt;br/&gt;read-only]
@@ -1265,7 +1265,7 @@
 <hr />
 <h2 id="shell-commands-during-exploration">Shell commands during exploration</h2>
 <p>Plan mode enforces a <strong>shell allowlist</strong> so the exploration phase stays read-only. Only commands whose first word matches a configured prefix are allowed, and anything with dangerous operators like <code>|</code>, <code>&gt;</code>, <code>$</code>, or command substitution is rejected outright regardless of the allowlist. This is a belt-and-braces check: even if a permitted command could be chained into something destructive, the operator filter blocks the chain.</p>
-<p>The default allowlist covers the usual read-only tools — <code>ls</code>, <code>cat</code>, <code>grep</code>, <code>rg</code>, <code>find</code>, <code>git status</code>, <code>git log</code>, <code>git diff</code>, <code>git show</code>, and similar. Prefix matches are word-boundary safe: <code>"git log"</code> matches <code>"git log --oneline"</code> but not <code>"git logger"</code>. Customise the list via <code>agent.plan_mode_shell_allowlist</code>, or set it to <code>[]</code> to block shell access in plan mode entirely.</p>
+<p>The default allowlist covers the usual read-only tools. This includes <code>ls</code>, <code>cat</code>, <code>grep</code>, <code>rg</code>, <code>find</code>, <code>git status</code>, <code>git log</code>, <code>git diff</code>, <code>git show</code>, and similar commands. Prefix matches are word-boundary safe: <code>"git log"</code> matches <code>"git log --oneline"</code> but not <code>"git logger"</code>. Customise the list via <code>agent.plan_mode_shell_allowlist</code>, or set it to <code>[]</code> to block shell access in plan mode entirely.</p>
 <p>MCP tools are permitted during exploration by default; toggle <code>agent.plan_mode_allow_mcp</code> if you want to block them too.</p>
 <hr />
 <h2 id="recovery-retry-and-continue">Recovery: /retry and /continue</h2>
@@ -1279,7 +1279,7 @@
 <p><code>/continue</code> keeps the failed state in the transcript and appends a "continue from where you left off" prompt. The model sees what already happened and picks up without repeating completed work.</p>
 <div class="codehilite"><pre><span></span><code>/continue
 </code></pre></div>
-<p>Use <code>/continue</code> when partial work succeeded and only the tail failed — a retry from scratch would redo work already done.</p>
+<p>Use <code>/continue</code> when partial work succeeded and only the tail failed. A retry from scratch would redo work already done.</p>
 <hr />
 <h2 id="configuration">Configuration</h2>
 <div class="table-wrapper"><table>

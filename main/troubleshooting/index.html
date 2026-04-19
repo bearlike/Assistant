@@ -1237,8 +1237,8 @@
 <p>Causes:</p>
 <ul>
 <li><code>configs/mcp.json</code> path doesn't match the container mount (Docker: paths must be identical between host and container).</li>
-<li>Project <code>.mcp.json</code> not merged — CWD not set correctly in the request.</li>
-<li>Key name mismatch: both <code>mcpServers</code> and <code>servers</code> are accepted — verify the key in your config file.</li>
+<li>Project <code>.mcp.json</code> not merged. CWD not set correctly in the request.</li>
+<li>Key name mismatch: both <code>mcpServers</code> and <code>servers</code> are accepted. Verify the key in your config file.</li>
 </ul>
 <p>Fix: Run <code>/mcp</code> in the CLI to see which servers are loaded. Verify the config path with the <code>--config</code> flag.</p>
 <h2 id="shellfile-tool-errors">Shell/file tool errors</h2>
@@ -1253,7 +1253,7 @@
 <p><strong>Symptom:</strong> Services won't start, or the console can't reach the API.</p>
 <p>Checks:</p>
 <ol>
-<li>Both services use host networking — verify nothing else is on ports 5125 or 3001.</li>
+<li>Both services use host networking. Verify nothing else is on ports 5125 or 3001.</li>
 <li><code>HOST_UID</code> and <code>HOST_GID</code> must match your actual user: run <code>id</code> to find them.</li>
 <li>Volume paths must match exactly between host and container.</li>
 <li>Check logs: <code>docker compose logs -f meeseeks-api</code>.</li>
@@ -1262,7 +1262,7 @@
 <p><strong>Symptom:</strong> Session runs for a very long time or appears to stall.</p>
 <p>Notes:</p>
 <ul>
-<li>Meeseeks uses a natural-completion loop — it runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.</li>
+<li>Meeseeks uses a natural-completion loop. It runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.</li>
 <li>Budget warnings are injected as messages as the context window fills up.</li>
 <li>If a session appears stuck, use mid-session steering:</li>
 </ul>

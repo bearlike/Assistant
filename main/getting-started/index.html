@@ -1240,7 +1240,7 @@
 </tr>
 <tr>
 <td>Docker</td>
-<td>Optional — for container deployment</td>
+<td>Optional, for container deployment</td>
 </tr>
 </tbody>
 </table></div>
@@ -1316,9 +1316,9 @@ uv<span class="w"> </span>run<span class="w"> </span>meeseeks-api
 <h2 id="configuration">Configuration</h2>
 <p>Meeseeks loads config files from the first directory that contains them, checked in order:</p>
 <ol>
-<li><code>CWD/configs/</code> — project-local config (highest priority)</li>
-<li><code>$MEESEEKS_HOME/</code> — custom home dir if set</li>
-<li><code>~/.meeseeks/</code> — user home fallback</li>
+<li><code>CWD/configs/</code>: project-local config (highest priority)</li>
+<li><code>$MEESEEKS_HOME/</code>: custom home dir if set</li>
+<li><code>~/.meeseeks/</code>: user home fallback</li>
 </ol>
 <p>Bootstrap from the example template:</p>
 <div class="codehilite"><pre><span></span><code>cp<span class="w"> </span>configs/app.example.json<span class="w"> </span>configs/app.json
@@ -1394,7 +1394,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>pull<span class="w"
 <p>See <a href="../deployment-docker/">Docker Compose</a> for the full reference: volume mounts, project directories, init scripts, reverse proxy, and runtime config.</p>
 <h2 id="project-instructions">Project instructions</h2>
 <p>Meeseeks discovers <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/rules/*.md</code> files
-automatically — compatible with the Claude Code and AGENTS.md conventions.</p>
+automatically. The discovery is compatible with the Claude Code and AGENTS.md conventions.</p>
 <p>Place a <code>CLAUDE.md</code> at your project root and it will be loaded at session start.
 Nested packages are handled via an on-demand index: sub-directory instruction files
 are listed in the system prompt as paths; their content is fetched via <code>read_file</code>
@@ -1412,14 +1412,14 @@ how project-level <code>.mcp.json</code> files are merged.</p>
 <p>Commit message format:
 <div class="codehilite"><pre><span></span><code>&lt;emoji&gt; &lt;verb&gt;(&lt;scope&gt;): &lt;message&gt;
 </code></pre></div></p>
-<p>Pre-push checks run <code>scripts/ci/check.sh</code> — ruff format/check, mypy, pytest.</p>
+<p>Pre-push checks run <code>scripts/ci/check.sh</code>. This covers ruff format/check, mypy, and pytest.</p>
 <h2 id="next-steps">Next steps</h2>
 <ul>
-<li><a href="../llm-setup/">Configure your LLM</a> — set provider keys and pick a model</li>
-<li><a href="../clients-cli/">CLI client</a> — slash commands, approval modes, global install</li>
-<li><a href="../clients-web-api/">Console + API</a> — web UI, REST API, session management</li>
-<li><a href="../configuration/">Configuration Reference</a> — every config key with defaults</li>
-<li><a href="../features-builtin-tools/">Features overview</a> — built-in tools, sub-agents, skills, plugins</li>
+<li><a href="../llm-setup/">Configure your LLM</a>: set provider keys and pick a model</li>
+<li><a href="../clients-cli/">CLI client</a>: slash commands, approval modes, global install</li>
+<li><a href="../clients-web-api/">Console + API</a>: web UI, REST API, session management</li>
+<li><a href="../configuration/">Configuration Reference</a>: every config key with defaults</li>
+<li><a href="../features-builtin-tools/">Features overview</a>: built-in tools, sub-agents, skills, plugins</li>
 </ul>
   </div>
   

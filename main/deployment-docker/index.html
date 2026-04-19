@@ -1220,17 +1220,17 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>The recommended way to run Meeseeks in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single <code>docker compose up</code> starts the full stack — API, console, MongoDB, and the nginx proxy for the Web IDE feature.</p>
+    <p>The recommended way to run Meeseeks in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single <code>docker compose up</code> starts the full stack. It includes the API, console, MongoDB, and the nginx proxy for the Web IDE feature.</p>
 <h2 id="quick-start">Quick Start</h2>
-<p><strong>Step 1 — Copy the environment template:</strong></p>
+<p><strong>Step 1. Copy the environment template:</strong></p>
 <div class="codehilite"><pre><span></span><code>cp<span class="w"> </span>docker.example.env<span class="w"> </span>docker.env
 </code></pre></div>
-<p><strong>Step 2 — Edit <code>docker.env</code>.</strong> At minimum, set these three values:</p>
+<p><strong>Step 2. Edit <code>docker.env</code>.</strong> At minimum, set these three values:</p>
 <div class="codehilite"><pre><span></span><code>MASTER_API_TOKEN=your-strong-random-token
 VITE_API_KEY=your-strong-random-token   # must match MASTER_API_TOKEN
 HOST_UID=1000                            # output of `id -u`
 </code></pre></div>
-<p><strong>Step 3 — Pull images and start the stack:</strong></p>
+<p><strong>Step 3. Pull images and start the stack:</strong></p>
 <div class="codehilite"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>pull<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 <p>The console is available at <code>http://localhost:3001</code>. The API is at <code>http://localhost:5125</code>.</p>
@@ -1249,13 +1249,13 @@ HOST_UID=1000                            # output of `id -u`
 <tr>
 <td><code>MASTER_API_TOKEN</code></td>
 <td>Yes</td>
-<td>—</td>
+<td><em>(none)</em></td>
 <td>API authentication token. Set a strong random value.</td>
 </tr>
 <tr>
 <td><code>VITE_API_KEY</code></td>
 <td>Yes</td>
-<td>—</td>
+<td><em>(none)</em></td>
 <td>Frontend API key. Must match <code>MASTER_API_TOKEN</code>.</td>
 </tr>
 <tr>
@@ -1429,7 +1429,7 @@ HOST_UID=1000                            # output of `id -u`
 </table></div>
 <p>To add your own scripts, mount the <code>docker/init.d/</code> directory in your override file (see example above) and add <code>.sh</code> files there. The API image does not need to be rebuilt.</p>
 <h2 id="runtime-config-injection">Runtime Config Injection</h2>
-<p>The console image generates a <code>runtime-config.js</code> file at container startup from environment variables (<code>VITE_API_BASE_URL</code>, <code>VITE_API_KEY</code>). This means you can change the API URL or key by updating <code>docker.env</code> and running <code>docker compose up -d</code> — no image rebuild required.</p>
+<p>The console image generates a <code>runtime-config.js</code> file at container startup from environment variables (<code>VITE_API_BASE_URL</code>, <code>VITE_API_KEY</code>). This means you can change the API URL or key by updating <code>docker.env</code> and running <code>docker compose up -d</code>. No image rebuild required.</p>
 <h2 id="web-ide-socket-access">Web IDE Socket Access</h2>
 <p>The API container needs access to <code>/var/run/docker.sock</code> to spawn sibling code-server containers. The Compose file mounts the socket and adds the container to the <code>DOCKER_GID</code> supplementary group. Set <code>DOCKER_GID</code> in <code>docker.env</code> to the GID of the <code>docker</code> group on your host:</p>
 <div class="codehilite"><pre><span></span><code>stat<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;%g&#39;</span><span class="w"> </span>/var/run/docker.sock

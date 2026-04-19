@@ -4,10 +4,10 @@
   <img src="../meeseeks-console-05-plugins.jpg" alt="The Plugins page in the Meeseeks console showing four installed plugins and a marketplace listing with install buttons" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-Plugins extend Meeseeks with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory; they activate automatically at session start without a restart. Plugins are first-class citizens — a plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.
+Plugins extend Meeseeks with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory. They activate automatically at session start without a restart. Plugins are first-class citizens. A plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.
 
 > [!TIP] Drop-in compatible with Claude Code plugins
-> Meeseeks reads the exact same [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins) manifest, directory layout (`.claude-plugin/plugin.json`, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`), and marketplace format. The default marketplace is the [official Claude plugins marketplace](https://github.com/anthropics/claude-plugins-official), and any private marketplace that follows the Claude Code marketplace schema works too — point `plugins.marketplaces` at the repo and it loads without translation. Plugins authored for Claude Code work in Meeseeks unchanged.
+> Meeseeks reads the exact same [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins) manifest, directory layout (`.claude-plugin/plugin.json`, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`), and marketplace format. The default marketplace is the [official Claude plugins marketplace](https://github.com/anthropics/claude-plugins-official). Any private marketplace that follows the Claude Code marketplace schema works too. Point `plugins.marketplaces` at the repo and it loads without translation. Plugins authored for Claude Code work in Meeseeks unchanged.
 
 For setup and installation, see [Getting Started](getting-started.md).
 
@@ -69,10 +69,10 @@ Inside `.mcp.json` and `hooks/hooks.json`, you can reference the plugin's own in
 ### Via CLI
 
 ```
-/plugins                          — list installed plugins and their components
-/plugins marketplace              — browse available plugins
-/plugins install <name>           — install from the default marketplace
-/plugins uninstall <name>         — remove an installed plugin
+/plugins                          # list installed plugins and their components
+/plugins marketplace              # browse available plugins
+/plugins install <name>           # install from the default marketplace
+/plugins uninstall <name>         # remove an installed plugin
 ```
 
 ### Via the console
@@ -116,7 +116,7 @@ Plugin system settings live under `plugins` in [`configs/app.json`](configuratio
 
 When `marketplaces` lists repos that are not yet cloned locally, Meeseeks shallow-clones them the first time you browse or install. Subsequent runs use the local cache; a fast-forward `git pull` keeps it up to date.
 
-Plugin skills never override personal (`~/.claude/skills/`) or project-local (`.claude/skills/`) skills with the same name. Plugin MCP servers are merged additively — later plugins do not overwrite earlier ones for the same server name.
+Plugin skills never override personal (`~/.claude/skills/`) or project-local (`.claude/skills/`) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name.
 
 ---
 

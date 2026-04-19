@@ -1220,10 +1220,10 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Meeseeks stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store — zero dependencies, works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the <a href="../features-web-ide/">Web IDE</a> feature (which requires MongoDB for container state).</p>
+    <p>Meeseeks stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store. It has zero dependencies and works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the <a href="../features-web-ide/">Web IDE</a> feature (which requires MongoDB for container state).</p>
 <h2 id="json-default">JSON (Default)</h2>
 <p>The JSON driver writes one file per session under <code>$MEESEEKS_HOME/sessions/</code> (default: <code>~/.meeseeks/sessions/</code>). No extra dependencies are needed.</p>
-<div class="codehilite"><pre><span></span><code><span class="c1"># These two are equivalent — JSON is the default</span>
+<div class="codehilite"><pre><span></span><code><span class="c1"># These two are equivalent. JSON is the default</span>
 <span class="nv">MEESEEKS_STORAGE_DRIVER</span><span class="o">=</span>json
 <span class="c1"># or simply leave it unset</span>
 </code></pre></div>

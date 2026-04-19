@@ -8,7 +8,7 @@ Meeseeks runs as a local CLI, a REST API + web console, or a containerised stack
 |-------------|-------|
 | Python 3.10+ | [uv](https://docs.astral.sh/uv/) manages the virtualenv |
 | Node.js 18+ | Console frontend only |
-| Docker | Optional — for container deployment |
+| Docker | Optional, for container deployment |
 
 ## Installation {#installation}
 
@@ -81,9 +81,9 @@ uv sync --all-extras --all-groups
 
 Meeseeks loads config files from the first directory that contains them, checked in order:
 
-1. `CWD/configs/` — project-local config (highest priority)
-2. `$MEESEEKS_HOME/` — custom home dir if set
-3. `~/.meeseeks/` — user home fallback
+1. `CWD/configs/`: project-local config (highest priority)
+2. `$MEESEEKS_HOME/`: custom home dir if set
+3. `~/.meeseeks/`: user home fallback
 
 Bootstrap from the example template:
 
@@ -149,7 +149,7 @@ See [Docker Compose](deployment-docker.md) for the full reference: volume mounts
 ## Project instructions {#project-instructions}
 
 Meeseeks discovers `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/*.md` files
-automatically — compatible with the Claude Code and AGENTS.md conventions.
+automatically. The discovery is compatible with the Claude Code and AGENTS.md conventions.
 
 Place a `CLAUDE.md` at your project root and it will be loaded at session start.
 Nested packages are handled via an on-demand index: sub-directory instruction files
@@ -178,12 +178,12 @@ Commit message format:
 <emoji> <verb>(<scope>): <message>
 ```
 
-Pre-push checks run `scripts/ci/check.sh` — ruff format/check, mypy, pytest.
+Pre-push checks run `scripts/ci/check.sh`. This covers ruff format/check, mypy, and pytest.
 
 ## Next steps {#next-steps}
 
-- [Configure your LLM](llm-setup.md) — set provider keys and pick a model
-- [CLI client](clients-cli.md) — slash commands, approval modes, global install
-- [Console + API](clients-web-api.md) — web UI, REST API, session management
-- [Configuration Reference](configuration.md) — every config key with defaults
-- [Features overview](features-builtin-tools.md) — built-in tools, sub-agents, skills, plugins
+- [Configure your LLM](llm-setup.md): set provider keys and pick a model
+- [CLI client](clients-cli.md): slash commands, approval modes, global install
+- [Console + API](clients-web-api.md): web UI, REST API, session management
+- [Configuration Reference](configuration.md): every config key with defaults
+- [Features overview](features-builtin-tools.md): built-in tools, sub-agents, skills, plugins

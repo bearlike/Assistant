@@ -1220,7 +1220,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Meeseeks ships a set of first-party tools that every session has available by default. These tools cover the full local-development surface — reading files, editing them, running shell commands, and browsing directory trees. Because they are bundled with the core, no MCP server or external process is required; they activate the moment a session starts.</p>
+    <p>Meeseeks ships a set of first-party tools that every session has available by default. These tools cover the full local-development surface. You get reading files, editing them, running shell commands, and browsing directory trees. Because they are bundled with the core, no MCP server or external process is required. They activate the moment a session starts.</p>
 <p>This page documents every built-in tool, its parameters, example output, and the configuration switches that control which editing backend is active.</p>
 <p>For setup and installation, see <a href="../getting-started/">Getting Started</a>. For tool permissions and approval modes, see the <a href="../clients-cli/">CLI client</a> page.</p>
 <h2 id="tool-catalog">Tool catalog</h2>
@@ -1329,7 +1329,7 @@
 <span class="w">  </span><span class="nt">&quot;total_lines&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The <code>text</code> field contains the windowed content with 1-based line numbers separated by a tab. When the window is truncated, the final line reads <code>... (truncated — use offset/limit to read more)</code>.</p>
+<p>The <code>text</code> field contains the windowed content with 1-based line numbers separated by a tab. When the window is truncated, the final line reads <code>... (truncated - use offset/limit to read more)</code>.</p>
 <h3 id="example-call">Example call</h3>
 <p>Read lines 200–400 of a large source file:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1511,7 +1511,7 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 <tbody>
 <tr>
 <td><code>""</code> (empty, default)</td>
-<td>Auto — chosen per model</td>
+<td>Auto (chosen per model)</td>
 <td>Recommended for mixed-model deployments</td>
 </tr>
 <tr>

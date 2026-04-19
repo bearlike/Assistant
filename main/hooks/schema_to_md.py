@@ -13,7 +13,7 @@ OUTPUT_PATH = Path("docs/configuration.md")
 
 _SCHEMA_URL = "https://github.com/bearlike/Assistant/blob/main/configs/app.schema.json"
 HEADER = f"""\
-<!-- AUTO-GENERATED from configs/app.schema.json — do not edit manually -->
+<!-- AUTO-GENERATED from configs/app.schema.json. Do not edit manually. -->
 # Configuration Reference
 
 Meeseeks is configured via `configs/app.json`. This reference is auto-generated
@@ -149,7 +149,7 @@ def on_pre_build(**_: object) -> None:
     """MkDocs hook: regenerate docs/configuration.md before each build."""
     if not SCHEMA_PATH.exists():
         log.warning(
-            "schema_to_md: %s not found — skipping configuration.md generation",
+            "schema_to_md: %s not found; skipping configuration.md generation",
             SCHEMA_PATH,
         )
         return
@@ -174,7 +174,7 @@ def on_pre_build(**_: object) -> None:
             non_null = [t for t in prop_def["anyOf"] if "$ref" in t and t.get("type") != "null"]
             class_def = _resolve_ref(non_null[0]["$ref"], defs) if non_null else {}
         else:
-            # Inline definition (e.g. channels, projects) — render a lightweight stub
+            # Inline definition (e.g. channels, projects). Render a lightweight stub
             inline_title = prop_def.get("title", key.replace("_", " ").title())
             inline_desc = prop_def.get("description", "").strip()
             stub_lines = [f"## {inline_title}\n", f"Top-level key: `{key}`\n"]
@@ -192,7 +192,7 @@ def on_pre_build(**_: object) -> None:
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     new_content = "\n".join(sections)
     if OUTPUT_PATH.exists() and OUTPUT_PATH.read_text(encoding="utf-8") == new_content:
-        log.debug("schema_to_md: %s unchanged — skipping write", OUTPUT_PATH)
+        log.debug("schema_to_md: %s unchanged; skipping write", OUTPUT_PATH)
         return
     OUTPUT_PATH.write_text(new_content, encoding="utf-8")
     log.info("schema_to_md: wrote %s", OUTPUT_PATH)

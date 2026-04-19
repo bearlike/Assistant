@@ -1220,10 +1220,10 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>A skill is a small, self-contained instruction file that teaches the assistant a specific way of working — running code review, drafting a changelog, triaging an incident. Each skill lives in its own directory as a <code>SKILL.md</code> file (YAML frontmatter plus a markdown body). Meeseeks only pulls the full body of a skill into context when that skill actually activates, so you can keep dozens of skills installed without burning context on skills you aren't using.</p>
+    <p>A skill is a small, self-contained instruction file that teaches the assistant a specific way of working. Examples include running code review, drafting a changelog, or triaging an incident. Each skill lives in its own directory as a <code>SKILL.md</code> file (YAML frontmatter plus a markdown body). Meeseeks only pulls the full body of a skill into context when that skill actually activates, so you can keep dozens of skills installed without burning context on skills you aren't using.</p>
 <div class="admonition tip">
 <p class="admonition-title">Drop-in compatible with Claude Code</p>
-<p>Skills follow the <a href="https://docs.claude.com/en/api/agent-skills">Agent Skills standard</a> (also published as the open <a href="https://agentskills.io"><code>agentskills.io</code></a> spec). The same directory conventions (<code>~/.claude/skills/</code> for user-global, <code>.claude/skills/</code> for project-local), the same <code>SKILL.md</code> frontmatter, the same <code>allowed-tools</code> scoping, and the same <code>/skill-name</code> invocation pattern — any skill written for Claude Code works unchanged in Meeseeks.</p>
+<p>Skills follow the <a href="https://docs.claude.com/en/api/agent-skills">Agent Skills standard</a> (also published as the open <a href="https://agentskills.io"><code>agentskills.io</code></a> spec). Meeseeks uses the same directory conventions (<code>~/.claude/skills/</code> for user-global, <code>.claude/skills/</code> for project-local), the same <code>SKILL.md</code> frontmatter, the same <code>allowed-tools</code> scoping, and the same <code>/skill-name</code> invocation pattern. Any skill written for Claude Code works unchanged in Meeseeks.</p>
 </div>
 <hr />
 <h2 id="writing-a-skill">Writing a skill</h2>
@@ -1312,8 +1312,8 @@ You are performing a thorough code review. Follow this checklist:
 <p>When <code>allowed-tools</code> is omitted, the skill inherits the full tool set of the current session.</p>
 <hr />
 <h2 id="shell-preprocessing">Shell preprocessing</h2>
-<p>Skills can embed shell commands using the <code>!`command`</code> syntax. At activation time each matched command is executed and its standard output is substituted inline before the instructions are shown to the model. This is useful for injecting live context — current branch, directory tree, environment values — into the skill body.</p>
-<p><strong>Example — inject the current git branch name:</strong></p>
+<p>Skills can embed shell commands using the <code>!`command`</code> syntax. At activation time each matched command is executed and its standard output is substituted inline before the instructions are shown to the model. This is useful for injecting live context into the skill body. Examples include the current branch, directory tree, or environment values.</p>
+<p><strong>Example.</strong> Inject the current git branch name:</p>
 <div class="codehilite"><pre><span></span><code>You are reviewing code on branch: !<span class="sb">`git rev-parse --abbrev-ref HEAD`</span>
 </code></pre></div>
 <p>Commands time out after 30 seconds. On error, the placeholder is replaced with <code>[ERROR: ...]</code>.</p>
@@ -1351,8 +1351,8 @@ You are performing a thorough code review. Follow this checklist:
 <h2 id="invoking-skills">Invoking skills</h2>
 <p>You have two ways to trigger a skill:</p>
 <ul>
-<li><strong>Automatically</strong> — the assistant reads the skill catalogue at the start of every session and can choose to activate a relevant skill based on your request.</li>
-<li><strong>Explicitly</strong> — type <code>/skill-name</code> in the CLI or console. Arguments after the name are passed through as <code>$ARGUMENTS</code> inside the skill body, and individual tokens are available as <code>$0</code>, <code>$1</code>, and so on.</li>
+<li><strong>Automatically</strong>: the assistant reads the skill catalogue at the start of every session and can choose to activate a relevant skill based on your request.</li>
+<li><strong>Explicitly</strong>: type <code>/skill-name</code> in the CLI or console. Arguments after the name are passed through as <code>$ARGUMENTS</code> inside the skill body, and individual tokens are available as <code>$0</code>, <code>$1</code>, and so on.</li>
 </ul>
 <p>Sub-agents also see the skill catalogue in their system prompt, so delegating work to a sub-agent and naming a skill in the task description works as expected.</p>
 <hr />

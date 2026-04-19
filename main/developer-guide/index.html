@@ -1248,7 +1248,7 @@
 <ul>
 <li><code>AbstractTool</code> (<code>meeseeks_core.classes</code>): base class for local tools; implement <code>get_state</code> and <code>set_state</code> and return a <code>MockSpeaker</code>.</li>
 <li><code>ToolRunner</code> protocol (<code>meeseeks_core.tool_registry</code>): interface for tool runners with <code>run(ActionStep)</code>.</li>
-<li><code>ToolSpec</code> / <code>ToolRegistry</code> (<code>meeseeks_core.tool_registry</code>): register tools with <code>tool_id</code>, metadata, and a factory. The file edit tool is conditionally registered based on <code>agent.edit_tool</code> config — either <code>aider_edit_block_tool</code> or <code>file_edit_tool</code>. When <code>edit_tool</code> is empty, <code>ToolUseLoop</code> auto-selects based on model identity via <code>model_prefers_structured_patch()</code>. The <code>read_file</code> tool is always registered as a native built-in (see <a href="#built-in-read_file-tool">Built-in <code>read_file</code> tool</a> below).</li>
+<li><code>ToolSpec</code> / <code>ToolRegistry</code> (<code>meeseeks_core.tool_registry</code>): register tools with <code>tool_id</code>, metadata, and a factory. The file edit tool is conditionally registered based on <code>agent.edit_tool</code> config. The value is either <code>aider_edit_block_tool</code> or <code>file_edit_tool</code>. When <code>edit_tool</code> is empty, <code>ToolUseLoop</code> auto-selects based on model identity via <code>model_prefers_structured_patch()</code>. The <code>read_file</code> tool is always registered as a native built-in (see <a href="#built-in-read_file-tool">Built-in <code>read_file</code> tool</a> below).</li>
 <li><code>PluginSystem</code> (<code>meeseeks_core.plugins</code>): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by <code>agent_registry.py</code>), skills, hooks, and MCP tool configurations. Loaded via <code>load_all_plugin_components()</code> during session init.</li>
 <li><code>ActionStep</code>, <code>Plan</code>, <code>TaskQueue</code> (<code>meeseeks_core.classes</code>): planning and tool-execution payloads.</li>
 <li><code>PermissionPolicy</code> (<code>meeseeks_core.permissions</code>): allow/deny/ask rules for tool execution.</li>
@@ -1380,29 +1380,29 @@
 </table></div>
 <h3 id="steps-to-add-a-new-platform-eg-slack">Steps to add a new platform (e.g., Slack)</h3>
 <ol>
-<li><strong>Create the adapter</strong> — <code>channels/slack.py</code> implementing <code>ChannelAdapter</code>:</li>
-<li><code>verify_request(headers, body)</code> — validate the inbound webhook signature.</li>
-<li><code>parse_inbound(headers, body)</code> — extract an <code>InboundMessage</code> from the platform payload. Return <code>None</code> for non-message events.</li>
-<li><code>send_response(channel_id, text, thread_id, reply_to)</code> — post the reply back to the platform.</li>
+<li><strong>Create the adapter.</strong> Add <code>channels/slack.py</code> implementing <code>ChannelAdapter</code>:</li>
+<li><code>verify_request(headers, body)</code>: validate the inbound webhook signature.</li>
+<li><code>parse_inbound(headers, body)</code>: extract an <code>InboundMessage</code> from the platform payload. Return <code>None</code> for non-message events.</li>
+<li><code>send_response(channel_id, text, thread_id, reply_to)</code>: post the reply back to the platform.</li>
 <li>
-<p><code>system_context</code> property — brief string injected into the LLM system prompt so it knows which interface the user is on.</p>
+<p><code>system_context</code> property: brief string injected into the LLM system prompt so it knows which interface the user is on.</p>
 </li>
 <li>
-<p><strong>Add config</strong> — add the platform section under <code>channels</code> in <code>configs/app.json</code>:
+<p><strong>Add config.</strong> Add the platform section under <code>channels</code> in <code>configs/app.json</code>:
    <div class="codehilite"><pre><span></span><code><span class="p">{</span><span class="w"> </span><span class="nt">&quot;channels&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;slack&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;bot_token&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;xoxb-...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;signing_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
 </code></pre></div></p>
 </li>
 <li>
-<p><strong>Register in <code>init_channels()</code></strong> — instantiate the adapter and call <code>_registry.register()</code>. For webhook-driven platforms, the route <code>POST /api/webhooks/slack</code> works automatically via the shared Blueprint.</p>
+<p><strong>Register in <code>init_channels()</code>.</strong> Instantiate the adapter and call <code>_registry.register()</code>. For webhook-driven platforms, the route <code>POST /api/webhooks/slack</code> works automatically via the shared Blueprint.</p>
 </li>
 <li>
 <p><strong>For poll-driven channels</strong> (like Email's IMAP poller): create a daemon thread that polls the external source and calls <code>_process_inbound()</code> directly, bypassing the webhook route.</p>
 </li>
 <li>
-<p><strong>Optionally implement <code>requires_mention(message)</code></strong> — return <code>False</code> to skip the mention gate for specific message types (e.g., Email skips mentions for 1-to-1 but requires <code>@Meeseeks</code> in multi-party threads).</p>
+<p><strong>Optionally implement <code>requires_mention(message)</code>.</strong> Return <code>False</code> to skip the mention gate for specific message types. For example, Email skips mentions for 1-to-1 but requires <code>@Meeseeks</code> in multi-party threads.</p>
 </li>
 <li>
-<p><strong>Add platform-specific slash commands</strong> (optional) — use the <code>@command</code> decorator in <code>routes.py</code>. Help text auto-generates from the registry.</p>
+<p><strong>Add platform-specific slash commands</strong> (optional). Use the <code>@command</code> decorator in <code>routes.py</code>. Help text auto-generates from the registry.</p>
 </li>
 </ol>
 <h3 id="session-mapping">Session mapping</h3>
@@ -1443,8 +1443,8 @@
 <p>Commands run without LLM invocation. Adding a new command is one <code>@command</code> decorator and one function.</p>
 <h3 id="existing-adapters">Existing adapters</h3>
 <ul>
-<li><strong>Nextcloud Talk</strong> — see <a href="../clients-nextcloud-talk/">docs/clients-nextcloud-talk.md</a></li>
-<li><strong>Email</strong> — see <a href="../clients-email/">docs/clients-email.md</a></li>
+<li><strong>Nextcloud Talk</strong>: see <a href="../clients-nextcloud-talk/">docs/clients-nextcloud-talk.md</a></li>
+<li><strong>Email</strong>: see <a href="../clients-email/">docs/clients-email.md</a></li>
 </ul>
 <h2 id="built-in-read_file-tool">Built-in <code>read_file</code> tool</h2>
 <p>The <code>read_file</code> tool (<code>tool_id: "read_file"</code>) is a native built-in for reading local files with line-based windowing and a dedup cache that prevents redundant reads from bloating the LLM's context.</p>
@@ -1467,7 +1467,7 @@
 <td><code>path</code></td>
 <td>string</td>
 <td>yes</td>
-<td>—</td>
+<td>(none)</td>
 <td>File path to read (relative to <code>root</code>)</td>
 </tr>
 <tr>
@@ -1504,8 +1504,8 @@
 </code></pre></div>
 <ul>
 <li><strong>Line numbers</strong> are 1-based, tab-separated (matches <code>cat -n</code> format).</li>
-<li><strong><code>total_lines</code></strong> reflects the full file, not the windowed portion — so the model knows whether it has seen everything.</li>
-<li>When the file exceeds the limit, a truncation hint is appended: <code>... (truncated — use offset/limit to read more)</code>.</li>
+<li><strong><code>total_lines</code></strong> reflects the full file, not the windowed portion. This tells the model whether it has seen everything.</li>
+<li>When the file exceeds the limit, a truncation hint is appended: <code>... (truncated, use offset/limit to read more)</code>.</li>
 </ul>
 <h3 id="dedup-cache">Dedup cache</h3>
 <p>The <code>ToolUseLoop</code> maintains a per-run <code>_file_read_cache</code> that prevents the same file from being re-read when it hasn't changed.</p>
@@ -1515,13 +1515,13 @@
 <li>On a subsequent <code>read_file</code> call with the same path, offset, and limit, the cache checks <code>os.path.getmtime()</code>. If the mtime matches, the tool returns a stub instead of the full content:</li>
 </ol>
 <blockquote>
-<p><em>"File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading."</em></p>
+<p><em>"File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current. Refer to that instead of re-reading."</em></p>
 </blockquote>
 <ol>
-<li>When the <code>file_edit_tool</code> edits a file, the cache entry for that path is invalidated — the next read returns fresh content.</li>
+<li>When the <code>file_edit_tool</code> edits a file, the cache entry for that path is invalidated. The next read then returns fresh content.</li>
 </ol>
-<p><strong>Why this matters:</strong> In observed sessions, GPT 5.4 re-read <code>backend.py</code> 8 times across 70 steps, adding 64KB of identical content to the message array. The dedup cache reduces this to one full read + seven 30-token stubs — a ~99% reduction in redundant context.</p>
-<p><strong>Cache location:</strong> <code>ToolUseLoop._file_read_cache</code> (<code>tool_use_loop.py</code>). The cache is per-run (created with the loop, discarded when the run ends). No cross-run persistence is needed — compaction handles session continuity.</p>
+<p><strong>Why this matters:</strong> In observed sessions, GPT 5.4 re-read <code>backend.py</code> 8 times across 70 steps, adding 64KB of identical content to the message array. The dedup cache reduces this to one full read plus seven 30-token stubs. That is a roughly 99% reduction in redundant context.</p>
+<p><strong>Cache location:</strong> <code>ToolUseLoop._file_read_cache</code> (<code>tool_use_loop.py</code>). The cache is per-run (created with the loop, discarded when the run ends). No cross-run persistence is needed. Compaction handles session continuity.</p>
 <h3 id="system-prompt-guidance">System prompt guidance</h3>
 <p>The system prompt (<code>prompts/system.txt</code>) includes:</p>
 <blockquote>

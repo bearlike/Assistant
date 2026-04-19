@@ -11,14 +11,14 @@ The Nextcloud Talk integration allows users to interact with Meeseeks directly f
 1. A Nextcloud Talk bot is registered on the server pointing to the Meeseeks API webhook endpoint.
 2. When a user @mentions the bot, Nextcloud POSTs an ActivityStreams 2.0 webhook to `POST /api/webhooks/nextcloud-talk`.
 3. The adapter verifies the HMAC-SHA256 signature, parses the message, and creates or continues a session.
-4. Non-mentioned messages are silently ignored — the bot only responds when triggered.
+4. Non-mentioned messages are silently ignored. The bot only responds when triggered.
 5. When the session completes, the final answer is sent back via the Nextcloud OCS Bot API with `replyTo` (creating a visual quote link).
 
 ### Session model
 
 - **Room-scoped**: All @mentions in the same room share one persistent session. Tag format: `nextcloud-talk:room:<room_token>`.
 - **Thread-scoped**: Messages with a `threadId` (explicit NC Talk thread) get their own session. Tag format: `nextcloud-talk:thread:<room_token>:<thread_id>`.
-- Sessions are standard API sessions — stored in MongoDB/JSON, visible in the console, support forking/archiving/export.
+- Sessions are standard API sessions. They are stored in MongoDB/JSON, visible in the console, and support forking, archiving, and export.
 
 ## Slash commands
 
@@ -61,7 +61,7 @@ occ talk:bot:install "Meeseeks" \
   "AI assistant with a conversation state machine and agent hypervisor"
 ```
 
-Note the shared secret — it must match the `bot_secret` in the Meeseeks config.
+Note the shared secret. It must match the `bot_secret` in the Meeseeks config.
 
 ### 2. Enable the bot in conversations
 

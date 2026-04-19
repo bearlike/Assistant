@@ -1226,11 +1226,11 @@
 
 <p>Meeseeks can be reached via email. Send a message to the configured mailbox and the agent replies with a styled HTML email. Thread replies continue the same session.</p>
 <h2 id="how-it-works">How it works</h2>
-<p>Meeseeks checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel — session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.</p>
+<p>Meeseeks checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel. Session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.</p>
 <h2 id="access-control">Access control</h2>
 <ul>
 <li><strong><code>allowed_senders</code></strong>: Only emails from listed addresses are processed. All others are silently ignored and marked as read. This is the primary gate.</li>
-<li><strong>1-to-1 emails</strong> (single recipient): Always processed — no mention keyword needed.</li>
+<li><strong>1-to-1 emails</strong> (single recipient): Always processed. No mention keyword needed.</li>
 <li><strong>Multi-party threads</strong> (multiple To/Cc recipients): The agent only responds when <code>@Meeseeks</code> appears in the message body.</li>
 </ul>
 <h2 id="session-model">Session model</h2>
@@ -1241,7 +1241,7 @@
 </ul>
 <p>Replies from the agent include proper <code>In-Reply-To</code> and <code>References</code> headers so email clients group them in the same thread.</p>
 <h2 id="slash-commands">Slash commands</h2>
-<p>All channel commands work in email — send the command as the email body:</p>
+<p>All channel commands work in email. Send the command as the email body:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1337,8 +1337,8 @@
 <h2 id="limitations">Limitations</h2>
 <ul>
 <li><strong>Attachments</strong>: Inbound email attachments are not yet processed (file metadata is ignored).</li>
-<li><strong>Rate limiting</strong>: There is no built-in rate limit on the poller — the <code>allowed_senders</code> list is the primary access control.</li>
-<li><strong>Polling latency</strong>: The poller checks the mailbox on the interval you configure. Latency is bounded by <code>poll_interval_seconds</code> — IMAP IDLE push is not yet supported.</li>
+<li><strong>Rate limiting</strong>: There is no built-in rate limit on the poller. The <code>allowed_senders</code> list is the primary access control.</li>
+<li><strong>Polling latency</strong>: The poller checks the mailbox on the interval you configure. Latency is bounded by <code>poll_interval_seconds</code>. IMAP IDLE push is not yet supported.</li>
 </ul>
 <div class="admonition note">
 <p class="admonition-title">How it works internally</p>

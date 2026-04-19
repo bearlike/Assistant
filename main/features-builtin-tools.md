@@ -1,6 +1,6 @@
 # Built-in Tools
 
-Meeseeks ships a set of first-party tools that every session has available by default. These tools cover the full local-development surface — reading files, editing them, running shell commands, and browsing directory trees. Because they are bundled with the core, no MCP server or external process is required; they activate the moment a session starts.
+Meeseeks ships a set of first-party tools that every session has available by default. These tools cover the full local-development surface. You get reading files, editing them, running shell commands, and browsing directory trees. Because they are bundled with the core, no MCP server or external process is required. They activate the moment a session starts.
 
 This page documents every built-in tool, its parameters, example output, and the configuration switches that control which editing backend is active.
 
@@ -47,7 +47,7 @@ For setup and installation, see [Getting Started](getting-started.md). For tool 
 }
 ```
 
-The `text` field contains the windowed content with 1-based line numbers separated by a tab. When the window is truncated, the final line reads `... (truncated — use offset/limit to read more)`.
+The `text` field contains the windowed content with 1-based line numbers separated by a tab. When the window is truncated, the final line reads `... (truncated - use offset/limit to read more)`.
 
 ### Example call
 
@@ -206,7 +206,7 @@ When `agent.edit_tool` is empty (the default), Meeseeks picks the right backend 
 
 | Value | Backend | When to use |
 |---|---|---|
-| `""` (empty, default) | Auto — chosen per model | Recommended for mixed-model deployments |
+| `""` (empty, default) | Auto (chosen per model) | Recommended for mixed-model deployments |
 | `"search_replace_block"` | `aider_edit_block_tool` | Force Aider format regardless of model |
 | `"structured_patch"` | `file_edit_tool` | Force JSON patch format regardless of model |
 

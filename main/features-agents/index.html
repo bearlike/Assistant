@@ -1292,7 +1292,7 @@
 </code></pre></div>
 <p>The agent runs in the background. Use <code>check_agents</code> to poll or wait for completion.</p>
 <p><strong>When a sub-agent itself spawns a deeper agent, the call is blocking.</strong> The deeper call waits for the child to finish and returns the result inline, so a mid-level agent reads the outcome the moment it is available.</p>
-<p>Sub-agents run until the model returns a text response without any more tool calls — that is natural completion. There is no hard step limit; safety comes from per-call timeouts, stall detection, and the session-wide step budget.</p>
+<p>Sub-agents run until the model returns a text response without any more tool calls. That is natural completion. There is no hard step limit. Safety comes from per-call timeouts, stall detection, and the session-wide step budget.</p>
 <hr />
 <h2 id="checking-and-steering-agents-root-only">Checking and steering agents (root only)</h2>
 <p>Two root-only tools let the orchestrator observe and influence running sub-agents.</p>
@@ -1362,7 +1362,7 @@
 </tr>
 </tbody>
 </table></div>
-<p>A steering message is queued and delivered to the agent between its next tool steps — it never interrupts an in-flight tool call.</p>
+<p>A steering message is queued and delivered to the agent between its next tool steps. It never interrupts an in-flight tool call.</p>
 <hr />
 <h2 id="what-a-sub-agent-returns">What a sub-agent returns</h2>
 <p>When a sub-agent finishes, its result is a structured object:</p>
@@ -1471,7 +1471,7 @@
 </tr>
 </tbody>
 </table></div>
-<p><strong>Example</strong> — limit sub-agents to a fast model and cap concurrency for a resource-constrained environment:</p>
+<p><strong>Example.</strong> Limit sub-agents to a fast model and cap concurrency for a resource-constrained environment:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;max_concurrent&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>

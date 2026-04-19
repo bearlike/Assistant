@@ -46,7 +46,7 @@ The agent runs in the background. Use `check_agents` to poll or wait for complet
 
 **When a sub-agent itself spawns a deeper agent, the call is blocking.** The deeper call waits for the child to finish and returns the result inline, so a mid-level agent reads the outcome the moment it is available.
 
-Sub-agents run until the model returns a text response without any more tool calls — that is natural completion. There is no hard step limit; safety comes from per-call timeouts, stall detection, and the session-wide step budget.
+Sub-agents run until the model returns a text response without any more tool calls. That is natural completion. There is no hard step limit. Safety comes from per-call timeouts, stall detection, and the session-wide step budget.
 
 ---
 
@@ -84,7 +84,7 @@ Sends a message to a running agent or cancels it. Agent IDs may be given in full
 | `action` | string | Yes | `"message"` to inject natural-language feedback; `"cancel"` to stop the agent |
 | `message` | string | Conditionally | Required when `action="message"` |
 
-A steering message is queued and delivered to the agent between its next tool steps — it never interrupts an in-flight tool call.
+A steering message is queued and delivered to the agent between its next tool steps. It never interrupts an in-flight tool call.
 
 ---
 
@@ -120,7 +120,7 @@ All keys live under `agent` in [`configs/app.json`](configuration.md#agentconfig
 | `agent.llm_call_retries` | integer | `2` | Retries on the primary model before cascading to `llm.fallback_models` |
 | `agent.default_denied_tools` | array | `[]` | Tool IDs denied to all sub-agents globally |
 
-**Example** — limit sub-agents to a fast model and cap concurrency for a resource-constrained environment:
+**Example.** Limit sub-agents to a fast model and cap concurrency for a resource-constrained environment:
 
 ```json
 {

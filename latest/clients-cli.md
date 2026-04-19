@@ -5,7 +5,7 @@
   Your browser does not support the video tag.
 </video>
 
-The CLI is a terminal-native client for developers working in their local environment. It runs the core runtime in-process, so tools execute directly against your local files and shell — no API round-trip. The main difference from the web console is execution context and autonomy: the CLI operates on your local machine, while the web console delegates work through the API. Both clients share the same underlying runtime and can run long-lived tasks.
+The CLI is a terminal-native client for developers working in their local environment. It runs the core runtime in-process, so tools execute directly against your local files and shell. There is no API round-trip. The main difference from the web console is execution context and autonomy. The CLI operates on your local machine, while the web console delegates work through the API. Both clients share the same underlying runtime and can run long-lived tasks.
 
 See [Get Started](getting-started.md#cli-setup) for installation.
 

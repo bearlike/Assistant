@@ -1224,8 +1224,8 @@
 <p>If you are setting up the product, start at <a href="../getting-started/">Get Started</a>. If you are looking up a capability, browse the <a href="../features-builtin-tools/">Capabilities</a> section. The Feature pages link back here for the implementation detail they intentionally omit.</p>
 <hr />
 <h2 id="execution-model">Execution model</h2>
-<p>Meeseeks uses a single async execution engine for every agent at every depth: <code>ToolUseLoop</code>. There is no separate planner, executor, or synthesiser — the LLM drives tool selection via native <code>bind_tools</code>, and the orchestration layer steps the message array forward.</p>
-<p>The loop runs until the LLM emits a text response with no tool calls. Budget warnings are injected as <code>SystemMessage</code> entries as the session approaches limits — the loop is never force-killed.</p>
+<p>Meeseeks uses a single async execution engine for every agent at every depth: <code>ToolUseLoop</code>. There is no separate planner, executor, or synthesiser. The LLM drives tool selection via native <code>bind_tools</code>. The orchestration layer steps the message array forward.</p>
+<p>The loop runs until the LLM emits a text response with no tool calls. Budget warnings are injected as <code>SystemMessage</code> entries as the session approaches limits. The loop is never force-killed.</p>
 <pre class="mermaid"><code>sequenceDiagram
     participant Client
     participant Orchestrator
@@ -1245,7 +1245,7 @@
     LLM--&gt;&gt;ToolUseLoop: final text response
     ToolUseLoop--&gt;&gt;Orchestrator: AgentResult
     Orchestrator--&gt;&gt;Client: response</code></pre>
-<p><strong>Tool concurrency</strong> — Tools are partitioned into concurrent-safe batches and exclusive calls. Concurrent-safe tools execute in parallel with <code>asyncio.gather</code>. Exclusive tools run alone. Each tool has a configurable timeout (default 120 s); a timeout does not cancel sibling calls.</p>
+<p><strong>Tool concurrency.</strong> Tools are partitioned into concurrent-safe batches and exclusive calls. Concurrent-safe tools execute in parallel with <code>asyncio.gather</code>. Exclusive tools run alone. Each tool has a configurable timeout (default 120 s). A timeout does not cancel sibling calls.</p>
 <h3 id="core-components">Core components</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1261,7 +1261,7 @@
 </tr>
 <tr>
 <td><code>ToolUseLoop</code></td>
-<td>Async tool-use conversation loop — the single execution engine at every depth.</td>
+<td>Async tool-use conversation loop. The single execution engine at every depth.</td>
 </tr>
 <tr>
 <td><code>AgentContext</code></td>
@@ -1330,12 +1330,12 @@
 </tbody>
 </table></div>
 <p>The full text of each file is concatenated and injected into the system prompt before the first LLM call. Each source is separated by a heading so content is traceable. When both <code>CLAUDE.md</code> and <code>AGENTS.md</code> exist at the same path, <code>CLAUDE.md</code> takes precedence.</p>
-<p><code>discover_subtree_instructions()</code> performs a <strong>downward pass</strong> from CWD to a maximum depth of 5, scanning for <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/CLAUDE.md</code>. Content is <strong>not</strong> injected — only paths. The system prompt receives an index like:</p>
+<p><code>discover_subtree_instructions()</code> performs a <strong>downward pass</strong> from CWD to a maximum depth of 5, scanning for <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/CLAUDE.md</code>. Content is <strong>not</strong> injected; only paths are. The system prompt receives an index like:</p>
 <div class="codehilite"><pre><span></span><code># Sub-package instruction files
 - packages/meeseeks_core/CLAUDE.md
 - apps/meeseeks_console/CLAUDE.md
 </code></pre></div>
-<p>When a later tool call targets a file inside <code>packages/meeseeks_core/</code>, the model's next prediction produces a <code>read_file</code> call that pulls the relevant <code>CLAUDE.md</code> into the message array as a tool result. This keeps large monorepos manageable — only directly applicable instructions occupy the active context.</p>
+<p>When a later tool call targets a file inside <code>packages/meeseeks_core/</code>, the model's next prediction produces a <code>read_file</code> call that pulls the relevant <code>CLAUDE.md</code> into the message array as a tool result. This keeps large monorepos manageable. Only directly applicable instructions occupy the active context.</p>
 <p>Pruned directories (never walked): <code>node_modules</code>, <code>__pycache__</code>, <code>.venv</code>, <code>venv</code>, and all dotfile directories. A <code>&lt;!-- meeseeks:noload --&gt;</code> marker on line 1 of any instruction file excludes it from both passes.</p>
 <p><code>get_git_context()</code> collects branch, working-tree status, and recent commits. It is available as a helper; individual integrations decide whether to include it.</p>
 <hr />
@@ -1361,8 +1361,8 @@
 <hr />
 <h2 id="sub-agents">Sub-agents and the hypervisor</h2>
 <p>Every session has a single <code>AgentHypervisor</code> instance shared across the entire agent tree. It has two layers.</p>
-<p><strong>Reflexes (code-level watchdog)</strong> — A background check runs every 30 seconds and examines all running agents for stalls (no tool call within the stall threshold, default 120 s). When a stall is detected, a <code>SystemMessage</code> warning is injected into the stalled agent's queue. Budget enforcement is similarly graduated: as <code>session_step_budget</code> is approached, warnings are injected; the loop is never hard-killed. This preserves accumulated context.</p>
-<p><strong>Brain (global eye)</strong> — The root agent's system prompt is rebuilt each step and includes <code>render_agent_tree()</code> — a compact live view of the entire agent tree with status, steps completed, last tool, and progress notes. The root can read this at any time via <code>check_agents</code> without an extra LLM call. Compaction events are tracked per agent (<code>compaction_count</code>, <code>last_compacted_at</code>) and visible in the tree view.</p>
+<p><strong>Reflexes (code-level watchdog).</strong> A background check runs every 30 seconds. It examines all running agents for stalls (no tool call within the stall threshold, default 120 s). When a stall is detected, a <code>SystemMessage</code> warning is injected into the stalled agent's queue. Budget enforcement is similarly graduated. As <code>session_step_budget</code> is approached, warnings are injected. The loop is never hard-killed. This preserves accumulated context.</p>
+<p><strong>Brain (global eye).</strong> The root agent's system prompt is rebuilt each step. It includes <code>render_agent_tree()</code>, a compact live view of the entire agent tree. The tree shows status, steps completed, last tool, and progress notes. The root can read this at any time via <code>check_agents</code> without an extra LLM call. Compaction events are tracked per agent (<code>compaction_count</code>, <code>last_compacted_at</code>) and visible in the tree view.</p>
 <h3 id="lifecycle">Lifecycle</h3>
 <pre class="mermaid"><code>stateDiagram-v2
     [*] --&gt; submitted : spawn_agent called
@@ -1375,10 +1375,10 @@
     failed --&gt; [*]
     cancelled --&gt; [*]
     rejected --&gt; [*]</code></pre>
-<p>Agents run until the model returns a text response with no tool calls — <strong>natural completion</strong>. There is no hard step limit; safety comes from <code>agent.llm_call_timeout</code>, stall detection, and <code>agent.session_step_budget</code>.</p>
+<p>Agents run until the model returns a text response with no tool calls. This is <strong>natural completion</strong>. There is no hard step limit. Safety comes from <code>agent.llm_call_timeout</code>, stall detection, and <code>agent.session_step_budget</code>.</p>
 <h3 id="spawning-semantics">Spawning semantics</h3>
 <p>Root spawns (depth = 0) are non-blocking: the call returns <code>{agent_id, status: "submitted"}</code> immediately and <code>_run_child_lifecycle</code> stores the <code>AgentResult</code> on the <code>AgentHandle</code> when the child finishes. Sub-agent spawns (depth ≥ 1) are blocking and return an <code>AgentResult</code> JSON payload inline.</p>
-<p><code>spawn_agent(task, model, allowed_tools, denied_tools, acceptance_criteria, agent_type)</code> — the <code>max_steps</code> parameter is deprecated and not enforced. Sub-agents inherit the parent's <code>approval_callback</code> so write, edit, and shell tools work in API and headless contexts.</p>
+<p><code>spawn_agent(task, model, allowed_tools, denied_tools, acceptance_criteria, agent_type)</code> is the full signature. The <code>max_steps</code> parameter is deprecated and not enforced. Sub-agents inherit the parent's <code>approval_callback</code> so write, edit, and shell tools work in API and headless contexts.</p>
 <h3 id="agentresult">AgentResult</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1449,7 +1449,7 @@
 </tr>
 </tbody>
 </table></div>
-<p>At depth 5 the <code>spawn_agent</code> tool is removed from the schema entirely — the LLM cannot attempt further delegation.</p>
+<p>At depth 5 the <code>spawn_agent</code> tool is removed from the schema entirely. The LLM cannot attempt further delegation.</p>
 <h3 id="messaging">Messaging</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1477,7 +1477,7 @@
 </tr>
 </tbody>
 </table></div>
-<p>Messages are drained between tool steps — they never interrupt an in-flight tool call.</p>
+<p>Messages are drained between tool steps. They never interrupt an in-flight tool call.</p>
 <h3 id="compaction-resilience">Compaction resilience</h3>
 <p>Sub-agent state survives compaction because it lives outside the LLM conversation history. The agent tree is rebuilt each step into the root system prompt from live <code>AgentHandle</code> state. <code>check_agents</code> reads <code>AgentHandle</code> directly in memory. Completed child results are stored on <code>AgentHandle.result</code> and re-injected after compaction. Compaction never loses track of running or completed sub-agents.</p>
 <h3 id="cleanup-and-structured-errors">Cleanup and structured errors</h3>
@@ -1490,33 +1490,33 @@
 <p><code>permissions.approval_mode</code> sets a session-wide shortcut that overrides the policy file: <code>allow</code> (also <code>auto</code>, <code>approve</code>, <code>yes</code>), <code>deny</code> (also <code>never</code>, <code>no</code>), or <code>ask</code> (default).</p>
 <hr />
 <h2 id="hook-manager">Hook manager</h2>
-<p><code>HookManager</code> dispatches hooks at lifecycle points and around individual tool calls. Every invocation is wrapped in <code>try/except</code> — a failing hook logs a warning and never blocks execution. <code>HookManager.load_from_config()</code> wires external hooks declared in <code>HooksConfig</code> into the manager; the API server calls this at startup and passes <code>hook_manager</code> to every <code>start_async()</code> call.</p>
+<p><code>HookManager</code> dispatches hooks at lifecycle points and around individual tool calls. Every invocation is wrapped in <code>try/except</code>. A failing hook logs a warning and never blocks execution. <code>HookManager.load_from_config()</code> wires external hooks declared in <code>HooksConfig</code> into the manager. The API server calls this at startup and passes <code>hook_manager</code> to every <code>start_async()</code> call.</p>
 <p>Two hook types:</p>
 <ul>
-<li><strong>Command hooks</strong> — Shell subprocess. <code>_session_env()</code> provides <code>MEESEEKS_SESSION_ID</code>, <code>MEESEEKS_ERROR</code>, <code>MEESEEKS_TOOL_ID</code>, <code>MEESEEKS_OPERATION</code>, and <code>MEESEEKS_TOOL_RESULT</code> (first 2 000 chars). Waits up to <code>timeout</code> seconds (default 30), then moves on.</li>
-<li><strong>HTTP hooks</strong> — Fire-and-forget JSON POST to an external URL in a daemon thread. Does not block execution; failures are logged.</li>
+<li><strong>Command hooks.</strong> Shell subprocess. <code>_session_env()</code> provides <code>MEESEEKS_SESSION_ID</code>, <code>MEESEEKS_ERROR</code>, <code>MEESEEKS_TOOL_ID</code>, <code>MEESEEKS_OPERATION</code>, and <code>MEESEEKS_TOOL_RESULT</code> (first 2 000 chars). Waits up to <code>timeout</code> seconds (default 30), then moves on.</li>
+<li><strong>HTTP hooks.</strong> Fire-and-forget JSON POST to an external URL in a daemon thread. Does not block execution. Failures are logged.</li>
 </ul>
 <p>An optional <code>matcher</code> (fnmatch pattern) restricts which tool IDs trigger the hook. <code>matcher: "mcp__*"</code> restricts to all MCP tools; omitting the matcher matches every call.</p>
-<p>Lifecycle events: <code>on_session_start</code>, <code>on_session_end</code>, <code>pre_tool_use</code>, <code>post_tool_use</code>. <code>on_compact</code> is fired programmatically from the compaction path; it is not configurable via <code>HooksConfig</code> but can be registered in code.</p>
+<p>Lifecycle events: <code>on_session_start</code>, <code>on_session_end</code>, <code>pre_tool_use</code>, <code>post_tool_use</code>. <code>on_compact</code> is fired programmatically from the compaction path. It is not configurable via <code>HooksConfig</code> but can be registered in code.</p>
 <hr />
 <h2 id="plan-mode">Plan mode signals</h2>
 <p>In plan mode, the LLM binds only read-only tools plus the <code>exit_plan_mode</code> signal. Writes are blocked. Once the model calls <code>exit_plan_mode</code>, <code>ToolUseLoop</code> emits a <code>plan_proposed</code> event and terminates the run, waiting for a decision.</p>
-<p>Approval emits <code>plan_approved</code> and starts a new act-mode run. Rejection emits <code>plan_rejected</code>; free-text feedback is provided to the model as context for a revised plan.</p>
+<p>Approval emits <code>plan_approved</code> and starts a new act-mode run. Rejection emits <code>plan_rejected</code>. Free-text feedback is provided to the model as context for a revised plan.</p>
 <p>Plan approval is <strong>episodic</strong>: approval and rejection events persist in the session transcript and survive process restarts. <code>SessionRuntime.resolve_session()</code> checks for unresolved <code>plan_proposed</code> events before starting a new run.</p>
 <p>Each <code>exit_plan_mode</code> call increments a per-session counter stored at <code>&lt;plan_dir&gt;/revision.txt</code>. The revision number appears in <code>plan_proposed</code> events so the UI can distinguish between first drafts and revised plans.</p>
 <h3 id="shell-allowlist">Shell allowlist</h3>
-<p>During exploration Meeseeks enforces a shell allowlist via <code>agent.plan_mode_shell_allowlist</code>. Only commands whose first token matches a configured prefix are permitted. Commands containing an unquoted pipe (<code>|</code>), redirect (<code>&gt;</code>, <code>&lt;</code>), chain (<code>&amp;</code>, <code>;</code>), variable expansion (<code>$</code>), or command substitution (<code>`</code>) are rejected regardless of the allowlist. Prefixes match at word boundaries — <code>"git log"</code> matches <code>"git log --oneline"</code> but not <code>"git logger"</code>. An empty list blocks shell access entirely.</p>
+<p>During exploration Meeseeks enforces a shell allowlist via <code>agent.plan_mode_shell_allowlist</code>. Only commands whose first token matches a configured prefix are permitted. Commands containing an unquoted pipe (<code>|</code>), redirect (<code>&gt;</code>, <code>&lt;</code>), chain (<code>&amp;</code>, <code>;</code>), variable expansion (<code>$</code>), or command substitution (<code>`</code>) are rejected regardless of the allowlist. Prefixes match at word boundaries. For example, <code>"git log"</code> matches <code>"git log --oneline"</code> but not <code>"git logger"</code>. An empty list blocks shell access entirely.</p>
 <p><code>agent.plan_mode_allow_mcp</code> defaults to <code>true</code>; MCP tools are available in plan mode unless explicitly disabled.</p>
 <hr />
 <h2 id="compaction">Compaction pipeline</h2>
 <p>Compaction has two modes:</p>
 <ul>
-<li><strong><code>PARTIAL</code></strong> — default for auto-compact. Keeps the most recent <code>context.recent_event_limit</code> events verbatim (default 8). Everything older is summarised.</li>
-<li><strong><code>FULL</code></strong> — summarises the entire transcript, including recent events. Clean-slate prompt.</li>
+<li><strong><code>PARTIAL</code></strong>: default for auto-compact. Keeps the most recent <code>context.recent_event_limit</code> events verbatim (default 8). Everything older is summarised.</li>
+<li><strong><code>FULL</code></strong>: summarises the entire transcript, including recent events. Clean-slate prompt.</li>
 </ul>
 <p>The compaction LLM receives the raw event transcript and produces a structured response in two XML sections:</p>
 <div class="codehilite"><pre><span></span><code><span class="nt">&lt;analysis&gt;</span>
-<span class="w">  </span>[Reasoning<span class="w"> </span>about<span class="w"> </span>what<span class="w"> </span>to<span class="w"> </span>preserve<span class="w"> </span>vs<span class="w"> </span>discard<span class="w"> </span>—<span class="w"> </span>removed<span class="w"> </span>before<span class="w"> </span>storing]
+<span class="w">  </span>[Reasoning<span class="w"> </span>about<span class="w"> </span>what<span class="w"> </span>to<span class="w"> </span>preserve<span class="w"> </span>vs<span class="w"> </span>discard.<span class="w"> </span>Removed<span class="w"> </span>before<span class="w"> </span>storing.]
 <span class="nt">&lt;/analysis&gt;</span>
 
 <span class="nt">&lt;summary&gt;</span>
@@ -1530,9 +1530,9 @@
 </code></pre></div>
 <p>Only the <code>&lt;summary&gt;</code> block is stored. The <code>&lt;analysis&gt;</code> scratchpad is stripped before injection into subsequent prompts.</p>
 <p>After the summary is generated, Meeseeks scans summarised events for file paths referenced by tool calls and re-reads up to 5 files (up to 5 000 tokens each) back into the compacted context. Recently edited files land in the prompt as literal content so the model can continue editing without re-reading them.</p>
-<p><strong>Caveman mode</strong> (<code>compaction.caveman_mode = true</code>) activates a terse summarisation prompt that drops articles, filler phrases, and hedging while preserving code blocks, file paths, URLs, commands, and error strings verbatim. Output tokens drop by ~30–60 % on prose-heavy sessions without changing the XML structure.</p>
-<p>Each compaction emits a <code>context_compacted</code> event with payload <code>{model, tokens_before, tokens_saved, events_summarized}</code>. The console timeline renders compaction events as a distinct pill; the context-window bar popover includes a <strong>Compactions</strong> row when at least one has run.</p>
-<p>Auto-compact fires when the most recent root prompt size crosses <code>token_budget.auto_compact_threshold</code> (default 0.8 of the model's context window). The threshold is evaluated after every LLM call using the actual <code>input_tokens</code> reported by the provider — not a character-count estimate.</p>
+<p><strong>Caveman mode</strong> (<code>compaction.caveman_mode = true</code>) activates a terse summarisation prompt. It drops articles, filler phrases, and hedging. Code blocks, file paths, URLs, commands, and error strings are preserved verbatim. Output tokens drop by ~30–60 % on prose-heavy sessions without changing the XML structure.</p>
+<p>Each compaction emits a <code>context_compacted</code> event with payload <code>{model, tokens_before, tokens_saved, events_summarized}</code>. The console timeline renders compaction events as a distinct pill. The context-window bar popover includes a <strong>Compactions</strong> row when at least one has run.</p>
+<p>Auto-compact fires when the most recent root prompt size crosses <code>token_budget.auto_compact_threshold</code> (default 0.8 of the model's context window). The threshold is evaluated after every LLM call using the actual <code>input_tokens</code> reported by the provider. This is not a character-count estimate.</p>
 <hr />
 <h2 id="token-tracking">Token tracking</h2>
 <p>Meeseeks tracks usage separately for the root agent (depth = 0) and all sub-agents (depth ≥ 1). Three distinct input-token semantics:</p>
@@ -1548,21 +1548,21 @@
 <tr>
 <td>Context fill (now)</td>
 <td><code>root_last_input_tokens</code></td>
-<td>Current window pressure — drives the fill bar and "until compact" display</td>
+<td>Current window pressure. Drives the fill bar and "until compact" display.</td>
 </tr>
 <tr>
 <td>Context pressure (peak)</td>
 <td><code>root_peak_input_tokens</code>, <code>sub_peak_input_tokens</code></td>
-<td>Worst-case historical pressure — popover secondary stat</td>
+<td>Worst-case historical pressure. Popover secondary stat.</td>
 </tr>
 <tr>
 <td>Billable (cost)</td>
 <td><code>*_input_tokens_billed</code></td>
-<td>Cumulative sum across all calls — cost dashboards</td>
+<td>Cumulative sum across all calls. Cost dashboards.</td>
 </tr>
 </tbody>
 </table></div>
-<p>Do <strong>not</strong> sum <code>input_tokens</code> across calls within a turn — the prompt grows as tool results accumulate (each step re-sends the full context), so summing double-counts the baseline. Use the peak or the last value. Output tokens are always additive — each output token is produced once.</p>
+<p>Do <strong>not</strong> sum <code>input_tokens</code> across calls within a turn. The prompt grows as tool results accumulate. Each step re-sends the full context, so summing double-counts the baseline. Use the peak or the last value. Output tokens are always additive. Each output token is produced once.</p>
 <p>Prompt caching auto-enables via LiteLLM for models that report support. No configuration is required. Meeseeks queries <code>litellm.utils.supports_prompt_caching</code> to decide whether to enable caching for a given model name.</p>
 <p>When using a proxy (<code>llm.api_base</code> set), the proxy must expose <code>/v1/model/info</code> advertising each model's capabilities. Meeseeks fetches this endpoint once per process at startup and registers the results with LiteLLM so <code>supports_prompt_caching</code> returns accurate results for proxy-routed custom model names. Without <code>/v1/model/info</code>, caching falls back to disabled for those models.</p>
 <hr />
@@ -1585,12 +1585,12 @@
 <tr>
 <td>2</td>
 <td>Global: <code>configs/mcp.json</code> or <code>$MEESEEKS_HOME/mcp.json</code></td>
-<td>—</td>
+<td>Middle</td>
 </tr>
 <tr>
 <td>3</td>
 <td>Subtree <code>.mcp.json</code> files, deepest-first</td>
-<td>—</td>
+<td>Middle</td>
 </tr>
 <tr>
 <td>4</td>
@@ -1624,7 +1624,7 @@
 <tr>
 <td><code>http_headers</code></td>
 <td><code>headers</code></td>
-<td>—</td>
+<td>Key rename</td>
 </tr>
 <tr>
 <td><code>transport: "http"</code></td>
@@ -1681,10 +1681,10 @@
 <p>The legacy one-shot client is a fallback when the pool is unavailable.</p>
 <hr />
 <h2 id="lsp">LSP tool</h2>
-<p><code>lsp_tool</code> is backed by <code>pygls</code> and <code>lsprotocol</code>. When these optional dependencies are absent, the tool is silently disabled on startup — no crash, no error.</p>
-<p>Servers are auto-discovered via <code>shutil.which</code> and spawned lazily per-session on the first request for a matching file type. A server that fails to start is added to a <code>_failed</code> set and is not retried for the lifetime of the session. <code>shutdown_all()</code> terminates running servers at session end.</p>
+<p><code>lsp_tool</code> is backed by <code>pygls</code> and <code>lsprotocol</code>. When these optional dependencies are absent, the tool is silently disabled on startup. There is no crash and no error.</p>
+<p>Servers are auto-discovered via <code>shutil.which</code>. They are spawned lazily per-session on the first request for a matching file type. A server that fails to start is added to a <code>_failed</code> set. It is not retried for the lifetime of the session. <code>shutdown_all()</code> terminates running servers at session end.</p>
 <p>The manager walks up from CWD looking for each server's <code>root_markers</code>. If no marker is found within 20 directory levels, CWD itself becomes the workspace root.</p>
-<p>Passive diagnostics run via an <code>_append_lsp_feedback</code> hook inside <code>ToolUseLoop</code> after every file edit. The diagnostics are appended to the context as a tool result — the LLM sees type errors and lint warnings in the same turn it wrote the edit, with no explicit <code>lsp_tool</code> call required. Disable by setting <code>agent.lsp.enabled</code> to <code>false</code>.</p>
+<p>Passive diagnostics run via an <code>_append_lsp_feedback</code> hook inside <code>ToolUseLoop</code> after every file edit. The diagnostics are appended to the context as a tool result. The LLM sees type errors and lint warnings in the same turn it wrote the edit, with no explicit <code>lsp_tool</code> call required. Disable by setting <code>agent.lsp.enabled</code> to <code>false</code>.</p>
 <p>Custom servers defined under <code>agent.lsp.servers</code> specify <code>command</code>, <code>extensions</code>, and optionally <code>root_markers</code> and <code>language_id</code>. Disable a built-in server with <code>{"pyright": {"disabled": true}}</code>.</p>
 <hr />
 <h2 id="web-ide">Web IDE manager</h2>
@@ -1707,11 +1707,11 @@
     IdeManager--&gt;&gt;API: (instance, created=True)
     API--&gt;&gt;Console: { url, password, status: "starting" }
     Console-&gt;&gt;User: Open /ide/{id}/ in new tab</code></pre>
-<p>The session's project directory is mounted at <code>/home/coder/project</code>. A deadline file is bind-mounted at <code>/meeseeks/deadline</code>; the container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. <code>POST /api/sessions/{id}/ide/extend</code> overwrites the deadline file and updates MongoDB. <code>DELETE</code> force-removes the container, deadline file, and MongoDB document.</p>
+<p>The session's project directory is mounted at <code>/home/coder/project</code>. A deadline file is bind-mounted at <code>/meeseeks/deadline</code>. The container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. <code>POST /api/sessions/{id}/ide/extend</code> overwrites the deadline file and updates MongoDB. <code>DELETE</code> force-removes the container, deadline file, and MongoDB document.</p>
 <hr />
 <h2 id="built-in-tools">Built-in tools</h2>
 <h3 id="read_file-cache">read_file cache</h3>
-<p><code>read_file</code> maintains a per-session cache keyed by <code>(path, offset, limit)</code>. If the session calls <code>read_file</code> on the same slice twice without any intervening edit to that file, the second call returns immediately from cache without re-reading or re-emitting the content into the context window. In real sessions this cuts 60–99 % of context consumed by repeated reads of the same large file.</p>
+<p><code>read_file</code> maintains a per-session cache keyed by <code>(path, offset, limit)</code>. If the session calls <code>read_file</code> on the same slice twice without any intervening edit to that file, the second call returns immediately from cache. It does not re-read or re-emit the content into the context window. In real sessions this cuts 60–99 % of context consumed by repeated reads of the same large file.</p>
 <h3 id="tool-output-schemas">Tool output schemas</h3>
 <p>Each built-in tool returns a JSON payload tagged with <code>kind</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="c1">// read_file</span>
@@ -1728,7 +1728,7 @@
 <span class="p">{</span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;diff&quot;</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">}</span>
 </code></pre></div>
 <h3 id="edit-tool-selection">Edit tool selection</h3>
-<p>Both edit backends share <code>edit_common.py</code> and emit <code>{"kind": "diff", ...}</code>. <code>AgentConfig.edit_tool</code> selects <code>"search_replace_block"</code> or <code>"structured_patch"</code>. When empty (default), <code>ToolUseLoop._configured_edit_tool_id()</code> auto-selects based on model identity via <code>llm.model_prefers_structured_patch()</code>. The tool schema, LLM prompt instructions, and backend implementation all switch together — they are bundled in the same <code>ToolSpec</code> registration.</p>
+<p>Both edit backends share <code>edit_common.py</code> and emit <code>{"kind": "diff", ...}</code>. <code>AgentConfig.edit_tool</code> selects <code>"search_replace_block"</code> or <code>"structured_patch"</code>. When empty (default), <code>ToolUseLoop._configured_edit_tool_id()</code> auto-selects based on model identity via <code>llm.model_prefers_structured_patch()</code>. The tool schema, LLM prompt instructions, and backend implementation all switch together. They are bundled in the same <code>ToolSpec</code> registration.</p>
 <p>Extend which models receive the structured-patch backend via <code>llm.structured_patch_models</code> (accepts wildcards): <code>["my-custom-model*", "openai/gpt-5"]</code>.</p>
 <hr />
 <h2 id="plugins">Plugin loading</h2>
@@ -1740,10 +1740,10 @@
     D --&gt; F[Load agent_files into AgentRegistry]
     D --&gt; G[Merge mcp_config into MCP server map]
     D --&gt; H[Merge hooks_config into HooksConfig]
-    E &amp; F &amp; G &amp; H --&gt; I[Session ready — all plugin components active]</code></pre>
-<p><code>load_all_plugin_components()</code> runs during session initialisation. It reads the installed-plugins registry file, discovers each plugin's directory, and fans contributions into the live registries. The result is cached by registry-file mtime — repeated calls within the same process are free unless a plugin was installed or uninstalled.</p>
+    E &amp; F &amp; G &amp; H --&gt; I[Session ready: all plugin components active]</code></pre>
+<p><code>load_all_plugin_components()</code> runs during session initialisation. It reads the installed-plugins registry file, discovers each plugin's directory, and fans contributions into the live registries. The result is cached by registry-file mtime. Repeated calls within the same process are free unless a plugin was installed or uninstalled.</p>
 <p><code>${CLAUDE_PLUGIN_ROOT}</code> in a plugin's <code>.mcp.json</code> or <code>hooks/hooks.json</code> is substituted at discovery time with the plugin's installation directory.</p>
-<p><strong>Precedence</strong> — Plugin skills do not override personal (<code>~/.claude/skills/</code>) or project-local (<code>.claude/skills/</code>) skills with the same name. Plugin MCP servers are merged additively — later plugins do not overwrite earlier ones for the same server name. Plugin hooks are format-translated and merged into the live <code>HooksConfig</code>.</p>
+<p><strong>Precedence.</strong> Plugin skills do not override personal (<code>~/.claude/skills/</code>) or project-local (<code>.claude/skills/</code>) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name. Plugin hooks are format-translated and merged into the live <code>HooksConfig</code>.</p>
 <p><code>PluginsConfig</code> lives in <code>config.py</code> and defines <code>registry_paths</code> and <code>marketplaces</code>. The CLI exposes <code>/plugins</code>; the API exposes <code>GET/POST /api/plugins</code>, <code>GET/POST /api/plugins/marketplace</code>, and <code>DELETE /api/plugins/&lt;name&gt;</code>; the console renders <code>PluginsView</code>.</p>
 <hr />
 <h2 id="channel-adapters">Channel adapters</h2>
@@ -1770,31 +1770,31 @@
 </tr>
 <tr>
 <td><code>system_context</code></td>
-<td>Injected into the LLM system prompt — makes the model aware it is communicating through this adapter</td>
+<td>Injected into the LLM system prompt. Makes the model aware it is communicating through this adapter</td>
 </tr>
 </tbody>
 </table></div>
 <p><code>ChannelRegistry</code> lookup and <code>DeduplicationGuard</code> replay protection are shared. The webhook endpoint <code>POST /api/webhooks/&lt;platform&gt;</code> authenticates via HMAC (not API key). Poll-driven channels (e.g. Email) call <code>_process_inbound()</code> directly from their own poller instead of via the webhook route.</p>
 <p>The shared <code>_process_inbound()</code> pipeline in <code>routes.py</code> runs dedup → mention gate → session resolve → commands → LLM for every channel. <code>requires_mention(message)</code> is optional on the adapter for dynamic mention gating (Email uses this to skip the <code>@Meeseeks</code> requirement on 1-to-1 threads).</p>
-<p>Channel sessions are standard API sessions — created via <code>session_store.create_session()</code>, mapped via session tags (<code>tag_session</code> / <code>resolve_tag</code>), visible in the console and Langfuse. The completion callback reads <code>source_platform</code> from the transcript context event and dispatches the final answer through the adapter.</p>
+<p>Channel sessions are standard API sessions. They are created via <code>session_store.create_session()</code>, mapped via session tags (<code>tag_session</code> / <code>resolve_tag</code>), and visible in the console and Langfuse. The completion callback reads <code>source_platform</code> from the transcript context event and dispatches the final answer through the adapter.</p>
 <p>Existing adapters: Nextcloud Talk (<code>nextcloud_talk.py</code>, HMAC-SHA256, ActivityStreams 2.0, OCS Bot API) and Email (<code>email_adapter.py</code>, IMAP polling + SMTP reply, markdown-to-HTML rendering via <code>mistune</code>, Jinja2 HTML template).</p>
 <hr />
 <h2 id="extensibility-points">Extensibility points</h2>
 <ul>
-<li><strong>Tools</strong> — Implement <code>AbstractTool</code> or register an MCP server with a schema.</li>
-<li><strong>File edit tool</strong> — Set <code>agent.edit_tool</code> to <code>"search_replace_block"</code> or <code>"structured_patch"</code>, or leave empty for auto-selection.</li>
-<li><strong>Plugins</strong> — Install from configured marketplaces; see <a href="../features-plugins/">Plugins &amp; Marketplace</a>.</li>
-<li><strong>Web IDE</strong> — Opt-in per-session code-server containers via <code>agent.web_ide</code>; see <a href="../features-web-ide/">Web IDE</a>.</li>
-<li><strong>Hooks</strong> — Shell command (<code>type: "command"</code>) or HTTP webhook (<code>type: "http"</code>); see <a href="../features-permissions-hooks/">Permissions &amp; Hooks</a>.</li>
-<li><strong>Interfaces</strong> — Reuse <code>SessionRuntime</code> and the event transcript model.</li>
-<li><strong>Chat platforms</strong> — Implement <code>ChannelAdapter</code>, register in <code>init_channels()</code>; see <a href="../clients-nextcloud-talk/">Nextcloud Talk</a> and <a href="../clients-email/">Email</a>.</li>
-<li><strong>LSP</strong> — Add a custom server under <code>agent.lsp.servers</code> with <code>command</code>, <code>extensions</code>, <code>root_markers</code>.</li>
+<li><strong>Tools</strong>: implement <code>AbstractTool</code> or register an MCP server with a schema.</li>
+<li><strong>File edit tool</strong>: set <code>agent.edit_tool</code> to <code>"search_replace_block"</code> or <code>"structured_patch"</code>, or leave empty for auto-selection.</li>
+<li><strong>Plugins</strong>: install from configured marketplaces; see <a href="../features-plugins/">Plugins &amp; Marketplace</a>.</li>
+<li><strong>Web IDE</strong>: opt-in per-session code-server containers via <code>agent.web_ide</code>; see <a href="../features-web-ide/">Web IDE</a>.</li>
+<li><strong>Hooks</strong>: shell command (<code>type: "command"</code>) or HTTP webhook (<code>type: "http"</code>); see <a href="../features-permissions-hooks/">Permissions &amp; Hooks</a>.</li>
+<li><strong>Interfaces</strong>: reuse <code>SessionRuntime</code> and the event transcript model.</li>
+<li><strong>Chat platforms</strong>: implement <code>ChannelAdapter</code>, register in <code>init_channels()</code>; see <a href="../clients-nextcloud-talk/">Nextcloud Talk</a> and <a href="../clients-email/">Email</a>.</li>
+<li><strong>LSP</strong>: add a custom server under <code>agent.lsp.servers</code> with <code>command</code>, <code>extensions</code>, <code>root_markers</code>.</li>
 </ul>
 <h2 id="further-reading">Further reading</h2>
 <ul>
-<li><a href="../session-runtime/">Session Runtime</a> — the shared facade used by CLI and API.</li>
-<li><a href="../developer-guide/">Building a Client</a> — full walkthrough for embedding the core.</li>
-<li><a href="../reference/">API Reference</a> — mkdocstrings reference for every module.</li>
+<li><a href="../session-runtime/">Session Runtime</a>: the shared facade used by CLI and API.</li>
+<li><a href="../developer-guide/">Building a Client</a>: full walkthrough for embedding the core.</li>
+<li><a href="../reference/">API Reference</a>: mkdocstrings reference for every module.</li>
 </ul>
   </div>
   

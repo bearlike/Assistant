@@ -1220,7 +1220,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Model Context Protocol (MCP) tools extend Meeseeks with external tool servers. Any MCP-compatible server — file systems, databases, APIs, code execution environments, search engines — can be plugged in via a config file. Tools contributed by MCP servers appear in the tool registry alongside Meeseeks' built-in tools and are available to every session.</p>
+    <p>Model Context Protocol (MCP) tools extend Meeseeks with external tool servers. Any MCP-compatible server can be plugged in via a config file. This includes file systems, databases, APIs, code execution environments, and search engines. Tools contributed by MCP servers appear in the tool registry alongside Meeseeks' built-in tools and are available to every session.</p>
 <div class="admonition tip">
 <p class="admonition-title">Drop-in compatible with Claude Code and VS Code</p>
 <p>Meeseeks reads the same <code>.mcp.json</code> / <code>mcp.json</code> schema, accepting both the <code>servers</code> (Meeseeks-native) and <code>mcpServers</code> (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same <code>${VAR}</code> convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official <a href="https://modelcontextprotocol.io">Model Context Protocol</a> specification.</p>
@@ -1244,7 +1244,7 @@
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<p><code>${VAR_NAME}</code> and <code>$VAR_NAME</code> patterns are expanded from the process environment at load time. Both <code>"servers"</code> and <code>"mcpServers"</code> (Claude Code / VS Code format) are accepted as the top-level key — Meeseeks normalises them to a common shape internally, so you can drop in config files written for other tools.</p>
+<p><code>${VAR_NAME}</code> and <code>$VAR_NAME</code> patterns are expanded from the process environment at load time. Both <code>"servers"</code> and <code>"mcpServers"</code> (Claude Code / VS Code format) are accepted as the top-level key. Meeseeks normalises them to a common shape internally, so you can drop in config files written for other tools.</p>
 <h2 id="supported-transports">Supported transports</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1263,7 +1263,7 @@
 <tr>
 <td><code>http</code></td>
 <td><code>url</code>, <code>headers</code></td>
-<td>Alias for <code>streamable_http</code> — accepted for compatibility</td>
+<td>Alias for <code>streamable_http</code>, accepted for compatibility</td>
 </tr>
 <tr>
 <td><code>stdio</code></td>
@@ -1273,13 +1273,13 @@
 </tbody>
 </table></div>
 <h2 id="tool-discovery">Tool discovery</h2>
-<p>At session start, Meeseeks connects to each configured MCP server, fetches its tool schema, and registers those tools in the registry. Connections are persistent — there is no per-request reconnect overhead, and a config change picks up on the next session.</p>
+<p>At session start, Meeseeks connects to each configured MCP server, fetches its tool schema, and registers those tools in the registry. Connections are persistent. There is no per-request reconnect overhead, and a config change picks up on the next session.</p>
 <h2 id="choosing-which-tools-a-session-sees">Choosing which tools a session sees</h2>
 <p>You can control which MCP tools are bound to a session:</p>
 <ul>
-<li><strong>Console</strong> — the config menu has a tool selector; pick which MCP tools to enable for the current session.</li>
-<li><strong>API</strong> — pass <code>allowed_tools</code> in the session create payload or the query body to scope which tools the LLM can call.</li>
-<li><strong>CLI</strong> — run <code>/mcp select</code> to interactively pick servers and tools.</li>
+<li><strong>Console</strong>: the config menu has a tool selector. Pick which MCP tools to enable for the current session.</li>
+<li><strong>API</strong>: pass <code>allowed_tools</code> in the session create payload or the query body to scope which tools the LLM can call.</li>
+<li><strong>CLI</strong>: run <code>/mcp select</code> to interactively pick servers and tools.</li>
 </ul>
 <h2 id="per-project-mcp-config">Per-project MCP config</h2>
 <p>Drop a <code>.mcp.json</code> file at your project root. When you start a session inside that project, its servers are merged with the global <code>configs/mcp.json</code> automatically. You can also place <code>.mcp.json</code> files deeper in the tree for sub-package–specific tools.</p>

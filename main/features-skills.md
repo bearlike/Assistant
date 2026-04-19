@@ -1,9 +1,9 @@
 # Skills
 
-A skill is a small, self-contained instruction file that teaches the assistant a specific way of working — running code review, drafting a changelog, triaging an incident. Each skill lives in its own directory as a `SKILL.md` file (YAML frontmatter plus a markdown body). Meeseeks only pulls the full body of a skill into context when that skill actually activates, so you can keep dozens of skills installed without burning context on skills you aren't using.
+A skill is a small, self-contained instruction file that teaches the assistant a specific way of working. Examples include running code review, drafting a changelog, or triaging an incident. Each skill lives in its own directory as a `SKILL.md` file (YAML frontmatter plus a markdown body). Meeseeks only pulls the full body of a skill into context when that skill actually activates, so you can keep dozens of skills installed without burning context on skills you aren't using.
 
 > [!TIP] Drop-in compatible with Claude Code
-> Skills follow the [Agent Skills standard](https://docs.claude.com/en/api/agent-skills) (also published as the open [`agentskills.io`](https://agentskills.io) spec). The same directory conventions (`~/.claude/skills/` for user-global, `.claude/skills/` for project-local), the same `SKILL.md` frontmatter, the same `allowed-tools` scoping, and the same `/skill-name` invocation pattern — any skill written for Claude Code works unchanged in Meeseeks.
+> Skills follow the [Agent Skills standard](https://docs.claude.com/en/api/agent-skills) (also published as the open [`agentskills.io`](https://agentskills.io) spec). Meeseeks uses the same directory conventions (`~/.claude/skills/` for user-global, `.claude/skills/` for project-local), the same `SKILL.md` frontmatter, the same `allowed-tools` scoping, and the same `/skill-name` invocation pattern. Any skill written for Claude Code works unchanged in Meeseeks.
 
 ---
 
@@ -57,9 +57,9 @@ When `allowed-tools` is omitted, the skill inherits the full tool set of the cur
 
 ## Shell preprocessing
 
-Skills can embed shell commands using the `` !`command` `` syntax. At activation time each matched command is executed and its standard output is substituted inline before the instructions are shown to the model. This is useful for injecting live context — current branch, directory tree, environment values — into the skill body.
+Skills can embed shell commands using the `` !`command` `` syntax. At activation time each matched command is executed and its standard output is substituted inline before the instructions are shown to the model. This is useful for injecting live context into the skill body. Examples include the current branch, directory tree, or environment values.
 
-**Example — inject the current git branch name:**
+**Example.** Inject the current git branch name:
 
 ```markdown
 You are reviewing code on branch: !`git rev-parse --abbrev-ref HEAD`
@@ -87,8 +87,8 @@ Plugins can ship skills too; they use the same `SKILL.md` format and never overr
 
 You have two ways to trigger a skill:
 
-- **Automatically** — the assistant reads the skill catalogue at the start of every session and can choose to activate a relevant skill based on your request.
-- **Explicitly** — type `/skill-name` in the CLI or console. Arguments after the name are passed through as `$ARGUMENTS` inside the skill body, and individual tokens are available as `$0`, `$1`, and so on.
+- **Automatically**: the assistant reads the skill catalogue at the start of every session and can choose to activate a relevant skill based on your request.
+- **Explicitly**: type `/skill-name` in the CLI or console. Arguments after the name are passed through as `$ARGUMENTS` inside the skill body, and individual tokens are available as `$0`, `$1`, and so on.
 
 Sub-agents also see the skill catalogue in their system prompt, so delegating work to a sub-agent and naming a skill in the task description works as expected.
 

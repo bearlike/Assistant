@@ -1,16 +1,16 @@
 # Docker Compose Deployment
 
-The recommended way to run Meeseeks in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single `docker compose up` starts the full stack — API, console, MongoDB, and the nginx proxy for the Web IDE feature.
+The recommended way to run Meeseeks in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single `docker compose up` starts the full stack. It includes the API, console, MongoDB, and the nginx proxy for the Web IDE feature.
 
 ## Quick Start
 
-**Step 1 — Copy the environment template:**
+**Step 1. Copy the environment template:**
 
 ```bash
 cp docker.example.env docker.env
 ```
 
-**Step 2 — Edit `docker.env`.** At minimum, set these three values:
+**Step 2. Edit `docker.env`.** At minimum, set these three values:
 
 ```dotenv
 MASTER_API_TOKEN=your-strong-random-token
@@ -18,7 +18,7 @@ VITE_API_KEY=your-strong-random-token   # must match MASTER_API_TOKEN
 HOST_UID=1000                            # output of `id -u`
 ```
 
-**Step 3 — Pull images and start the stack:**
+**Step 3. Pull images and start the stack:**
 
 ```bash
 docker compose pull && docker compose up -d
@@ -32,8 +32,8 @@ All variables live in `docker.env` (copied from `docker.example.env`).
 
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
-| `MASTER_API_TOKEN` | Yes | — | API authentication token. Set a strong random value. |
-| `VITE_API_KEY` | Yes | — | Frontend API key. Must match `MASTER_API_TOKEN`. |
+| `MASTER_API_TOKEN` | Yes | _(none)_ | API authentication token. Set a strong random value. |
+| `VITE_API_KEY` | Yes | _(none)_ | Frontend API key. Must match `MASTER_API_TOKEN`. |
 | `HOST_UID` | Yes | `1000` | UID the API container runs as. Run `id -u` to find yours. |
 | `HOST_GID` | Yes | `1000` | GID the API container runs as. Run `id -g` to find yours. |
 | `HOST_USER` | No | `youruser` | Username (informational only). |
@@ -106,7 +106,7 @@ To add your own scripts, mount the `docker/init.d/` directory in your override f
 
 ## Runtime Config Injection
 
-The console image generates a `runtime-config.js` file at container startup from environment variables (`VITE_API_BASE_URL`, `VITE_API_KEY`). This means you can change the API URL or key by updating `docker.env` and running `docker compose up -d` — no image rebuild required.
+The console image generates a `runtime-config.js` file at container startup from environment variables (`VITE_API_BASE_URL`, `VITE_API_KEY`). This means you can change the API URL or key by updating `docker.env` and running `docker compose up -d`. No image rebuild required.
 
 ## Web IDE Socket Access
 

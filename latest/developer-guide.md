@@ -27,7 +27,7 @@ The orchestrator loads project instructions from the working directory and injec
 ## Core abstractions and interfaces
 - `AbstractTool` (`meeseeks_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
 - `ToolRunner` protocol (`meeseeks_core.tool_registry`): interface for tool runners with `run(ActionStep)`.
-- `ToolSpec` / `ToolRegistry` (`meeseeks_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config — either `aider_edit_block_tool` or `file_edit_tool`. When `edit_tool` is empty, `ToolUseLoop` auto-selects based on model identity via `model_prefers_structured_patch()`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
+- `ToolSpec` / `ToolRegistry` (`meeseeks_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config. The value is either `aider_edit_block_tool` or `file_edit_tool`. When `edit_tool` is empty, `ToolUseLoop` auto-selects based on model identity via `model_prefers_structured_patch()`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
 - `PluginSystem` (`meeseeks_core.plugins`): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by `agent_registry.py`), skills, hooks, and MCP tool configurations. Loaded via `load_all_plugin_components()` during session init.
 - `ActionStep`, `Plan`, `TaskQueue` (`meeseeks_core.classes`): planning and tool-execution payloads.
 - `PermissionPolicy` (`meeseeks_core.permissions`): allow/deny/ask rules for tool execution.
@@ -149,24 +149,24 @@ Key files in `apps/meeseeks_api/src/meeseeks_api/channels/`:
 
 ### Steps to add a new platform (e.g., Slack)
 
-1. **Create the adapter** — `channels/slack.py` implementing `ChannelAdapter`:
-   - `verify_request(headers, body)` — validate the inbound webhook signature.
-   - `parse_inbound(headers, body)` — extract an `InboundMessage` from the platform payload. Return `None` for non-message events.
-   - `send_response(channel_id, text, thread_id, reply_to)` — post the reply back to the platform.
-   - `system_context` property — brief string injected into the LLM system prompt so it knows which interface the user is on.
+1. **Create the adapter.** Add `channels/slack.py` implementing `ChannelAdapter`:
+   - `verify_request(headers, body)`: validate the inbound webhook signature.
+   - `parse_inbound(headers, body)`: extract an `InboundMessage` from the platform payload. Return `None` for non-message events.
+   - `send_response(channel_id, text, thread_id, reply_to)`: post the reply back to the platform.
+   - `system_context` property: brief string injected into the LLM system prompt so it knows which interface the user is on.
 
-2. **Add config** — add the platform section under `channels` in `configs/app.json`:
+2. **Add config.** Add the platform section under `channels` in `configs/app.json`:
    ```json
    { "channels": { "slack": { "enabled": true, "bot_token": "xoxb-...", "signing_secret": "..." } } }
    ```
 
-3. **Register in `init_channels()`** — instantiate the adapter and call `_registry.register()`. For webhook-driven platforms, the route `POST /api/webhooks/slack` works automatically via the shared Blueprint.
+3. **Register in `init_channels()`.** Instantiate the adapter and call `_registry.register()`. For webhook-driven platforms, the route `POST /api/webhooks/slack` works automatically via the shared Blueprint.
 
 4. **For poll-driven channels** (like Email's IMAP poller): create a daemon thread that polls the external source and calls `_process_inbound()` directly, bypassing the webhook route.
 
-5. **Optionally implement `requires_mention(message)`** — return `False` to skip the mention gate for specific message types (e.g., Email skips mentions for 1-to-1 but requires `@Meeseeks` in multi-party threads).
+5. **Optionally implement `requires_mention(message)`.** Return `False` to skip the mention gate for specific message types. For example, Email skips mentions for 1-to-1 but requires `@Meeseeks` in multi-party threads.
 
-6. **Add platform-specific slash commands** (optional) — use the `@command` decorator in `routes.py`. Help text auto-generates from the registry.
+6. **Add platform-specific slash commands** (optional). Use the `@command` decorator in `routes.py`. Help text auto-generates from the registry.
 
 ### Session mapping
 
@@ -190,8 +190,8 @@ Commands run without LLM invocation. Adding a new command is one `@command` deco
 
 ### Existing adapters
 
-- **Nextcloud Talk** — see [docs/clients-nextcloud-talk.md](clients-nextcloud-talk.md)
-- **Email** — see [docs/clients-email.md](clients-email.md)
+- **Nextcloud Talk**: see [docs/clients-nextcloud-talk.md](clients-nextcloud-talk.md)
+- **Email**: see [docs/clients-email.md](clients-email.md)
 
 ## Built-in `read_file` tool
 
@@ -205,7 +205,7 @@ The `read_file` tool (`tool_id: "read_file"`) is a native built-in for reading l
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `path` | string | yes | — | File path to read (relative to `root`) |
+| `path` | string | yes | (none) | File path to read (relative to `root`) |
 | `root` | string | no | CWD | Project root for path resolution |
 | `offset` | integer | no | `0` | 0-based start line |
 | `limit` | integer | no | `2000` | Maximum lines to return |
@@ -224,8 +224,8 @@ Returns a JSON payload with line-numbered content:
 ```
 
 - **Line numbers** are 1-based, tab-separated (matches `cat -n` format).
-- **`total_lines`** reflects the full file, not the windowed portion — so the model knows whether it has seen everything.
-- When the file exceeds the limit, a truncation hint is appended: `... (truncated — use offset/limit to read more)`.
+- **`total_lines`** reflects the full file, not the windowed portion. This tells the model whether it has seen everything.
+- When the file exceeds the limit, a truncation hint is appended: `... (truncated, use offset/limit to read more)`.
 
 ### Dedup cache
 
@@ -236,13 +236,13 @@ The `ToolUseLoop` maintains a per-run `_file_read_cache` that prevents the same 
 1. On the first `read_file` call for a path, the tool executes normally and the cache records: `{path, offset, limit, mtime}`.
 2. On a subsequent `read_file` call with the same path, offset, and limit, the cache checks `os.path.getmtime()`. If the mtime matches, the tool returns a stub instead of the full content:
 
-   > *"File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading."*
+   > *"File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current. Refer to that instead of re-reading."*
 
-3. When the `file_edit_tool` edits a file, the cache entry for that path is invalidated — the next read returns fresh content.
+3. When the `file_edit_tool` edits a file, the cache entry for that path is invalidated. The next read then returns fresh content.
 
-**Why this matters:** In observed sessions, GPT 5.4 re-read `backend.py` 8 times across 70 steps, adding 64KB of identical content to the message array. The dedup cache reduces this to one full read + seven 30-token stubs — a ~99% reduction in redundant context.
+**Why this matters:** In observed sessions, GPT 5.4 re-read `backend.py` 8 times across 70 steps, adding 64KB of identical content to the message array. The dedup cache reduces this to one full read plus seven 30-token stubs. That is a roughly 99% reduction in redundant context.
 
-**Cache location:** `ToolUseLoop._file_read_cache` (`tool_use_loop.py`). The cache is per-run (created with the loop, discarded when the run ends). No cross-run persistence is needed — compaction handles session continuity.
+**Cache location:** `ToolUseLoop._file_read_cache` (`tool_use_loop.py`). The cache is per-run (created with the loop, discarded when the run ends). No cross-run persistence is needed. Compaction handles session continuity.
 
 ### System prompt guidance
 

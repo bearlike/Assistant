@@ -5,7 +5,7 @@
   <img src="../meeseeks-console-02-tasks.jpg" alt="Meeseeks Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-The REST API is the programmable surface for Meeseeks — you send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration; the console gives you session management, an event timeline, and rich visualization of tool output.
+The REST API is the programmable surface for Meeseeks. You send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration. The console gives you session management, an event timeline, and rich visualization of tool output.
 
 See [Get Started](getting-started.md#api-setup) for installation and [Docker Compose](deployment-docker.md) for container deployment.
 

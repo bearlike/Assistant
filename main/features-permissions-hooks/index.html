@@ -1220,8 +1220,8 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Meeseeks runs every tool call through a <strong>permission policy</strong> before it executes, and lets you wire <strong>hooks</strong> into session lifecycle events and individual tool calls. Together they give you a security boundary and a clean place to hang automation — notifications, audit logging, webhook fan-out, external guardrails.</p>
-<p><strong>Quick example — auto-approve all tool calls in the current session:</strong></p>
+    <p>Meeseeks runs every tool call through a <strong>permission policy</strong> before it executes, and lets you wire <strong>hooks</strong> into session lifecycle events and individual tool calls. Together they give you a security boundary and a clean place to hang automation. Think notifications, audit logging, webhook fan-out, and external guardrails.</p>
+<p><strong>Quick example.</strong> Auto-approve all tool calls in the current session:</p>
 <div class="codehilite"><pre><span></span><code>/automatic --yes
 </code></pre></div>
 <p>Or configure it globally:</p>
@@ -1251,7 +1251,7 @@
 </tr>
 <tr>
 <td><code>ask</code></td>
-<td>Prompt the user — on the CLI this is an interactive prompt; in the console it is an approval card</td>
+<td>Prompt the user. On the CLI this is an interactive prompt; in the console it is an approval card</td>
 </tr>
 </tbody>
 </table></div>
@@ -1272,7 +1272,7 @@
 <span class="w">  </span><span class="nt">&quot;default_decision&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ask&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p><code>fnmatch</code> wildcards are simple: <code>*</code> matches any string, <code>?</code> matches a single character. Patterns work equally well on MCP tool IDs — <code>"mcp__*"</code> matches every MCP-sourced tool, <code>"mcp__my_server__*"</code> scopes to one server.</p>
+<p><code>fnmatch</code> wildcards are simple: <code>*</code> matches any string, <code>?</code> matches a single character. Patterns work equally well on MCP tool IDs. For example, <code>"mcp__*"</code> matches every MCP-sourced tool, and <code>"mcp__my_server__*"</code> scopes to one server.</p>
 <h3 id="approval-modes">Approval modes</h3>
 <p><code>permissions.approval_mode</code> is a session-wide shortcut that overrides the rule file. It is useful when you want a blanket policy without editing rules:</p>
 <div class="table-wrapper"><table>
@@ -1296,7 +1296,7 @@
 </tr>
 <tr>
 <td><code>ask</code> (default)</td>
-<td>—</td>
+<td><em>(none)</em></td>
 <td>Falls through to per-rule decisions</td>
 </tr>
 </tbody>
@@ -1346,7 +1346,7 @@
 </table></div>
 <h3 id="two-hook-types">Two hook types</h3>
 <h4 id="command-hooks">Command hooks</h4>
-<p>A command hook runs a shell command. Meeseeks waits up to <code>timeout</code> seconds (default 30) for the process to finish before moving on. Use this when you want the hook to complete before the session continues — e.g. prepping a workspace at session start.</p>
+<p>A command hook runs a shell command. Meeseeks waits up to <code>timeout</code> seconds (default 30) for the process to finish before moving on. Use this when you want the hook to complete before the session continues, for example when prepping a workspace at session start.</p>
 <p>Meeseeks sets these environment variables on the subprocess:</p>
 <div class="table-wrapper"><table>
 <thead>
@@ -1384,7 +1384,7 @@
 </tr>
 </tbody>
 </table></div>
-<p>Example — send a desktop notification when a session ends:</p>
+<p>Example. Send a desktop notification when a session ends:</p>
 <div class="codehilite"><pre><span></span><code><span class="nt">&quot;hooks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;on_session_end&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
@@ -1396,7 +1396,7 @@
 <span class="p">}</span>
 </code></pre></div>
 <h4 id="http-hooks">HTTP hooks</h4>
-<p>An HTTP hook posts a JSON body to a URL. HTTP hooks are non-blocking — Meeseeks does not wait for the response, and failures are logged rather than raised. Use this when you want to feed Meeseeks events into a webhook, audit log, or chat integration without slowing the agent down.</p>
+<p>An HTTP hook posts a JSON body to a URL. HTTP hooks are non-blocking. Meeseeks does not wait for the response, and failures are logged rather than raised. Use this when you want to feed Meeseeks events into a webhook, audit log, or chat integration without slowing the agent down.</p>
 <p>Payload for <code>on_session_end</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;session_end&quot;</span><span class="p">,</span>
@@ -1412,7 +1412,7 @@
 <span class="w">  </span><span class="nt">&quot;result_preview&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;stdout output (first 2000 chars)&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>Example — notify an external webhook:</p>
+<p>Example. Notify an external webhook:</p>
 <div class="codehilite"><pre><span></span><code><span class="nt">&quot;hooks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;on_session_end&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>

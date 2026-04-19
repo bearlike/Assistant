@@ -1,13 +1,13 @@
 # Storage Backends
 
-Meeseeks stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store — zero dependencies, works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the [Web IDE](features-web-ide.md) feature (which requires MongoDB for container state).
+Meeseeks stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store. It has zero dependencies and works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the [Web IDE](features-web-ide.md) feature (which requires MongoDB for container state).
 
 ## JSON (Default)
 
 The JSON driver writes one file per session under `$MEESEEKS_HOME/sessions/` (default: `~/.meeseeks/sessions/`). No extra dependencies are needed.
 
 ```bash
-# These two are equivalent — JSON is the default
+# These two are equivalent. JSON is the default
 MEESEEKS_STORAGE_DRIVER=json
 # or simply leave it unset
 ```

@@ -1,6 +1,6 @@
 # Token Usage & Caching
 
-Meeseeks tracks token consumption for every session, splits it between the root agent and any sub-agents it spawns, and surfaces the numbers in the web console, the CLI, and the REST API. Prompt caching — which slashes the per-turn cost of re-sending system prompts and tool schemas — auto-enables for capable providers (Anthropic, OpenAI, Bedrock) with no configuration.
+Meeseeks tracks token consumption for every session, splits it between the root agent and any sub-agents it spawns, and surfaces the numbers in the web console, the CLI, and the REST API. Prompt caching slashes the per-turn cost of re-sending system prompts and tool schemas. It auto-enables for capable providers (Anthropic, OpenAI, Bedrock) with no configuration.
 
 ---
 
@@ -111,7 +111,7 @@ Key fields:
 
 | Field | Description |
 |-------|-------------|
-| `root_last_input_tokens` | Most recent root prompt size — drives the context bar fill |
+| `root_last_input_tokens` | Most recent root prompt size. Drives the context bar fill. |
 | `root_utilization` | `root_last_input_tokens / root_max_input_tokens` |
 | `tokens_until_compact` | Tokens remaining before auto-compact fires |
 | `compact_threshold` | The configured `token_budget.auto_compact_threshold` fraction |
@@ -127,7 +127,7 @@ Key fields:
 
 ## CLI usage display
 
-`/tokens` and `/budget` are aliases — they print the same budget table for the current session:
+`/tokens` and `/budget` are aliases. They print the same budget table for the current session:
 
 ```
 /tokens
@@ -154,7 +154,7 @@ These values use the provider-reported input token count from the most recent LL
 
 ## Prompt caching
 
-Meeseeks auto-enables provider prompt caching when the model reports it supports caching. No configuration is required — if you are on a supported model, caching is already on.
+Meeseeks auto-enables provider prompt caching when the model reports it supports caching. No configuration is required. If you are on a supported model, caching is already on.
 
 ### Supported providers
 
@@ -164,11 +164,11 @@ Meeseeks auto-enables provider prompt caching when the model reports it supports
 | OpenAI | Automatic prefix caching | Cache reads billed at 0.5× input |
 | AWS Bedrock | TTL-based caching | Provider-specific |
 
-The per-provider syntax differences are handled transparently — you interact with one consistent usage API regardless of which provider is behind it.
+The per-provider syntax differences are handled transparently. You interact with one consistent usage API regardless of which provider is behind it.
 
 ### Proxy models
 
-When using a proxy (`llm.api_base` is set), the proxy must advertise model capabilities for caching to activate — see the architecture page for details. If the proxy does not report caching support, Meeseeks conservatively leaves caching disabled for that model rather than risk malformed requests.
+When using a proxy (`llm.api_base` is set), the proxy must advertise model capabilities for caching to activate. See the architecture page for details. If the proxy does not report caching support, Meeseeks conservatively leaves caching disabled for that model rather than risk malformed requests.
 
 ### Seeing cache savings
 

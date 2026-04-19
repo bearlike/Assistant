@@ -1224,24 +1224,24 @@
 <h2 id="security-checklist">Security Checklist</h2>
 <ol>
 <li>
-<p><strong>Rotate <code>MASTER_API_TOKEN</code></strong> — the example value is public. Generate a strong random token:
+<p><strong>Rotate <code>MASTER_API_TOKEN</code></strong>. The example value is public. Generate a strong random token:
    <div class="codehilite"><pre><span></span><code>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span>
 </code></pre></div>
    Set it in <code>docker.env</code> as both <code>MASTER_API_TOKEN</code> and <code>VITE_API_KEY</code> (they must match).</p>
 </li>
 <li>
-<p><strong>Restrict <code>CORS_ORIGIN</code></strong> — the default <code>*</code> allows any origin. In production, set it to your actual domain:
+<p><strong>Restrict <code>CORS_ORIGIN</code></strong>. The default <code>*</code> allows any origin. In production, set it to your actual domain:
    <div class="codehilite"><pre><span></span><code>CORS_ORIGIN=https://meeseeks.example.com
 </code></pre></div></p>
 </li>
 <li>
-<p><strong>Use TLS</strong> — terminate TLS at a reverse proxy (nginx, Caddy, Traefik). Never expose the API or console ports directly on a public interface.</p>
+<p><strong>Use TLS</strong>. Terminate TLS at a reverse proxy such as nginx, Caddy, or Traefik. Never expose the API or console ports directly on a public interface.</p>
 </li>
 <li>
-<p><strong>Set <code>GITHUB_TOKEN</code> in <code>docker.env</code></strong> — if you mount git repositories, the <code>10-git-setup.sh</code> init script uses this to configure <code>gh CLI</code> authentication so <code>git fetch/push/pull</code> work without prompts.</p>
+<p><strong>Set <code>GITHUB_TOKEN</code> in <code>docker.env</code></strong>. If you mount git repositories, the <code>10-git-setup.sh</code> init script uses this token to configure <code>gh CLI</code> authentication. That lets <code>git fetch/push/pull</code> work without prompts.</p>
 </li>
 <li>
-<p><strong>Change MongoDB credentials</strong> — update <code>MONGO_INITDB_ROOT_USERNAME</code> / <code>MONGO_INITDB_ROOT_PASSWORD</code> in <code>docker.env</code> from their defaults and update <code>MEESEEKS_MONGODB_URI</code> to match.</p>
+<p><strong>Change MongoDB credentials</strong>. Update <code>MONGO_INITDB_ROOT_USERNAME</code> and <code>MONGO_INITDB_ROOT_PASSWORD</code> in <code>docker.env</code> from their defaults. Then update <code>MEESEEKS_MONGODB_URI</code> to match.</p>
 </li>
 </ol>
 <h2 id="tls-with-nginx">TLS with nginx</h2>
@@ -1259,7 +1259,7 @@ sudo<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </sp
 <span class="w">    </span><span class="kn">ssl_certificate</span><span class="w">     </span><span class="s">/path/to/your/server.crt</span><span class="p">;</span>
 <span class="w">    </span><span class="kn">ssl_certificate_key</span><span class="w"> </span><span class="s">/path/to/your/server.key</span><span class="p">;</span>
 
-<span class="w">    </span><span class="c1"># Web IDE — WebSocket upgrade + long timeout</span>
+<span class="w">    </span><span class="c1"># Web IDE: WebSocket upgrade + long timeout</span>
 <span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/ide/</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:5126</span><span class="p">;</span>
 <span class="w">        </span><span class="kn">proxy_http_version</span><span class="w"> </span><span class="mi">1</span><span class="s">.1</span><span class="p">;</span>
@@ -1280,7 +1280,7 @@ sudo<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </sp
 <span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="c1"># API — SSE streaming endpoints need no buffering</span>
+<span class="w">    </span><span class="c1"># API: SSE streaming endpoints need no buffering</span>
 <span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/api/sessions/</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:5125</span><span class="p">;</span>
 <span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
@@ -1295,7 +1295,7 @@ sudo<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </sp
 <span class="w">        </span><span class="kn">proxy_read_timeout</span><span class="w"> </span><span class="s">300s</span><span class="p">;</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="c1"># API — all other endpoints</span>
+<span class="w">    </span><span class="c1"># API: all other endpoints</span>
 <span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/api/</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:5125/api/</span><span class="p">;</span>
 <span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
@@ -1369,7 +1369,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"
 <span class="c1"># Check container status</span>
 docker<span class="w"> </span>compose<span class="w"> </span>ps
 </code></pre></div>
-<p>For external monitoring (uptime checks, alerting), probe <code>GET /api/tools</code> with your API key — it returns a non-empty list when the API is healthy.</p>
+<p>For external monitoring (uptime checks, alerting), probe <code>GET /api/tools</code> with your API key. It returns a non-empty list when the API is healthy.</p>
 <h2 id="api-token-rotation">API Token Rotation</h2>
 <p>To rotate <code>MASTER_API_TOKEN</code>:</p>
 <ol>
@@ -1381,7 +1381,7 @@ VITE_API_KEY=new-strong-random-token
    <div class="codehilite"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div></li>
 </ol>
-<p>The console reads <code>VITE_API_KEY</code> from the injected <code>runtime-config.js</code> at startup — no image rebuild is needed. Existing browser sessions will get a 401 and prompt for the new key on the next request.</p>
+<p>The console reads <code>VITE_API_KEY</code> from the injected <code>runtime-config.js</code> at startup. No image rebuild is needed. Existing browser sessions will get a 401 and prompt for the new key on the next request.</p>
 <h2 id="resource-limits">Resource Limits</h2>
 <p>The MongoDB service in <code>docker-compose.yml</code> is pre-configured with memory limits (<code>512M</code>) and CPU limits (<code>1.0</code> core). For high-traffic deployments, adjust these in <code>docker-compose.override.yml</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="nt">services</span><span class="p">:</span>
@@ -1392,7 +1392,7 @@ VITE_API_KEY=new-strong-random-token
 <span class="w">          </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2G</span>
 <span class="w">          </span><span class="nt">cpus</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;2.0&#39;</span>
 </code></pre></div>
-<p>The API and console services do not set explicit limits by default — add them in your override file if running on a shared host.</p>
+<p>The API and console services do not set explicit limits by default. Add them in your override file if running on a shared host.</p>
   </div>
   
   <script>

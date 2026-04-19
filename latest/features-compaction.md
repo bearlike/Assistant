@@ -1,10 +1,10 @@
 # Compaction
 
-LLM context windows are finite. As a session grows, older turns have to make room for newer work — otherwise you hit the model's context limit and the run falls over. Meeseeks handles this automatically with **compaction**: it summarises older conversation turns into a compact record and injects that summary into each subsequent prompt. The session carries on without losing the thread of work, just with less raw history and more digested history.
+LLM context windows are finite. As a session grows, older turns have to make room for newer work. Otherwise you hit the model's context limit and the run falls over. Meeseeks handles this automatically with **compaction**: it summarises older conversation turns into a compact record and injects that summary into each subsequent prompt. The session carries on without losing the thread of work, just with less raw history and more digested history.
 
 Compaction is transparent. You do not have to intervene, and nothing about how you use the session changes after it runs.
 
-**Quick example — compact the current session manually:**
+**Quick example.** Compact the current session manually:
 
 ```
 /compact
@@ -45,7 +45,7 @@ Compaction has two modes that trade off differently between context detail and c
 
 Keeps the most recent events verbatim (configurable via `context.recent_event_limit`, default 8) and summarises everything older. The model retains full detail for the current state and a digested summary of what led up to it.
 
-Best for **ongoing work** — the recent context stays intact, so the model does not lose track of the file it is editing or the error it is chasing.
+Best for **ongoing work**. The recent context stays intact, so the model does not lose track of the file it is editing or the error it is chasing.
 
 ### FULL
 
@@ -87,13 +87,13 @@ Enable `compaction.caveman_mode` to activate a terser summary prompt. It drops a
 
 Once the summary is produced, Meeseeks scans the summarised events for files that were read or edited and re-reads the most recently touched ones into the compacted context. That way, if the model was mid-way through editing a file when compaction fired, it can pick up with the current contents in view rather than having to re-read it.
 
-Compaction is also resilient to sub-agents. Running and completed sub-agent state lives outside the LLM conversation, so compaction never loses track of a spawned worker — the agent tree, their progress notes, and their results all survive.
+Compaction is also resilient to sub-agents. Running and completed sub-agent state lives outside the LLM conversation, so compaction never loses track of a spawned worker. The agent tree, their progress notes, and their results all survive.
 
 ---
 
 ## Routing compaction to a different model
 
-By default compaction uses the session's own model. If you want to route it to a cheaper or faster model — e.g. a small Haiku-class model for summarising — set `llm.compact_models`:
+By default compaction uses the session's own model. You can route it to a cheaper or faster model, such as a small Haiku-class model for summarising. Set `llm.compact_models`:
 
 ```json
 "llm": {

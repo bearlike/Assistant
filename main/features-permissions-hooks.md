@@ -1,8 +1,8 @@
 # Permissions & Hooks
 
-Meeseeks runs every tool call through a **permission policy** before it executes, and lets you wire **hooks** into session lifecycle events and individual tool calls. Together they give you a security boundary and a clean place to hang automation — notifications, audit logging, webhook fan-out, external guardrails.
+Meeseeks runs every tool call through a **permission policy** before it executes, and lets you wire **hooks** into session lifecycle events and individual tool calls. Together they give you a security boundary and a clean place to hang automation. Think notifications, audit logging, webhook fan-out, and external guardrails.
 
-**Quick example — auto-approve all tool calls in the current session:**
+**Quick example.** Auto-approve all tool calls in the current session:
 
 ```
 /automatic --yes
@@ -28,7 +28,7 @@ Every tool call carries a `tool_id` (which tool it is, e.g. `aider_shell_tool`, 
 |----------|---------|
 | `allow` | Execute without prompting |
 | `deny` | Block unconditionally |
-| `ask` | Prompt the user — on the CLI this is an interactive prompt; in the console it is an approval card |
+| `ask` | Prompt the user. On the CLI this is an interactive prompt; in the console it is an approval card |
 
 Rules are evaluated in order; the first match wins. If no rule matches, Meeseeks falls back to per-operation defaults (`get` → `allow`, `set` → `ask`) and then to a catch-all `default_decision`.
 
@@ -52,7 +52,7 @@ Rules live in a JSON or TOML policy file pointed to by `permissions.policy_path`
 }
 ```
 
-`fnmatch` wildcards are simple: `*` matches any string, `?` matches a single character. Patterns work equally well on MCP tool IDs — `"mcp__*"` matches every MCP-sourced tool, `"mcp__my_server__*"` scopes to one server.
+`fnmatch` wildcards are simple: `*` matches any string, `?` matches a single character. Patterns work equally well on MCP tool IDs. For example, `"mcp__*"` matches every MCP-sourced tool, and `"mcp__my_server__*"` scopes to one server.
 
 ### Approval modes
 
@@ -62,7 +62,7 @@ Rules live in a JSON or TOML policy file pointed to by `permissions.policy_path`
 |-------|---------|--------|
 | `allow` | `auto`, `approve`, `yes` | All tools run without prompting |
 | `deny` | `never`, `no` | All tools are blocked |
-| `ask` (default) | — | Falls through to per-rule decisions |
+| `ask` (default) | _(none)_ | Falls through to per-rule decisions |
 
 ### /automatic (CLI)
 
@@ -104,7 +104,7 @@ Hooks run custom code at specific moments in a session's life. They are declared
 
 #### Command hooks
 
-A command hook runs a shell command. Meeseeks waits up to `timeout` seconds (default 30) for the process to finish before moving on. Use this when you want the hook to complete before the session continues — e.g. prepping a workspace at session start.
+A command hook runs a shell command. Meeseeks waits up to `timeout` seconds (default 30) for the process to finish before moving on. Use this when you want the hook to complete before the session continues, for example when prepping a workspace at session start.
 
 Meeseeks sets these environment variables on the subprocess:
 
@@ -116,7 +116,7 @@ Meeseeks sets these environment variables on the subprocess:
 | `MEESEEKS_OPERATION` | `pre_tool_use`, `post_tool_use` | Operation name |
 | `MEESEEKS_TOOL_RESULT` | `post_tool_use` | First 2 000 characters of the result |
 
-Example — send a desktop notification when a session ends:
+Example. Send a desktop notification when a session ends:
 
 ```json
 "hooks": {
@@ -132,7 +132,7 @@ Example — send a desktop notification when a session ends:
 
 #### HTTP hooks
 
-An HTTP hook posts a JSON body to a URL. HTTP hooks are non-blocking — Meeseeks does not wait for the response, and failures are logged rather than raised. Use this when you want to feed Meeseeks events into a webhook, audit log, or chat integration without slowing the agent down.
+An HTTP hook posts a JSON body to a URL. HTTP hooks are non-blocking. Meeseeks does not wait for the response, and failures are logged rather than raised. Use this when you want to feed Meeseeks events into a webhook, audit log, or chat integration without slowing the agent down.
 
 Payload for `on_session_end`:
 
@@ -155,7 +155,7 @@ Payload for `post_tool_use`:
 }
 ```
 
-Example — notify an external webhook:
+Example. Notify an external webhook:
 
 ```json
 "hooks": {

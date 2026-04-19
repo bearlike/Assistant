@@ -1,6 +1,12 @@
 # Web IDE
 
-Meeseeks can launch a per-session [code-server](https://github.com/coder/code-server) (VS Code in the browser) tied to a session's working directory. This gives you a full IDE alongside the AI — you can review diffs, edit files directly, and run terminals while Meeseeks works in parallel. One container is created per session, started on demand, and automatically stopped after a configurable time-to-live.
+<video controls preload="metadata" poster="../meeseeks-console-01-front.jpg" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
+  <source src="../meeseeks-console-coder-demo-1.mp4" type="video/mp4" />
+  Your browser does not support the video tag.
+</video>
+
+
+Meeseeks can launch a per-session [code-server](https://github.com/coder/code-server) (VS Code in the browser) tied to a session's working directory. This gives you a full IDE alongside the AI. You can review diffs, edit files directly, and run terminals while Meeseeks works in parallel. One container is created per session, started on demand, and automatically stopped after a configurable time-to-live.
 
 ## Enabling
 
@@ -16,7 +22,7 @@ Set `agent.web_ide.enabled` to `true` in `configs/app.json`:
 }
 ```
 
-The Web IDE feature requires MongoDB to persist container state across API restarts. See [Storage Backends](deployment-storage.md) for how to enable the MongoDB driver. In the Docker Compose stack the rest of the plumbing is wired automatically — see [Docker Compose Deployment](deployment-docker.md).
+The Web IDE feature requires MongoDB to persist container state across API restarts. See [Storage Backends](deployment-storage.md) for how to enable the MongoDB driver. In the Docker Compose stack the rest of the plumbing is wired automatically. See [Docker Compose Deployment](deployment-docker.md).
 
 ## Launching an IDE session
 
@@ -35,7 +41,7 @@ When `agent.web_ide.enabled` is `true`, an **Open in Web IDE** button appears on
 
 The `POST` response includes a one-time `password` field (omitted from `GET` responses). The IDE is reachable at `/ide/{session_id}/` behind the built-in nginx proxy.
 
-**Example — create an IDE session:**
+**Example.** Create an IDE session:
 
 ```bash
 curl -sk -X POST https://meeseeks.example.com/api/sessions/abc123.../ide \
@@ -91,7 +97,7 @@ All keys are nested under `agent.web_ide` in `configs/app.json`.
 | `network` | `meeseeks-ide` | Docker network the containers join. |
 | `state_dir` | `/tmp/meeseeks-ide` | Host directory used for bookkeeping files. |
 
-**Example — restrict resources and pin the image:**
+**Example.** Restrict resources and pin the image:
 
 ```json
 {

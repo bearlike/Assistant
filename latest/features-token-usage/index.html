@@ -1220,7 +1220,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Meeseeks tracks token consumption for every session, splits it between the root agent and any sub-agents it spawns, and surfaces the numbers in the web console, the CLI, and the REST API. Prompt caching — which slashes the per-turn cost of re-sending system prompts and tool schemas — auto-enables for capable providers (Anthropic, OpenAI, Bedrock) with no configuration.</p>
+    <p>Meeseeks tracks token consumption for every session, splits it between the root agent and any sub-agents it spawns, and surfaces the numbers in the web console, the CLI, and the REST API. Prompt caching slashes the per-turn cost of re-sending system prompts and tool schemas. It auto-enables for capable providers (Anthropic, OpenAI, Bedrock) with no configuration.</p>
 <hr />
 <h2 id="the-context-window-bar-console">The context window bar (console)</h2>
 <p>The context window bar sits in the console navbar and in each session's detail header. It shows how full the root agent's context window is right now.</p>
@@ -1371,7 +1371,7 @@ X-Api-Key: &lt;your-token&gt;
 <tbody>
 <tr>
 <td><code>root_last_input_tokens</code></td>
-<td>Most recent root prompt size — drives the context bar fill</td>
+<td>Most recent root prompt size. Drives the context bar fill.</td>
 </tr>
 <tr>
 <td><code>root_utilization</code></td>
@@ -1417,7 +1417,7 @@ X-Api-Key: &lt;your-token&gt;
 </table></div>
 <hr />
 <h2 id="cli-usage-display">CLI usage display</h2>
-<p><code>/tokens</code> and <code>/budget</code> are aliases — they print the same budget table for the current session:</p>
+<p><code>/tokens</code> and <code>/budget</code> are aliases. They print the same budget table for the current session:</p>
 <div class="codehilite"><pre><span></span><code>/tokens
 </code></pre></div>
 <div class="codehilite"><pre><span></span><code>Token Budget
@@ -1436,7 +1436,7 @@ X-Api-Key: &lt;your-token&gt;
 <p>These values use the provider-reported input token count from the most recent LLM response when available, falling back to a local estimate for sessions that have not yet made a call.</p>
 <hr />
 <h2 id="prompt-caching">Prompt caching</h2>
-<p>Meeseeks auto-enables provider prompt caching when the model reports it supports caching. No configuration is required — if you are on a supported model, caching is already on.</p>
+<p>Meeseeks auto-enables provider prompt caching when the model reports it supports caching. No configuration is required. If you are on a supported model, caching is already on.</p>
 <h3 id="supported-providers">Supported providers</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1464,9 +1464,9 @@ X-Api-Key: &lt;your-token&gt;
 </tr>
 </tbody>
 </table></div>
-<p>The per-provider syntax differences are handled transparently — you interact with one consistent usage API regardless of which provider is behind it.</p>
+<p>The per-provider syntax differences are handled transparently. You interact with one consistent usage API regardless of which provider is behind it.</p>
 <h3 id="proxy-models">Proxy models</h3>
-<p>When using a proxy (<code>llm.api_base</code> is set), the proxy must advertise model capabilities for caching to activate — see the architecture page for details. If the proxy does not report caching support, Meeseeks conservatively leaves caching disabled for that model rather than risk malformed requests.</p>
+<p>When using a proxy (<code>llm.api_base</code> is set), the proxy must advertise model capabilities for caching to activate. See the architecture page for details. If the proxy does not report caching support, Meeseeks conservatively leaves caching disabled for that model rather than risk malformed requests.</p>
 <h3 id="seeing-cache-savings">Seeing cache savings</h3>
 <p>Cache savings appear immediately in the per-turn chip as <strong>cache read</strong> tokens. Accumulated session savings are visible in the context window bar popover under <strong>Cache reads</strong> (with a tooltip noting the per-provider billing rate). The <code>/api/sessions/{id}/usage</code> endpoint surfaces <code>total_cache_read_tokens</code> for programmatic access.</p>
 <hr />

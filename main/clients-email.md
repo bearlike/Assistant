@@ -8,12 +8,12 @@ Meeseeks can be reached via email. Send a message to the configured mailbox and 
 
 ## How it works
 
-Meeseeks checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel — session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.
+Meeseeks checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel. Session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.
 
 ## Access control
 
 - **`allowed_senders`**: Only emails from listed addresses are processed. All others are silently ignored and marked as read. This is the primary gate.
-- **1-to-1 emails** (single recipient): Always processed — no mention keyword needed.
+- **1-to-1 emails** (single recipient): Always processed. No mention keyword needed.
 - **Multi-party threads** (multiple To/Cc recipients): The agent only responds when `@Meeseeks` appears in the message body.
 
 ## Session model
@@ -27,7 +27,7 @@ Replies from the agent include proper `In-Reply-To` and `References` headers so 
 
 ## Slash commands
 
-All channel commands work in email — send the command as the email body:
+All channel commands work in email. Send the command as the email body:
 
 | Command | Description |
 |---------|-------------|
@@ -84,8 +84,8 @@ The HTML uses inline CSS for compatibility with Gmail, Outlook, and Apple Mail.
 ## Limitations
 
 - **Attachments**: Inbound email attachments are not yet processed (file metadata is ignored).
-- **Rate limiting**: There is no built-in rate limit on the poller — the `allowed_senders` list is the primary access control.
-- **Polling latency**: The poller checks the mailbox on the interval you configure. Latency is bounded by `poll_interval_seconds` — IMAP IDLE push is not yet supported.
+- **Rate limiting**: There is no built-in rate limit on the poller. The `allowed_senders` list is the primary access control.
+- **Polling latency**: The poller checks the mailbox on the interval you configure. Latency is bounded by `poll_interval_seconds`. IMAP IDLE push is not yet supported.
 
 > [!NOTE] How it works internally
 > See [Architecture Overview → Channel adapters](core-orchestration.md#channel-adapters).

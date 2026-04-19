@@ -40,8 +40,8 @@ Fix: Check `GET /api/tools` (API) or `/mcp` (CLI) to see what tools are actually
 Causes:
 
 - `configs/mcp.json` path doesn't match the container mount (Docker: paths must be identical between host and container).
-- Project `.mcp.json` not merged — CWD not set correctly in the request.
-- Key name mismatch: both `mcpServers` and `servers` are accepted — verify the key in your config file.
+- Project `.mcp.json` not merged. CWD not set correctly in the request.
+- Key name mismatch: both `mcpServers` and `servers` are accepted. Verify the key in your config file.
 
 Fix: Run `/mcp` in the CLI to see which servers are loaded. Verify the config path with the `--config` flag.
 
@@ -62,7 +62,7 @@ Fix: Verify the project directory is mounted at the exact same path as on the ho
 
 Checks:
 
-1. Both services use host networking — verify nothing else is on ports 5125 or 3001.
+1. Both services use host networking. Verify nothing else is on ports 5125 or 3001.
 2. `HOST_UID` and `HOST_GID` must match your actual user: run `id` to find them.
 3. Volume paths must match exactly between host and container.
 4. Check logs: `docker compose logs -f meeseeks-api`.
@@ -73,7 +73,7 @@ Checks:
 
 Notes:
 
-- Meeseeks uses a natural-completion loop — it runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.
+- Meeseeks uses a natural-completion loop. It runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.
 - Budget warnings are injected as messages as the context window fills up.
 - If a session appears stuck, use mid-session steering:
 

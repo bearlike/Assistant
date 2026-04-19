@@ -1,6 +1,6 @@
 # MCP Tools
 
-Model Context Protocol (MCP) tools extend Meeseeks with external tool servers. Any MCP-compatible server — file systems, databases, APIs, code execution environments, search engines — can be plugged in via a config file. Tools contributed by MCP servers appear in the tool registry alongside Meeseeks' built-in tools and are available to every session.
+Model Context Protocol (MCP) tools extend Meeseeks with external tool servers. Any MCP-compatible server can be plugged in via a config file. This includes file systems, databases, APIs, code execution environments, and search engines. Tools contributed by MCP servers appear in the tool registry alongside Meeseeks' built-in tools and are available to every session.
 
 > [!TIP] Drop-in compatible with Claude Code and VS Code
 > Meeseeks reads the same `.mcp.json` / `mcp.json` schema, accepting both the `servers` (Meeseeks-native) and `mcpServers` (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same `${VAR}` convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official [Model Context Protocol](https://modelcontextprotocol.io) specification.
@@ -29,27 +29,27 @@ Define the servers you want the assistant to reach through a JSON config. The pr
 }
 ```
 
-`${VAR_NAME}` and `$VAR_NAME` patterns are expanded from the process environment at load time. Both `"servers"` and `"mcpServers"` (Claude Code / VS Code format) are accepted as the top-level key — Meeseeks normalises them to a common shape internally, so you can drop in config files written for other tools.
+`${VAR_NAME}` and `$VAR_NAME` patterns are expanded from the process environment at load time. Both `"servers"` and `"mcpServers"` (Claude Code / VS Code format) are accepted as the top-level key. Meeseeks normalises them to a common shape internally, so you can drop in config files written for other tools.
 
 ## Supported transports
 
 | Transport | Config keys | Use case |
 |-----------|-----------|---------|
 | `streamable_http` | `url`, `headers` | Remote HTTP servers (recommended for persistent services) |
-| `http` | `url`, `headers` | Alias for `streamable_http` — accepted for compatibility |
+| `http` | `url`, `headers` | Alias for `streamable_http`, accepted for compatibility |
 | `stdio` | `command` | Local subprocess (binary on `PATH`) |
 
 ## Tool discovery
 
-At session start, Meeseeks connects to each configured MCP server, fetches its tool schema, and registers those tools in the registry. Connections are persistent — there is no per-request reconnect overhead, and a config change picks up on the next session.
+At session start, Meeseeks connects to each configured MCP server, fetches its tool schema, and registers those tools in the registry. Connections are persistent. There is no per-request reconnect overhead, and a config change picks up on the next session.
 
 ## Choosing which tools a session sees
 
 You can control which MCP tools are bound to a session:
 
-- **Console** — the config menu has a tool selector; pick which MCP tools to enable for the current session.
-- **API** — pass `allowed_tools` in the session create payload or the query body to scope which tools the LLM can call.
-- **CLI** — run `/mcp select` to interactively pick servers and tools.
+- **Console**: the config menu has a tool selector. Pick which MCP tools to enable for the current session.
+- **API**: pass `allowed_tools` in the session create payload or the query body to scope which tools the LLM can call.
+- **CLI**: run `/mcp select` to interactively pick servers and tools.
 
 ## Per-project MCP config
 

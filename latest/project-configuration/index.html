@@ -1220,7 +1220,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>When you start a session, Meeseeks looks for a <code>CLAUDE.md</code> in your project, walks up the directory tree to the git root collecting any parent <code>CLAUDE.md</code> files, and injects them into the assistant's context. Deeper nested <code>CLAUDE.md</code> files (inside sub-packages) are indexed but not injected — the assistant reads them on demand with <code>read_file</code> when work reaches that directory.</p>
+    <p>When you start a session, Meeseeks looks for a <code>CLAUDE.md</code> in your project, walks up the directory tree to the git root collecting any parent <code>CLAUDE.md</code> files, and injects them into the assistant's context. Deeper nested <code>CLAUDE.md</code> files (inside sub-packages) are indexed but not injected. The assistant reads them on demand with <code>read_file</code> when work reaches that directory.</p>
 <p>The same mechanism handles MCP tool configuration, skills, and local overrides.</p>
 <div class="admonition tip">
 <p class="admonition-title">Drop-in compatible with common agent conventions</p>
@@ -1228,7 +1228,7 @@
 </div>
 <hr />
 <h2 id="instruction-file-loading">Instruction file loading</h2>
-<h3 id="upward-pass-content-injected-at-startup">Upward pass — content injected at startup</h3>
+<h3 id="upward-pass-content-injected-at-startup">Upward pass: content injected at startup</h3>
 <p>At session start, Meeseeks walks up from your current working directory to the git root (or the filesystem root if you are not in a repo) and loads every instruction file it finds along the way. The full text of each file is concatenated and injected into the system prompt before the first LLM call. Each source is separated by a heading, so the assistant can tell where a rule came from.</p>
 <div class="table-wrapper"><table>
 <thead>
@@ -1261,8 +1261,8 @@
 </tr>
 </tbody>
 </table></div>
-<p>Lower priority means lower precedence — higher-priority content wins on conflict. If both <code>CLAUDE.md</code> and <code>AGENTS.md</code> exist at the same path, <code>CLAUDE.md</code> takes precedence and <code>AGENTS.md</code> is treated as a fallback.</p>
-<h3 id="downward-pass-context-map-for-on-demand-loading">Downward pass — context map for on-demand loading</h3>
+<p>Lower priority means lower precedence. Higher-priority content wins on conflict. If both <code>CLAUDE.md</code> and <code>AGENTS.md</code> exist at the same path, <code>CLAUDE.md</code> takes precedence and <code>AGENTS.md</code> is treated as a fallback.</p>
+<h3 id="downward-pass-context-map-for-on-demand-loading">Downward pass: context map for on-demand loading</h3>
 <p>Meeseeks also scans <em>down</em> from your working directory to a maximum depth of 5, looking for <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/CLAUDE.md</code> in subdirectories. Critically, the content of these files is <strong>not</strong> injected. Only the file paths are collected and listed in the system prompt, like so:</p>
 <div class="codehilite"><pre><span></span><code># Sub-package instruction files
 
@@ -1279,10 +1279,10 @@ Read them when working on the relevant package.
 <p>Add <code>&lt;!-- meeseeks:noload --&gt;</code> as the very first line of any instruction file to exclude it from both passes. The loader checks the first line before reading the rest of the file.</p>
 <p>Use this for shim files that redirect to another <code>CLAUDE.md</code> (so you do not get duplicate injection):</p>
 <div class="codehilite"><pre><span></span><code>&lt;!-- meeseeks:noload --&gt;
-See ../CLAUDE.md — this file exists only for tool compatibility.
+See ../CLAUDE.md. This file exists only for tool compatibility.
 </code></pre></div>
 <h3 id="git-context">Git context</h3>
-<p>Meeseeks can include git branch and status in the session context, so the assistant knows what branch you are on and what has changed since the last commit. Individual integrations (the CLI, specific skills) opt in to this — it is not always injected.</p>
+<p>Meeseeks can include git branch and status in the session context, so the assistant knows what branch you are on and what has changed since the last commit. Individual integrations (the CLI, specific skills) opt in to this. It is not always injected.</p>
 <hr />
 <h2 id="project-level-mcp-configuration">Project-level MCP configuration</h2>
 <h3 id="config-merge-order">Config merge order</h3>
@@ -1304,12 +1304,12 @@ See ../CLAUDE.md — this file exists only for tool compatibility.
 <tr>
 <td>2</td>
 <td>Global: <code>configs/mcp.json</code> or <code>$MEESEEKS_HOME/mcp.json</code></td>
-<td>—</td>
+<td>Mid</td>
 </tr>
 <tr>
 <td>3</td>
 <td>Subtree <code>.mcp.json</code> files, deepest-first</td>
-<td>—</td>
+<td>Mid-high</td>
 </tr>
 <tr>
 <td>4</td>
@@ -1344,7 +1344,7 @@ See ../CLAUDE.md — this file exists only for tool compatibility.
 <tr>
 <td><code>http_headers</code></td>
 <td><code>headers</code></td>
-<td>—</td>
+<td>Direct rename</td>
 </tr>
 <tr>
 <td><code>transport: "http"</code></td>
@@ -1416,7 +1416,7 @@ See ../CLAUDE.md — this file exists only for tool compatibility.
 <tr>
 <td>Subtree CLAUDE.md index (downward)</td>
 <td>Session start</td>
-<td>Path list only — content loaded on demand via <code>read_file</code></td>
+<td>Path list only. Content loaded on demand via <code>read_file</code></td>
 </tr>
 <tr>
 <td>Skills catalog</td>
@@ -1681,13 +1681,13 @@ See ../CLAUDE.md — this file exists only for tool compatibility.
         <a href="#upward-pass-content-injected-at-startup"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#upward-pass-content-injected-at-startup');">
-            Upward pass — content injected at startup
+            Upward pass: content injected at startup
         </a>
         
         <a href="#downward-pass-context-map-for-on-demand-loading"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#downward-pass-context-map-for-on-demand-loading');">
-            Downward pass — context map for on-demand loading
+            Downward pass: context map for on-demand loading
         </a>
         
         <a href="#noload-marker"

@@ -4,22 +4,22 @@ Running Meeseeks in production means hardening the default Docker Compose setup 
 
 ## Security Checklist
 
-1. **Rotate `MASTER_API_TOKEN`** — the example value is public. Generate a strong random token:
+1. **Rotate `MASTER_API_TOKEN`**. The example value is public. Generate a strong random token:
    ```bash
    openssl rand -hex 32
    ```
    Set it in `docker.env` as both `MASTER_API_TOKEN` and `VITE_API_KEY` (they must match).
 
-2. **Restrict `CORS_ORIGIN`** — the default `*` allows any origin. In production, set it to your actual domain:
+2. **Restrict `CORS_ORIGIN`**. The default `*` allows any origin. In production, set it to your actual domain:
    ```dotenv
    CORS_ORIGIN=https://meeseeks.example.com
    ```
 
-3. **Use TLS** — terminate TLS at a reverse proxy (nginx, Caddy, Traefik). Never expose the API or console ports directly on a public interface.
+3. **Use TLS**. Terminate TLS at a reverse proxy such as nginx, Caddy, or Traefik. Never expose the API or console ports directly on a public interface.
 
-4. **Set `GITHUB_TOKEN` in `docker.env`** — if you mount git repositories, the `10-git-setup.sh` init script uses this to configure `gh CLI` authentication so `git fetch/push/pull` work without prompts.
+4. **Set `GITHUB_TOKEN` in `docker.env`**. If you mount git repositories, the `10-git-setup.sh` init script uses this token to configure `gh CLI` authentication. That lets `git fetch/push/pull` work without prompts.
 
-5. **Change MongoDB credentials** — update `MONGO_INITDB_ROOT_USERNAME` / `MONGO_INITDB_ROOT_PASSWORD` in `docker.env` from their defaults and update `MEESEEKS_MONGODB_URI` to match.
+5. **Change MongoDB credentials**. Update `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD` in `docker.env` from their defaults. Then update `MEESEEKS_MONGODB_URI` to match.
 
 ## TLS with nginx
 
@@ -43,7 +43,7 @@ server {
     ssl_certificate     /path/to/your/server.crt;
     ssl_certificate_key /path/to/your/server.key;
 
-    # Web IDE — WebSocket upgrade + long timeout
+    # Web IDE: WebSocket upgrade + long timeout
     location /ide/ {
         proxy_pass http://127.0.0.1:5126;
         proxy_http_version 1.1;
@@ -64,7 +64,7 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # API — SSE streaming endpoints need no buffering
+    # API: SSE streaming endpoints need no buffering
     location /api/sessions/ {
         proxy_pass http://127.0.0.1:5125;
         proxy_set_header Host $host;
@@ -79,7 +79,7 @@ server {
         proxy_read_timeout 300s;
     }
 
-    # API — all other endpoints
+    # API: all other endpoints
     location /api/ {
         proxy_pass http://127.0.0.1:5125/api/;
         proxy_set_header Host $host;
@@ -145,7 +145,7 @@ docker compose logs -f meeseeks-api
 docker compose ps
 ```
 
-For external monitoring (uptime checks, alerting), probe `GET /api/tools` with your API key — it returns a non-empty list when the API is healthy.
+For external monitoring (uptime checks, alerting), probe `GET /api/tools` with your API key. It returns a non-empty list when the API is healthy.
 
 ## API Token Rotation
 
@@ -161,7 +161,7 @@ To rotate `MASTER_API_TOKEN`:
    docker compose up -d
    ```
 
-The console reads `VITE_API_KEY` from the injected `runtime-config.js` at startup — no image rebuild is needed. Existing browser sessions will get a 401 and prompt for the new key on the next request.
+The console reads `VITE_API_KEY` from the injected `runtime-config.js` at startup. No image rebuild is needed. Existing browser sessions will get a 401 and prompt for the new key on the next request.
 
 ## Resource Limits
 
@@ -177,4 +177,4 @@ services:
           cpus: '2.0'
 ```
 
-The API and console services do not set explicit limits by default — add them in your override file if running on a shared host.
+The API and console services do not set explicit limits by default. Add them in your override file if running on a shared host.

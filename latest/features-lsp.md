@@ -1,6 +1,6 @@
 # LSP Code Intelligence
 
-Meeseeks ships a native Language Server Protocol tool that gives the AI real code intelligence — diagnostics, go-to-definition, find-references, and hover information. Servers are auto-discovered on your `PATH` and start lazily on first use. After every file edit, diagnostics run automatically and land in the AI's context so it sees compile errors and type issues in the same turn it made the change.
+Meeseeks ships a native Language Server Protocol tool that gives the AI real code intelligence. It covers diagnostics, go-to-definition, find-references, and hover information. Servers are auto-discovered on your `PATH` and start lazily on first use. After every file edit, diagnostics run automatically and land in the AI's context. It sees compile errors and type issues in the same turn it made the change.
 
 ## Built-in language servers
 
@@ -24,7 +24,7 @@ Just have the binary on your `PATH`. Servers that are not installed are silently
 
 `line` and `character` are **0-based** (first line = 0, first column = 0).
 
-**Example — ask for diagnostics in a Python file:**
+**Example.** Ask for diagnostics in a Python file:
 
 ```json
 {
@@ -33,7 +33,7 @@ Just have the binary on your `PATH`. Servers that are not installed are silently
 }
 ```
 
-**Example — jump to definition at line 42, column 12:**
+**Example.** Jump to definition at line 42, column 12:
 
 ```json
 {
@@ -114,7 +114,7 @@ Define a custom server under `agent.lsp.servers`. All fields except `command` an
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `command` | Yes | List — binary and arguments (must be on `PATH`). |
+| `command` | Yes | List of binary and arguments (must be on `PATH`). |
 | `extensions` | Yes | List of file extensions this server handles (e.g. `[".py"]`). |
 | `root_markers` | No | Filenames that indicate a workspace root. |
 | `language_id` | No | LSP `languageId` string (defaults to the server's key name). |
@@ -137,7 +137,7 @@ The LSP tool depends on optional packages. Install them with:
 uv sync --extra lsp
 ```
 
-When those dependencies are absent, the LSP tool is silently disabled — no crash, no error on startup.
+When those dependencies are absent, the LSP tool is silently disabled. There is no crash and no error on startup.
 
 ---
 
