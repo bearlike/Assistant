@@ -136,4 +136,5 @@ At the maximum depth, `spawn_agent` is removed from the tool schema entirely, so
 
 ---
 
-> **How it works internally:** See [Architecture Overview → Sub-agents and the hypervisor](core-orchestration.md#sub-agents).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Sub-agents and the hypervisor](core-orchestration.md#sub-agents).

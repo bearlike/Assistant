@@ -39,7 +39,9 @@
     
 
 
-<title>Built-in Tools</title>
+
+
+<title>Built-in Tools - Meeseeks docs</title>
 
 
 
@@ -1278,7 +1280,11 @@
 </table></div>
 <hr />
 <h2 id="read_file">read_file</h2>
-<p><code>read_file</code> reads a local file and returns its content with 1-based line numbers, mirroring <code>cat -n</code> output. Reads are line-windowed: the default window is 2 000 lines, and <code>offset</code> / <code>limit</code> let the session page through arbitrarily large files without exhausting the context window. Meeseeks also deduplicates repeated reads of the same slice so the same content does not consume context twice.</p>
+<p><code>read_file</code> reads a local file and returns its content with 1-based line numbers, mirroring <code>cat -n</code> output. Reads are line-windowed: the default window is 2 000 lines, and <code>offset</code> / <code>limit</code> let the session page through arbitrarily large files without exhausting the context window. Meeseeks also deduplicates repeated reads of the same slice so the same content does not consume context twice. In the web console, every <code>read_file</code> call renders as an expandable card in the session timeline showing the project, file path, and the exact line window the assistant pulled into context.</p>
+<div style="display: flex; justify-content: center;">
+  <img src="../meeseeks-console-file-read-log.jpg" alt="A read_file tool card in the Meeseeks console showing lines 81 through 90 of a 733-line litellm-config.yml with a truncated tag" style="width: 100%; max-width: 720px; height: auto;" />
+</div>
+
 <h3 id="parameters">Parameters</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1398,7 +1404,11 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 </code></pre></div></p>
 <hr />
 <h2 id="aider_shell_tool">aider_shell_tool</h2>
-<p><code>aider_shell_tool</code> runs an arbitrary shell command and returns stdout, stderr, exit code, and wall-clock duration.</p>
+<p><code>aider_shell_tool</code> runs an arbitrary shell command and returns stdout, stderr, exit code, and wall-clock duration. In the web console, every shell call renders as a terminal card in the session timeline with the command, the working directory, and the captured output so you can review exactly what the assistant ran.</p>
+<div style="display: flex; justify-content: center;">
+  <img src="../meeseeks-console-shell-log.jpg" alt="A shell tool card in the Meeseeks console showing a gh release list command with its JSON response and a 348ms duration" style="width: 100%; max-width: 720px; height: auto;" />
+</div>
+
 <h3 id="parameters_1">Parameters</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1523,9 +1533,10 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 <span class="p">}</span>
 </code></pre></div>
 <hr />
-<blockquote>
-<p><strong>How it works internally:</strong> See <a href="../core-orchestration/#built-in-tools">Architecture Overview → Built-in tools</a>.</p>
-</blockquote>
+<div class="admonition note">
+<p class="admonition-title">How it works internally</p>
+<p>See <a href="../core-orchestration/#built-in-tools">Architecture Overview → Built-in tools</a>.</p>
+</div>
   </div>
   
   <script>
@@ -1898,6 +1909,10 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
      
 
 <script src="../javascripts/pygments-theme.js"></script>
+
+     
+
+<script src="../javascripts/search-enhance.js"></script>
 
      
 

@@ -2,7 +2,8 @@
 
 A skill is a small, self-contained instruction file that teaches the assistant a specific way of working — running code review, drafting a changelog, triaging an incident. Each skill lives in its own directory as a `SKILL.md` file (YAML frontmatter plus a markdown body). Meeseeks only pulls the full body of a skill into context when that skill actually activates, so you can keep dozens of skills installed without burning context on skills you aren't using.
 
-> **Drop-in compatible with Claude Code.** Skills follow the [Agent Skills standard](https://docs.claude.com/en/api/agent-skills) (also published as the open [`agentskills.io`](https://agentskills.io) spec). The same directory conventions (`~/.claude/skills/` for user-global, `.claude/skills/` for project-local), the same `SKILL.md` frontmatter, the same `allowed-tools` scoping, and the same `/skill-name` invocation pattern — any skill written for Claude Code works unchanged in Meeseeks.
+> [!TIP] Drop-in compatible with Claude Code
+> Skills follow the [Agent Skills standard](https://docs.claude.com/en/api/agent-skills) (also published as the open [`agentskills.io`](https://agentskills.io) spec). The same directory conventions (`~/.claude/skills/` for user-global, `.claude/skills/` for project-local), the same `SKILL.md` frontmatter, the same `allowed-tools` scoping, and the same `/skill-name` invocation pattern — any skill written for Claude Code works unchanged in Meeseeks.
 
 ---
 
@@ -99,4 +100,5 @@ Meeseeks notices when a `SKILL.md` file changes and picks up the new version aut
 
 ---
 
-> **How it works internally:** See [Architecture Overview → Skill loading](core-orchestration.md#skill-loading).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Skill loading](core-orchestration.md#skill-loading).

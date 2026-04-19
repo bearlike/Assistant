@@ -2,7 +2,8 @@
 
 Model Context Protocol (MCP) tools extend Meeseeks with external tool servers. Any MCP-compatible server — file systems, databases, APIs, code execution environments, search engines — can be plugged in via a config file. Tools contributed by MCP servers appear in the tool registry alongside Meeseeks' built-in tools and are available to every session.
 
-> **Drop-in compatible with Claude Code and VS Code.** Meeseeks reads the same `.mcp.json` / `mcp.json` schema, accepting both the `servers` (Meeseeks-native) and `mcpServers` (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same `${VAR}` convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official [Model Context Protocol](https://modelcontextprotocol.io) specification.
+> [!TIP] Drop-in compatible with Claude Code and VS Code
+> Meeseeks reads the same `.mcp.json` / `mcp.json` schema, accepting both the `servers` (Meeseeks-native) and `mcpServers` (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same `${VAR}` convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official [Model Context Protocol](https://modelcontextprotocol.io) specification.
 
 ## Configuring MCP servers
 
@@ -92,4 +93,5 @@ See also: [Troubleshooting](reference.md) for the general debugging methodology.
 
 ---
 
-> **How it works internally:** See [Architecture Overview → MCP connection pool](core-orchestration.md#mcp).
+> [!NOTE] How it works internally
+> See [Architecture Overview → MCP connection pool](core-orchestration.md#mcp).

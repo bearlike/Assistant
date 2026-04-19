@@ -6,7 +6,8 @@
 
 Plugins extend Meeseeks with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory; they activate automatically at session start without a restart. Plugins are first-class citizens — a plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.
 
-> **Drop-in compatible with [Claude Code plugins](https://docs.claude.com/en/docs/claude-code/plugins).** Meeseeks reads the exact same plugin manifest, directory layout (`.claude-plugin/plugin.json`, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`), and marketplace format that Claude Code uses. The default marketplace is the [official Claude plugins marketplace](https://github.com/anthropics/claude-plugins-official), and any private marketplace that follows the Claude Code marketplace schema works too — point `plugins.marketplaces` at the repo and it loads without translation. Plugins authored for Claude Code work in Meeseeks unchanged.
+> [!TIP] Drop-in compatible with Claude Code plugins
+> Meeseeks reads the exact same [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins) manifest, directory layout (`.claude-plugin/plugin.json`, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`), and marketplace format. The default marketplace is the [official Claude plugins marketplace](https://github.com/anthropics/claude-plugins-official), and any private marketplace that follows the Claude Code marketplace schema works too — point `plugins.marketplaces` at the repo and it loads without translation. Plugins authored for Claude Code work in Meeseeks unchanged.
 
 For setup and installation, see [Getting Started](getting-started.md).
 
@@ -127,4 +128,5 @@ The minimum viable plugin is a directory containing only `.claude-plugin/plugin.
 
 ---
 
-> **How it works internally:** See [Architecture Overview → Plugin loading](core-orchestration.md#plugins).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Plugin loading](core-orchestration.md#plugins).

@@ -112,4 +112,5 @@ The session's project directory is mounted into the container so edits you make 
 
 ---
 
-> **How it works internally:** See [Architecture Overview → Web IDE manager](core-orchestration.md#web-ide).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Web IDE manager](core-orchestration.md#web-ide).

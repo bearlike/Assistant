@@ -141,4 +141,5 @@ When those dependencies are absent, the LSP tool is silently disabled — no cra
 
 ---
 
-> **How it works internally:** See [Architecture Overview → LSP tool](core-orchestration.md#lsp).
+> [!NOTE] How it works internally
+> See [Architecture Overview → LSP tool](core-orchestration.md#lsp).

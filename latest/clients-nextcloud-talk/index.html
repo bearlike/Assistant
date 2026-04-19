@@ -39,7 +39,9 @@
     
 
 
-<title>Nextcloud Talk</title>
+
+
+<title>Nextcloud Talk - Meeseeks docs</title>
 
 
 
@@ -1218,7 +1220,11 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>The Nextcloud Talk integration allows users to interact with Meeseeks directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Meeseeks session visible in the web console and Langfuse traces.</p>
+    <div style="display: flex; justify-content: center;">
+  <img src="../meeseeks-nctalk-01.jpg" alt="Meeseeks replying to an @Meeseeks mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
+</div>
+
+<p>The Nextcloud Talk integration allows users to interact with Meeseeks directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Meeseeks session visible in the web console and Langfuse traces.</p>
 <h2 id="how-it-works">How it works</h2>
 <ol>
 <li>A Nextcloud Talk bot is registered on the server pointing to the Meeseeks API webhook endpoint.</li>
@@ -1357,9 +1363,10 @@ Channel webhook routes registered (platforms: [&#39;nextcloud-talk&#39;])
 <li><strong>DM auto-respond</strong>: the bot requires @mention in all rooms (no automatic DM detection yet).</li>
 <li><strong>Emoji reactions for status</strong>: not yet implemented.</li>
 </ul>
-<blockquote>
-<p><strong>How it works internally:</strong> See <a href="../core-orchestration/#channel-adapters">Architecture Overview → Channel adapters</a>.</p>
-</blockquote>
+<div class="admonition note">
+<p class="admonition-title">How it works internally</p>
+<p>See <a href="../core-orchestration/#channel-adapters">Architecture Overview → Channel adapters</a>.</p>
+</div>
   </div>
   
   <script>
@@ -1704,6 +1711,10 @@ Channel webhook routes registered (platforms: [&#39;nextcloud-talk&#39;])
      
 
 <script src="../javascripts/pygments-theme.js"></script>
+
+     
+
+<script src="../javascripts/search-enhance.js"></script>
 
      
 

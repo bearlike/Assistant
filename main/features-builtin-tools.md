@@ -22,7 +22,11 @@ For setup and installation, see [Getting Started](getting-started.md). For tool 
 
 ## read_file
 
-`read_file` reads a local file and returns its content with 1-based line numbers, mirroring `cat -n` output. Reads are line-windowed: the default window is 2 000 lines, and `offset` / `limit` let the session page through arbitrarily large files without exhausting the context window. Meeseeks also deduplicates repeated reads of the same slice so the same content does not consume context twice.
+`read_file` reads a local file and returns its content with 1-based line numbers, mirroring `cat -n` output. Reads are line-windowed: the default window is 2 000 lines, and `offset` / `limit` let the session page through arbitrarily large files without exhausting the context window. Meeseeks also deduplicates repeated reads of the same slice so the same content does not consume context twice. In the web console, every `read_file` call renders as an expandable card in the session timeline showing the project, file path, and the exact line window the assistant pulled into context.
+
+<div style="display: flex; justify-content: center;">
+  <img src="../meeseeks-console-file-read-log.jpg" alt="A read_file tool card in the Meeseeks console showing lines 81 through 90 of a 733-line litellm-config.yml with a truncated tag" style="width: 100%; max-width: 720px; height: auto;" />
+</div>
 
 ### Parameters
 
@@ -137,7 +141,11 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 
 ## aider_shell_tool
 
-`aider_shell_tool` runs an arbitrary shell command and returns stdout, stderr, exit code, and wall-clock duration.
+`aider_shell_tool` runs an arbitrary shell command and returns stdout, stderr, exit code, and wall-clock duration. In the web console, every shell call renders as a terminal card in the session timeline with the command, the working directory, and the captured output so you can review exactly what the assistant ran.
+
+<div style="display: flex; justify-content: center;">
+  <img src="../meeseeks-console-shell-log.jpg" alt="A shell tool card in the Meeseeks console showing a gh release list command with its JSON response and a 348ms duration" style="width: 100%; max-width: 720px; height: auto;" />
+</div>
 
 ### Parameters
 
@@ -212,4 +220,5 @@ When `agent.edit_tool` is empty (the default), Meeseeks picks the right backend 
 
 ---
 
-> **How it works internally:** See [Architecture Overview → Built-in tools](core-orchestration.md#built-in-tools).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Built-in tools](core-orchestration.md#built-in-tools).

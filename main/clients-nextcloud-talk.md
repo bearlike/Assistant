@@ -1,5 +1,9 @@
 # Nextcloud Talk
 
+<div style="display: flex; justify-content: center;">
+  <img src="../meeseeks-nctalk-01.jpg" alt="Meeseeks replying to an @Meeseeks mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
+</div>
+
 The Nextcloud Talk integration allows users to interact with Meeseeks directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Meeseeks session visible in the web console and Langfuse traces.
 
 ## How it works
@@ -127,4 +131,5 @@ The bot responds with the orchestration result. Subsequent @mentions in the same
 - **DM auto-respond**: the bot requires @mention in all rooms (no automatic DM detection yet).
 - **Emoji reactions for status**: not yet implemented.
 
-> **How it works internally:** See [Architecture Overview → Channel adapters](core-orchestration.md#channel-adapters).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Channel adapters](core-orchestration.md#channel-adapters).

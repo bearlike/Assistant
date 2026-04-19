@@ -26,9 +26,11 @@ MEESEEKS_MONGODB_DATABASE=meeseeks
 
 The MongoDB driver stores all session data in collections within the configured database. Connection settings are read from environment variables, which override anything set in `configs/app.json`.
 
-**Required for:** the [Web IDE](features-web-ide.md) feature, which needs MongoDB to persist container state across API restarts.
+> [!IMPORTANT] Required for the Web IDE
+> The [Web IDE](features-web-ide.md) feature needs MongoDB to persist container state across API restarts. Without MongoDB, the Web IDE button stays disabled.
 
-**Recommended for:** Docker deployments, multi-worker API setups, any environment where you need session data to survive container restarts.
+> [!TIP] Recommended for production
+> Docker deployments, multi-worker API setups, and any environment where session data must survive container restarts should prefer MongoDB over the JSON driver.
 
 ### Adding MongoDB to the Docker Compose Stack
 

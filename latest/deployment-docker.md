@@ -78,7 +78,8 @@ cp docker-compose.override.example.yml docker-compose.override.yml
 # Edit to add your project paths
 ```
 
-**Important:** Mount each project at the **same absolute path** as on the host. `configs/app.json` stores project paths, and they must match inside and outside the container.
+> [!IMPORTANT]
+> Mount each project at the **same absolute path** as on the host. `configs/app.json` stores project paths, and they must match inside and outside the container.
 
 **Example `docker-compose.override.yml`:**
 

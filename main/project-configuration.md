@@ -4,7 +4,8 @@ When you start a session, Meeseeks looks for a `CLAUDE.md` in your project, walk
 
 The same mechanism handles MCP tool configuration, skills, and local overrides.
 
-> **Drop-in compatible with common agent conventions.** Meeseeks reads both the [Claude Code](https://docs.claude.com/en/docs/claude-code/memory) `CLAUDE.md` format and the open [`AGENTS.md`](https://agents.md) convention used by Codex, Aider, and other agent frameworks. MCP servers follow the [Model Context Protocol](https://modelcontextprotocol.io) and accept both `servers` (Meeseeks) and `mcpServers` (Claude Code / VS Code) keys. Skills follow the [Agent Skills](https://docs.claude.com/en/api/agent-skills) standard. If you already use any of these tools, your existing project files work in Meeseeks without modification.
+> [!TIP] Drop-in compatible with common agent conventions
+> Meeseeks reads both the [Claude Code](https://docs.claude.com/en/docs/claude-code/memory) `CLAUDE.md` format and the open [`AGENTS.md`](https://agents.md) convention used by Codex, Aider, and other agent frameworks. MCP servers follow the [Model Context Protocol](https://modelcontextprotocol.io) and accept both `servers` (Meeseeks) and `mcpServers` (Claude Code / VS Code) keys. Skills follow the [Agent Skills](https://docs.claude.com/en/api/agent-skills) standard. If you already use any of these tools, your existing project files work in Meeseeks without modification.
 
 ---
 
@@ -137,4 +138,5 @@ Skills follow the same layered discovery as instruction files. See [Skills](feat
 | MCP tool schemas | Session start | Tool schemas bound to the LLM call |
 | Subtree `.mcp.json` | Per reconnect | Merged into active server set |
 
-> **How it works internally:** See [Architecture Overview → Instruction loading](core-orchestration.md#instruction-loading) and [MCP connection pool](core-orchestration.md#mcp).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Instruction loading](core-orchestration.md#instruction-loading) and [MCP connection pool](core-orchestration.md#mcp).
