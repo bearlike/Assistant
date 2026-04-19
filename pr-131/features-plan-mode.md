@@ -114,4 +114,5 @@ Use `/continue` when partial work succeeded and only the tail failed — a retry
 
 See [configuration.md](configuration.md) for the full `agent` config section.
 
-> **How it works internally:** See [Architecture Overview → Plan mode signals](core-orchestration.md#plan-mode).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Plan mode signals](core-orchestration.md#plan-mode).

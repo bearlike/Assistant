@@ -11,9 +11,7 @@ log = logging.getLogger("mkdocs.hooks.schema_to_md")
 SCHEMA_PATH = Path("configs/app.schema.json")
 OUTPUT_PATH = Path("docs/configuration.md")
 
-_SCHEMA_URL = (
-    "https://github.com/bearlike/Assistant/blob/main/configs/app.schema.json"
-)
+_SCHEMA_URL = "https://github.com/bearlike/Assistant/blob/main/configs/app.schema.json"
 HEADER = f"""\
 <!-- AUTO-GENERATED from configs/app.schema.json — do not edit manually -->
 # Configuration Reference
@@ -29,7 +27,7 @@ See [Get Started](getting-started.md) for the full setup walkthrough.
 def _resolve_ref(ref: str, defs: dict) -> dict:
     """Resolve a $ref like '#/$defs/LLMConfig' to its definition dict."""
     if ref.startswith("#/$defs/"):
-        name = ref[len("#/$defs/"):]
+        name = ref[len("#/$defs/") :]
         return defs.get(name, {})
     return {}
 
@@ -173,10 +171,7 @@ def on_pre_build(**_: object) -> None:
             class_def = _resolve_ref(prop_def["$ref"], defs)
         elif "anyOf" in prop_def:
             # Pick the first non-null ref
-            non_null = [
-                t for t in prop_def["anyOf"]
-                if "$ref" in t and t.get("type") != "null"
-            ]
+            non_null = [t for t in prop_def["anyOf"] if "$ref" in t and t.get("type") != "null"]
             class_def = _resolve_ref(non_null[0]["$ref"], defs) if non_null else {}
         else:
             # Inline definition (e.g. channels, projects) — render a lightweight stub
@@ -185,9 +180,7 @@ def on_pre_build(**_: object) -> None:
             stub_lines = [f"## {inline_title}\n", f"Top-level key: `{key}`\n"]
             if inline_desc:
                 stub_lines.append(f"{inline_desc}\n")
-            stub_lines.append(
-                "_Structure varies by entry. See the schema source for details._\n"
-            )
+            stub_lines.append("_Structure varies by entry. See the schema source for details._\n")
             sections.append("\n".join(stub_lines))
             continue
 

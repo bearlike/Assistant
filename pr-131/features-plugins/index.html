@@ -39,7 +39,9 @@
     
 
 
-<title>Plugins & Marketplace</title>
+
+
+<title>Plugins & Marketplace - Meeseeks docs</title>
 
 
 
@@ -1223,9 +1225,10 @@
 </div>
 
 <p>Plugins extend Meeseeks with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory; they activate automatically at session start without a restart. Plugins are first-class citizens — a plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.</p>
-<blockquote>
-<p><strong>Drop-in compatible with <a href="https://docs.claude.com/en/docs/claude-code/plugins">Claude Code plugins</a>.</strong> Meeseeks reads the exact same plugin manifest, directory layout (<code>.claude-plugin/plugin.json</code>, <code>agents/</code>, <code>skills/</code>, <code>hooks/hooks.json</code>, <code>.mcp.json</code>), and marketplace format that Claude Code uses. The default marketplace is the <a href="https://github.com/anthropics/claude-plugins-official">official Claude plugins marketplace</a>, and any private marketplace that follows the Claude Code marketplace schema works too — point <code>plugins.marketplaces</code> at the repo and it loads without translation. Plugins authored for Claude Code work in Meeseeks unchanged.</p>
-</blockquote>
+<div class="admonition tip">
+<p class="admonition-title">Drop-in compatible with Claude Code plugins</p>
+<p>Meeseeks reads the exact same <a href="https://docs.claude.com/en/docs/claude-code/plugins">Claude Code plugin</a> manifest, directory layout (<code>.claude-plugin/plugin.json</code>, <code>agents/</code>, <code>skills/</code>, <code>hooks/hooks.json</code>, <code>.mcp.json</code>), and marketplace format. The default marketplace is the <a href="https://github.com/anthropics/claude-plugins-official">official Claude plugins marketplace</a>, and any private marketplace that follows the Claude Code marketplace schema works too — point <code>plugins.marketplaces</code> at the repo and it loads without translation. Plugins authored for Claude Code work in Meeseeks unchanged.</p>
+</div>
 <p>For setup and installation, see <a href="../getting-started/">Getting Started</a>.</p>
 <hr />
 <h2 id="what-a-plugin-can-add">What a plugin can add</h2>
@@ -1409,9 +1412,10 @@
 <p>To develop a plugin locally before publishing it to a marketplace, place the plugin directory anywhere on disk and point <code>plugins.registry_paths</code> at a custom <code>installed_plugins.json</code> that references it. Alternatively, use the CLI install flow with a <code>./relative-path</code> source in a local <code>marketplace.json</code>.</p>
 <p>The minimum viable plugin is a directory containing only <code>.claude-plugin/plugin.json</code>. Everything else (<code>skills/</code>, <code>agents/</code>, <code>hooks/</code>, <code>.mcp.json</code>) is optional and discovered automatically.</p>
 <hr />
-<blockquote>
-<p><strong>How it works internally:</strong> See <a href="../core-orchestration/#plugins">Architecture Overview → Plugin loading</a>.</p>
-</blockquote>
+<div class="admonition note">
+<p class="admonition-title">How it works internally</p>
+<p>See <a href="../core-orchestration/#plugins">Architecture Overview → Plugin loading</a>.</p>
+</div>
   </div>
   
   <script>
@@ -1742,6 +1746,10 @@
      
 
 <script src="../javascripts/pygments-theme.js"></script>
+
+     
+
+<script src="../javascripts/search-enhance.js"></script>
 
      
 

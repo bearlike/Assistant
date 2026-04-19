@@ -244,4 +244,5 @@ Each entry in a hooks list accepts:
 
 See [configuration.md](configuration.md) for the full config schema.
 
-> **How it works internally:** See [Architecture Overview → Permission policy](core-orchestration.md#permission-policy) and [Hook manager](core-orchestration.md#hook-manager).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Permission policy](core-orchestration.md#permission-policy) and [Hook manager](core-orchestration.md#hook-manager).

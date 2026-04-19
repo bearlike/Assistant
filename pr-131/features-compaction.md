@@ -124,4 +124,5 @@ Each compaction appears as a distinct pill in the web console timeline. The cont
 
 See [configuration.md](configuration.md#tokenbudgetconfig) for the full schema.
 
-> **How it works internally:** See [Architecture Overview → Compaction pipeline](core-orchestration.md#compaction).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Compaction pipeline](core-orchestration.md#compaction).

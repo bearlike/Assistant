@@ -39,7 +39,9 @@
     
 
 
-<title>External Tools (MCP)</title>
+
+
+<title>External Tools (MCP) - Meeseeks docs</title>
 
 
 
@@ -1219,9 +1221,10 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <p>Model Context Protocol (MCP) tools extend Meeseeks with external tool servers. Any MCP-compatible server — file systems, databases, APIs, code execution environments, search engines — can be plugged in via a config file. Tools contributed by MCP servers appear in the tool registry alongside Meeseeks' built-in tools and are available to every session.</p>
-<blockquote>
-<p><strong>Drop-in compatible with Claude Code and VS Code.</strong> Meeseeks reads the same <code>.mcp.json</code> / <code>mcp.json</code> schema, accepting both the <code>servers</code> (Meeseeks-native) and <code>mcpServers</code> (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same <code>${VAR}</code> convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official <a href="https://modelcontextprotocol.io">Model Context Protocol</a> specification.</p>
-</blockquote>
+<div class="admonition tip">
+<p class="admonition-title">Drop-in compatible with Claude Code and VS Code</p>
+<p>Meeseeks reads the same <code>.mcp.json</code> / <code>mcp.json</code> schema, accepting both the <code>servers</code> (Meeseeks-native) and <code>mcpServers</code> (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same <code>${VAR}</code> convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official <a href="https://modelcontextprotocol.io">Model Context Protocol</a> specification.</p>
+</div>
 <h2 id="configuring-mcp-servers">Configuring MCP servers</h2>
 <p>Define the servers you want the assistant to reach through a JSON config. The primary file is <code>configs/mcp.json</code> at the repo root (or <code>$MEESEEKS_HOME/mcp.json</code> for a global install).</p>
 <p><strong>Example <code>configs/mcp.json</code>:</strong></p>
@@ -1325,9 +1328,10 @@
 </table></div>
 <p>See also: <a href="../reference/">Troubleshooting</a> for the general debugging methodology.</p>
 <hr />
-<blockquote>
-<p><strong>How it works internally:</strong> See <a href="../core-orchestration/#mcp">Architecture Overview → MCP connection pool</a>.</p>
-</blockquote>
+<div class="admonition note">
+<p class="admonition-title">How it works internally</p>
+<p>See <a href="../core-orchestration/#mcp">Architecture Overview → MCP connection pool</a>.</p>
+</div>
   </div>
   
   <script>
@@ -1658,6 +1662,10 @@
      
 
 <script src="../javascripts/pygments-theme.js"></script>
+
+     
+
+<script src="../javascripts/search-enhance.js"></script>
 
      
 

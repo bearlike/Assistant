@@ -187,4 +187,5 @@ Cache savings appear immediately in the per-turn chip as **cache read** tokens. 
 
 See [configuration.md](configuration.md#tokenbudgetconfig) for the full schema.
 
-> **How it works internally:** See [Architecture Overview → Token tracking](core-orchestration.md#token-tracking).
+> [!NOTE] How it works internally
+> See [Architecture Overview → Token tracking](core-orchestration.md#token-tracking).

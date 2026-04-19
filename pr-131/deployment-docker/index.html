@@ -39,7 +39,9 @@
     
 
 
-<title>Docker Compose</title>
+
+
+<title>Docker Compose - Meeseeks docs</title>
 
 
 
@@ -1396,7 +1398,10 @@ HOST_UID=1000                            # output of `id -u`
 <div class="codehilite"><pre><span></span><code>cp<span class="w"> </span>docker-compose.override.example.yml<span class="w"> </span>docker-compose.override.yml
 <span class="c1"># Edit to add your project paths</span>
 </code></pre></div>
-<p><strong>Important:</strong> Mount each project at the <strong>same absolute path</strong> as on the host. <code>configs/app.json</code> stores project paths, and they must match inside and outside the container.</p>
+<div class="admonition important">
+<p class="admonition-title">Important</p>
+<p>Mount each project at the <strong>same absolute path</strong> as on the host. <code>configs/app.json</code> stores project paths, and they must match inside and outside the container.</p>
+</div>
 <p><strong>Example <code>docker-compose.override.yml</code>:</strong></p>
 <div class="codehilite"><pre><span></span><code><span class="nt">services</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">api</span><span class="p">:</span>
@@ -1799,6 +1804,10 @@ HOST_UID=1000                            # output of `id -u`
      
 
 <script src="../javascripts/pygments-theme.js"></script>
+
+     
+
+<script src="../javascripts/search-enhance.js"></script>
 
      
 
