@@ -16,6 +16,7 @@ import jinja2
 
 from mewbo_core.common import get_logger
 from mewbo_core.config import get_config
+from mewbo_core.worktree import WorktreeManager, slugify_branch
 
 logging = get_logger(name="core.project_store")
 
@@ -26,7 +27,13 @@ def _utc_now() -> str:
 
 @dataclass
 class VirtualProject:
-    """A virtual project workspace with metadata and filesystem path."""
+    """A virtual project workspace with metadata and filesystem path.
+
+    A worktree is modeled as a child ``VirtualProject`` with ``is_worktree=True``
+    and ``parent_project_id``/``branch`` populated. Its ``project_id`` follows
+    the deterministic format ``wt:<parent_id>:<slugified-branch>`` so that the
+    same branch always resolves to the same record.
+    """
 
     project_id: str
     name: str
@@ -36,6 +43,15 @@ class VirtualProject:
     path: str
     path_source: str = "auto"  # "auto" | "provided"
     folder_created: bool = True
+    # Worktree extension (None for regular managed projects).
+    parent_project_id: str | None = None
+    branch: str | None = None
+    is_worktree: bool = False
+
+
+def worktree_project_id(parent_project_id: str, branch: str) -> str:
+    """Deterministic project_id for a worktree row."""
+    return f"wt:{parent_project_id}:{slugify_branch(branch)}"
 
 
 def _render_claude_md(name: str, description: str) -> str:
@@ -83,6 +99,66 @@ class ProjectStoreBase(abc.ABC):
     def delete_project(self, project_id: str) -> None:
         """Delete a project by ID."""
 
+    # ------------------------------------------------------------------
+    # Worktree-specific helpers (default implementations on top of CRUD).
+    # ------------------------------------------------------------------
+
+    def list_worktrees(self, parent_project_id: str) -> list[VirtualProject]:
+        """List worktree rows for *parent_project_id*."""
+        return [
+            p
+            for p in self.list_projects()
+            if p.is_worktree and p.parent_project_id == parent_project_id
+        ]
+
+    def create_worktree(self, parent_project_id: str, branch: str) -> VirtualProject:
+        """Create a worktree-backed VirtualProject for *branch* under *parent*.
+
+        Idempotent: if the deterministic worktree project_id already exists,
+        returns the existing record (after verifying its path still exists).
+        """
+        parent = self.get_project(parent_project_id)
+        if parent is None:
+            raise KeyError(f"Parent project {parent_project_id} not found")
+
+        wt_id = worktree_project_id(parent_project_id, branch)
+        existing = self.get_project(wt_id)
+        if existing is not None and Path(existing.path).exists():
+            return existing
+        if existing is not None:
+            # Stale record — drop and recreate.
+            self.delete_project(wt_id)
+
+        path = WorktreeManager.create(parent.path, branch)
+        return self._persist_worktree(
+            project_id=wt_id,
+            parent_project_id=parent_project_id,
+            branch=branch,
+            path=path,
+        )
+
+    def delete_worktree(self, project_id: str, *, force: bool = False) -> None:
+        """Remove the git worktree and the persisted record.
+
+        Raises ``RuntimeError`` if the worktree is dirty and ``force`` is False.
+        """
+        proj = self.get_project(project_id)
+        if proj is None or not proj.is_worktree:
+            raise KeyError(f"Worktree {project_id} not found")
+        WorktreeManager.remove(proj.path, force=force)
+        self.delete_project(project_id)
+
+    @abc.abstractmethod
+    def _persist_worktree(
+        self,
+        *,
+        project_id: str,
+        parent_project_id: str,
+        branch: str,
+        path: str,
+    ) -> VirtualProject:
+        """Persist a worktree row. Backend-specific."""
+
 
 class JsonProjectStore(ProjectStoreBase):
     """JSON file-backed project store."""
@@ -118,6 +194,9 @@ class JsonProjectStore(ProjectStoreBase):
             path=d["path"],
             path_source=d.get("path_source", "auto"),
             folder_created=d.get("folder_created", True),
+            parent_project_id=d.get("parent_project_id"),
+            branch=d.get("branch"),
+            is_worktree=d.get("is_worktree", False),
         )
 
     def create_project(  # noqa: D102
@@ -141,6 +220,34 @@ class JsonProjectStore(ProjectStoreBase):
             path=str(p),
             path_source=path_source,
             folder_created=folder_created,
+        )
+        with self._lock:
+            records = self._load()
+            records.append(asdict(proj))
+            self._save(records)
+        return proj
+
+    def _persist_worktree(  # noqa: D102
+        self,
+        *,
+        project_id: str,
+        parent_project_id: str,
+        branch: str,
+        path: str,
+    ) -> VirtualProject:
+        now = _utc_now()
+        proj = VirtualProject(
+            project_id=project_id,
+            name=branch,
+            description=f"Worktree on branch '{branch}'",
+            created_at=now,
+            updated_at=now,
+            path=path,
+            path_source="auto",
+            folder_created=True,
+            parent_project_id=parent_project_id,
+            branch=branch,
+            is_worktree=True,
         )
         with self._lock:
             records = self._load()
@@ -180,7 +287,11 @@ class JsonProjectStore(ProjectStoreBase):
             records = self._load()
             remaining = [d for d in records if d["project_id"] != project_id]
             deleted = [d for d in records if d["project_id"] == project_id]
-            if deleted and deleted[0].get("path_source", "auto") == "auto":
+            if (
+                deleted
+                and deleted[0].get("path_source", "auto") == "auto"
+                and not deleted[0].get("is_worktree", False)
+            ):
                 p = Path(deleted[0]["path"])
                 if p.exists():
                     p.rename(str(p) + ".deleted")
@@ -209,6 +320,9 @@ class MongoProjectStore(ProjectStoreBase):
             path=d["path"],
             path_source=d.get("path_source", "auto"),
             folder_created=d.get("folder_created", True),
+            parent_project_id=d.get("parent_project_id"),
+            branch=d.get("branch"),
+            is_worktree=d.get("is_worktree", False),
         )
 
     def create_project(  # noqa: D102
@@ -263,11 +377,40 @@ class MongoProjectStore(ProjectStoreBase):
 
     def delete_project(self, project_id: str) -> None:  # noqa: D102
         d = self._col.find_one({"project_id": project_id}, {"_id": 0})
-        if d and d.get("path_source", "auto") == "auto":
+        if (
+            d
+            and d.get("path_source", "auto") == "auto"
+            and not d.get("is_worktree", False)
+        ):
             p = Path(d["path"])
             if p.exists():
                 p.rename(str(p) + ".deleted")
         self._col.delete_one({"project_id": project_id})
+
+    def _persist_worktree(  # noqa: D102
+        self,
+        *,
+        project_id: str,
+        parent_project_id: str,
+        branch: str,
+        path: str,
+    ) -> VirtualProject:
+        now = _utc_now()
+        doc: dict[str, Any] = {
+            "project_id": project_id,
+            "name": branch,
+            "description": f"Worktree on branch '{branch}'",
+            "created_at": now,
+            "updated_at": now,
+            "path": path,
+            "path_source": "auto",
+            "folder_created": True,
+            "parent_project_id": parent_project_id,
+            "branch": branch,
+            "is_worktree": True,
+        }
+        self._col.insert_one(doc)
+        return self._to_project(doc)
 
 
 def create_project_store() -> ProjectStoreBase:

@@ -12,10 +12,18 @@ import subprocess
 import time
 import uuid
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from flask import Flask, Response, request, stream_with_context
 from flask_restx import Api, Resource, fields
+from mewbo_core.attachments import (
+    is_image,
+    is_supported,
+    model_supports_vision,
+    parse_to_markdown,
+    parsed_sidecar_path,
+)
 from mewbo_core.classes import TaskQueue
 from mewbo_core.common import get_logger
 from mewbo_core.config import (
@@ -38,6 +46,7 @@ from mewbo_core.session_runtime import SessionRuntime, parse_core_command
 from mewbo_core.session_store import SessionStoreBase, create_session_store
 from mewbo_core.share_store import ShareStore
 from mewbo_core.tool_registry import ToolSpec, load_registry
+from mewbo_core.worktree import WorktreeManager
 from pydantic import ValidationError
 from werkzeug.utils import secure_filename
 
@@ -217,6 +226,46 @@ _hook_manager = _HookManager.load_from_config(_config.hooks)
 app = Flask(__name__)
 session_store = create_session_store()
 project_store = create_project_store()
+
+
+def _auto_cleanup_worktree_on_session_end(session_id: str, error: str | None) -> None:
+    """Auto-remove a worktree-backed session's worktree if it is clean.
+
+    Mirrors the Claude Code default: when a worktree-bound session ends and
+    leaves no uncommitted changes / unpushed commits behind, drop the
+    worktree. Otherwise keep it so the user can resume or recover work.
+
+    Failures are swallowed — this is best-effort housekeeping, never blocking.
+    """
+    try:
+        events = session_store.load_transcript(session_id)
+    except Exception:
+        return
+    project_name: str | None = None
+    for evt in events:
+        if evt.get("type") != "context":
+            continue
+        payload = evt.get("payload") or {}
+        candidate = payload.get("project")
+        if isinstance(candidate, str) and candidate:
+            project_name = candidate
+    if not project_name or not project_name.startswith("managed:"):
+        return
+    vpid = project_name[len("managed:") :]
+    proj = project_store.get_project(vpid)
+    if proj is None or not proj.is_worktree:
+        return
+    try:
+        if WorktreeManager.is_clean(proj.path):
+            project_store.delete_worktree(vpid)
+    except Exception:
+        # Never let auto-cleanup raise from the hook chain.
+        pass
+
+
+_hook_manager.on_session_end.append(_auto_cleanup_worktree_on_session_end)
+
+
 runtime = SessionRuntime(session_store=session_store)
 notification_store = NotificationStore(root_dir=session_store.root_dir)
 share_store = ShareStore(root_dir=session_store.root_dir)
@@ -427,6 +476,29 @@ def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | No
     return None
 
 
+def _populate_worktree_context(project_name: str, context_payload: dict) -> None:
+    """If *project_name* refers to a managed worktree, set ``repo``/``branch``.
+
+    No-op for config-defined or non-worktree managed projects. Mutates
+    ``context_payload`` in place.
+    """
+    if not project_name.startswith("managed:"):
+        return
+    vpid = project_name[len("managed:") :]
+    proj = project_store.get_project(vpid)
+    if proj is None or not proj.is_worktree:
+        return
+    parent = (
+        project_store.get_project(proj.parent_project_id)
+        if proj.parent_project_id
+        else None
+    )
+    if proj.branch:
+        context_payload.setdefault("branch", proj.branch)
+    if parent is not None:
+        context_payload.setdefault("repo", parent.name)
+
+
 def _resolve_project_cwd(request_data: dict[str, object]) -> str | None:
     """Resolve a project from the request to its filesystem path.
 
@@ -527,11 +599,19 @@ class Models(Resource):
         try:
             models = get_config().llm.list_models()
         except ValueError:
-            return {
-                "models": [default_model] if default_model != "unknown" else [],
-                "default": default_model,
-            }, 200
-        return {"models": models, "default": default_model}, 200
+            models = [default_model] if default_model != "unknown" else []
+        # Per-model capability map. Frontend uses ``supports_vision`` to
+        # gate image attachments at file-selection time (Q5 option B
+        # complement — backend still rejects on upload as a safety net).
+        capabilities = {
+            name: {"supports_vision": bool(model_supports_vision(name))}
+            for name in models
+        }
+        return {
+            "models": models,
+            "default": default_model,
+            "capabilities": capabilities,
+        }, 200
 
 
 @ns.route("/projects")
@@ -556,7 +636,7 @@ class Projects(Resource):
             for name, cfg in get_config().projects.items()
             if cfg.path
         ]
-        # Managed (virtual) projects
+        # Managed (virtual) projects (includes worktrees as child entries).
         for vp in project_store.list_projects():
             result.append(
                 {
@@ -566,6 +646,9 @@ class Projects(Resource):
                     "description": vp.description,
                     "available": os.path.isdir(vp.path),
                     "source": "managed",
+                    "is_worktree": vp.is_worktree,
+                    "parent_project_id": vp.parent_project_id,
+                    "branch": vp.branch,
                 }
             )
         return {"projects": result}, 200
@@ -576,6 +659,9 @@ def _vproject_to_dict(p: VirtualProject) -> dict:
         "project_id": p.project_id,
         "name": p.name,
         "description": p.description,
+        "parent_project_id": p.parent_project_id,
+        "branch": p.branch,
+        "is_worktree": p.is_worktree,
         "path": p.path,
         "path_source": p.path_source,
         "folder_created": p.folder_created,
@@ -647,6 +733,306 @@ class VirtualProject_(Resource):
         return {}, 204
 
 
+# ---------------------------------------------------------------------------
+# Worktree routes
+#
+# A worktree is a child VirtualProject (is_worktree=True) bound to a single
+# branch. Identity is deterministic: project_id == "wt:<parent_id>:<slug>".
+# These endpoints accept either a managed VirtualProject UUID or a configured
+# project name (from ``configs/app.json``). Configured projects are auto-
+# promoted to a managed VirtualProject on first worktree creation so the
+# existing worktree machinery can take over.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _RepoTarget:
+    """Resolved view of a project that the worktree routes can operate on."""
+
+    project_id: str | None  # managed UUID, or promoted UUID once created
+    name: str
+    path: str
+    source: str  # "managed" | "config"
+
+
+def _find_promoted_for_path(path: str) -> VirtualProject | None:
+    """Return the managed VirtualProject promoted from this config path, if any.
+
+    Auto-promotion picks the first non-worktree managed project whose
+    ``path_source == "provided"`` and whose ``path`` matches. Multiple
+    matches are unexpected — first wins, deterministic.
+    """
+    target = os.path.realpath(path)
+    for vp in project_store.list_projects():
+        if vp.is_worktree:
+            continue
+        if vp.path_source != "provided":
+            continue
+        try:
+            if os.path.realpath(vp.path) == target:
+                return vp
+        except OSError:
+            continue
+    return None
+
+
+def _promote_config_project(name: str, path: str, description: str) -> VirtualProject:
+    """Create a managed VirtualProject pointing at the existing config path.
+
+    Idempotent: if a managed project already maps to the same path, returns
+    that one unchanged. The promoted project becomes the parent of any
+    worktrees the user creates.
+    """
+    existing = _find_promoted_for_path(path)
+    if existing is not None:
+        return existing
+    return project_store.create_project(name=name, description=description, path=path)
+
+
+def _resolve_repo_or_404(
+    project_key: str, *, promote: bool = False
+) -> tuple[_RepoTarget | None, tuple[dict, int] | None]:
+    """Resolve a managed UUID OR a configured project name to a repo target.
+
+    When ``promote=True`` and the key is a config-defined project, ensures a
+    managed VirtualProject exists for the path so worktree creation can
+    proceed. Returns a ``(target, None)`` on success or ``(None, response)``
+    on error.
+    """
+    proj = project_store.get_project(project_key)
+    if proj is not None:
+        if proj.is_worktree:
+            return None, ({"message": "Cannot manage worktrees of a worktree."}, 400)
+        return _RepoTarget(
+            project_id=proj.project_id,
+            name=proj.name,
+            path=proj.path,
+            source="managed",
+        ), None
+
+    cfg_projects = get_config().projects
+    cfg = cfg_projects.get(project_key)
+    if cfg is None or not cfg.path:
+        return None, ({"message": f"Project '{project_key}' not found"}, 404)
+
+    if not promote:
+        return _RepoTarget(
+            project_id=None,
+            name=project_key,
+            path=cfg.path,
+            source="config",
+        ), None
+
+    promoted = _promote_config_project(
+        name=project_key, path=cfg.path, description=cfg.description or ""
+    )
+    return _RepoTarget(
+        project_id=promoted.project_id,
+        name=promoted.name,
+        path=promoted.path,
+        source="managed",
+    ), None
+
+
+def _is_git_repo(path: str) -> bool:
+    """Return ``True`` if *path* is a git working tree.
+
+    Worktrees and submodules use a ``.git`` *file* (a gitlink), so we accept
+    both a directory and a regular file at that location.
+    """
+    if not os.path.isdir(path):
+        return False
+    return os.path.exists(os.path.join(path, ".git"))
+
+
+@ns.route("/v_projects/<string:project_id>/branches")
+class VirtualProjectBranches(Resource):
+    """List git branches and the current HEAD for a project's repository."""
+
+    @api.doc(security="apikey")
+    def get(self, project_id: str) -> tuple[dict, int]:
+        """Return ``{branches, current_branch, git_repo}`` for the repository.
+
+        ``current_branch`` is ``null`` when HEAD is detached or the
+        repository check fails. Accepts both managed UUIDs and configured
+        project names (e.g. ``"Assistant"``).
+        """
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        target, err = _resolve_repo_or_404(project_id)
+        if err:
+            return err
+        assert target is not None
+        if not os.path.isdir(target.path):
+            return {
+                "branches": [],
+                "current_branch": None,
+                "git_repo": False,
+                "reason": "missing_path",
+            }, 200
+        if not _is_git_repo(target.path):
+            return {
+                "branches": [],
+                "current_branch": None,
+                "git_repo": False,
+                "reason": "not_git",
+            }, 200
+        return {
+            "branches": WorktreeManager.list_branches(target.path),
+            "current_branch": WorktreeManager.current_branch(target.path),
+            "git_repo": True,
+        }, 200
+
+
+def _merged_worktree_listing(target: _RepoTarget) -> list[dict]:
+    """Merge managed VirtualProject worktrees with on-disk git worktrees.
+
+    Each entry carries a ``managed`` flag — managed worktrees expose their
+    ``project_id`` so callers can pin them to sessions; user-created ones
+    only carry ``branch`` and ``path`` until adopted (``managed: false``).
+    The parent repo's own working tree is intentionally excluded; it is the
+    parent, not a sibling.
+    """
+    entries: list[dict] = []
+    seen_paths: set[str] = set()
+
+    parent_path_real = os.path.realpath(target.path)
+
+    if target.project_id and target.source == "managed":
+        for wt in project_store.list_worktrees(target.project_id):
+            entry = _vproject_to_dict(wt)
+            entry["clean"] = WorktreeManager.is_clean(wt.path)
+            entry["managed"] = True
+            entry["parent_path"] = target.path
+            entries.append(entry)
+            try:
+                seen_paths.add(os.path.realpath(wt.path))
+            except OSError:
+                seen_paths.add(wt.path)
+
+    if _is_git_repo(target.path):
+        for wt in WorktreeManager.list_worktrees(target.path):
+            wt_path = wt.get("path", "")
+            if not wt_path:
+                continue
+            try:
+                real = os.path.realpath(wt_path)
+            except OSError:
+                real = wt_path
+            if real == parent_path_real or real in seen_paths:
+                continue
+            seen_paths.add(real)
+            entries.append(
+                {
+                    "project_id": None,
+                    "name": wt.get("branch") or os.path.basename(wt_path),
+                    "branch": wt.get("branch") or None,
+                    "path": wt_path,
+                    "head": wt.get("head") or None,
+                    "managed": False,
+                    "is_worktree": True,
+                    "parent_project_id": target.project_id,
+                    "parent_path": target.path,
+                    "clean": WorktreeManager.is_clean(wt_path),
+                }
+            )
+    return entries
+
+
+@ns.route("/v_projects/<string:project_id>/worktrees")
+class VirtualProjectWorktrees(Resource):
+    """List or create worktrees for a managed or configured project."""
+
+    @api.doc(security="apikey")
+    def get(self, project_id: str) -> tuple[dict, int]:
+        """List worktrees for the repository.
+
+        Returns the union of app-managed worktrees (created via this API)
+        and user-created on-disk worktrees produced by ``git worktree add``.
+        Each entry's ``managed`` flag tells the caller which is which.
+        """
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        target, err = _resolve_repo_or_404(project_id)
+        if err:
+            return err
+        assert target is not None
+        return {"worktrees": _merged_worktree_listing(target)}, 200
+
+    @api.doc(security="apikey")
+    def post(self, project_id: str) -> tuple[dict, int]:
+        """Create a worktree for an existing branch.
+
+        Body: ``{"branch": "<branch-name>"}``. Configured projects are
+        auto-promoted to a managed VirtualProject so the worktree has a
+        stable parent identity.
+        """
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        payload = request.get_json(silent=True) or {}
+        branch = str(payload.get("branch", "")).strip()
+        if not branch:
+            return {"message": "Invalid input: 'branch' is required"}, 400
+        target, err = _resolve_repo_or_404(project_id, promote=True)
+        if err:
+            return err
+        assert target is not None and target.project_id is not None
+        if not _is_git_repo(target.path):
+            return {
+                "message": (
+                    f"Project '{target.name}' is not a git repository — "
+                    "worktrees require a git working tree."
+                )
+            }, 400
+        try:
+            wt = project_store.create_worktree(target.project_id, branch)
+        except ValueError as exc:
+            return {"message": str(exc)}, 400
+        except FileExistsError as exc:
+            return {"message": str(exc)}, 409
+        except RuntimeError as exc:
+            return {"message": str(exc)}, 400
+        return _vproject_to_dict(wt), 201
+
+
+@ns.route("/v_projects/<string:project_id>/worktrees/<string:worktree_id>")
+class VirtualProjectWorktree(Resource):
+    """Manage a single worktree."""
+
+    @api.doc(security="apikey")
+    def delete(self, project_id: str, worktree_id: str) -> tuple[dict, int]:
+        """Remove a managed worktree. Refuses if dirty unless ``?force=true``.
+
+        User-created worktrees (those with no managed VirtualProject backing)
+        are out of scope — the user owns them and should manage them with
+        ``git worktree remove`` directly.
+        """
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        force = _parse_bool(request.args.get("force"))
+        wt = project_store.get_project(worktree_id)
+        if wt is None or not wt.is_worktree:
+            return {"message": f"Worktree '{worktree_id}' not found"}, 404
+        # Allow either the managed parent UUID or a configured project name
+        # whose promoted parent matches the worktree's parent_project_id.
+        owns = wt.parent_project_id == project_id
+        if not owns:
+            target, err = _resolve_repo_or_404(project_id)
+            if err is None and target is not None:
+                owns = target.project_id == wt.parent_project_id
+        if not owns:
+            return {"message": "Worktree does not belong to this project."}, 400
+        try:
+            project_store.delete_worktree(worktree_id, force=force)
+        except RuntimeError as exc:
+            return {"message": str(exc)}, 409
+        return {}, 204
+
+
 @ns.route("/sessions")
 class Sessions(Resource):
     """List and create sessions."""
@@ -696,6 +1082,7 @@ class Sessions(Resource):
                 if isinstance(ctx, dict):
                     project_name = ctx.get("project", "")
             context_payload["project"] = project_name
+            _populate_worktree_context(project_name, context_payload)
         if "model" not in context_payload:
             context_payload["model"] = get_config_value("llm", "default_model", default="unknown")
         if context_payload:
@@ -1273,6 +1660,37 @@ class SessionAttachments(Resource):
             files = [request.files["file"]]
         if not files:
             return {"message": "No files uploaded."}, 400
+        # Optional model hint from the client — when present we reject
+        # image uploads against non-vision models eagerly so the user
+        # gets a 400 instead of a silent skip at inference time.
+        model_hint = (
+            request.form.get("model")
+            or request.args.get("model")
+            or None
+        )
+        has_vision = model_supports_vision(model_hint) if model_hint else True
+
+        # Pre-flight: reject any unsupported file outright (Q5 option B).
+        # Better to fail loudly here than to store junk that the loader
+        # will silently skip later.
+        for item in files:
+            if not item or not item.filename:
+                continue
+            if not is_supported(item.mimetype or "", item.filename):
+                return {
+                    "message": (
+                        f"Unsupported file type: {item.filename} "
+                        f"({item.mimetype or 'unknown'})."
+                    )
+                }, 400
+            if model_hint and is_image(item.mimetype or "") and not has_vision:
+                return {
+                    "message": (
+                        f"Model {model_hint!r} does not support image inputs. "
+                        f"Remove {item.filename} or switch to a vision-capable model."
+                    )
+                }, 400
+
         attachments_dir = os.path.join(
             runtime.session_store.root_dir,
             session_id,
@@ -1289,14 +1707,33 @@ class SessionAttachments(Resource):
             path = os.path.join(attachments_dir, stored_name)
             item.save(path)
             size_bytes = os.path.getsize(path)
+            content_type = item.mimetype or ""
+
+            # Parse documents to Markdown at upload time (Q1). Cache the
+            # result alongside the raw file as ``<stored>.md`` so the
+            # context loader never re-parses on the hot path.
+            parsed = False
+            if not is_image(content_type):
+                md_text = parse_to_markdown(path)
+                if md_text:
+                    try:
+                        with open(parsed_sidecar_path(path), "w", encoding="utf-8") as fh:
+                            fh.write(md_text)
+                        parsed = True
+                    except OSError as exc:
+                        logging.warning(
+                            "failed to write parsed sidecar for %s: %s", path, exc
+                        )
+
             saved.append(
                 {
                     "id": attachment_id,
                     "filename": item.filename,
                     "stored_name": stored_name,
-                    "content_type": item.mimetype,
+                    "content_type": content_type,
                     "size_bytes": size_bytes,
                     "uploaded_at": _utc_now(),
+                    "parsed": parsed,
                 }
             )
         if not saved:

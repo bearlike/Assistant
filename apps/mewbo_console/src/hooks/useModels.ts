@@ -8,6 +8,7 @@ export function useModels() {
   return {
     models: q.data?.models ?? [],
     defaultModel: q.data?.default ?? "",
+    capabilities: q.data?.capabilities ?? {},
     loading: q.isPending,
     error: q.error ? logApiError("listModels", q.error) : null,
     refresh: () => qc.invalidateQueries({ queryKey: ["models"] }),

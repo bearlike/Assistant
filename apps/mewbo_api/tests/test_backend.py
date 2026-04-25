@@ -623,6 +623,92 @@ def test_attachments_upload(monkeypatch, tmp_path):
     assert path.exists()
 
 
+def test_attachments_rejects_unsupported_type(monkeypatch, tmp_path):
+    """Reject upload when the file type is not in the supported set."""
+    _reset_backend(tmp_path, monkeypatch)
+    client = backend.app.test_client()
+    create = client.post(
+        "/api/sessions",
+        headers={"X-API-KEY": backend.MASTER_API_TOKEN},
+        json={},
+    )
+    session_id = create.get_json()["session_id"]
+    # Filename + mime both indicate an executable — must be rejected.
+    response = client.post(
+        f"/api/sessions/{session_id}/attachments",
+        headers={"X-API-KEY": backend.MASTER_API_TOKEN},
+        data={"file": (io.BytesIO(b"binary"), "evil.exe", "application/x-msdownload")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert "Unsupported" in response.get_json()["message"]
+
+
+def test_attachments_rejects_image_on_non_vision_model(monkeypatch, tmp_path):
+    """Reject image uploads when the named model lacks vision support."""
+    _reset_backend(tmp_path, monkeypatch)
+    # Force the helper to report no vision so the test is hermetic — we
+    # don't depend on LiteLLM's catalogue knowing a specific model name.
+    monkeypatch.setattr(backend, "model_supports_vision", lambda _name: False)
+    client = backend.app.test_client()
+    session_id = backend.session_store.create_session()
+    response = client.post(
+        f"/api/sessions/{session_id}/attachments",
+        headers={"X-API-KEY": backend.MASTER_API_TOKEN},
+        data={
+            "model": "text-only-model",
+            "file": (io.BytesIO(b"\x89PNG\r\n\x1a\n"), "pic.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert "vision" in response.get_json()["message"].lower()
+
+
+def test_attachments_parses_text_to_markdown_sidecar(monkeypatch, tmp_path):
+    """Document uploads write a parsed Markdown sidecar next to the raw file."""
+    _reset_backend(tmp_path, monkeypatch)
+    client = backend.app.test_client()
+    session_id = backend.session_store.create_session()
+    response = client.post(
+        f"/api/sessions/{session_id}/attachments",
+        headers={"X-API-KEY": backend.MASTER_API_TOKEN},
+        data={"file": (io.BytesIO(b"# Title\n\nBody"), "doc.md", "text/markdown")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    record = response.get_json()["attachments"][0]
+    assert record["parsed"] is True
+    sidecar = tmp_path / session_id / "attachments" / (record["stored_name"] + ".md")
+    assert sidecar.exists()
+
+
+def test_models_endpoint_exposes_vision_capabilities(monkeypatch, tmp_path):
+    """`/api/models` returns a per-model capability map for the FE."""
+    _reset_backend(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        backend,
+        "model_supports_vision",
+        lambda name: name == "vision-model",
+    )
+    # Pin the model list so the test doesn't depend on user config.
+    class _LLM:
+        def list_models(self):
+            return ["vision-model", "text-only"]
+
+    monkeypatch.setattr(
+        backend, "get_config", lambda: type("C", (), {"llm": _LLM()})()
+    )
+    client = backend.app.test_client()
+    response = client.get(
+        "/api/models", headers={"X-API-KEY": backend.MASTER_API_TOKEN}
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["capabilities"]["vision-model"]["supports_vision"] is True
+    assert body["capabilities"]["text-only"]["supports_vision"] is False
+
+
 def test_attachments_errors(monkeypatch, tmp_path):
     """Return validation errors for attachment uploads."""
     _reset_backend(tmp_path, monkeypatch)

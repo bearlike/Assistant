@@ -13,8 +13,11 @@ import { useProjects } from '../hooks/useProjects';
 import { useModels } from '../hooks/useModels';
 import { useCommands } from '../hooks/useCommands';
 import { useContainerCompact } from '../hooks/useContainerCompact';
+import { useProjectGit } from '../hooks/useProjectGit';
 import { executeCommand } from '../api/client';
 import { parseCommandInput } from '../lib/commands';
+import { FILE_INPUT_ACCEPT, filterAttachments } from '../lib/attachments';
+import { toast } from 'sonner';
 import { ConfigMenu, McpOption, McpStatus } from './ConfigMenu';
 import { CommandPalette } from './CommandPalette';
 import { CommandDialog } from './CommandDialog';
@@ -101,6 +104,13 @@ export function InputBar({
   const [activeSkill, setActiveSkill] = useState<string | null>(sessionContext?.skill ?? null);
   const [activeProject, setActiveProject] = useState<string | null>(sessionContext?.project ?? null);
   const [activeModel, setActiveModel] = useState<string | null>(sessionContext?.model ?? null);
+  // ``activeBranch`` follows the parent repo's HEAD by default; it diverges
+  // only when the user explicitly picks a different branch in the composer.
+  // ``activeWorktree`` is the project_id of a managed worktree to run the
+  // session in (overrides ``activeProject`` on submit). Both are local to
+  // the composer and reset when the project changes.
+  const [activeBranch, setActiveBranch] = useState<string | null>(sessionContext?.branch ?? null);
+  const [activeWorktree, setActiveWorktree] = useState<string | null>(null);
   const pendingMcpToolsRef = useRef<string[] | null>(sessionContext?.mcp_tools ?? null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [queryMode, setQueryMode] = useState<QueryMode>(sessionContext?.mode ?? 'act');
@@ -120,6 +130,7 @@ export function InputBar({
   const {
     models: availableModels,
     defaultModel,
+    capabilities: modelCapabilities,
     loading: modelsLoading,
     error: modelsError,
     refresh: refreshModels,
@@ -130,6 +141,32 @@ export function InputBar({
     error: projectsError,
     refresh: refreshProjects
   } = useProjects();
+  // ``projectForGit`` strips out the worktree's id so the git lookup
+  // always asks about the *parent* repo — picking a worktree as the
+  // session context shouldn't make the picker forget about the other
+  // branches and worktrees on the same parent.
+  const projectForGit = useMemo(() => {
+    if (activeWorktree) {
+      const parent = availableProjects.find(
+        (p) => p.project_id === activeWorktree && p.is_worktree,
+      );
+      if (parent?.parent_project_id) {
+        return `managed:${parent.parent_project_id}`;
+      }
+    }
+    return activeProject;
+  }, [activeProject, activeWorktree, availableProjects]);
+  const projectGit = useProjectGit(projectForGit);
+  // Default-fill ``activeBranch`` with the parent's current HEAD as soon as
+  // the API responds, but only if the user hasn't already made a selection
+  // on this project. Worktree picks set ``activeBranch`` directly.
+  useEffect(() => {
+    if (!projectGit.gitRepo) return;
+    if (activeBranch !== null) return;
+    if (projectGit.currentBranch) {
+      setActiveBranch(projectGit.currentBranch);
+    }
+  }, [projectGit.gitRepo, projectGit.currentBranch, activeBranch]);
   const [mcps, setMcps] = useState<McpToolOption[]>([]);
   const [inputValue, setInputValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -214,7 +251,21 @@ export function InputBar({
     setQueryMode(sessionContext?.mode ?? 'act');
     pendingMcpToolsRef.current = sessionContext?.mcp_tools ?? null;
     setMcps([]);
-  }, [sessionContext?.project, sessionContext?.skill, sessionContext?.model, sessionContext?.mode, sessionContext?.mcp_tools]);
+    setActiveBranch(sessionContext?.branch ?? null);
+    setActiveWorktree(null);
+  }, [sessionContext?.project, sessionContext?.skill, sessionContext?.model, sessionContext?.mode, sessionContext?.mcp_tools, sessionContext?.branch]);
+
+  // If the session context resolves to a managed project that is itself a
+  // worktree, lift its id into ``activeWorktree`` so the composer shows
+  // both the parent (via ``projectForGit``) and the worktree highlighted.
+  useEffect(() => {
+    if (!activeProject || !activeProject.startsWith('managed:')) return;
+    const id = activeProject.slice('managed:'.length);
+    const matched = availableProjects.find((p) => p.project_id === id);
+    if (matched?.is_worktree) {
+      setActiveWorktree((prev) => (prev === id ? prev : id));
+    }
+  }, [activeProject, availableProjects]);
   useEffect(() => {
     setMcps((prev) => {
       if (mcpTools.length === 0) {
@@ -297,7 +348,26 @@ export function InputBar({
   };
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
-    setAttachedFiles(files);
+    // Gate at file-selection time. Same policy as the backend; this just
+    // surfaces the rejection earlier so the user can fix it before
+    // hitting "send" (and the backend re-validates as a safety net).
+    const activeModelName = activeModel || defaultModel || null;
+    const { accepted, rejected } = filterAttachments(files, {
+      model: activeModelName,
+      capabilities: modelCapabilities,
+    });
+    if (rejected.length > 0) {
+      const summary = rejected
+        .map(({ file, reason }) => `${file.name}: ${reason}`)
+        .join('\n');
+      toast.error(
+        rejected.length === 1
+          ? `Attachment rejected — ${rejected[0].file.name}: ${rejected[0].reason}`
+          : `${rejected.length} attachments rejected`,
+        { description: summary }
+      );
+    }
+    setAttachedFiles(accepted);
     setIsPlusMenuOpen(false);
     event.target.value = '';
   };
@@ -331,8 +401,82 @@ export function InputBar({
     setActiveProject(null);
     setActiveSkill(null);
     setActiveModel(null);
+    setActiveBranch(null);
+    setActiveWorktree(null);
     setMcps((prev) => prev.map((m) => (m.enabled ? { ...m, active: false } : m)));
   };
+
+  const handleSelectProject = useCallback((next: string | null) => {
+    setActiveProject(next);
+    // Switching projects must drop branch/worktree picks — they were
+    // anchored to the *old* repo and would otherwise leak into a session
+    // run against a completely different working tree.
+    setActiveBranch(null);
+    setActiveWorktree(null);
+  }, []);
+
+  const handleSelectBranch = useCallback((next: string | null) => {
+    setActiveBranch(next);
+  }, []);
+
+  const handleSelectWorktree = useCallback((next: string | null) => {
+    setActiveWorktree(next);
+  }, []);
+
+  const handleCreateWorktreeFromMenu = useCallback(
+    async (branch: string) => {
+      try {
+        const wt = await projectGit.createWorktreeFor(branch);
+        if (wt.project_id) {
+          setActiveBranch(wt.branch);
+          setActiveWorktree(wt.project_id);
+        }
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : 'Could not create worktree',
+        );
+      }
+    },
+    [projectGit],
+  );
+
+  const handleDeleteWorktreeFromMenu = useCallback(
+    async (worktreeId: string) => {
+      try {
+        await projectGit.deleteWorktreeFor(worktreeId, false);
+        if (activeWorktree === worktreeId) {
+          setActiveWorktree(null);
+          setActiveBranch(projectGit.currentBranch);
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Could not remove worktree';
+        // Dirty worktrees come back as a 409. Offer the destructive path
+        // explicitly rather than silently force-removing — losing local
+        // changes would be a much worse failure mode.
+        if (/uncommitted|dirty|409/i.test(message)) {
+          if (
+            window.confirm(
+              `${message}\n\nForce-remove anyway? Uncommitted or unpushed changes will be lost.`,
+            )
+          ) {
+            try {
+              await projectGit.deleteWorktreeFor(worktreeId, true);
+              if (activeWorktree === worktreeId) {
+                setActiveWorktree(null);
+                setActiveBranch(projectGit.currentBranch);
+              }
+            } catch (err2) {
+              toast.error(err2 instanceof Error ? err2.message : 'Force remove failed');
+            }
+          }
+        } else {
+          toast.error(message);
+        }
+      }
+    },
+    [projectGit, activeWorktree],
+  );
   const handleSubmit = () => {
     if (!inputValue.trim()) {
       return;
@@ -363,10 +507,25 @@ export function InputBar({
     }
     if (isSubmitting || !onSubmit) return;
     const modelToSend = activeModel || defaultModel || undefined;
+    // Worktree wins over project — picking a worktree is an explicit
+    // "run this session in this directory" gesture and must be reflected
+    // verbatim in the session context. The backend's
+    // ``_populate_worktree_context`` derives ``repo`` and ``branch`` from
+    // the worktree id, so we don't double-send those.
+    const projectForContext = activeWorktree
+      ? `managed:${activeWorktree}`
+      : activeProject;
+    const branchForContext =
+      !activeWorktree &&
+      activeBranch &&
+      activeBranch !== projectGit.currentBranch
+        ? activeBranch
+        : null;
     const context: SessionContext = {
       mcp_tools: mcps.filter((m) => m.active).map((m) => m.id),
       ...(activeSkill ? { skill: activeSkill } : {}),
-      ...(activeProject ? { project: activeProject } : {}),
+      ...(projectForContext ? { project: projectForContext } : {}),
+      ...(branchForContext ? { branch: branchForContext } : {}),
       ...(modelToSend ? { model: modelToSend } : {})
     };
     void onSubmit(inputValue.trim(), context, queryMode, attachedFiles);
@@ -453,10 +612,29 @@ export function InputBar({
       onRefreshProjects={refreshProjects}
       onRefreshModels={refreshModels}
       onToggleMcp={toggleMcp}
-      onSelectProject={setActiveProject}
+      onSelectProject={handleSelectProject}
       onSelectSkill={setActiveSkill}
       onSelectModel={setActiveModel}
       onResetAll={handleResetAll}
+      gitRepo={projectGit.gitRepo}
+      branches={projectGit.branches}
+      currentBranch={projectGit.currentBranch}
+      worktrees={projectGit.worktrees}
+      activeBranch={activeBranch}
+      activeWorktree={activeWorktree}
+      gitLoading={projectGit.loading}
+      gitMutating={projectGit.mutating}
+      gitError={projectGit.error}
+      // In-session composer: branches/worktrees are surfaced for context but
+      // can't be changed — switching branches mid-run would re-anchor the
+      // working tree under the agent's feet, and removing worktrees while a
+      // session is bound to one would orphan the run.
+      gitReadOnly={mode === 'detail'}
+      onSelectBranch={handleSelectBranch}
+      onSelectWorktree={handleSelectWorktree}
+      onCreateWorktree={(branch) => void handleCreateWorktreeFromMenu(branch)}
+      onDeleteWorktree={(id) => void handleDeleteWorktreeFromMenu(id)}
+      onRefreshGit={projectGit.refresh}
       isOpen={isConfigOpen}
       onToggleOpen={() => {
         setIsConfigOpen(!isConfigOpen);
@@ -530,6 +708,7 @@ export function InputBar({
             ref={fileInputRef}
             type="file"
             multiple
+            accept={FILE_INPUT_ACCEPT}
             onChange={handleFileChange}
             className="hidden"
             aria-hidden="true"
@@ -590,6 +769,7 @@ export function InputBar({
           ref={fileInputRef}
           type="file"
           multiple
+          accept={FILE_INPUT_ACCEPT}
           onChange={handleFileChange}
           className="hidden"
           aria-hidden="true"

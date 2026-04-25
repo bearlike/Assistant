@@ -23,10 +23,16 @@ export function useVirtualProjects() {
     listProjects()
       .then((all) => {
         if (mounted) {
-          // Filter to managed projects and map to VirtualProject shape
+          // Filter to managed projects and map to VirtualProject shape.
+          // Carry worktree flags through so consumers (ProjectCard, picker)
+          // can branch on them — earlier versions stripped these fields,
+          // which broke worktree detection downstream.
           setProjects(
             all
-              .filter((p): p is typeof p & { project_id: string } => p.source === "managed" && !!p.project_id)
+              .filter(
+                (p): p is typeof p & { project_id: string } =>
+                  p.source === "managed" && !!p.project_id,
+              )
               .map((p) => ({
                 project_id: p.project_id,
                 name: p.name,
@@ -36,7 +42,10 @@ export function useVirtualProjects() {
                 folder_created: true,
                 created_at: "",
                 updated_at: "",
-              }))
+                is_worktree: p.is_worktree ?? false,
+                parent_project_id: p.parent_project_id ?? null,
+                branch: p.branch ?? null,
+              })),
           );
         }
       })
