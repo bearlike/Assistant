@@ -6,8 +6,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from meeseeks_core.agent_context import AgentContext, AgentDepthExceeded
-from meeseeks_core.hypervisor import AgentHandle, AgentHypervisor
+from truss_core.agent_context import AgentContext, AgentDepthExceeded
+from truss_core.hypervisor import AgentHandle, AgentHypervisor
 
 # ---------------------------------------------------------------------------
 # AgentContext
@@ -639,7 +639,7 @@ class TestAgentResultStructure:
     """Ref: [CoA §3.1] Communication Units enable structured inter-agent context."""
 
     def test_agent_result_fields(self):
-        from meeseeks_core.hypervisor import AgentResult
+        from truss_core.hypervisor import AgentResult
 
         result = AgentResult(
             content="Task completed",
@@ -659,7 +659,7 @@ class TestAgentResultStructure:
         import json
         from dataclasses import asdict
 
-        from meeseeks_core.hypervisor import AgentResult
+        from truss_core.hypervisor import AgentResult
 
         result = AgentResult(
             content="output",
@@ -676,7 +676,7 @@ class TestAgentResultStructure:
 
     def test_cannot_solve_status(self):
         """Ref: [Aletheia §3] Explicit failure admission as first-class outcome."""
-        from meeseeks_core.hypervisor import AgentResult
+        from truss_core.hypervisor import AgentResult
 
         result = AgentResult(
             content="Cannot solve: depth exceeded",

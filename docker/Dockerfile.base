@@ -1,15 +1,15 @@
 # syntax=docker/dockerfile:1
 
-# Dockerfile.base — Dev-equipped agent runtime for Meeseeks
+# Dockerfile.base — Dev-equipped agent runtime for Truss
 FROM python:3.11-bookworm
 
 ARG VERSION="0.0.10"
-ARG USERNAME=meeseeks
+ARG USERNAME=truss
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 
-LABEL org.opencontainers.image.title="Meeseeks Base" \
-      org.opencontainers.image.description="Dev-equipped agent runtime for the Meeseeks assistant" \
+LABEL org.opencontainers.image.title="Truss Base" \
+      org.opencontainers.image.description="Dev-equipped agent runtime for the Truss assistant" \
       org.opencontainers.image.source="https://github.com/bearlike/Assistant" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.vendor="Krishnakanth Alagiri" \
@@ -47,19 +47,19 @@ USER root
 RUN ln -sfn "$(ls -d $NVM_DIR/versions/node/*/ | head -1 | sed 's:/$::')" /opt/node
 ENV PATH=/opt/node/bin:$PATH
 
-# ---------- Python: uv + Meeseeks core packages ----------
+# ---------- Python: uv + Truss core packages ----------
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 COPY . /app
 
 RUN uv pip install --system \
-        -e packages/meeseeks_core \
-        -e packages/meeseeks_tools \
+        -e packages/truss_core \
+        -e packages/truss_tools \
     && rm -rf /root/.cache/uv
 
 # ---------- Runtime defaults ----------
-ENV CACHE_DIR='/tmp/meeseeks_cache' \
+ENV CACHE_DIR='/tmp/truss_cache' \
     DEFAULT_MODEL='gpt-5.2' \
     LOG_LEVEL=DEBUG \
     ENVMODE=dev \

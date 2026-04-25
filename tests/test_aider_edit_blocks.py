@@ -5,14 +5,14 @@ from __future__ import annotations
 import textwrap
 
 import pytest
-from meeseeks_core.classes import ActionStep
-from meeseeks_core.errors import ToolInputError
-from meeseeks_tools.aider_bridge import (
+from truss_core.classes import ActionStep
+from truss_core.errors import ToolInputError
+from truss_tools.aider_bridge import (
     EditBlockApplyError,
     apply_search_replace_blocks,
     parse_search_replace_blocks,
 )
-from meeseeks_tools.integration.aider_edit_blocks import (
+from truss_tools.integration.aider_edit_blocks import (
     AiderEditBlockTool,
     _format_tool_input_error,
 )

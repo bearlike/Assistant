@@ -1,7 +1,7 @@
 [project]
-name = "meeseeks-workspace"
+name = "truss-workspace"
 version = "0.0.10"
-description = "Workspace package for the Meeseeks monorepo."
+description = "Workspace package for the Truss monorepo."
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
 authors = [
@@ -10,29 +10,32 @@ authors = [
 license = { text = "MIT" }
 dependencies = [
   "aniso8601>=10.0.1",
-  "meeseeks-core>=0.0.10",
+  "truss-core>=0.0.10",
+  "truss-tools>=0.0.10",
+  "truss-cli>=0.0.10",
 ]
 
 [project.scripts]
-meeseeks = "meeseeks_cli.cli_master:main"
+truss = "truss_cli.cli_master:main"
 
 [project.optional-dependencies]
-cli = ["meeseeks-cli>=0.0.10"]
-api = ["meeseeks-api>=0.0.10"]
-ha = ["meeseeks-ha-conversation>=0.0.10"]
-tools = ["meeseeks-tools>=0.0.10"]
+api = ["truss-api>=0.0.10"]
+ha = ["truss-ha-conversation>=0.0.10"]
 
 [dependency-groups]
 dev = [
+  "altair>=6.1.0",
   "autopep8==2.3.2",
   "flake8==7.3.0",
   "mongomock==4.3.0",
   "mypy==1.19.1",
+  "pandas>=2.3.3",
   "pre-commit==3.8.0",
   "pylint==3.3.9",
   "pytest==8.4.2",
   "pytest-cov==7.1.0",
   "ruff==0.15.8",
+  "streamlit>=1.56.0",
   "types-requests==2.33.0.20260327",
   "vulture==2.16",
 ]
@@ -52,31 +55,31 @@ members = ["packages/*"]
 default-groups = []
 
 [tool.uv.sources]
-meeseeks-core = { workspace = true }
-meeseeks-tools = { workspace = true }
-meeseeks-cli = { path = "apps/meeseeks_cli", editable = true }
-meeseeks-api = { path = "apps/meeseeks_api", editable = true }
-meeseeks-ha-conversation = { path = "meeseeks_ha_conversation", editable = true }
+truss-core = { workspace = true }
+truss-tools = { workspace = true }
+truss-cli = { path = "apps/truss_cli", editable = true }
+truss-api = { path = "apps/truss_api", editable = true }
+truss-ha-conversation = { path = "truss_ha_conversation", editable = true }
 
 [build-system]
 requires = ["hatchling>=1.25.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/meeseeks_workspace"]
+packages = ["src/truss_workspace"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 extend-exclude = [
-  "meeseeks_ha_conversation/translations",
+  "truss_ha_conversation/translations",
   "vendor",
 ]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "I", "UP"]
 fixable = ["ALL"]
-per-file-ignores = { "packages/meeseeks_tools/src/meeseeks_tools/aider_bridge/edit_blocks.py" = ["D"], "vendor/**" = ["D"], "tests/**" = ["D"] }
+per-file-ignores = { "packages/truss_tools/src/truss_tools/aider_bridge/edit_blocks.py" = ["D"], "vendor/**" = ["D"], "tests/**" = ["D"] }
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
@@ -86,11 +89,11 @@ convention = "google"
 
 [tool.mypy]
 files = [
-  "packages/meeseeks_core/src/meeseeks_core/**/*.py",
-  "packages/meeseeks_tools/src/meeseeks_tools/**/*.py",
-  "apps/meeseeks_api/src/meeseeks_api/**/*.py",
-  "apps/meeseeks_cli/src/meeseeks_cli/**/*.py",
-  "meeseeks_ha_conversation/**/*.py",
+  "packages/truss_core/src/truss_core/**/*.py",
+  "packages/truss_tools/src/truss_tools/**/*.py",
+  "apps/truss_api/src/truss_api/**/*.py",
+  "apps/truss_cli/src/truss_cli/**/*.py",
+  "truss_ha_conversation/**/*.py",
 ]
 explicit_package_bases = true
 mypy_path = ["."]
@@ -103,12 +106,12 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 testpaths = [
   "tests",
-  "apps/meeseeks_api/tests",
-  "apps/meeseeks_cli/tests",
+  "apps/truss_api/tests",
+  "apps/truss_cli/tests",
 ]
 
 [tool.coverage.run]
 omit = [
-  "packages/meeseeks_tools/src/meeseeks_tools/vendor/*",
+  "packages/truss_tools/src/truss_tools/vendor/*",
   "vendor/*",
 ]

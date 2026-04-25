@@ -29,10 +29,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv sync --group docs --extra tools --extra ha
+          uv sync --group docs --extra ha
 
       - name: Verify mkdocstrings imports
-        run: .venv/bin/python -c "import meeseeks_core.common; print(meeseeks_core.common.__name__)"
+        run: .venv/bin/python -c "import truss_core.common; print(truss_core.common.__name__)"
 
       - name: Generate build info
         run: |

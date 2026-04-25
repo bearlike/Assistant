@@ -49,33 +49,33 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "release_type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
 
-      - name: Docker meta for meeseeks-base
+      - name: Docker meta for truss-base
         id: meta_base
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/bearlike/meeseeks-base
+          images: ghcr.io/bearlike/truss-base
           tags: |
             type=raw,value=${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
             type=raw,value=latest,enable=${{ steps.extract_version.outputs.release_type == 'latest' }}
             type=raw,value=stable,enable=${{ steps.extract_version.outputs.release_type == 'stable' }}
             type=raw,value=dev,enable=${{ steps.extract_version.outputs.release_type == 'dev' }}
 
-      - name: Docker meta for meeseeks-console
+      - name: Docker meta for truss-console
         id: meta_console
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/bearlike/meeseeks-console
+          images: ghcr.io/bearlike/truss-console
           tags: |
             type=raw,value=${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
             type=raw,value=latest,enable=${{ steps.extract_version.outputs.release_type == 'latest' }}
             type=raw,value=stable,enable=${{ steps.extract_version.outputs.release_type == 'stable' }}
             type=raw,value=dev,enable=${{ steps.extract_version.outputs.release_type == 'dev' }}
 
-      - name: Docker meta for meeseeks-api
+      - name: Docker meta for truss-api
         id: meta_api
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/bearlike/meeseeks-api
+          images: ghcr.io/bearlike/truss-api
           tags: |
             type=raw,value=${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
             type=raw,value=latest,enable=${{ steps.extract_version.outputs.release_type == 'latest' }}
@@ -96,7 +96,7 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push meeseeks-base
+      - name: Build and push truss-base
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -108,7 +108,7 @@ jobs:
           build-args: |
             VERSION=${{ steps.extract_version.outputs.version }}
 
-      - name: Build and push meeseeks-console
+      - name: Build and push truss-console
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -120,7 +120,7 @@ jobs:
           build-args: |
             VERSION=${{ steps.extract_version.outputs.version }}
 
-      - name: Build and push meeseeks-api
+      - name: Build and push truss-api
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -131,4 +131,4 @@ jobs:
           labels: ${{ steps.meta_api.outputs.labels }}
           build-args: |
             VERSION=${{ steps.extract_version.outputs.version }}
-            BASE_IMAGE=ghcr.io/bearlike/meeseeks-base:${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
+            BASE_IMAGE=ghcr.io/bearlike/truss-base:${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}

@@ -1,6 +1,6 @@
 # Sub-agents
 
-Meeseeks can spawn child agents to work on independent subtasks in parallel. The root agent acts as an orchestrator: it delegates bounded work to sub-agents, monitors their progress, collects structured results, and synthesises a final answer. Sub-agents inherit the parent's permission policy, tool registry, and session context, so they can pick up a task and run with it without re-authorising every tool call.
+Truss can spawn child agents to work on independent subtasks in parallel. The root agent acts as an orchestrator: it delegates bounded work to sub-agents, monitors their progress, collects structured results, and synthesises a final answer. Sub-agents inherit the parent's permission policy, tool registry, and session context, so they can pick up a task and run with it without re-authorising every tool call.
 
 For setup and installation, see [Getting Started](getting-started.md).
 
@@ -28,6 +28,8 @@ The root agent spawns sub-agents by calling the `spawn_agent` tool. Pass a task 
 | `denied_tools` | array | No | Tool IDs explicitly blocked for this sub-agent |
 | `acceptance_criteria` | string | No | How to verify the task is complete (appended to the task description) |
 | `agent_type` | string | No | Name of a registered agent definition (e.g. `feature-dev:code-reviewer`); loads a pre-built system prompt, tool scope, and model |
+
+Agent definitions themselves are `.md` files with YAML frontmatter, registered from `~/.claude/agents/`, `.claude/agents/`, and any installed plugin's `agents/` directory. A frontmatter `requires-capabilities` entry gates the definition to sessions that advertise the matching capability — the agent does not appear in the `agent_type` catalog otherwise (see [Plugins & Marketplace → Capability gating](features-plugins.md#capability-gating)). Plugin-contributed agent bodies can reference `${CLAUDE_PLUGIN_ROOT}`, `${SESSION_ID}`, and plugin-specific environment-variable placeholders; these are substituted at spawn time with a single linear `replace` pass — no template engine.
 
 ### Blocking vs. non-blocking
 

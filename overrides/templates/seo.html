@@ -1,12 +1,12 @@
 {% block seo %}
 
-{# Title format: "<page title> - Meeseeks docs". Falls back to just the site
+{# Title format: "<page title> - Truss docs". Falls back to just the site
    name on pages with no title (shouldn't happen, but safe). #}
 {% set _page_title = page.meta.title or page.title %}
 {% if _page_title and _page_title != config.site_name %}
-<title>{{ _page_title }} - Meeseeks docs</title>
+<title>{{ _page_title }} - Truss docs</title>
 {% else %}
-<title>Meeseeks docs</title>
+<title>Truss docs</title>
 {% endif %}
 
 {% if page.meta.description %}

@@ -14,11 +14,11 @@ set -u
 # Named Docker volumes AND bind mounts whose host directory was
 # auto-created by docker mount as root:root even when the container runs
 # as a non-root user.  Fix ownership of writable directories that need it.
-# The meeseeks user has passwordless sudo (see Dockerfile.base).
-# /tmp/meeseeks-ide holds per-session deadline files written by the Web
+# The truss user has passwordless sudo (see Dockerfile.base).
+# /tmp/truss-ide holds per-session deadline files written by the Web
 # IDE feature; it is bind-mounted from the host so docker can expose the
 # same paths to sibling code-server containers.
-for _dir in /tmp/meeseeks /app/data /tmp/meeseeks-ide; do
+for _dir in /tmp/truss /app/data /tmp/truss-ide; do
     if [ -d "$_dir" ] && [ ! -w "$_dir" ]; then
         printf '[entrypoint] Fixing ownership on %s\n' "$_dir"
         sudo chown -R "$(id -u):$(id -g)" "$_dir"
@@ -52,4 +52,4 @@ exec gunicorn \
     --timeout 300 \
     --graceful-timeout 30 \
     --access-logfile - \
-    meeseeks_api.backend:app
+    truss_api.backend:app

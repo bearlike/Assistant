@@ -1,5 +1,5 @@
 site_name: bearlike/Assistant
-site_description: Documentation for Meeseeks — an AI assistant modeled as a conversation state machine with a hierarchical agent hypervisor. Accessible via CLI, web console, REST API, and Home Assistant.
+site_description: Documentation for Truss — an AI assistant modeled as a conversation state machine with a hierarchical agent hypervisor. Accessible via CLI, web console, REST API, and Home Assistant.
 repo_url: https://github.com/bearlike/Assistant
 repo_name: bearlike/Assistant
 site_url: https://thekrishna.in/Assistant/
@@ -44,10 +44,10 @@ plugins:
         python:
           paths:
             - .
-            - packages/meeseeks_core/src
-            - packages/meeseeks_tools/src
-            - apps/meeseeks_api/src
-            - apps/meeseeks_cli/src
+            - packages/truss_core/src
+            - packages/truss_tools/src
+            - apps/truss_api/src
+            - apps/truss_cli/src
           options:
             docstring_style: google
             show_source: true
@@ -88,7 +88,8 @@ nav:
       - Workspace & Execution:
           - Built-in Tools: features-builtin-tools.md
           - Web IDE: features-web-ide.md
-          - Code Intelligence (LSP): features-lsp.md
+          - Widgets: features-widgets.md
+          - Code Intelligence: features-lsp.md
           - External Tools (MCP): features-mcp.md
       - Composition & Delegation:
           - Sub-agents: features-agents.md

@@ -3,9 +3,9 @@
 import sys
 import types
 
-from meeseeks_core import llm as llm_module
-from meeseeks_core.config import LLMConfig, set_config_override
-from meeseeks_core.llm import (
+from truss_core import llm as llm_module
+from truss_core.config import LLMConfig, set_config_override
+from truss_core.llm import (
     build_chat_model,
     model_supports_prompt_caching,
     model_supports_reasoning_effort,

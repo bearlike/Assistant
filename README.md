@@ -1,9 +1,9 @@
 
 <p align="center">
-  <img src="docs/logos/logo-transparent.svg" alt="Meeseeks logo" width="96" />
+  <img src="docs/logos/logo-transparent.svg" alt="Truss logo" width="96" />
 </p>
 
-<h1 align="center">Meeseeks</h1>
+<h1 align="center">Truss</h1>
 <p align="center"><em>An AI assistant modeled as a conversation state machine. A hierarchical agent hypervisor admits, scopes, and terminates parallel sub-agents under explicit lifecycle control.</em></p>
 
 <p align="center">
@@ -13,7 +13,7 @@
     <a href="https://github.com/bearlike/Assistant/actions/workflows/docs.yml"><img alt="Docs" src="https://github.com/bearlike/Assistant/actions/workflows/docs.yml/badge.svg"></a>
     <a href="https://codecov.io/gh/bearlike/Assistant"><img src="https://codecov.io/gh/bearlike/Assistant/graph/badge.svg?token=OJ2YUCIZ2I" alt="Codecov"></a>
     <a href="https://github.com/bearlike/Assistant/releases"><img src="https://img.shields.io/github/v/release/bearlike/Assistant" alt="GitHub Release"></a>
-    <a href="https://github.com/bearlike/Assistant/pkgs/container/meeseeks-api"><img src="https://img.shields.io/badge/ghcr.io-bearlike/meeseeks--api:latest-blue?logo=docker&logoColor=white" alt="Docker Image"></a>
+    <a href="https://github.com/bearlike/Assistant/pkgs/container/truss-api"><img src="https://img.shields.io/badge/ghcr.io-bearlike/truss--api:latest-blue?logo=docker&logoColor=white" alt="Docker Image"></a>
 </p>
 
 
@@ -23,9 +23,9 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
 
 ## Overview
 
-Meeseeks is an AI assistant modeled as a conversation state machine. A top-level session binds an LLM to a filtered tool set via `bind_tools` and advances through a `submitted → running → terminal` lifecycle. Where parallelism is useful, the session issues `spawn_agent`; the hypervisor admits child sessions under a concurrency budget, constrains their tool scope, and resolves them into one of four terminal states — `completed`, `failed`, `cancelled`, or `rejected`. Transcripts are persisted per session, long histories are compacted, and summaries are retained across compactions.
+Truss is an AI assistant modeled as a conversation state machine. A top-level session binds an LLM to a filtered tool set via `bind_tools` and advances through a `submitted → running → terminal` lifecycle. Where parallelism is useful, the session issues `spawn_agent`; the hypervisor admits child sessions under a concurrency budget, constrains their tool scope, and resolves them into one of four terminal states — `completed`, `failed`, `cancelled`, or `rejected`. Transcripts are persisted per session, long histories are compacted, and summaries are retained across compactions. The plugin and skill layers follow the Claude-ecosystem Agent Skills + Plugin standard, and the console renders interactive [stlite (Streamlit-in-WASM) widgets](docs/features-widgets.md) inline in the conversation timeline via the bundled `widget-builder` plugin.
 
-### Meeseeks Console
+### Truss Console
 
 The web console provides a task orchestration frontend backed by the REST API. It supports session management, real-time event polling, tool selection, and execution trace viewing.
 
@@ -35,8 +35,8 @@ The web console provides a task orchestration frontend backed by the REST API. I
         <th>Console landing page</th>
     </tr>
     <tr>
-        <td align="center"><img src="docs/meeseeks-console-02-tasks.jpg" alt="Meeseeks task detail page" height="360px"></td>
-        <td align="center"><img src="docs/meeseeks-console-01-front.jpg" alt="Meeseeks console landing page" height="360px"></td>
+        <td align="center"><img src="docs/truss-console-02-tasks.png" alt="Truss task detail page" height="360px"></td>
+        <td align="center"><img src="docs/truss-console-01-front.png" alt="Truss console landing page" height="360px"></td>
     </tr>
 </table>
 
@@ -48,16 +48,22 @@ The web console provides a task orchestration frontend backed by the REST API. I
         <th>Live diff on every edit</th>
     </tr>
     <tr>
-        <td align="center"><img src="docs/meeseeks-console-03-plan-approval.jpg" alt="Plan approval in the Meeseeks console" height="300px"></td>
-        <td align="center"><img src="docs/meeseeks-console-04-file-edit.jpg" alt="File-edit diff card in the Meeseeks console" height="300px"></td>
+        <td align="center"><img src="docs/truss-console-03-plan-approval.jpg" alt="Plan approval in the Truss console" height="300px"></td>
+        <td align="center"><img src="docs/truss-console-04-file-edit.jpg" alt="File-edit diff card in the Truss console" height="300px"></td>
     </tr>
     <tr>
         <th>Plugin marketplace</th>
         <th>Virtual projects</th>
     </tr>
     <tr>
-        <td align="center"><img src="docs/meeseeks-console-05-plugins.jpg" alt="Plugins page with installed plugins and marketplace listings" height="300px"></td>
-        <td align="center"><img src="docs/meeseeks-console-06-projects.jpg" alt="Projects page showing virtual workspaces shared across sessions" height="300px"></td>
+        <td align="center"><img src="docs/truss-console-05-plugins.png" alt="Plugins page with installed plugins and marketplace listings" height="300px"></td>
+        <td align="center"><img src="docs/truss-console-06-projects.png" alt="Projects page showing virtual workspaces shared across sessions" height="300px"></td>
+    </tr>
+    <tr>
+        <th colspan="2">Widgets inline in chat</th>
+    </tr>
+    <tr>
+        <td colspan="2" align="center"><img src="docs/truss-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Truss Console" width="100%"></td>
     </tr>
 </table>
 
@@ -80,9 +86,10 @@ The web console provides a task orchestration frontend backed by the REST API. I
 
 ### Tooling and integrations
 - (✅) **Tool registry:** Discovers local tools and MCP tools via persistent connection pool with automatic reconnection and config change detection.
-- (✅) **Skills:** Supports the [Agent Skills](https://agentskills.io) open standard. Place `SKILL.md` files in `~/.claude/skills/` or `.claude/skills/` to teach the assistant reusable workflows. Skills can be invoked via `/skill-name` slash commands or auto-activated by the LLM.
+- (✅) **Skills:** Supports the [Agent Skills](https://agentskills.io) open standard. Place `SKILL.md` files in `~/.claude/skills/` or `.claude/skills/` to teach the assistant reusable workflows. Skills can be invoked via `/skill-name` slash commands or auto-activated by the LLM. `requires-capabilities` frontmatter gates a skill to sessions that advertise the matching capability bundle.
 - (✅) **Configurable file editing:** Two built-in edit mechanisms — Aider-style SEARCH/REPLACE blocks and per-file structured patch (`file_path` / `old_string` / `new_string`). Select via `agent.edit_tool` in config, or let the system auto-select based on model identity. Different models perform better with different formats; the choice is transparent to the rest of the stack.
-- (✅) **Plugin system:** Discover, install, and manage plugins from configured marketplaces. Plugins can provide agent definitions, skills, hooks, and MCP tool integrations. Managed via the CLI (`/plugins`), console UI, or REST API.
+- (✅) **Plugin system:** Discover, install, and manage plugins from configured marketplaces, alongside a built-in plugin scan path for first-party bundles. Plugins can provide agent definitions, skills, hooks, MCP tool integrations, and per-agent stateful session tools via the `SessionTool` protocol. `requires-capabilities` frontmatter plus the `X-Truss-Capabilities` request header gate capability bundles to compatible sessions, and `${CLAUDE_PLUGIN_ROOT}` substitution lets plugins reference their own assets by absolute path. Managed via the CLI (`/plugins`), console UI, or REST API.
+- (✅) **Interactive widgets:** Inline [stlite (Streamlit-in-WASM) widgets](docs/features-widgets.md) rendered in the conversation timeline via the bundled `widget-builder` plugin. A sub-agent writes a two-file widget (`app.py` + `data.json`), calls `submit_widget`, and the console mounts the result in a sandboxed Web Worker — no server round-trip, no CORS. Ships with a component library (GitHubRepoCard, SearchResultCard, StockTickerCard) and an AST import-allowlist lint that returns line-numbered feedback to the generating agent.
 - (✅) **Native LSP integration:** Opt-in code intelligence via `lsp_tool` (pygls/lsprotocol). Supports diagnostics, go-to-definition, find-references, and hover. Built-in servers: pyright (Python), typescript-language-server (TS/JS), gopls (Go), rust-analyzer (Rust) — auto-discovered on the PATH. Passive diagnostics inject automatically after file edits. Configure via `agent.lsp` in config.
 - (✅) **Web IDE:** Opt-in per-session code-server containers for browser-based editing, accessible from the console via "Open in Web IDE".
 - (✅) **Local file + shell tools:** Built-in tools for file reads, directory listing, and shell commands (approval-gated).
@@ -121,13 +128,13 @@ The web console provides a task orchestration frontend backed by the REST API. I
 ### Email integration
 
 <p align="center">
-    <img src="docs/meeseeks-email-01.jpg" alt="Meeseeks email thread in Gmail" height="480px">
+    <img src="docs/truss-email-01.jpg" alt="Truss email thread in Gmail" height="480px">
 </p>
 
 ## Installation
 
 <p align="center">
-    <img src="docs/meeseeks-console-banner.gif" alt="Meeseeks console banner" width="100%">
+    <img src="docs/truss-console-banner.gif" alt="Truss console banner" width="100%">
 </p>
 
 User install (core only):
@@ -139,7 +146,7 @@ Optional components:
 ```bash
 uv sync --extra cli   # CLI
 uv sync --extra api   # REST API
-cd apps/meeseeks_console && npm install  # Web console
+cd apps/truss_console && npm install  # Web console
 uv sync --extra ha    # Home Assistant integration
 ```
 
@@ -148,19 +155,19 @@ Developer install (all components + dev/test/docs):
 uv sync --all-extras --all-groups
 ```
 
-Global install (available system-wide as `meeseeks`):
+Global install (available system-wide as `truss`):
 ```bash
 uv tool install .
 # Set up global config:
-mkdir -p ~/.meeseeks
-cp configs/app.json ~/.meeseeks/app.json
-cp configs/mcp.json ~/.meeseeks/mcp.json
-# Or run `meeseeks` and use /init to scaffold example configs
+mkdir -p ~/.truss
+cp configs/app.json ~/.truss/app.json
+cp configs/mcp.json ~/.truss/mcp.json
+# Or run `truss` and use /init to scaffold example configs
 ```
 
-Config discovery priority: `CWD/configs/`, then `$MEESEEKS_HOME/`, then `~/.meeseeks/`. Use `--config /path/to/app.json` for explicit override, or set `MEESEEKS_HOME` in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to permanently point to a custom config directory:
+Config discovery priority: `CWD/configs/`, then `$TRUSS_HOME/`, then `~/.truss/`. Use `--config /path/to/app.json` for explicit override, or set `TRUSS_HOME` in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to permanently point to a custom config directory:
 ```bash
-export MEESEEKS_HOME="/path/to/your/config"
+export TRUSS_HOME="/path/to/your/config"
 ```
 
 ### Docker Compose
@@ -186,13 +193,13 @@ See [docs/index.md](docs/index.md) for the full architecture diagram.
 
 ## Monorepo layout
 
-- `packages/meeseeks_core/`: orchestration loop, schemas, session storage, two-mode compaction, tool registry, hook system, hierarchical instruction discovery, plugin system, agent registry.
-- `packages/meeseeks_tools/`: tool implementations and integrations (including Home Assistant and MCP).
-- `apps/meeseeks_api/`: Flask REST API for programmatic access, plugin management endpoints, Web IDE lifecycle, channel adapters (Nextcloud Talk, Email).
-- `apps/meeseeks_console/`: Web console for task orchestration, plugin management, and Web IDE access.
-- `apps/meeseeks_cli/`: Terminal CLI frontend for interactive sessions.
-- `meeseeks_ha_conversation/`: Home Assistant integration that routes voice to the API.
-- `packages/meeseeks_core/src/meeseeks_core/prompts/`: planner prompts and tool instructions.
+- `packages/truss_core/`: orchestration loop, schemas, session storage, two-mode compaction, tool registry, hook system, hierarchical instruction discovery, plugin system, agent registry.
+- `packages/truss_tools/`: tool implementations and integrations (including Home Assistant and MCP).
+- `apps/truss_api/`: Flask REST API for programmatic access, plugin management endpoints, Web IDE lifecycle, channel adapters (Nextcloud Talk, Email).
+- `apps/truss_console/`: Web console for task orchestration, plugin management, and Web IDE access.
+- `apps/truss_cli/`: Terminal CLI frontend for interactive sessions.
+- `truss_ha_conversation/`: Home Assistant integration that routes voice to the API.
+- `packages/truss_core/src/truss_core/prompts/`: planner prompts and tool instructions.
 
 ## Documentation
 
@@ -208,7 +215,7 @@ If you are just getting started, jump to [Get Started](https://kanth.tech/Assist
 
 ## Contributing
 
-We welcome contributions from the community to improve Meeseeks.
+We welcome contributions from the community to improve Truss.
 
 1. Fork the repository and clone it to your local machine.
 2. Create a new branch for your contribution.

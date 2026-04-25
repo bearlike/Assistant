@@ -4,21 +4,21 @@ from unittest.mock import patch
 
 import mongomock
 import pytest
-from meeseeks_core.session_store import SessionStoreBase
-from meeseeks_core.session_store_mongo import MongoSessionStore
+from truss_core.session_store import SessionStoreBase
+from truss_core.session_store_mongo import MongoSessionStore
 
 
 @pytest.fixture()
 def mongo_store(tmp_path):
     """Create a MongoSessionStore backed by mongomock."""
     with patch(
-        "meeseeks_core.session_store_mongo.MongoClient",
+        "truss_core.session_store_mongo.MongoClient",
         mongomock.MongoClient,
     ):
         store = MongoSessionStore(
             root_dir=str(tmp_path),
             uri="mongodb://localhost:27017",
-            database="test_meeseeks",
+            database="test_truss",
         )
     return store
 

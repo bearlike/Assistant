@@ -5,16 +5,16 @@ from __future__ import annotations
 
 from io import StringIO
 
-from meeseeks_cli.cli_agent_display import (
+from rich.console import Console
+from rich.panel import Panel
+from truss_cli.cli_agent_display import (
     AgentDisplayManager,
     AgentDisplayState,
     _format_elapsed,
 )
-from meeseeks_core.classes import ActionStep
-from meeseeks_core.common import MockSpeaker
-from meeseeks_core.hypervisor import AgentHandle
-from rich.console import Console
-from rich.panel import Panel
+from truss_core.classes import ActionStep
+from truss_core.common import MockSpeaker
+from truss_core.hypervisor import AgentHandle
 
 
 def _render_to_str(mgr: AgentDisplayManager, width: int = 100) -> str:
