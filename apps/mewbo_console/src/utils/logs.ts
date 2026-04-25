@@ -228,6 +228,61 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         } catch { /* not JSON, fall through to shell */ }
       }
 
+      // Agent tool calls from imported sessions → spawn_submit (task) + agent_result (output)
+      if (toolId === "Agent") {
+        const inp = (payload.tool_input as Record<string, unknown>) || {};
+        const description = typeof inp.description === "string" ? inp.description : "";
+        const prompt = typeof inp.prompt === "string" ? inp.prompt : description;
+        const subagentType = typeof inp.subagent_type === "string" ? inp.subagent_type : undefined;
+        const agentModel = typeof inp.model === "string" ? inp.model : undefined;
+        const resultText = typeof result === "string" ? result : "";
+        logs.push({
+          id: `spawn-submit-${idx++}`,
+          type: "spawn_submit",
+          content: "",
+          timestamp: event.ts,
+          spawnTask: prompt,
+          spawnAgentType: subagentType,
+          spawnModel: agentModel,
+          spawnChildId: "",
+          spawnAllowedTools: [],
+          spawnDeniedTools: [],
+          spawnExtras: [],
+          spawnMessage: "",
+        });
+        if (resultText) {
+          logs.push({
+            id: `agent-result-${idx++}`,
+            type: "agent_result",
+            content: "",
+            timestamp: event.ts,
+            agentResultStatus: success ? "completed" : "failed",
+            stepsUsed: 0,
+            summary: truncate(resultText, 300),
+          });
+        }
+        continue;
+      }
+
+      // Read tool calls from imported sessions → file_read card
+      if (toolId === "Read") {
+        const inp = (payload.tool_input as Record<string, unknown>) || {};
+        const filePath = typeof inp.file_path === "string" ? inp.file_path : "";
+        if (filePath) {
+          logs.push({
+            id: `file-read-${idx++}`,
+            type: "file_read",
+            content: "",
+            timestamp: event.ts,
+            fileReadPath: filePath,
+            fileReadText: typeof result === "string" ? result : "",
+            agentId: eventAgentId,
+            model: eventModel,
+          });
+          continue;
+        }
+      }
+
       // steer_agent → render as a chat line ("<root → agent-xxxxxx>").
       // The result is always a short string ("Message sent.", "Agent xxx
       // cancelled.", or "ERROR: ..."), so no JSON parse needed.
@@ -315,12 +370,16 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         const filePath = typeof inp?.file_path === "string" ? inp.file_path : "";
         if (filePath) {
           const oldStr = typeof inp?.old_string === "string" ? inp.old_string : "";
-          const newStr = typeof inp?.new_string === "string" ? inp.new_string : "";
+          const newStr = typeof inp?.new_string === "string" ? inp.new_string :
+                         (typeof inp?.content === "string" ? inp.content : "");
           let diffText = "";
           if (oldStr || newStr) {
-            const oldLines = oldStr ? oldStr.split("\n").map((l: string) => `-${l}`).join("\n") : "";
-            const newLines = newStr ? newStr.split("\n").map((l: string) => `+${l}`).join("\n") : "";
-            diffText = `--- ${filePath}\n+++ ${filePath}\n@@ edit @@\n${[oldLines, newLines].filter(Boolean).join("\n")}`;
+            const oldSplit = oldStr ? oldStr.split("\n") : [];
+            const newSplit = newStr ? newStr.split("\n") : [];
+            const oldLines = oldSplit.map((l: string) => `-${l}`).join("\n");
+            const newLines = newSplit.map((l: string) => `+${l}`).join("\n");
+            const hunkHeader = `@@ -1,${oldSplit.length} +1,${newSplit.length} @@`;
+            diffText = `--- ${filePath}\n+++ ${filePath}\n${hunkHeader}\n${[oldLines, newLines].filter(Boolean).join("\n")}`;
           }
           const errorMsg = typeof payload.error === "string" ? payload.error : "";
           logs.push({

@@ -2,11 +2,7 @@
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
-                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
+            {{ "lucide:x" | iconify(height="18px") | safe }}
         </button>
         {% include "templates/sidebar.html" %}
     </div>
