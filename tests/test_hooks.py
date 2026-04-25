@@ -5,17 +5,17 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from meeseeks_core.classes import ActionStep
-from meeseeks_core.common import MockSpeaker
-from meeseeks_core.config import HookEntry, HooksConfig
-from meeseeks_core.hooks import (
+from mewbo_core.classes import ActionStep
+from mewbo_core.common import MockSpeaker
+from mewbo_core.config import HookEntry, HooksConfig
+from mewbo_core.hooks import (
     HookManager,
     _hook_env,
     _make_command_hook,
     _make_post_tool_hook,
     _matches,
 )
-from meeseeks_core.permissions import PermissionDecision
+from mewbo_core.permissions import PermissionDecision
 
 
 def _step(tool_id: str = "test_tool") -> ActionStep:
@@ -236,28 +236,28 @@ class TestHookEnvVars:
     def test_hook_env_includes_tool_id(self):
         step = _step("shell_run")
         env = _hook_env(step)
-        assert env["MEESEEKS_TOOL_ID"] == "shell_run"
+        assert env["MEWBO_TOOL_ID"] == "shell_run"
 
     def test_hook_env_includes_operation(self):
         step = ActionStep(tool_id="read_file", operation="get", tool_input="")
         env = _hook_env(step)
-        assert env["MEESEEKS_OPERATION"] == "get"
+        assert env["MEWBO_OPERATION"] == "get"
 
     def test_hook_env_includes_result_content(self):
         step = _step("tool_a")
         env = _hook_env(step, result_content="some output")
-        assert env["MEESEEKS_TOOL_RESULT"] == "some output"
+        assert env["MEWBO_TOOL_RESULT"] == "some output"
 
     def test_hook_env_truncates_long_result(self):
         step = _step("tool_b")
         long_content = "x" * 5000
         env = _hook_env(step, result_content=long_content)
-        assert len(env["MEESEEKS_TOOL_RESULT"]) == 2000
+        assert len(env["MEWBO_TOOL_RESULT"]) == 2000
 
     def test_hook_env_no_result_key_when_none(self):
         step = _step("tool_c")
         env = _hook_env(step)
-        assert "MEESEEKS_TOOL_RESULT" not in env
+        assert "MEWBO_TOOL_RESULT" not in env
 
     def test_hook_env_inherits_os_environ(self, monkeypatch):
         monkeypatch.setenv("MY_CUSTOM_VAR", "hello")
@@ -273,23 +273,23 @@ class TestCommandHookPassesEnv:
         entry = HookEntry(command="echo test", matcher=None, timeout=5)
         hook = _make_command_hook(entry)
         step = ActionStep(tool_id="my_tool", operation="set", tool_input="data")
-        with patch("meeseeks_core.hooks.subprocess.run") as mock_run:
+        with patch("mewbo_core.hooks.subprocess.run") as mock_run:
             hook(step)
             mock_run.assert_called_once()
             call_kwargs = mock_run.call_args
             passed_env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
-            assert passed_env["MEESEEKS_TOOL_ID"] == "my_tool"
-            assert passed_env["MEESEEKS_OPERATION"] == "set"
+            assert passed_env["MEWBO_TOOL_ID"] == "my_tool"
+            assert passed_env["MEWBO_OPERATION"] == "set"
 
     def test_post_tool_hook_passes_result_env(self):
         entry = HookEntry(command="echo done", matcher=None, timeout=5)
         hook = _make_post_tool_hook(entry)
         step = _step("shell_tool")
         result = MockSpeaker(content="output data")
-        with patch("meeseeks_core.hooks.subprocess.run") as mock_run:
+        with patch("mewbo_core.hooks.subprocess.run") as mock_run:
             hook(step, result)
             mock_run.assert_called_once()
             call_kwargs = mock_run.call_args
             passed_env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
-            assert passed_env["MEESEEKS_TOOL_ID"] == "shell_tool"
-            assert passed_env["MEESEEKS_TOOL_RESULT"] == "output data"
+            assert passed_env["MEWBO_TOOL_ID"] == "shell_tool"
+            assert passed_env["MEWBO_TOOL_RESULT"] == "output data"

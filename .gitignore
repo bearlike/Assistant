@@ -154,13 +154,13 @@ venv.bak/
 dmypy.json
 
 # Local runtime sessions
-apps/meeseeks_cli/data/
+apps/mewbo_cli/data/
 
 # Local config files (MCP/tool manifests, secrets)
 **/app.json
 **/*config.json
-!apps/meeseeks_console/tsconfig.json
-!apps/meeseeks_console/tsconfig.node.json
+!apps/mewbo_console/tsconfig.json
+!apps/mewbo_console/tsconfig.node.json
 configs/*.toml
 configs/*.yaml
 configs/*.yml
@@ -189,7 +189,7 @@ docker/init.d/*
 /.claude/settings.json
 /.playwright-mcp
 
-# meeseeks_console build cache + runtime session state
-apps/meeseeks_console/.vite/
-apps/meeseeks_console/data/
+# mewbo_console build cache + runtime session state
+apps/mewbo_console/.vite/
+apps/mewbo_console/data/
 .claude/settings.local.json

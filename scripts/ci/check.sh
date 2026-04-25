@@ -16,7 +16,7 @@ has_console=false
 while IFS= read -r file; do
   case "${file}" in
     *.py|*pyproject.toml) has_python=true ;;
-    apps/meeseeks_console/*) has_console=true ;;
+    apps/mewbo_console/*) has_console=true ;;
   esac
 done <<< "${changed_files}"
 
@@ -32,7 +32,7 @@ fi
 # Run Console checks when frontend files changed.
 if [[ "${has_console}" == true ]]; then
   echo "==> Running Console checks..."
-  cd apps/meeseeks_console
+  cd apps/mewbo_console
   npm run lint:ci
   npm run typecheck
   npm run test:ci

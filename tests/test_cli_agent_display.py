@@ -5,14 +5,14 @@ from __future__ import annotations
 
 from io import StringIO
 
-from meeseeks_cli.cli_agent_display import (
+from mewbo_cli.cli_agent_display import (
     AgentDisplayManager,
     AgentDisplayState,
     _format_elapsed,
 )
-from meeseeks_core.classes import ActionStep
-from meeseeks_core.common import MockSpeaker
-from meeseeks_core.hypervisor import AgentHandle
+from mewbo_core.classes import ActionStep
+from mewbo_core.common import MockSpeaker
+from mewbo_core.hypervisor import AgentHandle
 from rich.console import Console
 from rich.panel import Panel
 

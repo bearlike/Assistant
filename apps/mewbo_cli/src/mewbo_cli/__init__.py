@@ -1,0 +1,1 @@
+"""Mewbo terminal CLI package."""

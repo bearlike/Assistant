@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from meeseeks_core.classes import ToolResult
-from meeseeks_core.spawn_agent import AgentError
-from meeseeks_core.tool_registry import ToolSpec
-from meeseeks_core.tool_use_loop import ToolBatch, ToolUseLoop
+from mewbo_core.classes import ToolResult
+from mewbo_core.spawn_agent import AgentError
+from mewbo_core.tool_registry import ToolSpec
+from mewbo_core.tool_use_loop import ToolBatch, ToolUseLoop
 
 # -- Helpers ----------------------------------------------------------------
 

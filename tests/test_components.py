@@ -3,14 +3,14 @@
 import sys
 import types
 
-from meeseeks_core.components import (
+from mewbo_core.components import (
     ComponentStatus,
     build_langfuse_handler,
     format_component_status,
     resolve_home_assistant_status,
     resolve_langfuse_status,
 )
-from meeseeks_core.config import set_config_override
+from mewbo_core.config import set_config_override
 
 
 def test_langfuse_disabled_flag(monkeypatch):

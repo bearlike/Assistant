@@ -39,7 +39,7 @@ cat > "$VENDOR_DIR/README.md" <<README
 # Aider Vendor Snapshot
 
 This directory vendors a minimal subset of Aider (https://github.com/Aider-AI/aider)
-needed for the Meeseeks edit-block adapter. It is intentionally small and updated
+needed for the Mewbo edit-block adapter. It is intentionally small and updated
 via scripts/vendor_aider.sh.
 
 Pinned upstream commit: ${AIDER_REF}

@@ -8,8 +8,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from unittest.mock import MagicMock, patch
 
-from meeseeks_api.channels.base import ChannelAdapter, InboundMessage
-from meeseeks_api.channels.email_adapter import (
+from mewbo_api.channels.base import ChannelAdapter, InboundMessage
+from mewbo_api.channels.email_adapter import (
     EmailAdapter,
     EmailPoller,
     _derive_thread_id,
@@ -24,10 +24,10 @@ from meeseeks_api.channels.email_adapter import (
 def _make_email(
     *,
     from_addr: str = "alice@example.com",
-    to_addr: str = "meeseeks@example.com",
+    to_addr: str = "mewbo@example.com",
     cc: str | None = None,
     subject: str = "Test Subject",
-    body: str = "Hello, Meeseeks!",
+    body: str = "Hello, Mewbo!",
     message_id: str = "<msg-001@example.com>",
     in_reply_to: str | None = None,
     references: str | None = None,
@@ -54,7 +54,7 @@ def _make_adapter(**kwargs) -> EmailAdapter:
     defaults = {
         "smtp_host": "smtp.example.com",
         "smtp_port": 587,
-        "username": "meeseeks@example.com",
+        "username": "mewbo@example.com",
         "password": "test-password",
         "allowed_senders": ["alice@example.com", "bob@example.com"],
     }
@@ -80,7 +80,7 @@ class TestParseEmail:
         assert result.channel_id == "alice@example.com"
         assert result.sender_id == "alice@example.com"
         assert result.sender_name == "Alice"
-        assert result.text == "Hello, Meeseeks!"
+        assert result.text == "Hello, Mewbo!"
         assert result.room_name == "Test Subject"
         assert result.message_id == "<msg-001@example.com>"
 
@@ -104,7 +104,7 @@ class TestParseEmail:
 
     def test_allowed_recipients_rejects_wrong_address(self) -> None:
         adapter = _make_adapter(
-            allowed_recipients=["meeseeks@example.com"],
+            allowed_recipients=["mewbo@example.com"],
         )
         msg = _make_email(to_addr="someone-else@example.com")
         result = adapter.parse_email(msg)
@@ -112,28 +112,28 @@ class TestParseEmail:
 
     def test_allowed_recipients_accepts_matching_address(self) -> None:
         adapter = _make_adapter(
-            allowed_recipients=["meeseeks@example.com"],
+            allowed_recipients=["mewbo@example.com"],
         )
-        msg = _make_email(to_addr="meeseeks@example.com")
+        msg = _make_email(to_addr="mewbo@example.com")
         result = adapter.parse_email(msg)
         assert result is not None
 
     def test_allowed_recipients_matches_cc(self) -> None:
         adapter = _make_adapter(
-            allowed_recipients=["meeseeks@example.com"],
+            allowed_recipients=["mewbo@example.com"],
         )
         msg = _make_email(
             to_addr="someone@example.com",
-            cc="meeseeks@example.com",
+            cc="mewbo@example.com",
         )
         result = adapter.parse_email(msg)
         assert result is not None
 
     def test_allowed_recipients_case_insensitive(self) -> None:
         adapter = _make_adapter(
-            allowed_recipients=["meeseeks@example.com"],
+            allowed_recipients=["mewbo@example.com"],
         )
-        msg = _make_email(to_addr="Meeseeks@Example.COM")
+        msg = _make_email(to_addr="Mewbo@Example.COM")
         result = adapter.parse_email(msg)
         assert result is not None
 
@@ -149,7 +149,7 @@ class TestParseEmail:
         msg.attach(MIMEText("plain text body", "plain", "utf-8"))
         msg.attach(MIMEText("<p>html body</p>", "html", "utf-8"))
         msg["From"] = "alice@example.com"
-        msg["To"] = "meeseeks@example.com"
+        msg["To"] = "mewbo@example.com"
         msg["Subject"] = "Multi"
         msg["Message-ID"] = "<multi@example.com>"
         msg["Date"] = email.utils.formatdate()
@@ -161,13 +161,13 @@ class TestParseEmail:
     def test_recipients_in_raw(self) -> None:
         adapter = _make_adapter()
         msg = _make_email(
-            to_addr="meeseeks@example.com",
+            to_addr="mewbo@example.com",
             cc="bob@example.com, charlie@example.com",
         )
         result = adapter.parse_email(msg)
         assert result is not None
         recipients = result.raw["recipients"]
-        assert "meeseeks@example.com" in recipients
+        assert "mewbo@example.com" in recipients
         assert "bob@example.com" in recipients
         assert "charlie@example.com" in recipients
 
@@ -229,7 +229,7 @@ class TestRequiresMention:
 
     def test_single_recipient_no_mention_needed(self) -> None:
         adapter = _make_adapter()
-        msg = _make_email(to_addr="meeseeks@example.com")
+        msg = _make_email(to_addr="mewbo@example.com")
         inbound = adapter.parse_email(msg)
         assert inbound is not None
         assert adapter.requires_mention(inbound) is False
@@ -237,16 +237,16 @@ class TestRequiresMention:
     def test_multiple_recipients_mention_required(self) -> None:
         adapter = _make_adapter()
         msg = _make_email(
-            to_addr="meeseeks@example.com",
+            to_addr="mewbo@example.com",
             cc="bob@example.com",
         )
         inbound = adapter.parse_email(msg)
         assert inbound is not None
         assert adapter.requires_mention(inbound) is True
 
-    def test_trigger_keyword_is_at_meeseeks(self) -> None:
+    def test_trigger_keyword_is_at_mewbo(self) -> None:
         adapter = _make_adapter()
-        assert adapter.trigger_keyword == "@Meeseeks"
+        assert adapter.trigger_keyword == "@Mewbo"
 
 
 # ------------------------------------------------------------------
@@ -257,7 +257,7 @@ class TestRequiresMention:
 class TestSendResponse:
     """Test SMTP email sending with proper threading headers."""
 
-    @patch("meeseeks_api.channels.email_adapter.smtplib.SMTP")
+    @patch("mewbo_api.channels.email_adapter.smtplib.SMTP")
     def test_sends_html_email(self, mock_smtp_cls: MagicMock) -> None:
         mock_smtp = MagicMock()
         mock_smtp_cls.return_value = mock_smtp
@@ -293,7 +293,7 @@ class TestSendResponse:
         html_body = html_parts[0].get_payload(decode=True).decode()
         assert "<strong>Done!</strong>" in html_body
 
-    @patch("meeseeks_api.channels.email_adapter.smtplib.SMTP")
+    @patch("mewbo_api.channels.email_adapter.smtplib.SMTP")
     def test_plain_text_fallback_included(self, mock_smtp_cls: MagicMock) -> None:
         mock_smtp = MagicMock()
         mock_smtp_cls.return_value = mock_smtp
@@ -315,7 +315,7 @@ class TestSendResponse:
         plain_body = plain_parts[0].get_payload(decode=True).decode()
         assert "Plain markdown text" in plain_body
 
-    @patch("meeseeks_api.channels.email_adapter.smtplib.SMTP")
+    @patch("mewbo_api.channels.email_adapter.smtplib.SMTP")
     def test_smtp_failure_returns_none(self, mock_smtp_cls: MagicMock) -> None:
         mock_smtp_cls.side_effect = ConnectionRefusedError("no SMTP")
         adapter = _make_adapter()
@@ -325,7 +325,7 @@ class TestSendResponse:
         )
         assert result is None
 
-    @patch("meeseeks_api.channels.email_adapter.smtplib.SMTP_SSL")
+    @patch("mewbo_api.channels.email_adapter.smtplib.SMTP_SSL")
     def test_ssl_mode(self, mock_smtp_ssl_cls: MagicMock) -> None:
         mock_smtp = MagicMock()
         mock_smtp_ssl_cls.return_value = mock_smtp
@@ -347,7 +347,7 @@ class TestSendResponse:
 class TestSendReaction:
     """Test Gmail emoji reaction MIME construction."""
 
-    @patch("meeseeks_api.channels.email_adapter.smtplib.SMTP")
+    @patch("mewbo_api.channels.email_adapter.smtplib.SMTP")
     def test_send_reaction_builds_gmail_mime(self, mock_smtp_cls: MagicMock) -> None:
         mock_smtp = MagicMock()
         mock_smtp_cls.return_value = mock_smtp
@@ -389,7 +389,7 @@ class TestSendReaction:
         payload = json.loads(reaction_parts[0].get_payload(decode=True).decode())
         assert payload == {"emoji": "\N{EYES}", "version": 1}
 
-    @patch("meeseeks_api.channels.email_adapter.smtplib.SMTP")
+    @patch("mewbo_api.channels.email_adapter.smtplib.SMTP")
     def test_send_reaction_smtp_failure_returns_none(
         self,
         mock_smtp_cls: MagicMock,
@@ -403,7 +403,7 @@ class TestSendReaction:
         )
         assert result is None
 
-    @patch("meeseeks_api.channels.email_adapter.smtplib.SMTP")
+    @patch("mewbo_api.channels.email_adapter.smtplib.SMTP")
     def test_send_reaction_fallback_text(self, mock_smtp_cls: MagicMock) -> None:
         mock_smtp = MagicMock()
         mock_smtp_cls.return_value = mock_smtp
@@ -450,7 +450,7 @@ class TestMarkdownRendering:
 
     def test_email_template_wraps(self) -> None:
         html = render_markdown_html("Hello")
-        assert "Meeseeks" in html  # Header branding
+        assert "Mewbo" in html  # Header branding
         assert "<!DOCTYPE html>" in html
         assert "agent hypervisor" in html  # Footer
 
@@ -470,7 +470,7 @@ class TestEmailPoller:
         poller = EmailPoller(
             adapter=adapter,
             imap_host="imap.example.com",
-            username="meeseeks@example.com",
+            username="mewbo@example.com",
             password="test",
             process_fn=process_fn,
         )
@@ -486,7 +486,7 @@ class TestEmailPoller:
         poller = EmailPoller(
             adapter=adapter,
             imap_host="imap.example.com",
-            username="meeseeks@example.com",
+            username="mewbo@example.com",
             password="test",
             process_fn=MagicMock(),
         )
@@ -498,14 +498,14 @@ class TestEmailPoller:
         poller = EmailPoller(
             adapter=adapter,
             imap_host="imap.example.com",
-            username="meeseeks@example.com",
+            username="mewbo@example.com",
             password="test",
             poll_interval=1,  # Too low
             process_fn=MagicMock(),
         )
         assert poller._poll_interval >= 5
 
-    @patch("meeseeks_api.channels.email_adapter.imapclient.IMAPClient")
+    @patch("mewbo_api.channels.email_adapter.imapclient.IMAPClient")
     def test_poll_loop_processes_unseen(
         self,
         mock_imap_cls: MagicMock,
@@ -515,7 +515,7 @@ class TestEmailPoller:
         process_fn = MagicMock()
 
         # Build a raw email for the mock to return
-        test_email = _make_email(body="@Meeseeks do something")
+        test_email = _make_email(body="@Mewbo do something")
         raw_bytes = test_email.as_bytes()
 
         mock_client = MagicMock()
@@ -528,7 +528,7 @@ class TestEmailPoller:
         poller = EmailPoller(
             adapter=adapter,
             imap_host="imap.example.com",
-            username="meeseeks@example.com",
+            username="mewbo@example.com",
             password="test",
             process_fn=process_fn,
         )
@@ -545,7 +545,7 @@ class TestEmailPoller:
         call_args = process_fn.call_args[0]
         assert call_args[0] is adapter
         assert isinstance(call_args[1], InboundMessage)
-        assert call_args[1].text == "@Meeseeks do something"
+        assert call_args[1].text == "@Mewbo do something"
 
         # Verify email marked as SEEN
         mock_client.add_flags.assert_called_once()

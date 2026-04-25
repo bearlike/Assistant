@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from meeseeks_core.hooks import HookManager, merge_plugin_hooks
+from mewbo_core.hooks import HookManager, merge_plugin_hooks
 
 
 def test_merge_plugin_hooks_session_start():
@@ -77,7 +77,7 @@ def test_merge_plugin_hooks_variable_substitution():
             ],
         }
     }
-    plugin_root = "/home/user/.meeseeks/plugins/cache/mp/plug/1.0"
+    plugin_root = "/home/user/.mewbo/plugins/cache/mp/plug/1.0"
     merge_plugin_hooks(manager, hooks_json, plugin_root=plugin_root)
     assert len(manager.on_session_start) == 1
 

@@ -1,0 +1,16 @@
+{
+  "domain": "mewbo_conversation",
+  "name": "Mewbo",
+  "codeowners": [
+    "@bearlike"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "conversation"
+  ],
+  "documentation": "https://github.com/bearlike/Assistant",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/bearlike/Assistant/issues",
+  "version": "v1.2.0"
+}

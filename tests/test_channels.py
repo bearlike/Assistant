@@ -7,13 +7,13 @@ import hmac
 import json
 import time
 
-from meeseeks_api.channels.base import (
+from mewbo_api.channels.base import (
     ChannelAdapter,
     ChannelRegistry,
     DeduplicationGuard,
 )
-from meeseeks_api.channels.nextcloud_talk import NextcloudTalkAdapter
-from meeseeks_api.channels.routes import _COMMAND_RE
+from mewbo_api.channels.nextcloud_talk import NextcloudTalkAdapter
+from mewbo_api.channels.routes import _COMMAND_RE
 
 # ------------------------------------------------------------------
 # DeduplicationGuard
@@ -313,7 +313,7 @@ class TestCommandRegex:
         text = (
             "/switch-project personal-assistant\n"
             "\n"
-            "On Mon, Apr 7, 2026 at 5:53 PM, Meeseeks wrote:\n"
+            "On Mon, Apr 7, 2026 at 5:53 PM, Mewbo wrote:\n"
             "> Hey! Going great, thanks for asking!\n"
         )
         m = _COMMAND_RE.match(text.strip())
@@ -323,7 +323,7 @@ class TestCommandRegex:
 
     def test_command_without_args_in_email_reply(self) -> None:
         text = (
-            "/help\n\nOn Mon, Apr 7, 2026 at 5:53 PM, Meeseeks wrote:\n> Commands: /help, /usage\n"
+            "/help\n\nOn Mon, Apr 7, 2026 at 5:53 PM, Mewbo wrote:\n> Commands: /help, /usage\n"
         )
         m = _COMMAND_RE.match(text.strip())
         assert m is not None
