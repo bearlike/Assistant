@@ -5,9 +5,9 @@ import shutil
 from unittest.mock import patch
 
 import pytest
-from meeseeks_core.config import StorageConfig
-from meeseeks_core.session_store import SessionStore, SessionStoreBase, create_session_store
 from pydantic import ValidationError
+from truss_core.config import StorageConfig
+from truss_core.session_store import SessionStore, SessionStoreBase, create_session_store
 
 
 def test_session_store_roundtrip(tmp_path):
@@ -99,7 +99,8 @@ def test_session_store_archive_roundtrip(tmp_path):
 
 def test_create_session_store_default_json(tmp_path):
     """Factory returns SessionStore (json) when no driver is configured."""
-    store = create_session_store(root_dir=str(tmp_path))
+    with patch("truss_core.session_store.get_config_value", return_value="json"):
+        store = create_session_store(root_dir=str(tmp_path))
     assert isinstance(store, SessionStore)
     assert isinstance(store, SessionStoreBase)
 
@@ -107,11 +108,11 @@ def test_create_session_store_default_json(tmp_path):
 def test_create_session_store_mongodb(tmp_path):
     """Factory returns MongoSessionStore when driver is 'mongodb'."""
     import mongomock
-    from meeseeks_core.session_store_mongo import MongoSessionStore
+    from truss_core.session_store_mongo import MongoSessionStore
 
     with (
-        patch("meeseeks_core.session_store.get_config_value", return_value="mongodb"),
-        patch("meeseeks_core.session_store_mongo.MongoClient", mongomock.MongoClient),
+        patch("truss_core.session_store.get_config_value", return_value="mongodb"),
+        patch("truss_core.session_store_mongo.MongoClient", mongomock.MongoClient),
     ):
         store = create_session_store(root_dir=str(tmp_path))
     assert isinstance(store, MongoSessionStore)
@@ -195,7 +196,7 @@ def test_session_store_load_title_empty_string(tmp_path):
 def test_unknown_storage_driver_raises():
     """Unknown storage driver should raise, not silently fall back to json."""
     with patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("MEESEEKS_STORAGE_DRIVER", None)
+        os.environ.pop("TRUSS_STORAGE_DRIVER", None)
         with pytest.raises(ValidationError, match="Unknown storage driver"):
             StorageConfig(driver="postgres")
 
@@ -203,9 +204,9 @@ def test_unknown_storage_driver_raises():
 def test_create_session_store_mongodb_unreachable(tmp_path):
     """Factory raises RuntimeError when MongoDB is unreachable."""
     with (
-        patch("meeseeks_core.session_store.get_config_value", return_value="mongodb"),
+        patch("truss_core.session_store.get_config_value", return_value="mongodb"),
         patch(
-            "meeseeks_core.session_store_mongo.MongoClient",
+            "truss_core.session_store_mongo.MongoClient",
             side_effect=Exception("connection refused"),
         ),
     ):

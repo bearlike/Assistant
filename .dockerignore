@@ -14,7 +14,7 @@
 
 # ── Node / frontend build artifacts ──────────────────────────
 **/node_modules/
-apps/meeseeks_console/dist/
+apps/truss_console/dist/
 
 # ── Environment & secrets ─────────────────────────────────────
 .env

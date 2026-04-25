@@ -33,8 +33,8 @@ Event payload notes:
 
 ## Minimal usage (Python)
 ```python
-from meeseeks_core.session_runtime import SessionRuntime
-from meeseeks_core.session_store import SessionStore
+from truss_core.session_runtime import SessionRuntime
+from truss_core.session_store import SessionStore
 
 runtime = SessionRuntime(session_store=SessionStore())
 session_id = runtime.resolve_session(session_tag="primary")

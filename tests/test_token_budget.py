@@ -2,9 +2,9 @@
 
 from unittest.mock import patch
 
-from meeseeks_core import token_budget as token_budget_module
-from meeseeks_core.config import set_config_override
-from meeseeks_core.token_budget import (
+from truss_core import token_budget as token_budget_module
+from truss_core.config import set_config_override
+from truss_core.token_budget import (
     _strip_provider_prefix,
     build_usage_numbers,
     get_model_max_input_tokens,

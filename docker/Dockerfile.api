@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
 
-# Dockerfile.api — Meeseeks API with Gunicorn
-ARG BASE_IMAGE="ghcr.io/bearlike/meeseeks-base:latest"
+# Dockerfile.api — Truss API with Gunicorn
+ARG BASE_IMAGE="ghcr.io/bearlike/truss-base:latest"
 FROM $BASE_IMAGE
 
 ARG VERSION="0.0.10"
 
-LABEL org.opencontainers.image.title="Meeseeks API" \
-      org.opencontainers.image.description="REST API for the Meeseeks task-agent assistant" \
+LABEL org.opencontainers.image.title="Truss API" \
+      org.opencontainers.image.description="REST API for the Truss task-agent assistant" \
       org.opencontainers.image.source="https://github.com/bearlike/Assistant" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.vendor="Krishnakanth Alagiri" \
@@ -36,13 +36,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends git wget \
 
 # 1. Copy only dependency metadata first (layer caching — survives source changes)
 COPY pyproject.toml uv.lock ./
-COPY packages/meeseeks_core/pyproject.toml packages/meeseeks_core/pyproject.toml
-COPY packages/meeseeks_tools/pyproject.toml packages/meeseeks_tools/pyproject.toml
-COPY apps/meeseeks_api/pyproject.toml apps/meeseeks_api/pyproject.toml
+COPY packages/truss_core/pyproject.toml packages/truss_core/pyproject.toml
+COPY packages/truss_tools/pyproject.toml packages/truss_tools/pyproject.toml
+COPY apps/truss_api/pyproject.toml apps/truss_api/pyproject.toml
 
 # 2. Copy source
 COPY packages/ packages/
-COPY apps/meeseeks_api/ apps/meeseeks_api/
+COPY apps/truss_api/ apps/truss_api/
 COPY configs/ configs/
 
 # 3. Entrypoint (runs runtime init.d scripts, then execs gunicorn)
@@ -53,20 +53,21 @@ RUN chmod +x /app/docker/entrypoint-api.sh
 RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
-        -e packages/meeseeks_core \
-        -e packages/meeseeks_tools \
-        -e apps/meeseeks_api \
+        -e packages/truss_core \
+        -e packages/truss_tools \
+        -e apps/truss_api \
         gunicorn
 
 # Pre-create plan-mode scratch directory with correct ownership.
 # Named volumes copy permissions from the image on first mount, so
-# ``plans-data:/tmp/meeseeks/plans`` inherits meeseeks ownership
+# ``plans-data:/tmp/truss/plans`` inherits truss ownership
 # instead of root:root. The entrypoint also fixes ownership at
 # runtime for volumes that already exist (see entrypoint-api.sh).
-RUN mkdir -p /tmp/meeseeks/plans && chown -R 1000:1000 /tmp/meeseeks
+RUN mkdir -p /tmp/truss/plans && chown -R 1000:1000 /tmp/truss
 
 ENV MASTER_API_TOKEN='msk-strong-password' \
-    API_PORT=5125
+    API_PORT=5125 \
+    CLAUDE_PLUGIN_ROOT=''
 
 # Single worker (RunRegistry is in-memory), 8 HTTP threads, 5-min timeout.
 # entrypoint-api.sh runs docker/init.d/*.sh scripts before exec'ing gunicorn.

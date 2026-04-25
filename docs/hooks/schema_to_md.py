@@ -16,7 +16,7 @@ HEADER = f"""\
 <!-- AUTO-GENERATED from configs/app.schema.json. Do not edit manually. -->
 # Configuration Reference
 
-Meeseeks is configured via `configs/app.json`. This reference is auto-generated
+Truss is configured via `configs/app.json`. This reference is auto-generated
 from the JSON Schema at [`configs/app.schema.json`]({_SCHEMA_URL}).
 
 Copy `configs/app.example.json` to `configs/app.json` to get started.

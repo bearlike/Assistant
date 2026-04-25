@@ -1,1 +1,0 @@
-"""Meeseeks terminal CLI package."""

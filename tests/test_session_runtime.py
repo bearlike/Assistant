@@ -3,8 +3,8 @@
 import time
 
 import pytest
-from meeseeks_core.session_runtime import SessionRuntime, parse_core_command
-from meeseeks_core.session_store import SessionStore
+from truss_core.session_runtime import SessionRuntime, parse_core_command
+from truss_core.session_store import SessionStore
 
 
 def test_parse_core_command():

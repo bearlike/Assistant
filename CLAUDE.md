@@ -1,4 +1,4 @@
-# Agents Guide - Meeseeks
+# Agents Guide - Truss
 
 ## MANDATORY: Hydrate context with Devin/DeepWiki before touching files
 
@@ -6,7 +6,7 @@ At the start of every conversation and every non-trivial task, call `ask_questio
 
 This applies to subagents too — include the directive in their prompts. There are multiple CLAUDE.md files in this monorepo. You must deliberately read the appropriate CLAUDE.md file required for the task. 
 
-## What Meeseeks is
+## What Truss is
 
 An AI assistant modeled as a conversation state machine with a hierarchical agent hypervisor. Core engine: a single async `ToolUseLoop` bound to an LLM via native `bind_tools`. Child sessions are admitted via `spawn_agent`, tracked by `AgentHypervisor`, and resolved through structured concurrency into one of four terminal states (`completed`, `failed`, `cancelled`, `rejected`). Interfaces: CLI, web console, REST API, Home Assistant, Nextcloud Talk — all share the core engine.
 
@@ -16,25 +16,25 @@ For architecture details, query the wiki. Do not restate them here.
 
 | Concern | File |
 |---|---|
-| Async tool-use loop | `packages/meeseeks_core/src/meeseeks_core/tool_use_loop.py` |
-| Agent hypervisor & handles | `packages/meeseeks_core/src/meeseeks_core/hypervisor.py` |
-| Sub-agent spawn + management tools | `packages/meeseeks_core/src/meeseeks_core/spawn_agent.py` |
-| Skills (Agent Skills standard) | `packages/meeseeks_core/src/meeseeks_core/skills.py` |
-| Plugin discovery + install | `packages/meeseeks_core/src/meeseeks_core/plugins.py` |
-| Agent definition registry | `packages/meeseeks_core/src/meeseeks_core/agent_registry.py` |
-| Session lifecycle, sync→async bridge | `packages/meeseeks_core/src/meeseeks_core/orchestrator.py` |
-| Tool registry + `filter_specs()` | `packages/meeseeks_core/src/meeseeks_core/tool_registry.py` |
-| Config (`AgentConfig`, `HooksConfig`, `PluginsConfig`) | `packages/meeseeks_core/src/meeseeks_core/config.py` |
-| Compaction (FULL/PARTIAL modes) | `packages/meeseeks_core/src/meeseeks_core/compact.py` |
-| Hook manager | `packages/meeseeks_core/src/meeseeks_core/hooks.py` |
-| Channel adapter abstraction | `apps/meeseeks_api/src/meeseeks_api/channels/base.py` |
-| Nextcloud Talk adapter | `apps/meeseeks_api/src/meeseeks_api/channels/nextcloud_talk.py` |
-| Email adapter + IMAP poller | `apps/meeseeks_api/src/meeseeks_api/channels/email_adapter.py` |
-| Channel routes + shared pipeline | `apps/meeseeks_api/src/meeseeks_api/channels/routes.py` |
-| MCP connection pool | `packages/meeseeks_tools/src/meeseeks_tools/integration/mcp_pool.py` |
-| File edit tools + shared utils | `packages/meeseeks_tools/src/meeseeks_tools/integration/edit_common.py` |
-| Web IDE manager + routes | `apps/meeseeks_api/src/meeseeks_api/ide.py`, `ide_routes.py` |
-| LSP tool, manager, server defs | `packages/meeseeks_tools/src/meeseeks_tools/integration/lsp/` |
+| Async tool-use loop | `packages/truss_core/src/truss_core/tool_use_loop.py` |
+| Agent hypervisor & handles | `packages/truss_core/src/truss_core/hypervisor.py` |
+| Sub-agent spawn + management tools | `packages/truss_core/src/truss_core/spawn_agent.py` |
+| Skills (Agent Skills standard) | `packages/truss_core/src/truss_core/skills.py` |
+| Plugin discovery + install | `packages/truss_core/src/truss_core/plugins.py` |
+| Agent definition registry | `packages/truss_core/src/truss_core/agent_registry.py` |
+| Session lifecycle, sync→async bridge | `packages/truss_core/src/truss_core/orchestrator.py` |
+| Tool registry + `filter_specs()` | `packages/truss_core/src/truss_core/tool_registry.py` |
+| Config (`AgentConfig`, `HooksConfig`, `PluginsConfig`) | `packages/truss_core/src/truss_core/config.py` |
+| Compaction (FULL/PARTIAL modes) | `packages/truss_core/src/truss_core/compact.py` |
+| Hook manager | `packages/truss_core/src/truss_core/hooks.py` |
+| Channel adapter abstraction | `apps/truss_api/src/truss_api/channels/base.py` |
+| Nextcloud Talk adapter | `apps/truss_api/src/truss_api/channels/nextcloud_talk.py` |
+| Email adapter + IMAP poller | `apps/truss_api/src/truss_api/channels/email_adapter.py` |
+| Channel routes + shared pipeline | `apps/truss_api/src/truss_api/channels/routes.py` |
+| MCP connection pool | `packages/truss_tools/src/truss_tools/integration/mcp_pool.py` |
+| File edit tools + shared utils | `packages/truss_tools/src/truss_tools/integration/edit_common.py` |
+| Web IDE manager + routes | `apps/truss_api/src/truss_api/ide.py`, `ide_routes.py` |
+| LSP tool, manager, server defs | `packages/truss_tools/src/truss_tools/integration/lsp/` |
 
 Use `rg` / `glob` for anything else.
 
@@ -42,10 +42,10 @@ Use `rg` / `glob` for anything else.
 
 When given a session URL (`/s/<session_id>`), work through these layers in order:
 
-1. **MongoDB transcript** — authoritative event log. Query `db.events.find({session_id}).sort({ts:1})` via `MEESEEKS_MONGODB_URI` (port 27018). Check `tool_result.error`, `context.mcp_tools`, `completion.done_reason`.
+1. **MongoDB transcript** — authoritative event log. Query `db.events.find({session_id}).sort({ts:1})` via `TRUSS_MONGODB_URI` (port 27018). Check `tool_result.error`, `context.mcp_tools`, `completion.done_reason`.
 2. **Langfuse traces** — LLM conversation chain. `fetch_traces(age=N)` → `fetch_observation(id)` on `GENERATION` to see system prompt, bound tool schemas, model reasoning. Trace-to-session: `trace_id == session_id`.
 3. **Config** — `configs/app.json` (mounted read-only at `/app/configs/`), `docker.env` for secrets, MCP at `configs/mcp.json` (global) or `<project>/.mcp.json` (project).
-4. **Docker env** — `docker-compose.yml` + override for mounts. API runs at `/app` with `MEESEEKS_HOME=/app/data`. Project dirs need identical host/container paths.
+4. **Docker env** — `docker-compose.yml` + override for mounts. API runs at `/app` with `TRUSS_HOME=/app/data`. Project dirs need identical host/container paths.
 
 ### Common root-cause signatures
 
@@ -63,7 +63,7 @@ When given a session URL (`/s/<session_id>`), work through these layers in order
 
 **Devin session tools (`devin_session_create`, `devin_session_interact`, `devin_session_events`, `devin_session_search`, `devin_session_gather`, `devin_knowledge_manage`, `devin_schedule_manage`)** — delegate long-running tasks, manage knowledge notes, schedule automated work. Session IDs need `devin-` prefix when reused.
 
-**Langfuse (`mcp__langfuse__*`)** — observability. Standard path: `get_error_count(age)` → `fetch_sessions(age)` → `fetch_traces(age, session_id, name)` → `fetch_trace(id, include_observations=true)` → `fetch_observation(id)`. Trace names: `meeseeks-tool-use`, `meeseeks-task-master`, `meeseeks-context`. `age` is in minutes (max 10080). For large payloads use `output_mode="full_json_file"`.
+**Langfuse (`mcp__langfuse__*`)** — observability. Standard path: `get_error_count(age)` → `fetch_sessions(age)` → `fetch_traces(age, session_id, name)` → `fetch_trace(id, include_observations=true)` → `fetch_observation(id)`. Trace names: `truss-tool-use`, `truss-task-master`, `truss-context`. `age` is in minutes (max 10080). For large payloads use `output_mode="full_json_file"`.
 
 **SearXNG (`searxng_web_search`) + `web_url_read`** — current events, docs, error messages, anything outside codebase/wikis.
 
@@ -93,7 +93,7 @@ Other rules:
 
 Subtree discovery (`discover_subtree_instructions()`, max depth 5) walks DOWN from CWD to find nested `CLAUDE.md` / `AGENTS.md` / `.claude/CLAUDE.md` and indexes them (not injected — model reads on demand). Prunes `node_modules`, `__pycache__`, `.venv`, hidden dirs. Same mechanism for `.claude/skills/*/SKILL.md`.
 
-Add `<!-- meeseeks:noload -->` on line 1 to skip a file (marker: `_NOLOAD_MARKER` in `common.py`). Git context is injected via `get_git_context()`.
+Add `<!-- truss:noload -->` on line 1 to skip a file (marker: `_NOLOAD_MARKER` in `common.py`). Git context is injected via `get_git_context()`.
 
 ## Orchestration invariants
 
@@ -123,8 +123,8 @@ These are *rules*, not explanations. For background, query the wiki.
 - **Concurrency**: `_partition_tool_calls()` batches `concurrency_safe` tools and isolates exclusive ones. Per-tool `asyncio.wait_for(spec.timeout)`, default 120s. Timeouts don't cancel siblings.
 - **MCP pool**: `MCPConnectionPool` (persistent, auto-reconnect after 3 consecutive errors, 60s per-request timeout, config change detection). Legacy one-shot client is fallback.
 - **Compaction modes**: `FULL` or `PARTIAL` (default for auto-compact). Structured summary prompt with `<analysis>` and `<summary>` sections. Post-compact file restoration within token budgets.
-- **Hooks**: all invocations are try/excepted — failing hook logs warning, never blocks. Lifecycle: `on_session_start`, `on_session_end`, `on_compact`. Two hook types: `"command"` (shell subprocess) and `"http"` (fire-and-forget POST to URL in daemon thread). External hooks in `HooksConfig` filter by `fnmatch` tool matcher. `_session_env()` passes `MEESEEKS_SESSION_ID` and `MEESEEKS_ERROR` to command hooks. API server loads hooks from config via `HookManager.load_from_config()` and passes `hook_manager` to all `start_async()` calls.
-- **Channel adapters**: `ChannelAdapter` Protocol (3 methods + `system_context` property) in `channels/base.py`. `ChannelRegistry` for lookup, `DeduplicationGuard` for replay protection. Shared `_process_inbound()` pipeline in `routes.py` handles dedup → mention gate → session resolve → commands → LLM for all channels. Webhook endpoint at `POST /api/webhooks/<platform>` (HMAC auth, not API key). Non-webhook channels (e.g. email) use `_process_inbound()` directly from their own poller. Channel sessions are standard API sessions — created via `session_store.create_session()`, mapped via session tags (`tag_session`/`resolve_tag`), visible in console/Langfuse. Completion callback reads `source_platform` from transcript context event and sends the final answer back via the adapter. Adapters may expose `requires_mention(message)` to dynamically skip mention gating (e.g. email skips mentions for 1-to-1 but requires `@Meeseeks` in multi-party threads). Adapters: Nextcloud Talk (HMAC-SHA256, ActivityStreams 2.0, OCS Bot API) and Email (IMAP polling + SMTP reply with markdown→HTML rendering via mistune).
+- **Hooks**: all invocations are try/excepted — failing hook logs warning, never blocks. Lifecycle: `on_session_start`, `on_session_end`, `on_compact`. Two hook types: `"command"` (shell subprocess) and `"http"` (fire-and-forget POST to URL in daemon thread). External hooks in `HooksConfig` filter by `fnmatch` tool matcher. `_session_env()` passes `TRUSS_SESSION_ID` and `TRUSS_ERROR` to command hooks. API server loads hooks from config via `HookManager.load_from_config()` and passes `hook_manager` to all `start_async()` calls.
+- **Channel adapters**: `ChannelAdapter` Protocol (3 methods + `system_context` property) in `channels/base.py`. `ChannelRegistry` for lookup, `DeduplicationGuard` for replay protection. Shared `_process_inbound()` pipeline in `routes.py` handles dedup → mention gate → session resolve → commands → LLM for all channels. Webhook endpoint at `POST /api/webhooks/<platform>` (HMAC auth, not API key). Non-webhook channels (e.g. email) use `_process_inbound()` directly from their own poller. Channel sessions are standard API sessions — created via `session_store.create_session()`, mapped via session tags (`tag_session`/`resolve_tag`), visible in console/Langfuse. Completion callback reads `source_platform` from transcript context event and sends the final answer back via the adapter. Adapters may expose `requires_mention(message)` to dynamically skip mention gating (e.g. email skips mentions for 1-to-1 but requires `@Truss` in multi-party threads). Adapters: Nextcloud Talk (HMAC-SHA256, ActivityStreams 2.0, OCS Bot API) and Email (IMAP polling + SMTP reply with markdown→HTML rendering via mistune).
 - **Structured errors**: `AgentError` captures `agent_id`, `depth`, `task`, `message`, `last_tool`, `steps`. Sub-agent cleanup cascades to children before unregistering.
 - **Cleanup**: 3-phase (cancel → wait with timeout → force-mark as cancelled). `await_lifecycle_managers(timeout)` before event-loop teardown.
 - **Forced synthesis**: on root step limit with pending non-blocking children, 2s grace period, then inject completed results as `SystemMessage` for synthesis; still-running agents warned in the prompt.
@@ -138,7 +138,7 @@ These are *rules*, not explanations. For background, query the wiki.
 
 - Tests: `pytest` under `tests/`.
 - Install: `uv sync` (core) or `uv sync --all-extras --all-groups` (dev).
-- Run: `uv run meeseeks` / `uv run meeseeks-api` from repo root, or `npm run dev` in `apps/meeseeks_console`.
-- Global install: `uv tool install .`. Config chain: `CWD/configs/` → `$MEESEEKS_HOME/` → `~/.meeseeks/`. Override with `--config`. Run `/init` to scaffold.
+- Run: `uv run truss` / `uv run truss-api` from repo root, or `npm run dev` in `apps/truss_console`.
+- Global install: `uv tool install .`. Config chain: `CWD/configs/` → `$TRUSS_HOME/` → `~/.truss/`. Override with `--config`. Run `/init` to scaffold.
 - Docker: `docker/` dir, compose supported.
 - Lint: `ruff` (auto-fix: `.venv/bin/ruff check --fix .`). Types: `mypy`. Helpers: `make lint`, `make lint-fix`, `make typecheck`, `make precommit-install`.

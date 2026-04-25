@@ -7,15 +7,15 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage, SystemMessage
-from meeseeks_core.agent_context import AgentContext
-from meeseeks_core.classes import ActionStep, Plan, PlanStep
-from meeseeks_core.context import ContextSnapshot
-from meeseeks_core.hooks import HookManager
-from meeseeks_core.hypervisor import AgentHypervisor
-from meeseeks_core.permissions import PermissionDecision, PermissionPolicy
-from meeseeks_core.token_budget import TokenBudget
-from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
-from meeseeks_core.tool_use_loop import (
+from truss_core.agent_context import AgentContext
+from truss_core.classes import ActionStep, Plan, PlanStep
+from truss_core.context import ContextSnapshot
+from truss_core.hooks import HookManager
+from truss_core.hypervisor import AgentHypervisor
+from truss_core.permissions import PermissionDecision, PermissionPolicy
+from truss_core.token_budget import TokenBudget
+from truss_core.tool_registry import ToolRegistry, ToolSpec
+from truss_core.tool_use_loop import (
     _ANSI_ESCAPE_RE,
     ToolUseLoop,
     _CachedFileRead,
@@ -205,7 +205,7 @@ class TestToolUseLoopTextResponse:
         bound = MagicMock()
         bound.ainvoke = fake_model.ainvoke
 
-        with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+        with patch("truss_core.tool_use_loop.build_chat_model") as mock_build:
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = bound
 
@@ -249,7 +249,7 @@ class TestToolUseLoopToolCall:
         mock_tool.run.return_value = mock_speaker
 
         with (
-            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
             patch.object(registry, "get", return_value=mock_tool),
         ):
             mock_build.return_value = MagicMock()
@@ -298,7 +298,7 @@ class TestToolUseLoopNaturalCompletion:
         mock_tool.run.return_value = mock_speaker
 
         with (
-            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
             patch.object(registry, "get", return_value=mock_tool),
         ):
             mock_build.return_value = MagicMock()
@@ -344,7 +344,7 @@ class TestToolUseLoopNaturalCompletion:
         mock_tool.run.return_value = mock_speaker
 
         with (
-            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
             patch.object(registry, "get", return_value=mock_tool),
         ):
             mock_build.return_value = MagicMock()
@@ -395,7 +395,7 @@ class TestToolUseLoopPermissionDenied:
         deny_policy = MagicMock(spec=PermissionPolicy)
         deny_policy.decide.return_value = PermissionDecision.DENY
 
-        with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+        with patch("truss_core.tool_use_loop.build_chat_model") as mock_build:
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = bound
 
@@ -431,7 +431,7 @@ class TestToolUseLoopWithPlan:
         bound = MagicMock()
         bound.ainvoke = fake_model.ainvoke
 
-        with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+        with patch("truss_core.tool_use_loop.build_chat_model") as mock_build:
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = bound
 
@@ -465,7 +465,7 @@ class TestToolUseLoopCancel:
         bound = MagicMock()
         bound.ainvoke = fake_model.ainvoke
 
-        with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+        with patch("truss_core.tool_use_loop.build_chat_model") as mock_build:
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = bound
 
@@ -507,7 +507,7 @@ class TestToolUseLoopToolError:
         mock_tool.run.side_effect = RuntimeError("Connection refused")
 
         with (
-            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
             patch.object(registry, "get", return_value=mock_tool),
         ):
             mock_build.return_value = MagicMock()
@@ -553,7 +553,7 @@ class TestToolUseLoopToolError:
         )
 
         with (
-            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
             patch.object(registry, "get", return_value=mock_tool),
         ):
             mock_build.return_value = MagicMock()
@@ -672,7 +672,7 @@ class TestEnvironmentSectionInSystemPrompt:
         assert "Working directory:" in content
         assert "Platform:" in content
         assert "Date:" in content
-        assert "Meeseeks version:" in content
+        assert "Truss version:" in content
 
     def test_environment_uses_cwd_param(self):
         loop = ToolUseLoop(
@@ -811,7 +811,7 @@ class TestThinkingOnlyContentPlaceholder:
         emitted_events: list[dict] = []
 
         with (
-            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
             patch.object(registry, "get", return_value=mock_tool),
         ):
             mock_build.return_value = MagicMock()
@@ -861,7 +861,7 @@ class TestThinkingOnlyContentPlaceholder:
         emitted_events: list[dict] = []
 
         with (
-            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
             patch.object(registry, "get", return_value=mock_tool),
         ):
             mock_build.return_value = MagicMock()
@@ -915,9 +915,9 @@ class TestLlmCallTimeoutCeiling:
         bound.ainvoke = _hang
 
         with (
-            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
             patch(
-                "meeseeks_core.tool_use_loop.get_config_value",
+                "truss_core.tool_use_loop.get_config_value",
                 side_effect=lambda *keys, default=None: (
                     0.05
                     if keys == ("agent", "llm_call_timeout")
@@ -954,7 +954,7 @@ class TestFileReadDedupCache:
         """Create a minimal ToolUseLoop for cache testing."""
         spec = _make_spec()
         registry = _make_registry(spec)
-        with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+        with patch("truss_core.tool_use_loop.build_chat_model") as mock_build:
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = MagicMock()
             loop = ToolUseLoop(
@@ -1181,7 +1181,7 @@ class TestBudgetWarningStillFires:
         mock_tool.run.return_value = mock_speaker
 
         with (
-            patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
             patch.object(registry, "get", return_value=mock_tool),
         ):
             mock_build.return_value = MagicMock()
@@ -1243,7 +1243,7 @@ class TestModelFallback:
                     raise primary_error
                 return fallback_response
 
-            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+            with patch("truss_core.tool_use_loop.build_chat_model") as mock_build:
                 mock_model = MagicMock()
                 mock_model.bind_tools.return_value.ainvoke = AsyncMock(side_effect=_side_effect)
                 mock_build.return_value = mock_model
@@ -1276,8 +1276,8 @@ class TestModelFallback:
 
             bad_request = ValueError("bad request")
             with (
-                patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build,
-                patch("meeseeks_core.tool_use_loop._classify_llm_error", return_value=(False, 0)),
+                patch("truss_core.tool_use_loop.build_chat_model") as mock_build,
+                patch("truss_core.tool_use_loop._classify_llm_error", return_value=(False, 0)),
             ):
                 mock_model = MagicMock()
                 mock_model.bind_tools.return_value.ainvoke = AsyncMock(side_effect=bad_request)
@@ -1309,7 +1309,7 @@ class TestModelFallback:
                 hook_manager=_make_hook_manager(),
             )
 
-            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+            with patch("truss_core.tool_use_loop.build_chat_model") as mock_build:
                 mock_model = MagicMock()
                 mock_model.bind_tools.return_value.ainvoke = AsyncMock(
                     side_effect=RuntimeError("down")
@@ -1327,3 +1327,61 @@ class TestModelFallback:
                     assert "down" in str(exc)
 
         asyncio.run(_test())
+
+
+class TestRootInjection:
+    """``_tool_call_to_action_step`` injects ``root`` only for registered non-MCP tools.
+
+    Regression: session tools with strict Pydantic schemas (e.g. ``submit_widget``
+    uses ``ConfigDict(extra='forbid')``) rejected the injected ``root`` key,
+    causing repeated validation failures in sub-agents.
+    """
+
+    def _make_loop(self, registry: ToolRegistry) -> ToolUseLoop:
+        loop = ToolUseLoop(
+            agent_context=_make_agent_context(),
+            tool_registry=registry,
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+            cwd="/tmp/project",
+        )
+        return loop
+
+    def test_registered_local_tool_gets_root_injected(self):
+        loop = self._make_loop(_make_registry(_make_spec("aider_shell_tool")))
+        step = loop._tool_call_to_action_step(
+            {"name": "aider_shell_tool", "args": {"command": "ls"}}
+        )
+        assert step.tool_input == {"command": "ls", "root": "/tmp/project"}
+
+    def test_session_tool_does_not_get_root_injected(self):
+        # ``submit_widget`` is a session tool — not in the registry.
+        loop = self._make_loop(_make_registry())
+        step = loop._tool_call_to_action_step(
+            {"name": "submit_widget", "args": {"widget_id": "w1"}}
+        )
+        assert step.tool_input == {"widget_id": "w1"}
+        assert "root" not in step.tool_input
+
+    def test_mcp_tool_does_not_get_root_injected(self):
+        mcp_spec = ToolSpec(
+            tool_id="mcp_search",
+            name="mcp_search",
+            description="",
+            factory=lambda: MagicMock(),
+            enabled=True,
+            kind="mcp",
+            metadata={},
+        )
+        loop = self._make_loop(_make_registry(mcp_spec))
+        step = loop._tool_call_to_action_step(
+            {"name": "mcp_search", "args": {"q": "x"}}
+        )
+        assert step.tool_input == {"q": "x"}
+
+    def test_explicit_root_is_preserved(self):
+        loop = self._make_loop(_make_registry(_make_spec("aider_shell_tool")))
+        step = loop._tool_call_to_action_step(
+            {"name": "aider_shell_tool", "args": {"command": "ls", "root": "/elsewhere"}}
+        )
+        assert step.tool_input["root"] == "/elsewhere"

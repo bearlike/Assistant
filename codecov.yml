@@ -7,7 +7,7 @@ coverage:
       default:
         informational: true
         paths:
-          - "packages/meeseeks_tools/src/meeseeks_tools/vendor/**"
+          - "packages/truss_tools/src/truss_tools/vendor/**"
           - "vendor/**"
 
 comment:
@@ -23,20 +23,20 @@ component_management:
     - component_id: core
       name: core
       paths:
-        - "packages/meeseeks_core/**"
+        - "packages/truss_core/**"
     - component_id: tools
       name: tools
       paths:
-        - "packages/meeseeks_tools/**"
+        - "packages/truss_tools/**"
     - component_id: cli
       name: cli
       paths:
-        - "apps/meeseeks_cli/**"
+        - "apps/truss_cli/**"
     - component_id: api
       name: api
       paths:
-        - "apps/meeseeks_api/**"
+        - "apps/truss_api/**"
     - component_id: ha
       name: ha
       paths:
-        - "meeseeks_ha_conversation/**"
+        - "truss_ha_conversation/**"

@@ -1,4 +1,4 @@
-# Git Commit + PR Instructions (Meeseeks)
+# Git Commit + PR Instructions (Truss)
 
 Use this file for **every** commit and PR title/body in this repo. It codifies our Gitmoji + Conventional Commits rules and common pitfalls to avoid.
 

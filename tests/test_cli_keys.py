@@ -6,7 +6,7 @@ from __future__ import annotations
 import threading
 from unittest.mock import MagicMock, patch
 
-from meeseeks_cli.cli_keys import KeyListener
+from truss_cli.cli_keys import KeyListener
 
 
 class TestKeyListenerNoop:
@@ -31,10 +31,10 @@ class TestKeyListenerNoop:
 class TestKeyListenerBindings:
     """Test bind/dispatch without a real terminal."""
 
-    @patch("meeseeks_cli.cli_keys.tty")
-    @patch("meeseeks_cli.cli_keys.termios")
-    @patch("meeseeks_cli.cli_keys.select")
-    @patch("meeseeks_cli.cli_keys.os")
+    @patch("truss_cli.cli_keys.tty")
+    @patch("truss_cli.cli_keys.termios")
+    @patch("truss_cli.cli_keys.select")
+    @patch("truss_cli.cli_keys.os")
     @patch("sys.stdin")
     def test_bound_key_fires_callback(
         self,
@@ -76,10 +76,10 @@ class TestKeyListenerBindings:
 
         assert callback.called, "Callback should have been invoked"
 
-    @patch("meeseeks_cli.cli_keys.tty")
-    @patch("meeseeks_cli.cli_keys.termios")
-    @patch("meeseeks_cli.cli_keys.select")
-    @patch("meeseeks_cli.cli_keys.os")
+    @patch("truss_cli.cli_keys.tty")
+    @patch("truss_cli.cli_keys.termios")
+    @patch("truss_cli.cli_keys.select")
+    @patch("truss_cli.cli_keys.os")
     @patch("sys.stdin")
     def test_unbound_key_ignored(
         self,
@@ -120,10 +120,10 @@ class TestKeyListenerBindings:
 class TestKeyListenerLifecycle:
     """Test start/stop and pause/resume mechanics."""
 
-    @patch("meeseeks_cli.cli_keys.tty")
-    @patch("meeseeks_cli.cli_keys.termios")
-    @patch("meeseeks_cli.cli_keys.select")
-    @patch("meeseeks_cli.cli_keys.os")
+    @patch("truss_cli.cli_keys.tty")
+    @patch("truss_cli.cli_keys.termios")
+    @patch("truss_cli.cli_keys.select")
+    @patch("truss_cli.cli_keys.os")
     @patch("sys.stdin")
     def test_stop_sets_event_and_joins(
         self,
@@ -148,10 +148,10 @@ class TestKeyListenerLifecycle:
         # Terminal settings should be restored.
         mock_termios.tcsetattr.assert_called()
 
-    @patch("meeseeks_cli.cli_keys.tty")
-    @patch("meeseeks_cli.cli_keys.termios")
-    @patch("meeseeks_cli.cli_keys.select")
-    @patch("meeseeks_cli.cli_keys.os")
+    @patch("truss_cli.cli_keys.tty")
+    @patch("truss_cli.cli_keys.termios")
+    @patch("truss_cli.cli_keys.select")
+    @patch("truss_cli.cli_keys.os")
     @patch("sys.stdin")
     def test_pause_sets_event_and_restores_termios(
         self,

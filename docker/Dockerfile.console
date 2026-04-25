@@ -4,11 +4,11 @@
 FROM node:20-slim AS build
 
 WORKDIR /app
-COPY apps/meeseeks_console/package.json apps/meeseeks_console/package-lock.json ./
+COPY apps/truss_console/package.json apps/truss_console/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --ignore-scripts
 
-COPY apps/meeseeks_console/ .
+COPY apps/truss_console/ .
 RUN npm run build
 
 # ---------- runtime stage ----------
@@ -16,8 +16,8 @@ FROM nginx:alpine
 
 ARG VERSION="0.0.10"
 
-LABEL org.opencontainers.image.title="Meeseeks Console" \
-      org.opencontainers.image.description="Web console for the Meeseeks task-agent assistant" \
+LABEL org.opencontainers.image.title="Truss Console" \
+      org.opencontainers.image.description="Web console for the Truss task-agent assistant" \
       org.opencontainers.image.source="https://github.com/bearlike/Assistant" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.vendor="Krishnakanth Alagiri" \

@@ -1,14 +1,14 @@
 # Nextcloud Talk
 
 <div style="display: flex; justify-content: center;">
-  <img src="../meeseeks-nctalk-01.jpg" alt="Meeseeks replying to an @Meeseeks mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../truss-nctalk-01.png" alt="Truss replying to an @Truss mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-The Nextcloud Talk integration allows users to interact with Meeseeks directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Meeseeks session visible in the web console and Langfuse traces.
+The Nextcloud Talk integration allows users to interact with Truss directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Truss session visible in the web console and Langfuse traces.
 
 ## How it works
 
-1. A Nextcloud Talk bot is registered on the server pointing to the Meeseeks API webhook endpoint.
+1. A Nextcloud Talk bot is registered on the server pointing to the Truss API webhook endpoint.
 2. When a user @mentions the bot, Nextcloud POSTs an ActivityStreams 2.0 webhook to `POST /api/webhooks/nextcloud-talk`.
 3. The adapter verifies the HMAC-SHA256 signature, parses the message, and creates or continues a session.
 4. Non-mentioned messages are silently ignored. The bot only responds when triggered.
@@ -33,10 +33,10 @@ Commands are available after the @mention keyword. They run without invoking the
 
 Examples:
 ```
-@Meeseeks /help
-@Meeseeks /usage
-@Meeseeks /new
-@Meeseeks /switch-project personal-assistant
+@Truss /help
+@Truss /usage
+@Truss /new
+@Truss /switch-project personal-assistant
 ```
 
 The `/switch-project` command sets the working directory for subsequent LLM runs. If the project name is invalid or omitted, it lists available projects.
@@ -45,7 +45,7 @@ The `/switch-project` command sets the working directory for subsequent LLM runs
 
 - Nextcloud 27.1+ with Talk 17.1+ (for bots-v1 capability)
 - Nextcloud 32+ with Talk 22+ (for thread support via `threadId`)
-- The Meeseeks API server running and reachable from the Nextcloud instance
+- The Truss API server running and reachable from the Nextcloud instance
 
 ## Setup
 
@@ -54,14 +54,14 @@ The `/switch-project` command sets the working directory for subsequent LLM runs
 On the Nextcloud server (requires admin shell access):
 
 ```bash
-occ talk:bot:install "Meeseeks" \
+occ talk:bot:install "Truss" \
   "<shared-secret-at-least-40-chars>" \
-  "https://<meeseeks-api-host>/api/webhooks/nextcloud-talk" \
+  "https://<truss-api-host>/api/webhooks/nextcloud-talk" \
   --feature webhook --feature response \
   "AI assistant with a conversation state machine and agent hypervisor"
 ```
 
-Note the shared secret. It must match the `bot_secret` in the Meeseeks config.
+Note the shared secret. It must match the `bot_secret` in the Truss config.
 
 ### 2. Enable the bot in conversations
 
@@ -73,7 +73,7 @@ occ talk:bot:setup <bot-id> <conversation-token>
 
 Or via the Nextcloud Talk web UI (moderator role required): open the conversation settings and enable the bot under "Bots".
 
-### 3. Configure Meeseeks
+### 3. Configure Truss
 
 Add the channel config to `configs/app.json`:
 
@@ -85,7 +85,7 @@ Add the channel config to `configs/app.json`:
       "bot_secret": "<shared-secret-from-step-1>",
       "nextcloud_url": "https://cloud.example.com",
       "allowed_backends": ["https://cloud.example.com"],
-      "trigger_keyword": "@Meeseeks",
+      "trigger_keyword": "@Truss",
       "nextcloud_host_header": ""
     }
   }
@@ -98,13 +98,13 @@ Add the channel config to `configs/app.json`:
 | `bot_secret` | Shared HMAC secret from `occ talk:bot:install` |
 | `nextcloud_url` | Base URL of the Nextcloud instance (use internal URL if behind a CDN) |
 | `allowed_backends` | Origin allowlist for the `X-Nextcloud-Talk-Backend` header (recommended) |
-| `trigger_keyword` | Literal keyword that must appear in a message to trigger the bot (default: `@Meeseeks`) |
+| `trigger_keyword` | Literal keyword that must appear in a message to trigger the bot (default: `@Truss`) |
 | `nextcloud_host_header` | Optional `Host` header override for outbound requests (useful when `nextcloud_url` is an internal address) |
 
 ### 4. Restart the API server
 
 ```bash
-uv run meeseeks-api
+uv run truss-api
 # or: docker compose restart api
 ```
 
@@ -120,7 +120,7 @@ Channel webhook routes registered (platforms: ['nextcloud-talk'])
 In any Nextcloud Talk conversation where the bot is enabled:
 
 ```
-@Meeseeks help me refactor the auth module
+@Truss help me refactor the auth module
 ```
 
 The bot responds with the orchestration result. Subsequent @mentions in the same room continue the conversation with full context. Use `/new` to reset.

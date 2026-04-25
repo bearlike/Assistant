@@ -14,7 +14,7 @@
     "driver": "json",
     "mongodb": {
       "uri": "mongodb://localhost:27017",
-      "database": "meeseeks"
+      "database": "truss"
     }
   },
   "llm": {
@@ -87,8 +87,8 @@
       "cpus": 1.0,
       "memory": "1g",
       "pids_limit": 512,
-      "network": "meeseeks-ide",
-      "state_dir": "/tmp/meeseeks-ide"
+      "network": "truss-ide",
+      "state_dir": "/tmp/truss-ide"
     }
   },
   "hooks": {
@@ -110,7 +110,7 @@
       "nextcloud_url": "http://localhost:8180",
       "nextcloud_host_header": "",
       "allowed_backends": [],
-      "trigger_keyword": "@Meeseeks"
+      "trigger_keyword": "@Truss"
     },
     "email": {
       "enabled": false,
@@ -120,13 +120,13 @@
       "smtp_host": "smtp.example.com",
       "smtp_port": 587,
       "smtp_starttls": true,
-      "username": "meeseeks@example.com",
+      "username": "truss@example.com",
       "password": "app-password-here",
-      "from_address": "Meeseeks <meeseeks@example.com>",
+      "from_address": "Truss <truss@example.com>",
       "mailbox": "INBOX",
       "poll_interval_seconds": 30,
       "allowed_senders": ["user@example.com"],
-      "allowed_recipients": ["meeseeks@example.com"]
+      "allowed_recipients": ["truss@example.com"]
     }
   },
   "projects": {}

@@ -5,14 +5,15 @@ import sys
 import types
 
 import pytest
-from meeseeks_core.common import get_mock_speaker
-from meeseeks_core.config import set_mcp_config_path
-from meeseeks_core.llm import sanitize_tool_schema
-from meeseeks_tools.integration.homeassistant import HomeAssistant, cache_monitor
-from meeseeks_tools.integration.mcp import (
+from truss_core.common import get_mock_speaker
+from truss_core.config import set_mcp_config_path
+from truss_core.llm import sanitize_tool_schema
+from truss_tools.integration.homeassistant import HomeAssistant, cache_monitor
+from truss_tools.integration.mcp import (
     MCPToolRunner,
     _expand_env_vars,
     _load_mcp_config,
+    _normalize_mcp_config,
     _prepare_mcp_input,
     discover_mcp_tool_details_with_failures,
     discover_mcp_tools,
@@ -39,6 +40,25 @@ def test_mcp_config_normalizes_legacy_keys(monkeypatch, tmp_path):
     assert server["transport"] == "streamable_http"
     assert server["headers"] == {"a": "b"}
     assert "http_headers" not in server
+
+
+def test_mcp_config_strips_unsupported_adapter_keys():
+    """Drop Claude Code-only extension keys (e.g. ``oauth``) so the
+    langchain-mcp-adapters session factory doesn't choke on them."""
+    config = {
+        "mcpServers": {
+            "slack": {
+                "type": "http",
+                "url": "https://mcp.slack.com/mcp",
+                "oauth": {"clientId": "abc", "callbackPort": 3118},
+            }
+        }
+    }
+    server = _normalize_mcp_config(config)["servers"]["slack"]
+    assert server["transport"] == "streamable_http"
+    assert server["url"] == "https://mcp.slack.com/mcp"
+    assert "oauth" not in server
+    assert "type" not in server
 
 
 def test_mcp_tool_runner_uses_async(monkeypatch):
@@ -390,7 +410,7 @@ def test_homeassistant_update_services(monkeypatch):
             return [{"domain": "scene"}]
 
     monkeypatch.setattr(
-        "meeseeks_tools.integration.homeassistant.requests.get",
+        "truss_tools.integration.homeassistant.requests.get",
         lambda *args, **kwargs: DummyResponse(),
     )
     assert ha.update_services() is True
@@ -412,7 +432,7 @@ def test_homeassistant_update_entities(monkeypatch):
             ]
 
     monkeypatch.setattr(
-        "meeseeks_tools.integration.homeassistant.requests.get",
+        "truss_tools.integration.homeassistant.requests.get",
         lambda *args, **kwargs: DummyResponse(),
     )
     assert ha.update_entities() is True
@@ -474,7 +494,7 @@ def test_homeassistant_call_service_success(monkeypatch):
             return "ok"
 
     monkeypatch.setattr(
-        "meeseeks_tools.integration.homeassistant.requests.post",
+        "truss_tools.integration.homeassistant.requests.post",
         lambda *args, **kwargs: DummyResponse(),
     )
     ok, payload = ha.call_service("scene", "turn_on", "scene.lamp")
@@ -524,12 +544,12 @@ def test_homeassistant_set_state(monkeypatch):
             return "format"
 
     monkeypatch.setattr(
-        "meeseeks_tools.integration.homeassistant.PydanticOutputParser",
+        "truss_tools.integration.homeassistant.PydanticOutputParser",
         DummyParser,
     )
     monkeypatch.setattr(HomeAssistant, "_create_set_prompt", lambda *_a, **_k: DummyChain())
     monkeypatch.setattr(
-        "meeseeks_tools.integration.homeassistant.ha_render_system_prompt",
+        "truss_tools.integration.homeassistant.ha_render_system_prompt",
         lambda *args, **kwargs: "prompt",
     )
     monkeypatch.setattr(
@@ -555,7 +575,7 @@ def test_homeassistant_get_state(monkeypatch):
 
     monkeypatch.setattr(HomeAssistant, "_create_get_prompt", lambda *_a, **_k: DummyChain())
     monkeypatch.setattr(
-        "meeseeks_tools.integration.homeassistant.ha_render_system_prompt",
+        "truss_tools.integration.homeassistant.ha_render_system_prompt",
         lambda *args, **kwargs: "prompt",
     )
     step = types.SimpleNamespace(tool_input="status")

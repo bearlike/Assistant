@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from meeseeks_core import config as config_module
-from meeseeks_core.config import (
+from truss_core import config as config_module
+from truss_core.config import (
     AppConfig,
     ConfigCheck,
     LLMConfig,
@@ -149,29 +149,29 @@ def test_get_config_warns_once_for_missing_file(tmp_path, monkeypatch):
     assert len(captured) == 1
 
 
-# -- MEESEEKS_HOME resolution chain ------------------------------------------
+# -- TRUSS_HOME resolution chain ------------------------------------------
 
 
-class TestResolveMeeseeksHome:
-    """Tests for resolve_meeseeks_home()."""
+class TestResolveTrussHome:
+    """Tests for resolve_truss_home()."""
 
     def test_env_var_takes_precedence(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("MEESEEKS_HOME", str(tmp_path / "custom"))
-        result = config_module.resolve_meeseeks_home()
+        monkeypatch.setenv("TRUSS_HOME", str(tmp_path / "custom"))
+        result = config_module.resolve_truss_home()
         assert result == (tmp_path / "custom").resolve()
 
-    def test_default_is_home_dot_meeseeks(self, monkeypatch):
-        monkeypatch.delenv("MEESEEKS_HOME", raising=False)
+    def test_default_is_home_dot_truss(self, monkeypatch):
+        monkeypatch.delenv("TRUSS_HOME", raising=False)
         from pathlib import Path
 
-        result = config_module.resolve_meeseeks_home()
-        assert result == Path.home() / ".meeseeks"
+        result = config_module.resolve_truss_home()
+        assert result == Path.home() / ".truss"
 
     def test_tilde_in_env_expanded(self, monkeypatch):
-        monkeypatch.setenv("MEESEEKS_HOME", "~/my-meeseeks")
-        result = config_module.resolve_meeseeks_home()
+        monkeypatch.setenv("TRUSS_HOME", "~/my-truss")
+        result = config_module.resolve_truss_home()
         assert "~" not in str(result)
-        assert "my-meeseeks" in str(result)
+        assert "my-truss" in str(result)
 
 
 class TestResolveConfigPath:
@@ -187,7 +187,7 @@ class TestResolveConfigPath:
 
     def test_falls_back_to_home(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("MEESEEKS_HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("TRUSS_HOME", str(tmp_path / "home"))
         # No configs/ directory in CWD
         result = config_module._resolve_config_path("app.json")
         assert result == tmp_path / "home" / "app.json"
@@ -197,23 +197,23 @@ class TestResolveConfigPath:
         home = tmp_path / "home"
         home.mkdir()
         (home / "app.json").write_text("{}", encoding="utf-8")
-        monkeypatch.setenv("MEESEEKS_HOME", str(home))
+        monkeypatch.setenv("TRUSS_HOME", str(home))
         result = config_module._resolve_config_path("app.json")
         assert result == home / "app.json"
         assert result.exists()
 
 
 class TestRuntimeConfigDefaults:
-    """RuntimeConfig resolves empty defaults to MEESEEKS_HOME paths."""
+    """RuntimeConfig resolves empty defaults to TRUSS_HOME paths."""
 
     def test_empty_session_dir_resolves_to_home(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("MEESEEKS_HOME", str(tmp_path))
+        monkeypatch.setenv("TRUSS_HOME", str(tmp_path))
         config_module.reset_config()
         rt = config_module.RuntimeConfig.model_validate({})
         assert rt.session_dir == str(tmp_path / "sessions")
 
     def test_empty_cache_dir_resolves_to_home(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("MEESEEKS_HOME", str(tmp_path))
+        monkeypatch.setenv("TRUSS_HOME", str(tmp_path))
         config_module.reset_config()
         rt = config_module.RuntimeConfig.model_validate({})
         assert rt.cache_dir == str(tmp_path / "cache")
@@ -244,7 +244,7 @@ class TestGetConfigPathIntegration:
 
     def test_app_config_falls_back_to_home(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("MEESEEKS_HOME", str(tmp_path / "mhome"))
+        monkeypatch.setenv("TRUSS_HOME", str(tmp_path / "mhome"))
         config_module.reset_config()
         path = config_module.get_app_config_path()
         assert str(tmp_path / "mhome" / "app.json") == path
@@ -258,7 +258,7 @@ class TestGetConfigPathIntegration:
 
 
 class TestEnsureExampleConfigs:
-    """ensure_example_configs respects MEESEEKS_HOME when outside project."""
+    """ensure_example_configs respects TRUSS_HOME when outside project."""
 
     def test_scaffolds_to_home_when_no_configs_dir(
         self,
@@ -267,7 +267,7 @@ class TestEnsureExampleConfigs:
     ):
         monkeypatch.chdir(tmp_path)
         home = tmp_path / "mhome"
-        monkeypatch.setenv("MEESEEKS_HOME", str(home))
+        monkeypatch.setenv("TRUSS_HOME", str(home))
         app_p, mcp_p = ensure_example_configs()
         assert app_p.parent == home
         assert mcp_p.parent == home

@@ -3,14 +3,28 @@
 import json
 from types import SimpleNamespace
 
-from meeseeks_core.config import set_config_override, set_mcp_config_path
-from meeseeks_core.tool_registry import (
+from truss_core.config import set_config_override, set_mcp_config_path
+from truss_core.tool_registry import (
     ToolRegistry,
     ToolSpec,
     _default_manifest_cache_path,
     _ensure_auto_manifest,
+    _sanitize_tool_id,
     load_registry,
 )
+
+
+def test_sanitize_tool_id_strips_redundant_server_prefix():
+    """Tool names that already embed the server name shouldn't double up."""
+    # searxng/deepwiki shape — the upstream tool name self-prefixes.
+    assert (
+        _sanitize_tool_id("internet-search", "Internet-Search-searxng_web_search")
+        == "mcp_internet_search_searxng_web_search"
+    )
+    # No redundancy → standard mcp_<server>_<tool>.
+    assert _sanitize_tool_id("docs-deepwiki", "ask_question") == "mcp_docs_deepwiki_ask_question"
+    # Casing / hyphen normalisation still happens.
+    assert _sanitize_tool_id("Linear", "create_issue") == "mcp_linear_create_issue"
 
 
 def test_default_registry(monkeypatch):
@@ -35,7 +49,7 @@ def test_default_registry_homeassistant_enabled(monkeypatch):
 
 def test_registry_disables_on_factory_error():
     """Disable tools that fail during initialization."""
-    from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
+    from truss_core.tool_registry import ToolRegistry, ToolSpec
 
     def _boom():
         raise RuntimeError("nope")
@@ -127,7 +141,7 @@ def test_manifest_skips_missing_local_class(tmp_path, monkeypatch):
 
 def test_manifest_skips_mcp_tool_when_support_missing(tmp_path, monkeypatch):
     """Skip MCP tools when MCP adapters are unavailable."""
-    monkeypatch.setattr("meeseeks_core.tool_registry._load_mcp_support", lambda: None)
+    monkeypatch.setattr("truss_core.tool_registry._load_mcp_support", lambda: None)
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
         json.dumps(
@@ -156,7 +170,7 @@ def test_manifest_skips_mcp_tool_when_support_missing(tmp_path, monkeypatch):
 def test_manifest_skips_mcp_tool_missing_server(tmp_path, monkeypatch):
     """Skip MCP tools missing server/tool metadata."""
     dummy_mcp = SimpleNamespace(MCPToolRunner=object)
-    monkeypatch.setattr("meeseeks_core.tool_registry._load_mcp_support", lambda: dummy_mcp)
+    monkeypatch.setattr("truss_core.tool_registry._load_mcp_support", lambda: dummy_mcp)
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
         json.dumps(
@@ -186,7 +200,7 @@ def test_auto_manifest_returns_existing_when_mcp_missing(tmp_path, monkeypatch):
     manifest_path = tmp_path / "tool-manifest.auto.json"
     manifest_path.write_text("{}", encoding="utf-8")
     set_config_override({"runtime": {"config_dir": str(tmp_path)}})
-    monkeypatch.setattr("meeseeks_core.tool_registry._load_mcp_support", lambda: None)
+    monkeypatch.setattr("truss_core.tool_registry._load_mcp_support", lambda: None)
 
     result = _ensure_auto_manifest(str(tmp_path / "mcp.json"))
     assert result == str(manifest_path)
@@ -203,7 +217,7 @@ def test_auto_manifest_handles_discovery_error(tmp_path, monkeypatch):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "meeseeks_core.tool_registry._load_mcp_support",
+        "truss_core.tool_registry._load_mcp_support",
         lambda: DummyMcpModule(),
     )
 
@@ -224,7 +238,7 @@ def test_auto_manifest_handles_write_failure(tmp_path, monkeypatch):
             return ({}, {})
 
     monkeypatch.setattr(
-        "meeseeks_core.tool_registry._load_mcp_support",
+        "truss_core.tool_registry._load_mcp_support",
         lambda: DummyMcpModule(),
     )
 
@@ -264,9 +278,9 @@ def test_tool_catalog_reports_registered_tools():
 
 
 def test_default_manifest_cache_path_uses_home_fallback(tmp_path, monkeypatch):
-    """Fallback to ~/.meeseeks when config dir is empty."""
+    """Fallback to ~/.truss when config dir is empty."""
     set_config_override({"runtime": {"config_dir": ""}})
-    monkeypatch.setattr("meeseeks_core.tool_registry.os.path.expanduser", lambda _p: str(tmp_path))
+    monkeypatch.setattr("truss_core.tool_registry.os.path.expanduser", lambda _p: str(tmp_path))
     path = _default_manifest_cache_path()
     assert path.endswith("tool-manifest.auto.json")
 
@@ -305,7 +319,7 @@ def test_auto_manifest_marks_cached_tools_disabled_on_failure(tmp_path, monkeypa
         def _load_mcp_config(self, _path):
             raise RuntimeError("boom")
 
-    monkeypatch.setattr("meeseeks_core.tool_registry._load_mcp_support", lambda: DummyMcpModule())
+    monkeypatch.setattr("truss_core.tool_registry._load_mcp_support", lambda: DummyMcpModule())
 
     result = _ensure_auto_manifest(str(tmp_path / "mcp.json"))
     assert result == str(manifest_path)
@@ -353,7 +367,7 @@ def test_manifest_builds_mcp_factory(tmp_path, monkeypatch):
             return None
 
     dummy_module = SimpleNamespace(MCPToolRunner=DummyMCPToolRunner)
-    monkeypatch.setattr("meeseeks_core.tool_registry._load_mcp_support", lambda: dummy_module)
+    monkeypatch.setattr("truss_core.tool_registry._load_mcp_support", lambda: dummy_module)
 
     registry = load_registry(str(manifest_path))
     tool = registry.get("mcp_tool")
@@ -402,7 +416,7 @@ def test_auto_manifest_from_mcp_config(tmp_path, monkeypatch):
     manifest_path.write_text("{bad json", encoding="utf-8")
 
     monkeypatch.setattr(
-        "meeseeks_tools.integration.mcp.discover_mcp_tool_details_with_failures",
+        "truss_tools.integration.mcp.discover_mcp_tool_details_with_failures",
         lambda _config: (
             {"srv": [{"name": " ", "schema": None}, {"name": "tool-a", "schema": None}]},
             {},
@@ -427,7 +441,7 @@ def test_load_registry_sets_available_tools_for_mcp(tmp_path, monkeypatch):
     set_config_override({"runtime": {"config_dir": str(tmp_path)}})
 
     monkeypatch.setattr(
-        "meeseeks_tools.integration.mcp.discover_mcp_tool_details_with_failures",
+        "truss_tools.integration.mcp.discover_mcp_tool_details_with_failures",
         lambda _config: ({"srv": [{"name": "tool-a", "schema": None}]}, {}),
     )
 
@@ -435,7 +449,7 @@ def test_load_registry_sets_available_tools_for_mcp(tmp_path, monkeypatch):
     tool_ids = {spec.tool_id for spec in registry.list_specs()}
     assert "mcp_srv_tool_a" in tool_ids
 
-    from meeseeks_core.classes import AVAILABLE_TOOLS
+    from truss_core.classes import AVAILABLE_TOOLS
 
     assert "mcp_srv_tool_a" in AVAILABLE_TOOLS
 
@@ -454,11 +468,11 @@ def test_auto_manifest_marks_failed_server(tmp_path, monkeypatch):
     manifest_path.write_text(json.dumps({"tools": "bad"}), encoding="utf-8")
 
     monkeypatch.setattr(
-        "meeseeks_tools.integration.mcp.discover_mcp_tool_details_with_failures",
+        "truss_tools.integration.mcp.discover_mcp_tool_details_with_failures",
         lambda _config: ({}, {"srv": RuntimeError("boom")}),
     )
     monkeypatch.setattr(
-        "meeseeks_core.tool_registry._build_manifest_payload",
+        "truss_core.tool_registry._build_manifest_payload",
         lambda _tools: {"tools": "bad"},
     )
 
@@ -511,7 +525,7 @@ def test_auto_manifest_marks_failed_server(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr(
-        "meeseeks_core.tool_registry._build_manifest_payload",
+        "truss_core.tool_registry._build_manifest_payload",
         lambda _tools: {"tools": [{"tool_id": "mcp_srv_tool_a"}, {"name": "bad"}, "bad"]},
     )
 

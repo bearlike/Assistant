@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import MagicMock, patch
 
-from meeseeks_tools.integration.mcp_pool import (
+from truss_tools.integration.mcp_pool import (
     MAX_ERRORS_BEFORE_RECONNECT,
     MCPConnectionPool,
     ServerState,
@@ -275,9 +275,11 @@ class TestQuarantineOnConfigKwargError:
             call_args: list[dict] = []
 
             async def maybe_fail(name, cfg):
+                # Simulate the adapter rejecting an unknown kwarg on the
+                # first call; succeed once the config hash changes.
                 call_args.append(cfg)
-                if "oauth" in cfg:
-                    raise TypeError("unexpected keyword argument 'oauth'")
+                if len(call_args) == 1:
+                    raise TypeError("unexpected keyword argument 'foo'")
                 return ServerState(
                     name=name,
                     config=cfg,
@@ -285,10 +287,14 @@ class TestQuarantineOnConfigKwargError:
                 )
 
             with patch.object(self.pool, "_connect_single", side_effect=maybe_fail):
-                await self.pool.connect_all({"servers": {"slack": {"type": "http", "oauth": {}}}})
+                await self.pool.connect_all(
+                    {"servers": {"slack": {"type": "http", "url": "https://a"}}}
+                )
                 assert self.pool._servers["slack"].skip_reason is not None
                 # User "fixes" the config — different shape, new hash
-                await self.pool.refresh_if_config_changed({"servers": {"slack": {"type": "http"}}})
+                await self.pool.refresh_if_config_changed(
+                    {"servers": {"slack": {"type": "http", "url": "https://b"}}}
+                )
             return call_args
 
         call_args = asyncio.run(_run())

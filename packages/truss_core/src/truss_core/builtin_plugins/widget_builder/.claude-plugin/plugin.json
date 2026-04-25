@@ -1,0 +1,14 @@
+{
+  "name": "widget-builder",
+  "description": "st-widget-builder sub-agent for stlite console widgets.",
+  "version": "0.1.0",
+  "author": "Truss",
+  "requires-capabilities": ["stlite"],
+  "session_tools": [
+    {
+      "tool_id": "submit_widget",
+      "module": "truss_core.builtin_plugins.widget_builder.submit_widget",
+      "class": "SubmitWidgetTool"
+    }
+  ]
+}

@@ -4,10 +4,10 @@ from contextlib import contextmanager
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
-from meeseeks_core import planning as planning_module
-from meeseeks_core.classes import Plan
-from meeseeks_core.planning import Planner
-from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
+from truss_core import planning as planning_module
+from truss_core.classes import Plan
+from truss_core.planning import Planner
+from truss_core.tool_registry import ToolRegistry, ToolSpec
 
 
 def test_planner_examples_are_wrapped():

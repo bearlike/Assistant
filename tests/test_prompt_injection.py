@@ -1,12 +1,12 @@
 """Tests for prompt/tool injection logic."""
 
-from meeseeks_core import planning as planning_module
-from meeseeks_core.common import get_system_prompt, ha_render_system_prompt
-from meeseeks_core.config import set_config_override, set_mcp_config_path
-from meeseeks_core.context import ContextSnapshot
-from meeseeks_core.planning import PromptBuilder
-from meeseeks_core.token_budget import get_token_budget
-from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, load_registry
+from truss_core import planning as planning_module
+from truss_core.common import get_system_prompt, ha_render_system_prompt
+from truss_core.config import set_config_override, set_mcp_config_path
+from truss_core.context import ContextSnapshot
+from truss_core.planning import PromptBuilder
+from truss_core.token_budget import get_token_budget
+from truss_core.tool_registry import ToolRegistry, ToolSpec, load_registry
 
 
 def _build_prompt(registry, *, recent_events=None, selected_events=None, summary=None):
@@ -242,12 +242,12 @@ def test_ha_render_system_prompt_includes_entities():
 def test_action_planner_prompt_identity():
     """Ensure the planner prompt includes agent identity and boundaries."""
     prompt = get_system_prompt()
-    assert "Meeseeks, a task-completing agent" in prompt
+    assert "Truss, a task-completing agent" in prompt
     assert "Examples in the prompt are illustrative only" in prompt
 
 
 def test_system_prompt_identity():
     """Ensure the unified system prompt includes agent identity."""
     prompt = get_system_prompt("system")
-    assert "Meeseeks" in prompt
+    assert "Truss" in prompt
     assert "tool" in prompt.lower()

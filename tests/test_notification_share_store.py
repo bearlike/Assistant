@@ -1,8 +1,8 @@
 """Tests for notification and share stores."""
 
-from meeseeks_core.config import set_config_override
-from meeseeks_core.notifications import NotificationStore
-from meeseeks_core.share_store import ShareStore
+from truss_core.config import set_config_override
+from truss_core.notifications import NotificationStore
+from truss_core.share_store import ShareStore
 
 
 def test_notification_store_handles_corrupt_json(tmp_path):

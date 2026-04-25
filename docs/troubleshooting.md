@@ -65,7 +65,7 @@ Checks:
 1. Both services use host networking. Verify nothing else is on ports 5125 or 3001.
 2. `HOST_UID` and `HOST_GID` must match your actual user: run `id` to find them.
 3. Volume paths must match exactly between host and container.
-4. Check logs: `docker compose logs -f meeseeks-api`.
+4. Check logs: `docker compose logs -f truss-api`.
 
 ## Session stuck / not completing
 
@@ -73,7 +73,7 @@ Checks:
 
 Notes:
 
-- Meeseeks uses a natural-completion loop. It runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.
+- Truss uses a natural-completion loop. It runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.
 - Budget warnings are injected as messages as the context window fills up.
 - If a session appears stuck, use mid-session steering:
 
@@ -91,8 +91,8 @@ Stall detection in the hypervisor fires after repeated identical tool calls and 
 
 Checks:
 
-1. `MEESEEKS_STORAGE_DRIVER=mongodb` is set in the environment.
-2. `MEESEEKS_MONGODB_URI` format: `mongodb://user:pass@host:27017/dbname?authSource=admin`.
+1. `TRUSS_STORAGE_DRIVER=mongodb` is set in the environment.
+2. `TRUSS_MONGODB_URI` format: `mongodb://user:pass@host:27017/dbname?authSource=admin`.
 3. In Docker: MongoDB must be on the same network or accessible via host networking.
 4. Default production port: `27017`. (Port `27018` is used for direct dev-environment access.)
 
@@ -101,14 +101,14 @@ Checks:
 **CLI verbose mode:**
 
 ```bash
-uv run meeseeks -v    # debug
-uv run meeseeks -vv   # trace (very verbose)
+uv run truss -v    # debug
+uv run truss -vv   # trace (very verbose)
 ```
 
 **Docker API logs:**
 
 ```bash
-docker compose logs -f meeseeks-api
+docker compose logs -f truss-api
 ```
 
 **Langfuse traces** (if enabled):
