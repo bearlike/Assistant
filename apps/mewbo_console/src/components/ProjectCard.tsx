@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FolderOpen, Pencil, Trash2, Check, X } from 'lucide-react';
 import { VirtualProject } from '../types';
 import { Button } from './ui/button';
+import { WorktreesPanel } from './WorktreesPanel';
 
 interface ProjectCardProps {
   project: VirtualProject;
@@ -88,6 +89,10 @@ export function ProjectCard({ project, onEdit, onDelete }: ProjectCardProps) {
           <div className="text-[10px] text-[hsl(var(--muted-foreground))]">
             Created {new Date(project.created_at).toLocaleDateString()}
           </div>
+          {/* Worktrees: only relevant for top-level managed projects. */}
+          {!project.is_worktree && (
+            <WorktreesPanel projectId={project.project_id} />
+          )}
         </>
       )}
     </div>

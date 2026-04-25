@@ -33,7 +33,11 @@ export function useSessionQuery(
       const payloadContext = vars.contextOverride ?? context;
       let attachmentRecords: AttachmentPayload[] | undefined;
       if (vars.attachments && vars.attachments.length > 0) {
-        attachmentRecords = await uploadAttachments(sessionId, vars.attachments);
+        attachmentRecords = await uploadAttachments(
+          sessionId,
+          vars.attachments,
+          payloadContext?.model ?? null,
+        );
       }
       await postQuery(
         sessionId,

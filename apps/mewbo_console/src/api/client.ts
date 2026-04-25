@@ -93,9 +93,10 @@ export async function regenerateTitle(
 
 export async function uploadAttachments(
   sessionId: string,
-  files: File[]
+  files: File[],
+  model?: string | null
 ): Promise<AttachmentRecord[]> {
-  return realClient.uploadAttachments(sessionId, files);
+  return realClient.uploadAttachments(sessionId, files, model);
 }
 
 export async function createShare(sessionId: string): Promise<ShareRecord> {
@@ -219,6 +220,26 @@ export async function updateVirtualProject(id: string, data: { name?: string; de
 
 export async function deleteVirtualProject(id: string): Promise<void> {
   return realClient.deleteVirtualProject(id);
+}
+
+export async function listProjectBranches(projectId: string) {
+  return realClient.listProjectBranches(projectId);
+}
+
+export async function listWorktrees(projectId: string) {
+  return realClient.listWorktrees(projectId);
+}
+
+export async function createWorktree(projectId: string, branch: string) {
+  return realClient.createWorktree(projectId, branch);
+}
+
+export async function deleteWorktree(
+  projectId: string,
+  worktreeId: string,
+  force = false
+): Promise<void> {
+  return realClient.deleteWorktree(projectId, worktreeId, force);
 }
 
 export async function fetchGitDiff(

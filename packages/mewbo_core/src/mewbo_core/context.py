@@ -11,6 +11,12 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from pydantic import BaseModel, Field
 
+from mewbo_core.attachments import (
+    encode_image_data_uri,
+    is_image,
+    model_supports_vision,
+    parsed_sidecar_path,
+)
 from mewbo_core.common import format_tool_input, get_logger
 from mewbo_core.components import build_langfuse_handler, langfuse_trace_span
 from mewbo_core.config import get_config_value, get_version
@@ -38,7 +44,12 @@ class ContextSnapshot:
     selected_events: list[EventRecord] | None
     events: list[EventRecord]
     budget: TokenBudget
+    # Markdown-rendered text from documents (PDF/DOCX/CSV/...) and raw
+    # text files. Injected into the system prompt's "Attached files:" block.
     attachment_texts: list[str] = field(default_factory=list)
+    # LiteLLM-style image content parts: {"type": "image_url", "image_url": {"url": ...}}
+    # Spliced into the per-turn HumanMessage on vision-capable models.
+    attachment_images: list[dict] = field(default_factory=list)
 
 
 def event_payload_text(event: EventRecord) -> str:
@@ -65,21 +76,15 @@ def render_event_lines(events: list[EventRecord]) -> str:
     return "\n".join(lines).strip()
 
 
-_MAX_ATTACHMENT_BYTES = 50_000  # per file
-_MAX_TOTAL_ATTACHMENT_BYTES = 200_000  # aggregate cap
-_TEXT_CONTENT_TYPES = {"text/", "application/json", "application/xml", "application/yaml"}
+# Per-file and aggregate caps for parsed/text attachment content. Sized
+# for Markdown rendered from PDFs/DOCX — a 10-page PDF easily produces
+# 60–80 KB of MD; a single CSV can be much larger.
+_MAX_ATTACHMENT_BYTES = 200_000  # per file
+_MAX_TOTAL_ATTACHMENT_BYTES = 1_000_000  # aggregate cap
 
 
-def _is_text_content_type(ct: str) -> bool:
-    """Return True if the content type looks like a text file."""
-    ct = ct.lower()
-    return any(ct.startswith(prefix) for prefix in _TEXT_CONTENT_TYPES)
-
-
-def _load_attachment_texts(session_dir: str, events: list[EventRecord]) -> list[str]:
-    """Read text attachment content from disk for inclusion in LLM context."""
-    texts: list[str] = []
-    total_bytes = 0
+def _iter_attachments(events: list[EventRecord]):
+    """Yield attachment dicts from all ``context`` events in order."""
     for event in events:
         if event.get("type") != "context":
             continue
@@ -90,34 +95,100 @@ def _load_attachment_texts(session_dir: str, events: list[EventRecord]) -> list[
         if not isinstance(attachments, list):
             continue
         for att in attachments:
-            if not isinstance(att, dict):
-                continue
-            stored_name = att.get("stored_name")
-            filename = att.get("filename", stored_name)
-            content_type = str(att.get("content_type", ""))
-            size = int(att.get("size_bytes", 0) or 0)
-            if not stored_name:
-                continue
-            if size > _MAX_ATTACHMENT_BYTES:
-                texts.append(f"[Attachment {filename}: {size} bytes, too large to include]")
-                continue
-            if content_type and not _is_text_content_type(content_type):
-                texts.append(f"[Attachment {filename}: binary file ({content_type}), skipped]")
-                continue
-            path = os.path.join(session_dir, "attachments", stored_name)
-            if not os.path.isfile(path):
-                continue
-            try:
-                with open(path, encoding="utf-8", errors="replace") as fh:
-                    content = fh.read(_MAX_ATTACHMENT_BYTES)
-                if total_bytes + len(content) > _MAX_TOTAL_ATTACHMENT_BYTES:
-                    texts.append(f"[Attachment {filename}: skipped, aggregate size limit reached]")
-                    continue
-                total_bytes += len(content)
-                texts.append(f"--- {filename} ---\n{content}")
-            except OSError:
-                continue
+            if isinstance(att, dict):
+                yield att
+
+
+def _read_text_capped(path: str, cap: int) -> str | None:
+    """Read up to ``cap`` bytes of text from ``path``; None on error."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read(cap)
+    except OSError:
+        return None
+
+
+def _load_attachment_texts(
+    session_dir: str,
+    events: list[EventRecord],
+    model_name: str | None = None,
+) -> list[str]:
+    """Read attachment content for inclusion in the system prompt.
+
+    For documents we prefer the parsed Markdown sidecar (``<stored>.md``)
+    written at upload time. Images are not loaded here — see
+    :func:`_load_attachment_images`. Images on non-vision models surface
+    as a clear ``[Image ... skipped]`` warning so the model knows the
+    user attempted to share visual context.
+    """
+    texts: list[str] = []
+    total_bytes = 0
+    has_vision = model_supports_vision(model_name)
+    for att in _iter_attachments(events):
+        stored_name = att.get("stored_name")
+        filename = att.get("filename", stored_name)
+        content_type = str(att.get("content_type", ""))
+        size = int(att.get("size_bytes", 0) or 0)
+        if not stored_name:
+            continue
+        raw_path = os.path.join(session_dir, "attachments", stored_name)
+
+        if is_image(content_type):
+            # Surface a warning for non-vision models so the LLM knows
+            # the user shared an image it can't see (Q5 option C).
+            if not has_vision:
+                texts.append(
+                    f"[Image {filename}: model does not support vision; image skipped]"
+                )
+            # Vision models receive the image via ``attachment_images`` —
+            # nothing to add to the text block.
+            continue
+
+        # Document path: prefer parsed-Markdown sidecar.
+        sidecar = parsed_sidecar_path(raw_path)
+        load_path = sidecar if os.path.isfile(sidecar) else raw_path
+        if not os.path.isfile(load_path):
+            continue
+
+        if load_path is raw_path and size > _MAX_ATTACHMENT_BYTES:
+            texts.append(f"[Attachment {filename}: {size} bytes, too large to include]")
+            continue
+        content = _read_text_capped(load_path, _MAX_ATTACHMENT_BYTES)
+        if content is None:
+            continue
+        if total_bytes + len(content) > _MAX_TOTAL_ATTACHMENT_BYTES:
+            texts.append(f"[Attachment {filename}: skipped, aggregate size limit reached]")
+            continue
+        total_bytes += len(content)
+        texts.append(f"--- {filename} ---\n{content}")
     return texts
+
+
+def _load_attachment_images(
+    session_dir: str,
+    events: list[EventRecord],
+    model_name: str | None,
+) -> list[dict]:
+    """Build LiteLLM-style ``image_url`` content parts for vision models.
+
+    Returns an empty list when the active model is not vision-capable —
+    the user is informed via a text warning instead (see
+    :func:`_load_attachment_texts`).
+    """
+    if not model_supports_vision(model_name):
+        return []
+    parts: list[dict] = []
+    for att in _iter_attachments(events):
+        stored_name = att.get("stored_name")
+        content_type = str(att.get("content_type", ""))
+        if not stored_name or not is_image(content_type):
+            continue
+        path = os.path.join(session_dir, "attachments", stored_name)
+        url = encode_image_data_uri(path, content_type)
+        if not url:
+            continue
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+    return parts
 
 
 class ContextBuilder:
@@ -193,7 +264,8 @@ class ContextBuilder:
                 model_name=model_name,
             )
         session_dir = self._session_store.session_dir(session_id)
-        attachment_texts = _load_attachment_texts(session_dir, events)
+        attachment_texts = _load_attachment_texts(session_dir, events, model_name)
+        attachment_images = _load_attachment_images(session_dir, events, model_name)
         return ContextSnapshot(
             summary=summary,
             recent_events=recent_events,
@@ -201,6 +273,7 @@ class ContextBuilder:
             events=events,
             budget=budget,
             attachment_texts=attachment_texts,
+            attachment_images=attachment_images,
         )
 
     def _select_context_events(

@@ -5,16 +5,18 @@ import {
   CommandSpec,
   EventRecord,
   NotificationItem,
+  ProjectBranches,
   QueryMode,
   SessionContext,
   SessionExport,
   SessionSummary,
   SessionUsage,
   ShareRecord,
-  VirtualProject
+  VirtualProject,
+  WorktreeSummary
 } from "../types";
 
-export type { VirtualProject };
+export type { ProjectBranches, VirtualProject, WorktreeSummary };
 
 export type ProjectSource = "config" | "managed";
 
@@ -45,11 +47,22 @@ export type ProjectSummary = {
   description?: string;
   source?: ProjectSource;
   project_id?: string;  // only for managed projects
+  // Worktree fields appear only on managed projects; backend leaves them
+  // undefined for config-defined entries.
+  is_worktree?: boolean;
+  parent_project_id?: string | null;
+  branch?: string | null;
+};
+
+export type ModelCapabilities = {
+  supports_vision: boolean;
 };
 
 export type ModelInfo = {
   models: string[];
   default: string;
+  /** Per-model capability map keyed by model name. Optional for back-compat. */
+  capabilities?: Record<string, ModelCapabilities>;
 };
 
 export type AgentSummary = {
@@ -90,7 +103,8 @@ export type ApiClient = {
   regenerateTitle: (sessionId: string) => Promise<{ session_id: string; title: string }>;
   uploadAttachments: (
     sessionId: string,
-    files: File[]
+    files: File[],
+    model?: string | null
   ) => Promise<AttachmentRecord[]>;
   createShare: (sessionId: string) => Promise<ShareRecord>;
   exportSession: (sessionId: string) => Promise<SessionExport>;
@@ -139,6 +153,10 @@ export type ApiClient = {
   createVirtualProject: (name: string, description: string, path?: string) => Promise<VirtualProject>;
   updateVirtualProject: (id: string, data: Partial<Pick<VirtualProject, "name" | "description">>) => Promise<VirtualProject>;
   deleteVirtualProject: (id: string) => Promise<void>;
+  listProjectBranches: (projectId: string) => Promise<ProjectBranches>;
+  listWorktrees: (projectId: string) => Promise<WorktreeSummary[]>;
+  createWorktree: (projectId: string, branch: string) => Promise<WorktreeSummary>;
+  deleteWorktree: (projectId: string, worktreeId: string, force?: boolean) => Promise<void>;
   fetchCommands: () => Promise<CommandSpec[]>;
   executeCommand: (
     sessionId: string,

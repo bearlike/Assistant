@@ -38,6 +38,37 @@ export type VirtualProject = {
   folder_created: boolean;
   created_at: string;
   updated_at: string;
+  // Worktree extension (null/undefined for regular managed projects).
+  parent_project_id?: string | null;
+  branch?: string | null;
+  is_worktree?: boolean;
+};
+
+export type WorktreeSummary = {
+  /** Worktree-as-VirtualProject id when the API owns it; ``null`` for
+   * user-created worktrees the app hasn't adopted. */
+  project_id: string | null;
+  name: string;
+  branch: string;
+  path: string;
+  /** ``true`` for worktrees registered with the project store, ``false``
+   * for entries discovered via ``git worktree list``. The console can
+   * select managed worktrees as session contexts; user-created ones are
+   * informational until adopted. */
+  managed: boolean;
+  is_worktree: true;
+  parent_project_id?: string | null;
+  parent_path?: string;
+  /** Result of the most recent cleanliness check from the API. */
+  clean?: boolean;
+  head?: string | null;
+};
+
+export type ProjectBranches = {
+  branches: string[];
+  current_branch?: string | null;
+  git_repo: boolean;
+  reason?: string;
 };
 
 export type SessionContext = {

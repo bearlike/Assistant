@@ -1224,6 +1224,20 @@ class ToolUseLoop:
                     system_parts.append(rendered)
 
         system_prompt = "\n\n".join(p for p in system_parts if p)
+        # If the active context carries images for a vision-capable model,
+        # build a multipart HumanMessage that interleaves the user's text
+        # with ``image_url`` parts (LiteLLM/OpenAI Chat Completions format).
+        # Otherwise stick with plain-string content to keep the cache
+        # prefix friendly.
+        image_parts = list(getattr(context, "attachment_images", []) or []) if context else []
+        if image_parts:
+            # langchain's HumanMessage expects ``list[str | dict]`` (invariant);
+            # widen the element type so mypy accepts mixed text/image parts.
+            human_content: list[str | dict] = [
+                {"type": "text", "text": user_query},
+                *image_parts,
+            ]
+            return [SystemMessage(content=system_prompt), HumanMessage(content=human_content)]
         return [SystemMessage(content=system_prompt), HumanMessage(content=user_query)]
 
     def _build_depth_guidance(self) -> str:

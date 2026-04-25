@@ -12,7 +12,7 @@ import {
   SessionUsage,
   ShareRecord
 } from "../types";
-import { AgentSummary, ApiClient, ApiConfig, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, SkillSummary, ToolSummary, VirtualProject } from "./contracts";
+import { AgentSummary, ApiClient, ApiConfig, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
 
 function withBase(baseUrl: string, path: string) {
   if (!baseUrl) {
@@ -188,11 +188,17 @@ export function createRealClient(config: ApiConfig): ApiClient {
 
     async uploadAttachments(
       sessionId: string,
-      files: File[]
+      files: File[],
+      model?: string | null
     ): Promise<AttachmentRecord[]> {
       const form = new FormData();
       for (const file of files) {
         form.append("files", file);
+      }
+      // Backend uses ``model`` to reject images on non-vision models with
+      // a 400 instead of silently dropping them at inference time.
+      if (model) {
+        form.append("model", model);
       }
       const response = await fetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/attachments`),
@@ -522,6 +528,58 @@ export function createRealClient(config: ApiConfig): ApiClient {
     async deleteVirtualProject(id: string): Promise<void> {
       const response = await fetch(
         withBase(baseUrl, `/api/v_projects/${encodeURIComponent(id)}`),
+        { method: "DELETE", headers: headers(apiKey) }
+      );
+      await handleJson(response);
+    },
+
+    async listProjectBranches(projectId: string): Promise<ProjectBranches> {
+      const response = await fetch(
+        withBase(
+          baseUrl,
+          `/api/v_projects/${encodeURIComponent(projectId)}/branches`
+        ),
+        { headers: headers(apiKey) }
+      );
+      return handleJson<ProjectBranches>(response);
+    },
+
+    async listWorktrees(projectId: string): Promise<WorktreeSummary[]> {
+      const response = await fetch(
+        withBase(
+          baseUrl,
+          `/api/v_projects/${encodeURIComponent(projectId)}/worktrees`
+        ),
+        { headers: headers(apiKey) }
+      );
+      const payload = await handleJson<{ worktrees: WorktreeSummary[] }>(response);
+      return payload.worktrees ?? [];
+    },
+
+    async createWorktree(projectId: string, branch: string): Promise<WorktreeSummary> {
+      const response = await fetch(
+        withBase(
+          baseUrl,
+          `/api/v_projects/${encodeURIComponent(projectId)}/worktrees`
+        ),
+        {
+          method: "POST",
+          headers: headers(apiKey),
+          body: JSON.stringify({ branch })
+        }
+      );
+      return handleJson<WorktreeSummary>(response);
+    },
+
+    async deleteWorktree(projectId: string, worktreeId: string, force = false): Promise<void> {
+      const qs = force ? "?force=true" : "";
+      const response = await fetch(
+        withBase(
+          baseUrl,
+          `/api/v_projects/${encodeURIComponent(projectId)}/worktrees/${encodeURIComponent(
+            worktreeId
+          )}${qs}`
+        ),
         { method: "DELETE", headers: headers(apiKey) }
       );
       await handleJson(response);

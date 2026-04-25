@@ -193,3 +193,7 @@ docker/init.d/*
 apps/mewbo_console/.vite/
 apps/mewbo_console/data/
 .claude/settings.local.json
+# Live git worktrees rooted under the project — checked out files belong to
+# their own branch and must not be tracked by the parent repo.
+.claude/worktrees/
+.mewbo/worktrees/
