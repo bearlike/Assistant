@@ -1,6 +1,6 @@
 # Get Started
 
-Meeseeks runs as a local CLI, a REST API + web console, or a containerised stack. Pick the path that fits your setup.
+Mewbo runs as a local CLI, a REST API + web console, or a containerised stack. Pick the path that fits your setup.
 
 ## Prerequisites {#prerequisites}
 
@@ -18,10 +18,10 @@ The CLI is the fastest way to start a local session.
 
 ```bash
 uv sync --extra cli
-uv run meeseeks
+uv run mewbo
 ```
 
-For a global install so `meeseeks` works from anywhere:
+For a global install so `mewbo` works from anywhere:
 ```bash
 uv tool install .
 ```
@@ -37,13 +37,13 @@ The REST API and web console run as two separate processes.
 uv sync --extra api
 
 # Install console frontend dependencies (once)
-cd apps/meeseeks_console && npm install && cd -
+cd apps/mewbo_console && npm install && cd -
 
 # Start the API
-uv run meeseeks-api
+uv run mewbo-api
 
 # Start the console (separate terminal)
-cd apps/meeseeks_console && npm run dev
+cd apps/mewbo_console && npm run dev
 ```
 
 The console proxies `/api/` requests to the API at `127.0.0.1:5125` by default.
@@ -79,11 +79,11 @@ uv sync --all-extras --all-groups
 
 ## Configuration {#configuration}
 
-Meeseeks loads config files from the first directory that contains them, checked in order:
+Mewbo loads config files from the first directory that contains them, checked in order:
 
 1. `CWD/configs/`: project-local config (highest priority)
-2. `$MEESEEKS_HOME/`: custom home dir if set
-3. `~/.meeseeks/`: user home fallback
+2. `$MEWBO_HOME/`: custom home dir if set
+3. `~/.mewbo/`: user home fallback
 
 Bootstrap from the example template:
 
@@ -108,7 +108,7 @@ To scaffold both from scratch, run `/init` from the CLI after a bare `uv sync`.
 After copying and editing `configs/app.json`:
 
 ```bash
-uv run meeseeks
+uv run mewbo
 ```
 
 On first run, type `/init` to scaffold any missing config files. A minimal working `configs/app.json`:
@@ -148,7 +148,7 @@ See [Docker Compose](deployment-docker.md) for the full reference: volume mounts
 
 ## Project instructions {#project-instructions}
 
-Meeseeks discovers `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/*.md` files
+Mewbo discovers `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/*.md` files
 automatically. The discovery is compatible with the Claude Code and AGENTS.md conventions.
 
 Place a `CLAUDE.md` at your project root and it will be loaded at session start.

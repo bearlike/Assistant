@@ -6,9 +6,9 @@ DOCS_ADDR ?= 0.0.0.0:8000
 bootstrap:
 	uv venv $(VENV)
 	uv pip install -e .[dev]
-	uv pip install -e packages/meeseeks_core -e packages/meeseeks_tools \
-		-e apps/meeseeks_api -e apps/meeseeks_cli \
-		-e meeseeks_ha_conversation
+	uv pip install -e packages/mewbo_core -e packages/mewbo_tools \
+		-e apps/mewbo_api -e apps/mewbo_cli \
+		-e mewbo_ha_conversation
 
 lint:
 	$(VENV)/bin/ruff check .

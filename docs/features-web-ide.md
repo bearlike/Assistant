@@ -1,12 +1,12 @@
 # Web IDE
 
-<video controls preload="metadata" poster="../meeseeks-console-01-front.jpg" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
-  <source src="../meeseeks-console-coder-demo-1.mp4" type="video/mp4" />
+<video controls preload="metadata" poster="../mewbo-console-01-front.png" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
+  <source src="../mewbo-console-coder-demo-1.mp4" type="video/mp4" />
   Your browser does not support the video tag.
 </video>
 
 
-Meeseeks can launch a per-session [code-server](https://github.com/coder/code-server) (VS Code in the browser) tied to a session's working directory. This gives you a full IDE alongside the AI. You can review diffs, edit files directly, and run terminals while Meeseeks works in parallel. One container is created per session, started on demand, and automatically stopped after a configurable time-to-live.
+Mewbo can launch a per-session [code-server](https://github.com/coder/code-server) (VS Code in the browser) tied to a session's working directory. This gives you a full IDE alongside the AI. You can review diffs, edit files directly, and run terminals while Mewbo works in parallel. One container is created per session, started on demand, and automatically stopped after a configurable time-to-live.
 
 ## Enabling
 
@@ -44,7 +44,7 @@ The `POST` response includes a one-time `password` field (omitted from `GET` res
 **Example.** Create an IDE session:
 
 ```bash
-curl -sk -X POST https://meeseeks.example.com/api/sessions/abc123.../ide \
+curl -sk -X POST https://mewbo.example.com/api/sessions/abc123.../ide \
   -H "X-API-Key: your-token" | jq .
 ```
 
@@ -62,7 +62,7 @@ curl -sk -X POST https://meeseeks.example.com/api/sessions/abc123.../ide \
 **Extend the deadline:**
 
 ```bash
-curl -sk -X POST https://meeseeks.example.com/api/sessions/abc123.../ide/extend \
+curl -sk -X POST https://mewbo.example.com/api/sessions/abc123.../ide/extend \
   -H "X-API-Key: your-token" \
   -H "Content-Type: application/json" \
   -d '{"hours": 2}'
@@ -79,7 +79,7 @@ Every IDE session carries an expiry. When the wall clock passes `expires_at`, th
 | Running | The container stays alive until `expires_at`. |
 | Extend | `POST .../ide/extend` pushes the deadline out; the change takes effect within about 15 seconds. |
 | Stop | `DELETE .../ide` tears the container down immediately. |
-| Reconnect | `POST .../ide` on an existing session returns the current URL and password. If the container exited unexpectedly, Meeseeks respawns it automatically. |
+| Reconnect | `POST .../ide` on an existing session returns the current URL and password. If the container exited unexpectedly, Mewbo respawns it automatically. |
 
 ## Configuration
 
@@ -94,8 +94,8 @@ All keys are nested under `agent.web_ide` in `configs/app.json`.
 | `cpus` | `1.0` | CPU quota assigned to each container (0.1–16.0). |
 | `memory` | `1g` | Memory limit (e.g. `512m`, `2g`). |
 | `pids_limit` | `512` | PID limit per container (64–4096). |
-| `network` | `meeseeks-ide` | Docker network the containers join. |
-| `state_dir` | `/tmp/meeseeks-ide` | Host directory used for bookkeeping files. |
+| `network` | `mewbo-ide` | Docker network the containers join. |
+| `state_dir` | `/tmp/mewbo-ide` | Host directory used for bookkeeping files. |
 
 **Example.** Restrict resources and pin the image:
 

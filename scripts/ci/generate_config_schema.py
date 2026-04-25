@@ -18,7 +18,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_MODULE_PATH = (
-    REPO_ROOT / "packages" / "meeseeks_core" / "src" / "meeseeks_core" / "config.py"
+    REPO_ROOT / "packages" / "mewbo_core" / "src" / "mewbo_core" / "config.py"
 )
 SCHEMA_OUTPUT_PATH = REPO_ROOT / "configs" / "app.schema.json"
 SCHEMA_ID = "https://thekrishna.in/Assistant/latest/app.schema.json"
@@ -42,7 +42,7 @@ def _ast_check() -> None:
 # 2. Generate schema via native Pydantic mechanism
 # ---------------------------------------------------------------------------
 def _generate_schema() -> str:
-    from meeseeks_core.config import AppConfig
+    from mewbo_core.config import AppConfig
 
     schema = AppConfig.model_json_schema()
     # Place $id first for readability; JSON Schema processors

@@ -1,0 +1,10 @@
+{
+  "title": "Portfolio Summary",
+  "holdings": [
+    {"ticker": "AAPL", "shares": 10, "price": 175.50, "change_pct": 1.2},
+    {"ticker": "GOOGL", "shares": 5, "price": 140.20, "change_pct": -0.5},
+    {"ticker": "MSFT", "shares": 8, "price": 410.30, "change_pct": 0.8}
+  ],
+  "total_value": 6072.60,
+  "day_gain": 48.20
+}

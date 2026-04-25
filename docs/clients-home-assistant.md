@@ -5,19 +5,19 @@
   <img src="../screenshot_ha_assist_2.png" alt="HA Assist control entities screenshot" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-The Home Assistant integration lives in `meeseeks_ha_conversation/` and proxies voice requests to the API. It is designed for hands-free voice control: HA handles wake words and intent capture, then forwards the request to the API for orchestration and responses.
+The Home Assistant integration lives in `mewbo_ha_conversation/` and proxies voice requests to the API. It is designed for hands-free voice control: HA handles wake words and intent capture, then forwards the request to the API for orchestration and responses.
 
 See [Get Started](getting-started.md#ha-setup) for installation prerequisites.
 
 ## How it works
 
-Voice requests flow through the HA Assist pipeline, which forwards the transcript to the Meeseeks API. The API runs the orchestration loop and returns a text response that HA Assist reads aloud.
+Voice requests flow through the HA Assist pipeline, which forwards the transcript to the Mewbo API. The API runs the orchestration loop and returns a text response that HA Assist reads aloud.
 
 ```mermaid
 sequenceDiagram
     participant User
     participant HA as Home Assistant
-    participant API as Meeseeks API
+    participant API as Mewbo API
 
     User->>HA: voice utterance (wake word + query)
     HA->>API: POST /api/sessions/{id}/query
@@ -25,17 +25,17 @@ sequenceDiagram
     HA-->>User: TTS response
 ```
 
-The custom component handles session creation and maps HA conversation threads to Meeseeks sessions via session tags.
+The custom component handles session creation and maps HA conversation threads to Mewbo sessions via session tags.
 
 ## Install the custom component
 1. Ensure the API is running (see [Web + API](clients-web-api.md)).
-2. Copy the contents of `meeseeks_ha_conversation/` into Home Assistant under
-   `custom_components/meeseeks_conversation/`.
-3. In Home Assistant, add the "Meeseeks" conversation integration and set:
+2. Copy the contents of `mewbo_ha_conversation/` into Home Assistant under
+   `custom_components/mewbo_conversation/`.
+3. In Home Assistant, add the "Mewbo" conversation integration and set:
    - Base URL: the API base URL (for example, `http://host:5123`).
    - API key: the API master token (`api.master_token` in `configs/app.json`).
 
 ## Optional: enable the Home Assistant tool
-If bearlike/Assistant should control Home Assistant entities directly:
+If Mewbo should control Home Assistant entities directly:
 - Set `home_assistant.enabled` to `true` in `configs/app.json`.
 - Provide the Home Assistant URL and token in `home_assistant.*`.

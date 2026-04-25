@@ -3,7 +3,7 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 
-from meeseeks_core.title_generator import (
+from mewbo_core.title_generator import (
     TITLE_SYSTEM_PROMPT,
     _clean_title,
     generate_session_title,
@@ -62,7 +62,7 @@ def test_generate_title_returns_none_when_no_user_or_assistant():
 def test_generate_title_returns_none_when_no_model_configured():
     events = [{"type": "user", "payload": {"text": "hi"}}]
     with patch(
-        "meeseeks_core.title_generator.get_config_value",
+        "mewbo_core.title_generator.get_config_value",
         return_value="",
     ):
         result = asyncio.run(generate_session_title(events))
@@ -80,10 +80,10 @@ def test_generate_title_happy_path():
 
     with (
         patch(
-            "meeseeks_core.title_generator.get_config_value",
+            "mewbo_core.title_generator.get_config_value",
             side_effect=lambda *keys, **_kw: "gpt-5.2" if keys[-1] == "default_model" else "",
         ),
-        patch("meeseeks_core.llm.build_chat_model", return_value=fake_llm),
+        patch("mewbo_core.llm.build_chat_model", return_value=fake_llm),
     ):
         result = asyncio.run(generate_session_title(events))
 
@@ -121,8 +121,8 @@ def test_generate_title_prefers_title_model_over_default():
         return ""
 
     with (
-        patch("meeseeks_core.title_generator.get_config_value", side_effect=fake_get),
-        patch("meeseeks_core.llm.build_chat_model", side_effect=fake_builder),
+        patch("mewbo_core.title_generator.get_config_value", side_effect=fake_get),
+        patch("mewbo_core.llm.build_chat_model", side_effect=fake_builder),
     ):
         result = asyncio.run(generate_session_title(events))
     assert result == "Small Title"
@@ -137,10 +137,10 @@ def test_generate_title_returns_none_on_llm_failure():
 
     with (
         patch(
-            "meeseeks_core.title_generator.get_config_value",
+            "mewbo_core.title_generator.get_config_value",
             side_effect=lambda *keys, **_kw: "gpt-5.2" if keys[-1] == "default_model" else "",
         ),
-        patch("meeseeks_core.llm.build_chat_model", return_value=fake_llm),
+        patch("mewbo_core.llm.build_chat_model", return_value=fake_llm),
     ):
         result = asyncio.run(generate_session_title(events))
     assert result is None
@@ -155,10 +155,10 @@ def test_generate_title_truncates_long_excerpts():
 
     with (
         patch(
-            "meeseeks_core.title_generator.get_config_value",
+            "mewbo_core.title_generator.get_config_value",
             side_effect=lambda *keys, **_kw: "gpt-5.2" if keys[-1] == "default_model" else "",
         ),
-        patch("meeseeks_core.llm.build_chat_model", return_value=fake_llm),
+        patch("mewbo_core.llm.build_chat_model", return_value=fake_llm),
     ):
         asyncio.run(generate_session_title(events))
 
@@ -177,10 +177,10 @@ def test_generate_title_user_only_includes_xml_framing():
 
     with (
         patch(
-            "meeseeks_core.title_generator.get_config_value",
+            "mewbo_core.title_generator.get_config_value",
             side_effect=lambda *keys, **_kw: "gpt-5.2" if keys[-1] == "default_model" else "",
         ),
-        patch("meeseeks_core.llm.build_chat_model", return_value=fake_llm),
+        patch("mewbo_core.llm.build_chat_model", return_value=fake_llm),
     ):
         result = asyncio.run(generate_session_title(events))
 
@@ -213,10 +213,10 @@ def test_generate_title_handles_reasoning_model_content_blocks():
 
     with (
         patch(
-            "meeseeks_core.title_generator.get_config_value",
+            "mewbo_core.title_generator.get_config_value",
             side_effect=lambda *keys, **_kw: "gpt-5.2" if keys[-1] == "default_model" else "",
         ),
-        patch("meeseeks_core.llm.build_chat_model", return_value=fake_llm),
+        patch("mewbo_core.llm.build_chat_model", return_value=fake_llm),
     ):
         result = asyncio.run(generate_session_title(events))
 

@@ -1,0 +1,760 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@layer base {
+  :root {
+    /* ── Dark mode (default) ──
+       Source: Anthropic Claude docs CSS variables (platform.claude.com)
+       Gray scale uses Anthropic's warm→neutral gradient:
+       lighter grays = hue 60 (warm), deeper grays = hue 0 (neutral black) */
+    --background: 60 2.7% 14.5%; /* #262624 — Anthropic dark app bg */
+    --foreground: 60 14% 97%; /* _gray-20 */
+
+    --muted: 60 3% 21%; /* _gray-700 — elevated surfaces */
+    --muted-foreground: 48 5% 57%; /* _gray-350 */
+
+    --popover: 60 2.7% 14.5%; /* same as bg — popover sits on overlay */
+    --popover-foreground: 60 14% 97%;
+
+    --border: 55 9% 74% / 0.15; /* _gray-200 at 15% — subtle card hairline */
+    --border-strong: 55 9% 74% / 0.35; /* _gray-200 at 35% — structural dividers (nav, panels) */
+    --input: 60 2% 17%; /* _gray-750 */
+
+    --card: 60 2% 17%; /* _gray-750 — card surfaces above bg */
+    --card-foreground: 60 14% 97%;
+
+    --primary: 14.8 63.1% 59.6%; /* _brand-clay */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 60 3% 11%; /* _gray-820 */
+    --secondary-foreground: 55 9% 74%; /* _gray-200 */
+
+    --accent: 60 3% 21%; /* _gray-700 — hover/active states */
+    --accent-foreground: 60 14% 97%;
+
+    --destructive: 0 73% 59%; /* _red-400 */
+    --destructive-foreground: 0 0% 100%;
+
+    --ring: 14.8 63.1% 59.6%;
+
+    --radius: 0.5rem;
+
+    --success: 81 100% 30%; /* _green-400 */
+    --success-foreground: 0 0% 100%;
+
+    --surface: 60 2% 12%; /* _gray-800 — recessed surfaces */
+    --surface-deep: 0 0% 7%; /* _gray-860 — deepest layer */
+
+    /* ── Semantic: orchestration (from Anthropic palette + CC theme) ── */
+    --permission: 213 80% 79%; /* _blue-200 — Anthropic accent-000 */
+    --plan-mode: 158 52% 49%; /* _aqua-300 — Anthropic aqua for plan context */
+    --user-message-bg: 60 3% 21%; /* _gray-700 — user bubbles above card */
+    --user-message-bg-hover: 60 2% 26%; /* _gray-650 */
+    --bash-bg: 60 2% 12%; /* _gray-800 — code/shell areas */
+    --memory-bg: 60 2% 17%; /* _gray-750 — context/memory areas */
+
+    /* ── Agent color cycling (8 slots, Anthropic spectrum) ── */
+    --agent-0: 0 73% 59%; /* _red-400 */
+    --agent-1: 213 77% 56%; /* _blue-400 */
+    --agent-2: 81 100% 30%; /* _green-400 */
+    --agent-3: 39 100% 36%; /* _yellow-400 */
+    --agent-4: 248 67% 67%; /* _violet-400 */
+    --agent-5: 17 70% 50%; /* _orange-400 */
+    --agent-6: 338 61% 58%; /* _magenta-400 */
+    --agent-7: 159 73% 36%; /* _aqua-400 */
+
+    --diff-add-bg: 83 54% 61% / 0.18; /* _green-200 */
+    --diff-add-text: 83 55% 81%; /* _green-100 */
+    --diff-del-bg: 0 77% 81% / 0.18; /* _red-200 */
+    --diff-del-text: 0 78% 91%; /* _red-100 */
+    --diff-hunk-text: 213 80% 79%; /* _blue-200 */
+
+    /* ── Code-surface tokens (Terminal, Diff, Review cards) — dark mode ── */
+    --widget-panel-bg: 220 5% 10%;       /* stlite widget panel background */
+
+    --code-chrome: 220 5% 12%;          /* title bar / window chrome */
+    --code-body: 220 5% 7%;             /* deep terminal body */
+    --code-fg: 60 14% 92%;              /* primary text */
+    --code-fg-muted: 60 5% 55%;         /* line numbers, hints, cwd */
+    --code-fg-subtle: 60 4% 38%;        /* placeholders, dim chevrons */
+    --code-border: 60 9% 74% / 0.06;    /* hairline inside code areas */
+    --code-prompt: 158 64% 52%;         /* the `$ ` prefix */
+    --code-stderr: 0 73% 65%;           /* stderr text */
+
+    /* ── Syntax highlighting (highlight.js) — dark mode (github-dark palette) ── */
+    --hl-keyword: 351 78% 75%;          /* if/for/function */
+    --hl-string: 26 73% 70%;            /* "string literals" */
+    --hl-comment: 220 14% 56%;          /* # comments */
+    --hl-number: 36 63% 70%;            /* 42, 3.14 */
+    --hl-builtin: 207 100% 78%;         /* echo, sudo, return */
+    --hl-variable: 207 60% 79%;         /* $var, var name */
+    --hl-function: 280 60% 78%;         /* function names */
+    --hl-meta: 220 14% 50%;             /* shebang, preprocessor */
+    --hl-attr: 207 100% 78%;            /* attributes */
+    --hl-tag: 351 78% 75%;              /* HTML tags */
+    --hl-deletion: 0 65% 70%;           /* diff -- */
+    --hl-addition: 134 50% 65%;         /* diff ++ */
+
+    /* ── Elevation system — three layered surface tiers (dark) ──
+       Each tier composes: faint inner top-edge highlight + tight key shadow + soft ambient drop.
+       Apply via `shadow-[var(--elev-N)]`. Used by agentic_search and any future card surface. */
+    --elev-1: 0 1px 0 0 hsl(0 0% 100% / 0.025) inset, 0 1px 2px 0 rgba(0,0,0,0.18), 0 4px 12px -6px rgba(0,0,0,0.35);
+    --elev-2: 0 1px 0 0 hsl(0 0% 100% / 0.03) inset, 0 2px 4px -1px rgba(0,0,0,0.20), 0 10px 24px -8px rgba(0,0,0,0.45);
+    --elev-3: 0 1px 0 0 hsl(0 0% 100% / 0.04) inset, 0 4px 8px -2px rgba(0,0,0,0.22), 0 18px 40px -12px rgba(0,0,0,0.55);
+  }
+
+  .light {
+    /* ── Light mode ──
+       Source: Anthropic Claude docs CSS variables (platform.claude.com) */
+    --background: 45 28.6% 97.3%; /* #faf9f6 — Anthropic light app bg */
+    --foreground: 0 0% 4%; /* _gray-900 */
+
+    --muted: 48 25% 92.2%; /* #f0eee6 — Anthropic light accent */
+    --muted-foreground: 45 3% 52%; /* _gray-400 */
+
+    --popover: 0 0% 100%; /* pure white */
+    --popover-foreground: 0 0% 4%;
+
+    --border: 53 12% 87% / 0.4; /* _gray-100 at 40% — subtle card hairline */
+    --border-strong: 53 12% 74% / 0.5; /* _gray-200 at 50% — structural dividers */
+    --input: 48 25% 92.2%; /* matches muted */
+
+    --card: 0 0% 100%; /* white */
+    --card-foreground: 0 0% 4%;
+
+    --primary: 14.8 63.1% 59.6%; /* _brand-clay */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 48 25% 92.2%; /* #f0eee6 */
+    --secondary-foreground: 60 3% 21%; /* _gray-700 */
+
+    --accent: 48 25% 92.2%; /* #f0eee6 — Anthropic accent bg */
+    --accent-foreground: 60 3% 21%;
+
+    --destructive: 0 55% 47%; /* _red-500 */
+    --destructive-foreground: 0 0% 100%;
+
+    --ring: 14.8 63.1% 59.6%;
+
+    --success: 79 94% 37%; /* _green-300 */
+    --success-foreground: 0 0% 100%;
+
+    --surface: 48 25% 92.2%; /* #f0eee6 */
+    --surface-deep: 45 28.6% 97.3%; /* #faf9f6 */
+
+    /* ── Semantic: orchestration (from Anthropic palette) ── */
+    --permission: 213 77% 56%; /* _blue-400 */
+    --plan-mode: 159 73% 40%; /* _aqua-350 */
+    --user-message-bg: 48 25% 92.2%; /* #f0eee6 — matches accent */
+    --user-message-bg-hover: 45 28.6% 97.3%; /* #faf9f6 — lift to bg */
+    --bash-bg: 0 0% 100%; /* white — code on white */
+    --memory-bg: 48 25% 92.2%; /* #f0eee6 */
+
+    /* ── Agent color cycling (8 slots, Anthropic spectrum -500 for light bg) ── */
+    --agent-0: 0 55% 47%; /* _red-500 */
+    --agent-1: 213 68% 45%; /* _blue-500 */
+    --agent-2: 84 100% 24%; /* _green-500 */
+    --agent-3: 38 100% 29%; /* _yellow-500 */
+    --agent-4: 248 62% 58%; /* _violet-500 */
+    --agent-5: 17 72% 40%; /* _orange-500 */
+    --agent-6: 338 48% 46%; /* _magenta-500 */
+    --agent-7: 162 79% 28%; /* _aqua-500 */
+
+    --diff-add-bg: 79 94% 37% / 0.12; /* _green-300 */
+    --diff-add-text: 81 100% 30%; /* _green-400 */
+    --diff-del-bg: 0 55% 47% / 0.12; /* _red-500 */
+    --diff-del-text: 0 55% 47%; /* _red-500 */
+    --diff-hunk-text: 213 77% 56%; /* _blue-400 */
+
+    /* ── Code-surface tokens — light mode ── */
+    --widget-panel-bg: 220 5% 96%;       /* stlite widget panel background */
+
+    --code-chrome: 48 25% 92.2%;        /* #f0eee6 — Anthropic accent cream */
+    --code-body: 0 0% 100%;             /* white — code on white */
+    --code-fg: 0 0% 13%;                /* near-black */
+    --code-fg-muted: 0 0% 40%;          /* gray */
+    --code-fg-subtle: 0 0% 60%;         /* lighter gray */
+    --code-border: 0 0% 0% / 0.08;      /* hairline */
+    --code-prompt: 158 73% 32%;         /* deeper green for contrast on white */
+    --code-stderr: 0 65% 47%;           /* deeper red */
+
+    /* ── Syntax highlighting — light mode (github light palette) ── */
+    --hl-keyword: 354 75% 41%;          /* #d73a49 */
+    --hl-string: 217 71% 33%;           /* #032f62 */
+    --hl-comment: 220 14% 56%;          /* #6a737d */
+    --hl-number: 26 91% 32%;            /* #b08800 darker */
+    --hl-builtin: 211 100% 38%;         /* #005cc5 */
+    --hl-variable: 8 85% 36%;           /* #b31d28 */
+    --hl-function: 273 65% 41%;         /* #6f42c1 */
+    --hl-meta: 220 14% 56%;
+    --hl-attr: 211 100% 38%;
+    --hl-tag: 134 50% 33%;              /* #22863a */
+    --hl-deletion: 0 65% 47%;
+    --hl-addition: 134 50% 33%;
+
+    /* ── Elevation system — softer warm tints for light mode ── */
+    --elev-1: 0 1px 2px 0 rgba(15, 15, 12, 0.04), 0 2px 6px -2px rgba(15, 15, 12, 0.06);
+    --elev-2: 0 2px 4px -1px rgba(15, 15, 12, 0.05), 0 8px 18px -6px rgba(15, 15, 12, 0.10);
+    --elev-3: 0 4px 8px -2px rgba(15, 15, 12, 0.06), 0 16px 32px -10px rgba(15, 15, 12, 0.14);
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  html {
+    color-scheme: dark;
+  }
+  html.light {
+    color-scheme: light;
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+}
+
+/* ── highlight.js theme via CSS variables — single source of truth, both
+   light and dark modes adapt automatically through the --hl-* tokens above.
+   Replaces the third-party github-dark.css import we used to ship. ── */
+.hljs {
+  color: hsl(var(--code-fg));
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote { color: hsl(var(--hl-comment)); font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst { color: hsl(var(--hl-keyword)); }
+.hljs-string,
+.hljs-meta-string,
+.hljs-regexp,
+.hljs-template-tag,
+.hljs-template-variable { color: hsl(var(--hl-string)); }
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet { color: hsl(var(--hl-number)); }
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-class .hljs-title { color: hsl(var(--hl-builtin)); }
+.hljs-variable,
+.hljs-attr { color: hsl(var(--hl-variable)); }
+.hljs-title,
+.hljs-title.function_,
+.hljs-section { color: hsl(var(--hl-function)); }
+.hljs-meta { color: hsl(var(--hl-meta)); }
+.hljs-attribute { color: hsl(var(--hl-attr)); }
+.hljs-tag,
+.hljs-name { color: hsl(var(--hl-tag)); }
+.hljs-deletion { color: hsl(var(--hl-deletion)); }
+.hljs-addition { color: hsl(var(--hl-addition)); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+
+/* Scroll-reveal rows used by HomeView session lists. One IntersectionObserver
+   at the page level toggles `.is-visible`. `--row-index` (set inline) staggers
+   siblings without per-component JS. Skipped by prefers-reduced-motion. */
+.fade-in-row {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 300ms ease-out, transform 300ms ease-out;
+  transition-delay: calc(var(--row-index, 0) * 60ms);
+  will-change: opacity, transform;
+}
+.fade-in-row.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .fade-in-row {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Soft fade at the top edge of the sessions region so rows peeking below
+   the hero bleed softly into the background — signals "there's more below"
+   without a hard seam. The mask is anchored to the element's own box so
+   it only affects the top ~72px; once scrolled past, content renders normally. */
+.sessions-peek-fade {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 72px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 72px);
+}
+
+/* Scroll affordance — chevron bobs gently at the bottom of the hero and
+   fades out once the user has scrolled past it (class toggled by HomeView). */
+@keyframes scroll-bounce {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(6px); }
+}
+.animate-scroll-bounce {
+  animation: scroll-bounce 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-scroll-bounce {
+    animation: none;
+  }
+}
+
+/* ── Session detail — conversation row entrance ──
+   Fade + 4px rise per row, staggered by --row-index * 60ms. Plays once
+   (animation-fill-mode: both keeps the start state during the delay so
+   there's no flash of un-positioned content). Skipped under
+   prefers-reduced-motion.
+
+   We animate `top` (with position:relative) instead of `transform:
+   translateY`. Per CSS spec, any non-`none` `transform` on an element makes
+   it the containing block for `position: fixed` descendants — and with
+   `animation-fill-mode: both` the row keeps `transform: translateY(0)`
+   forever after the animation ends. WidgetCard's maximize overlay uses
+   `position: fixed` to center on the viewport; with a transformed ancestor
+   it instead centered inside the row. `position: relative` only creates a
+   containing block for `position: absolute` descendants, leaving fixed
+   elements free to anchor to the viewport. */
+@keyframes session-row-in {
+  from { opacity: 0; top: 4px; }
+  to   { opacity: 1; top: 0; }
+}
+.session-row-in {
+  position: relative;
+  opacity: 0;
+  animation: session-row-in 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(var(--row-index, 0) * 60ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-row-in { animation: none; opacity: 1; top: 0; }
+}
+
+/* ── Composer running pulse ──
+   Single live dot in the running-state indicator strip. The only
+   animation that loops while the user is reading idle content. */
+@keyframes session-cmp-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+.session-cmp-pulse {
+  animation: session-cmp-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-cmp-pulse { animation: none; opacity: 1; }
+}
+
+/* ── Pending assistant beat ──
+   Replaces the old bordered "Working… / Open trace" pill on the user row
+   with a single inline beat: pulse dot + shimmer label + ghost trace
+   button. Mounts only while an assistant turn has accepted the user
+   message but hasn't streamed any tokens yet — same lifecycle as
+   .flower-mark, so the keyframes never run during idle reading. */
+.pending-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 2px 2px 4px;
+  font: 400 10.5px/1 var(--font-sans, inherit);
+  color: hsl(var(--muted-foreground));
+}
+.pending-dot {
+  position: relative;
+  width: 4px; height: 4px; flex: none;
+  border-radius: 9999px;
+  background: hsl(var(--muted-foreground) / 0.55);
+}
+.pending-dot::after {
+  content: '';
+  position: absolute; inset: -2px;
+  border-radius: 9999px;
+  background: hsl(var(--muted-foreground) / 0.35);
+  animation: pending-pulse 1.6s ease-out infinite;
+}
+@keyframes pending-pulse {
+  0%   { transform: scale(0.5); opacity: 0.7; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.pending-label {
+  position: relative;
+  letter-spacing: 0.005em;
+  color: hsl(var(--foreground) / 0.78);
+  background: linear-gradient(
+    90deg,
+    hsl(var(--foreground) / 0.55) 0%,
+    hsl(var(--foreground) / 0.92) 50%,
+    hsl(var(--foreground) / 0.55) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: pending-shimmer 2.4s ease-in-out infinite;
+}
+@keyframes pending-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.pending-trace {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 17px;
+  padding: 0 5px 0 4px;
+  margin-left: 1px;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  color: hsl(var(--muted-foreground));
+  font: 500 10px/1 var(--font-sans, inherit);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.pending-trace:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+.pending-trace:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.45);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pending-dot::after,
+  .pending-label { animation: none; }
+  .pending-label { -webkit-text-fill-color: hsl(var(--foreground) / 0.85); }
+}
+
+/* ── Long-message smart collapse ──
+   Older assistant turns clip to --clip height with a soft mask fade so
+   the truncated content reads as a deliberate fade, not a rendering
+   bug. Toggle reveals full content. */
+.session-collapsible {
+  position: relative;
+}
+.session-collapsible.is-collapsed > .session-collapsible-body {
+  max-height: var(--clip, 140px);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+}
+
+/* ── Turn scroller (left-edge token-weighted dot indicator) ──
+   Frosted backplate makes dots legible against any background scrolling
+   behind. Expanded state stretches each segment to its --ts-w width and
+   reveals labels. */
+.session-ts-rail {
+  background: hsl(var(--background) / 0.72);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+          backdrop-filter: blur(10px) saturate(120%);
+  box-shadow:
+    inset 0 1px 0 hsl(var(--foreground) / 0.04),
+    0 0 0 1px hsl(var(--border-strong) / 0.55),
+    0 6px 18px hsl(0 0% 0% / 0.28),
+    0 1px 2px hsl(0 0% 0% / 0.18);
+  /* Cap so the pill never crosses into the 820px message column. Rail is
+     position:fixed at left-2 (8px); expanded segments cap at 22px + px-1.5
+     padding (12px) → ~42px from viewport. Hard cap at 2rem (32px) keeps it
+     a margin glyph at any pane width. */
+  max-width: 2rem;
+}
+.session-ts-rail.is-expanded {
+  background: hsl(var(--card) / 0.92);
+  box-shadow:
+    inset 0 1px 0 hsl(var(--foreground) / 0.06),
+    0 0 0 1px hsl(var(--border-strong) / 0.7),
+    0 8px 24px hsl(0 0% 0% / 0.34),
+    0 1px 2px hsl(0 0% 0% / 0.22);
+}
+.session-ts-seg {
+  display: block;
+  width: var(--ts-w, 2px);
+  height: 2px;
+  border-radius: 1px;
+  background: hsl(var(--foreground));
+  opacity: 0.28;
+  transition: opacity 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              width 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Hard cap so the expanded cost-map line never reaches the text column
+     even when the rail is fixed at the viewport margin. */
+  max-width: 22px;
+}
+.session-ts-seg:hover { opacity: 0.7; }
+.session-ts-seg.is-active { opacity: 1; }
+.session-ts-rail.is-collapsed .session-ts-seg {
+  width: 2px !important;
+}
+
+/*
+ * Stlite widget scrollbar — always visible + theme-aware.
+ *
+ * The card clamps widget height at min(600px, 70vh) and scrolls the overflow
+ * inside `.stAppViewContainer`. Default browser behavior auto-hides the
+ * scrollbar on macOS / iOS / "overlay"-configured Windows, so users who
+ * don't know a widget can scroll never find the rest of the content.
+ * Forcing the track to render (via `overflow-y: scroll` on the element +
+ * an always-rendered ::webkit-scrollbar) gives them a visible affordance.
+ *
+ * Scoped to `.stAppViewContainer` only — this class exists exclusively
+ * inside stlite widgets, so the rest of the console's overlay scrollbars
+ * are untouched.
+ */
+.stAppViewContainer {
+  /* Firefox — `auto` width reads as ~16px (browser default) so the rail is
+     noticeable; `scrollbar-color` paints thumb against the widget bg. */
+  scrollbar-width: auto;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.55) hsl(var(--muted) / 0.4);
+}
+/* Chromium / WebKit get a slightly wider rail than the Firefox default so
+   it reads as "scrollable surface" at a glance rather than a hairline. */
+.stAppViewContainer::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+.stAppViewContainer::-webkit-scrollbar-track {
+  /* Faint rail so users can see the full scroll range, not just the thumb —
+     the key affordance that tells them "there's more content here." */
+  background-color: hsl(var(--muted) / 0.4);
+}
+.stAppViewContainer::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+  border-radius: 6px;
+  /* Transparent border + padding-box clip inset the thumb inside the rail
+     so the colored track is still visible around it. */
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.stAppViewContainer::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.75);
+  background-clip: padding-box;
+}
+
+/* ── Session detail — refresh pass 2 primitives ──────────────────────────
+   Additive CSS for the session-page refresh. Behavior wires up component
+   by component in subsequent commits; this block is purely additive. */
+
+/* Composer detail shell — replaces the old border-t + ring-2 glow. The
+   container itself is calmer (8px radius, single hairline, soft 4px halo
+   on focus). Running state tints the border blue and brightens the halo
+   so the composer reads as "alive" while preserving its silhouette. (§F,
+   §G, P5) data-attributes drive every state — no class concatenation
+   soup (E2). */
+.composer-shell {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border-strong));
+  border-radius: 0.5rem;
+  padding: 0.25rem;
+  transition: box-shadow 200ms ease-out, border-color 200ms ease-out;
+}
+.composer-shell[data-focused="true"] {
+  box-shadow: 0 0 0 4px hsl(var(--primary) / 0.10);
+}
+.composer-shell[data-running="true"] {
+  border-color: hsl(var(--permission) / 0.45);
+}
+.composer-shell[data-running="true"][data-focused="true"] {
+  box-shadow: 0 0 0 4px hsl(var(--permission) / 0.18);
+}
+/* Slash-command mode: input is a command, not a chat message. Border tints to
+   the brand accent so the user knows submit will fire a command, not send a
+   message. The accent color is a state container per the design philosophy. */
+.composer-shell[data-command-mode="true"] {
+  border-color: hsl(var(--primary) / 0.55);
+}
+.composer-shell[data-command-mode="true"][data-focused="true"] {
+  box-shadow: 0 0 0 4px hsl(var(--primary) / 0.15);
+}
+
+/* Composer dissolves UP into the conversation — no top hairline. The base
+   layer is a vertical gradient bg → background; ::before pseudo extends
+   28px upward as a soft veil so message text fades in instead of meeting
+   a hard composer edge. (P13) */
+.composer-band-glow {
+  position: relative;
+  background: linear-gradient(to bottom,
+    hsl(var(--background) / 0) 0%,
+    hsl(var(--background)) 30%);
+}
+.composer-band-glow::before {
+  content: '';
+  position: absolute;
+  top: -28px;
+  left: 0;
+  right: 0;
+  height: 28px;
+  background: linear-gradient(to bottom,
+    hsl(var(--background) / 0) 0%,
+    hsl(var(--background) / 0.85) 100%);
+  pointer-events: none;
+}
+
+/* Asymmetric notch on the user message bubble — the SIGNATURE silhouette
+   on the calm-reading (left) surface. Utility fallback for environments
+   where Tailwind JIT misreads the four-corner arbitrary value. (P3) */
+.bubble-notch {
+  border-radius: 8px 8px 0 8px;
+}
+
+/* FlowerMark — branded conic-ring loader for the workspace spinner.
+   Conic gradient sweeps clockwise around a centered logo SVG; the logo
+   itself breathes via opacity + tiny scale. Single infinite loop. (P14) */
+@keyframes session-flower-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes session-flower-breathe {
+  0%, 100% { opacity: 0.7; transform: scale(0.92); }
+  50%      { opacity: 1;   transform: scale(1.0); }
+}
+.flower-mark {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  background:
+    radial-gradient(circle at center,
+      hsl(var(--surface-deep)) 0%,
+      hsl(var(--surface-deep)) 56%,
+      transparent 58%),
+    conic-gradient(from 0deg,
+      hsl(var(--primary) / 0.9) 0deg,
+      hsl(var(--primary) / 0.05) 220deg,
+      hsl(var(--primary) / 0.9) 360deg);
+  animation: session-flower-spin 2.6s linear infinite;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.flower-mark-logo {
+  width: 20px;
+  height: 20px;
+  opacity: 0.9;
+  animation: session-flower-breathe 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .flower-mark,
+  .flower-mark-logo {
+    animation: none;
+  }
+}
+
+/* Sticky telemetry strip — sits at the bottom of the workspace logs
+   scroll. Translucent bg + backdrop-blur so log content fades through
+   it as the user scrolls. (P4, P8) */
+.spinner-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
+  margin: 0.75rem -1.25rem -1.25rem;
+  padding: 0.75rem 1.25rem 1rem;
+  background: linear-gradient(to top,
+    hsl(var(--surface-deep)) 0%,
+    hsl(var(--surface-deep) / 0.92) 70%,
+    hsl(var(--surface-deep) / 0) 100%);
+  backdrop-filter: blur(6px) saturate(110%);
+  -webkit-backdrop-filter: blur(6px) saturate(110%);
+  pointer-events: none;
+}
+.spinner-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  background: hsl(var(--card) / 0.7);
+  pointer-events: auto;
+}
+
+/* Overlapping agent dots — RunTelemetry full variant inside the sticky
+   spinner. Each chip is a colored pill that overlaps its neighbor; on
+   hover the cluster fans out to expose individual chips. */
+.agents-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.agents-stack {
+  display: inline-flex;
+  align-items: center;
+}
+.agents-stack > .agent-chip + .agent-chip {
+  margin-left: -6px;
+  transition: margin-left 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.agents-stack:hover > .agent-chip + .agent-chip {
+  margin-left: 2px;
+}
+.agent-chip {
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  border: 1.5px solid hsl(var(--surface-deep));
+  background: hsl(var(--primary));
+  display: inline-block;
+}
+
+/* Edit-message terminal-card kbd hint — small monospace pill with a
+   subtle border so ⌘↵ / esc reads as a key, not body text. (§U) */
+.edit-kbd {
+  display: inline-flex;
+  align-items: center;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 4px;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--surface-deep) / 0.6);
+}
+
+/* Sliding under-line indicator for workspace tabs. Positioned absolute
+   under the tab strip; left/width updated via JS measuring the active
+   tab's bounding box. Sharp corners — instrument-panel vocabulary. (§C) */
+.tab-ind {
+  position: absolute;
+  bottom: -1px;
+  height: 2px;
+  background: hsl(var(--primary));
+  border-radius: 0;
+  transition: left 320ms cubic-bezier(0.5, 0, 0, 1),
+              width 320ms cubic-bezier(0.5, 0, 0, 1);
+  pointer-events: none;
+}
+
+/* Pane-rail grip dots — appear on hover/drag of the resize separator.
+   The hairline tint already happens via group-hover/group-active classes
+   on the JSX; this adds a 4-dot column so the handle is discoverable
+   without shouting. (§S, P9) */
+.pane-rail {
+  position: relative;
+}
+.pane-rail::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+  background-image: radial-gradient(circle, hsl(var(--foreground) / 0.55) 1px, transparent 1.5px);
+  background-size: 4px 5.5px;
+  background-repeat: repeat-y;
+  opacity: 0;
+  transition: opacity 180ms ease-out;
+  pointer-events: none;
+}
+.pane-rail:hover::after,
+.pane-rail:active::after,
+.pane-rail[data-dragging="true"]::after {
+  opacity: 1;
+}
+

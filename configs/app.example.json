@@ -14,7 +14,7 @@
     "driver": "json",
     "mongodb": {
       "uri": "mongodb://localhost:27017",
-      "database": "meeseeks"
+      "database": "mewbo"
     }
   },
   "llm": {
@@ -87,8 +87,8 @@
       "cpus": 1.0,
       "memory": "1g",
       "pids_limit": 512,
-      "network": "meeseeks-ide",
-      "state_dir": "/tmp/meeseeks-ide"
+      "network": "mewbo-ide",
+      "state_dir": "/tmp/mewbo-ide"
     }
   },
   "hooks": {
@@ -110,7 +110,7 @@
       "nextcloud_url": "http://localhost:8180",
       "nextcloud_host_header": "",
       "allowed_backends": [],
-      "trigger_keyword": "@Meeseeks"
+      "trigger_keyword": "@Mewbo"
     },
     "email": {
       "enabled": false,
@@ -120,13 +120,13 @@
       "smtp_host": "smtp.example.com",
       "smtp_port": 587,
       "smtp_starttls": true,
-      "username": "meeseeks@example.com",
+      "username": "mewbo@example.com",
       "password": "app-password-here",
-      "from_address": "Meeseeks <meeseeks@example.com>",
+      "from_address": "Mewbo <mewbo@example.com>",
       "mailbox": "INBOX",
       "poll_interval_seconds": 30,
       "allowed_senders": ["user@example.com"],
-      "allowed_recipients": ["meeseeks@example.com"]
+      "allowed_recipients": ["mewbo@example.com"]
     }
   },
   "projects": {}

@@ -1,29 +1,30 @@
 # Console + API
 
 <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;">
-  <img src="../meeseeks-console-01-front.jpg" alt="Meeseeks Console landing page" style="width: 100%; max-width: 520px; height: auto;" />
-  <img src="../meeseeks-console-02-tasks.jpg" alt="Meeseeks Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../mewbo-console-01-front.png" alt="Mewbo Console landing page" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../mewbo-console-02-tasks.png" alt="Mewbo Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-The REST API is the programmable surface for Meeseeks. You send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration. The console gives you session management, an event timeline, and rich visualization of tool output.
+The REST API is the programmable surface for Mewbo. You send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration. The console gives you session management, an event timeline, and rich visualization of tool output.
 
 See [Get Started](getting-started.md#api-setup) for installation and [Docker Compose](deployment-docker.md) for container deployment.
 
 ## Run the REST API
 ```bash
-uv run meeseeks-api
+uv run mewbo-api
 ```
 
 API notes:
 
 - Protected routes require `X-API-Key` matching `api.master_token` in `configs/app.json`.
 - Session runtime endpoints support async runs and event polling.
+- `X-Mewbo-Capabilities` is an optional request header advertising what the client can render. See [Client capability negotiation](#client-capability-negotiation) below.
 
 Core endpoints:
 
 - `POST /api/sessions` create a session
 - `POST /api/sessions/{session_id}/query` enqueue a query or core command
-- `GET /api/sessions/{session_id}/events?after=...` poll events
+- `GET /api/sessions/{session_id}/events?after=...` poll events (event kinds include `widget_ready` for capability-gated widget output — see [Widgets in the timeline](#widgets-in-the-timeline))
 - `GET /api/sessions` list sessions (defaults to non-archived, non-empty)
 - `GET /api/sessions?include_archived=1` include archived sessions
 - `POST /api/sessions/{session_id}/archive` archive a session
@@ -48,7 +49,7 @@ Core endpoints:
 
 ## Run the Console
 ```bash
-cd apps/meeseeks_console
+cd apps/mewbo_console
 npm install
 npm run dev
 ```
@@ -58,6 +59,38 @@ Console notes:
 - Set `VITE_API_KEY` to match `api.master_token` in `configs/app.json`.
 - Set `VITE_API_MODE` to `live` for direct API access or `auto` (default) for fallback to mock data.
 - During development, the Vite dev server proxies `/api/` requests to the API backend.
+
+## Client capability negotiation
+
+Clients advertise the UI primitives they can render by sending the `X-Mewbo-Capabilities` request header. The value is a comma-separated list of capability ids (for example `stlite`, or `stlite,foo`). The header travels on every request that creates or drives a session.
+
+| Layer | Behaviour |
+|---|---|
+| Client | Sets `X-Mewbo-Capabilities` per request. The console sets `stlite` automatically; other clients opt in explicitly. |
+| API | Writes the advertised list onto the session's context event the first time the session is seen. |
+| Orchestrator | Reads capabilities from the context event once per session and passes them to the `ToolUseLoop`. |
+| `ToolUseLoop` | Filters the agent catalog, skill catalog, and session-tool schema so only entries whose `requires-capabilities` are satisfied are visible to the LLM. |
+
+> [!NOTE] No header means no capability-gated surface
+> A REST caller that omits `X-Mewbo-Capabilities: stlite` will not see the `st-widget-builder` agent_type, will not see the `/st-widget-builder` skill, and will not have the `submit_widget` tool bound on its sessions. The same applies to any third-party plugin that declares `requires-capabilities`.
+
+See [Widgets](features-widgets.md) for the reference use case and [Plugins & Marketplace → Capability gating](features-plugins.md#capability-gating) for the full contract.
+
+## Widgets in the timeline
+
+Sessions that advertise `stlite` get the bundled widget surface: the `st-widget-builder` agent type, the `/st-widget-builder` skill, and the `submit_widget` session tool. When the sub-agent completes, a `widget_ready` event lands in the session event stream alongside the usual tool results.
+
+| Field | Description |
+|---|---|
+| `widget_id` | Stable identifier for the widget, typically `widget_<unix_ts>`. |
+| `app_py` | Full text of the widget's `app.py`. |
+| `data_json` | Widget state as a JSON object. |
+| `requirements` | Optional list of extra Python packages the widget imports. |
+| `summary` | Optional one-line description. |
+
+The console timeline builder attaches the payload to the turn that contained the `submit_widget` call and mounts it inline as an [stlite](https://github.com/whitphx/stlite) panel running in a Web Worker; theme sync to the console's dark/light mode is automatic. The REST API returns the same event in the `GET /api/sessions/{id}/events` poll response — programmatic clients can either render it themselves with stlite or ignore it.
+
+See [Widgets](features-widgets.md) for the full picture, including the lint loop and the component library.
 
 ## Docker Compose deployment
 
@@ -120,7 +153,7 @@ In the console, the InputBar shows a steering mode UI while a run is in progress
 The console supports multiple projects that appear as virtual workspaces shared across sessions. Each project has its own working directory, its own `.mcp.json`, and its own `.claude/skills/` directory, so tools and skills scope cleanly to the project you are in.
 
 <div style="display: flex; justify-content: center;">
-  <img src="../meeseeks-console-06-projects.jpg" alt="The Projects page in the Meeseeks console showing two virtual workspaces with their paths" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../mewbo-console-06-projects.png" alt="The Projects page in the Mewbo console showing two virtual workspaces with their paths" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 Create and switch projects from the **Projects** page or the project selector in the ConfigMenu. In the REST API, projects are identified by the working directory path you pass in the session context.

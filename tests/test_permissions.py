@@ -1,9 +1,9 @@
 """Tests for permission policy decisions."""
 
-from meeseeks_core import permissions as permissions_module
-from meeseeks_core.classes import ActionStep
-from meeseeks_core.config import set_config_override
-from meeseeks_core.permissions import (
+from mewbo_core import permissions as permissions_module
+from mewbo_core.classes import ActionStep
+from mewbo_core.config import set_config_override
+from mewbo_core.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRule,

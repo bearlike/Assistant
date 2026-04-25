@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 
-from meeseeks_core.common import (
+from mewbo_core.common import (
     _NOLOAD_MARKER,
     InstructionSource,
     discover_all_instructions,

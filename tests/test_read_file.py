@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from meeseeks_core.classes import ActionStep
-from meeseeks_tools.integration.aider_file_tools import AiderListDirTool, ReadFileTool
+from mewbo_core.classes import ActionStep
+from mewbo_tools.integration.aider_file_tools import AiderListDirTool, ReadFileTool
 
 
 def test_read_file_reads(tmp_path):

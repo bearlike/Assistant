@@ -1,0 +1,74 @@
+# Ruff configuration for widget-builder examples.
+#
+# Files in this tree are TEMPLATES for stlite (Streamlit-in-WASM) widgets.
+# They ship as data inside the mewbo-core wheel, are never imported by
+# the main Python runtime, and are ultimately copy-pasted by the
+# widget-builder sub-agent into a single-file `app.py` submitted through
+# `submit_widget`.
+#
+# Ruff here lints them the way a widget will be linted at submit time —
+# NOT the way a regular Streamlit-on-a-server app would be:
+#
+#   * Runtime target: Pyodide's bundled CPython (3.12 as of stlite 0.83).
+#   * Import allowlist: the authority is
+#     `widget_builder/linter.py::ALLOWED_MODULES` (enforced at submit time).
+#     The `banned-api` table below catches the common stlite-hostile
+#     modules statically so the sub-agent gets feedback before submit.
+#   * No network, no shell, no threads, no tempfile — the widget runs in
+#     a browser sandbox; everything the widget needs must live in
+#     `data.json` next to `app.py`.
+#
+# If a legitimate need arises to use a module not in the allowlist, extend
+# `linter.py::ALLOWED_MODULES` and the "Allowed libraries" block in
+# `agents/st-widget-builder.md` together — a parity test
+# (`test_widget_linter.py::test_every_allowed_module_appears_in_agent_prompt`)
+# enforces both sides stay in sync.
+
+# 120 chars, not the project's 100: component render methods are
+# dominated by scoped CSS f-strings; hand-breaking them mid-property
+# makes the CSS harder to read than the ~20 extra columns ever cost.
+line-length = 120
+target-version = "py312"
+
+[lint]
+# Rule families chosen for stlite correctness and copy-paste hygiene.
+# `E`/`F` catch syntax/name errors the AST linter won't; `I` keeps
+# import order consistent so copy-paste is easy; `B`/`SIM`/`UP` catch the
+# usual refactor opportunities; `TID` powers the banned-api table below.
+select = ["E", "F", "I", "B", "SIM", "UP", "TID"]
+
+[lint.flake8-tidy-imports.banned-api]
+# ---- Network / RPC -----------------------------------------------------
+# stlite runs inside the browser; synchronous HTTP libs do not exist there.
+# Widgets must source their state from `data.json` — the parent agent
+# already resolved any network I/O before the widget is built.
+"requests".msg = "Pyodide cannot load `requests` — widget must not do HTTP at runtime; source state from data.json."
+"httpx".msg = "Pyodide cannot load `httpx` — widget must not do HTTP at runtime; source state from data.json."
+"aiohttp".msg = "Pyodide cannot load `aiohttp` — widget must not do HTTP at runtime; source state from data.json."
+"urllib.request".msg = "No network at runtime — state comes from data.json, not a live fetch."
+"socket".msg = "No raw sockets in a browser sandbox."
+
+# ---- Shell / process ---------------------------------------------------
+"subprocess".msg = "No processes in a browser sandbox — widget code must be pure Python."
+"os.system".msg = "No shell in a browser sandbox."
+"os.popen".msg = "No shell in a browser sandbox."
+
+# ---- Concurrency -------------------------------------------------------
+# Pyodide is single-threaded; threading/multiprocessing imports succeed on
+# some builds but produce silent heisenbugs. Use `asyncio` if concurrency
+# is actually needed (it usually isn't for a widget).
+"threading".msg = "Pyodide is single-threaded — use asyncio if you genuinely need concurrency."
+"multiprocessing".msg = "Pyodide cannot spawn processes."
+"concurrent.futures".msg = "Pyodide cannot spawn threads or processes."
+
+# ---- Filesystem / serialization ---------------------------------------
+"tempfile".msg = "Browser FS is volatile — write beside data.json in the widget dir instead."
+"pickle".msg = "Unsafe and unnecessary — widget state is JSON."
+"shelve".msg = "Depends on pickle — not suitable for widgets."
+
+[lint.per-file-ignores]
+# Component files intentionally inline their `__main__` demos — pulling
+# `random` into the `if __name__ == "__main__":` branch keeps the demo
+# self-contained without leaking into the render function the agent will
+# actually copy. S311 (non-cryptographic random) is the point there.
+"*.py" = ["S311"]

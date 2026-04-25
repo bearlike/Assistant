@@ -1,6 +1,6 @@
 # Compaction
 
-LLM context windows are finite. As a session grows, older turns have to make room for newer work. Otherwise you hit the model's context limit and the run falls over. Meeseeks handles this automatically with **compaction**: it summarises older conversation turns into a compact record and injects that summary into each subsequent prompt. The session carries on without losing the thread of work, just with less raw history and more digested history.
+LLM context windows are finite. As a session grows, older turns have to make room for newer work. Otherwise you hit the model's context limit and the run falls over. Mewbo handles this automatically with **compaction**: it summarises older conversation turns into a compact record and injects that summary into each subsequent prompt. The session carries on without losing the thread of work, just with less raw history and more digested history.
 
 Compaction is transparent. You do not have to intervene, and nothing about how you use the session changes after it runs.
 
@@ -23,7 +23,7 @@ POST /api/sessions/{session_id}/query
 
 ### Automatic
 
-Auto-compact fires when the most recent root prompt crosses `token_budget.auto_compact_threshold` (default 80% of the model's context window). Meeseeks evaluates this after every LLM call using the actual `input_tokens` reported by the provider, not a character-count estimate, so the threshold is accurate even for models with unusual tokenisation.
+Auto-compact fires when the most recent root prompt crosses `token_budget.auto_compact_threshold` (default 80% of the model's context window). Mewbo evaluates this after every LLM call using the actual `input_tokens` reported by the provider, not a character-count estimate, so the threshold is accurate even for models with unusual tokenisation.
 
 The context window bar in the console shows how full the window is right now and marks the compact threshold. When the bar reaches that marker, compaction runs before the next turn.
 
@@ -85,7 +85,7 @@ Enable `compaction.caveman_mode` to activate a terser summary prompt. It drops a
 
 ## After the summary
 
-Once the summary is produced, Meeseeks scans the summarised events for files that were read or edited and re-reads the most recently touched ones into the compacted context. That way, if the model was mid-way through editing a file when compaction fired, it can pick up with the current contents in view rather than having to re-read it.
+Once the summary is produced, Mewbo scans the summarised events for files that were read or edited and re-reads the most recently touched ones into the compacted context. That way, if the model was mid-way through editing a file when compaction fired, it can pick up with the current contents in view rather than having to re-read it.
 
 Compaction is also resilient to sub-agents. Running and completed sub-agent state lives outside the LLM conversation, so compaction never loses track of a spawned worker. The agent tree, their progress notes, and their results all survive.
 

@@ -9,10 +9,10 @@
 
 <p class="ms-hero__eyebrow">bearlike / Assistant</p>
 
-# Meeseeks is an AI agent that plans, delegates, and completes your work.
+# Mewbo is an AI agent that plans, delegates, and completes your work.
 
 <p class="ms-hero__lede">
-Hand off a goal. Meeseeks drafts a plan and spawns parallel sub-agents for the independent
+Hand off a goal. Mewbo drafts a plan and spawns parallel sub-agents for the independent
 pieces. A live hypervisor watches every child for stalls, drift, and budget overruns. You get
 one synthesised answer with the full audit trail. Any model works. Your existing MCP configs,
 skills, plugins, and project instructions drop in unchanged.
@@ -24,7 +24,7 @@ skills, plugins, and project instructions drop in unchanged.
   <a class="ms-btn ms-btn--ghost" href="reference/">API reference</a>
 </div>
 
-<div class="ms-pills" aria-label="What makes Meeseeks different">
+<div class="ms-pills" aria-label="What makes Mewbo different">
   <span class="ms-pill">
     <svg class="ms-pill__icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>
@@ -49,11 +49,18 @@ skills, plugins, and project instructions drop in unchanged.
     </svg>
     Claude Code and Codex compatible
   </span>
+  <span class="ms-pill">
+    <svg class="ms-pill__icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="14" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/><line x1="8" y1="15" x2="11" y2="15"/>
+    </svg>
+    Interactive widgets inline in chat
+  </span>
 </div>
 
 <div class="ms-hero__screens">
-  <img src="meeseeks-console-01-front.jpg" alt="Meeseeks Console landing page" />
-  <img src="meeseeks-console-02-tasks.jpg" alt="Meeseeks Console tasks page" />
+  <img src="mewbo-console-01-front.png" alt="Mewbo Console landing page" />
+  <img src="mewbo-console-02-tasks.png" alt="Mewbo Console tasks page" />
+  <img src="mewbo-console-07-widgets.png" alt="Widgets rendered inline in the Mewbo Console" />
 </div>
 
 </section>
@@ -126,7 +133,7 @@ One engine. Five clients. Pick whichever matches where the work already happens 
 
 Ask for it in plain English on whichever surface is closest. In plan mode, the root agent drafts the steps first and waits for your approval. Destructive work never runs before you sign off on the plan.
 
-### Meeseeks delegates in parallel
+### Mewbo delegates in parallel
 
 The root agent spawns sub-agents for any pieces of work that can run at the same time. A test run, a search, a refactor, and an MCP call against an external service can all execute in parallel. A live hypervisor watches every child for stalls. It steers drifting agents back with natural-language nudges between tool steps, and enforces per-agent token budgets without killing in-flight context. The tree grows in real time and you can steer or cancel any branch.
 
@@ -140,15 +147,33 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 
 ---
 
+## What's new { .ms-h2-icon data-icon="star" }
+
+<div class="ms-grid ms-grid--2">
+
+<a class="ms-card" href="features-widgets/">
+<span class="ms-card__title">Widgets inline in chat</span>
+<span class="ms-card__body">Ask for a chart, a card, or a data table and an interactive widget appears directly in the conversation. Widgets run in a sandboxed browser environment with no server involvement. Data is baked in at creation time, so widgets persist across sessions as permanent snapshots. Teams with internal data systems that lack good reporting interfaces can surface results visually on demand.</span>
+</a>
+
+<a class="ms-card" href="features-plugins/">
+<span class="ms-card__title">Plugin and Agent Skills platform</span>
+<span class="ms-card__body">Extend Mewbo with new agent types, skills, hooks, and tools using the same plugin format as Claude Code. Plugins are compatible with the official Claude plugins marketplace and activate automatically at session start. Capability gating ensures features only appear on surfaces that can support them. The bundled widget-builder is the reference example.</span>
+</a>
+
+</div>
+
+---
+
 ## Already using Claude Code or Codex? { .ms-h2-icon data-icon="plug" }
 
-Meeseeks reads the configuration you already have. Point it at a project and it picks up your MCP servers, skills, plugins, and instruction hierarchy automatically. No rewrites, no new formats.
+Mewbo reads the configuration you already have. Point it at a project and it picks up your MCP servers, skills, plugins, and instruction hierarchy automatically. No rewrites, no new formats.
 
-<div class="ms-grid ms-grid--4">
+<div class="ms-grid ms-grid--5">
 
 <div class="ms-card">
 <span class="ms-card__title">MCP servers</span>
-<span class="ms-card__body">Both the Meeseeks <code>servers</code> and the Claude Code / VS Code <code>mcpServers</code> schemas are accepted at project and user scope.</span>
+<span class="ms-card__body">Both the Mewbo <code>servers</code> and the Claude Code / VS Code <code>mcpServers</code> schemas are accepted at project and user scope.</span>
 </div>
 
 <div class="ms-card">
@@ -158,13 +183,18 @@ Meeseeks reads the configuration you already have. Point it at a project and it 
 
 <div class="ms-card">
 <span class="ms-card__title">Plugins &amp; marketplaces</span>
-<span class="ms-card__body">Claude Code plugin manifests install without translation. Point Meeseeks at any Claude Code-compatible marketplace and it just works.</span>
+<span class="ms-card__body">Claude Code plugin manifests install without translation. Point Mewbo at any Claude Code-compatible marketplace and it just works.</span>
 </div>
 
 <div class="ms-card">
 <span class="ms-card__title">Project instructions</span>
 <span class="ms-card__body"><code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/rules/*.md</code> all load hierarchically on session start.</span>
 </div>
+
+<a class="ms-card" href="features-plugins/#session-tools">
+<span class="ms-card__title">Session tools</span>
+<span class="ms-card__body">Plugins contribute per-agent stateful tools via a <code>session_tools</code> array in <code>plugin.json</code>. The core imports the class and wires it to the <code>ToolUseLoop</code>; widgets, exit-plan-mode, and future capability bundles all use the same primitive.</span>
+</a>
 
 </div>
 
@@ -185,6 +215,7 @@ Meeseeks reads the configuration you already have. Point it at a project and it 
   <li><a href="features-web-ide/">Web IDE</a>: per-session code-server</li>
   <li><a href="features-lsp/">Code intelligence (LSP)</a></li>
   <li><a href="features-mcp/">External tools (MCP)</a></li>
+  <li><a href="features-widgets/">Widgets</a>: interactive UI inline in chat</li>
 </ul>
 </div>
 
@@ -265,6 +296,7 @@ A five-step journey. Each step is short, and each link lands on the page you nee
 <ul class="ms-step__links">
   <li><a href="features-mcp/">MCP tools</a></li>
   <li><a href="features-plugins/">Plugins</a></li>
+  <li><a href="features-widgets/">Interactive widgets</a></li>
   <li><a href="developer-guide/">Build a client</a></li>
 </ul>
 </div>

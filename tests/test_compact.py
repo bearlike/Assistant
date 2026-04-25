@@ -6,7 +6,7 @@ import asyncio
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from meeseeks_core.compact import (
+from mewbo_core.compact import (
     CAVEMAN_COMPACT_PROMPT,
     COMPACT_PROMPT,
     CompactionMode,
@@ -17,6 +17,7 @@ from meeseeks_core.compact import (
     _strip_analysis,
     compact_conversation,
     get_compact_prompt,
+    record_compaction,
     resolve_compact_models,
 )
 
@@ -131,6 +132,158 @@ class TestCompactionResult:
         assert r.kept_events == []
         assert r.restored_attachments == []
         assert r.tokens_saved == 0
+        assert r.events_summarized == 0
+
+
+# -- record_compaction (single source of truth) ----------------------------
+
+
+class TestRecordCompaction:
+    """``record_compaction`` is shared by the auto and user-triggered paths.
+
+    It must persist the summary, append a ``context_compacted`` marker
+    event with the canonical payload shape, and (when provided) fire the
+    ``on_compact`` hook with the same numbers.
+    """
+
+    def _make_store(self, tmp_path):
+        from mewbo_core.session_store import SessionStore
+
+        store = SessionStore(root_dir=str(tmp_path))
+        sid = store.create_session()
+        return store, sid
+
+    def test_writes_summary_and_marker_event(self, tmp_path):
+        store, sid = self._make_store(tmp_path)
+        record_compaction(
+            store,
+            None,
+            sid,
+            summary="fresh summary",
+            mode="user",
+            model="claude-sonnet-4-6",
+            tokens_before=12_000,
+            tokens_saved=9_000,
+            events_summarized=42,
+        )
+        assert store.load_summary(sid) == "fresh summary"
+        events = store.load_transcript(sid)
+        assert events, "marker event should be appended"
+        marker = events[-1]
+        assert marker["type"] == "context_compacted"
+        payload = marker["payload"]
+        assert payload["mode"] == "user"
+        assert payload["model"] == "claude-sonnet-4-6"
+        assert payload["tokens_before"] == 12_000
+        assert payload["tokens_saved"] == 9_000
+        assert payload["tokens_after"] == 3_000
+        assert payload["events_summarized"] == 42
+        assert payload["summary"] == "fresh summary"
+        assert payload["fallback"] is False
+
+    def test_invokes_hook_manager_when_provided(self, tmp_path):
+        store, sid = self._make_store(tmp_path)
+        hook_calls: list[dict] = []
+
+        class _Hooks:
+            def run_on_compact(self, session_id, **kwargs):
+                hook_calls.append({"session_id": session_id, **kwargs})
+
+        record_compaction(
+            store,
+            _Hooks(),
+            sid,
+            summary="s",
+            mode="auto",
+            model="m",
+            tokens_before=1000,
+            tokens_saved=400,
+            events_summarized=5,
+        )
+        assert len(hook_calls) == 1
+        call = hook_calls[0]
+        assert call["session_id"] == sid
+        assert call["summary"] == "s"
+        assert call["tokens_before"] == 1000
+        assert call["tokens_saved"] == 400
+        assert call["events_summarized"] == 5
+
+    def test_tokens_after_clamped_at_zero(self, tmp_path):
+        # Defensive: tokens_saved > tokens_before (e.g. summary larger than
+        # input on a tiny transcript) must not produce a negative
+        # tokens_after in the marker payload.
+        store, sid = self._make_store(tmp_path)
+        record_compaction(
+            store,
+            None,
+            sid,
+            summary="x",
+            mode="user",
+            model="m",
+            tokens_before=10,
+            tokens_saved=99,
+            events_summarized=1,
+        )
+        marker = store.load_transcript(sid)[-1]
+        assert marker["payload"]["tokens_after"] == 0
+
+
+# -- compact_conversation: focus_prompt + events_summarized ----------------
+
+
+class TestCompactConversationFocus:
+    def test_focus_prompt_threaded_into_system_message(self):
+        captured: dict = {}
+
+        async def _capture(msgs):
+            captured["msgs"] = msgs
+            return MagicMock(content="<summary>ok</summary>")
+
+        llm = MagicMock()
+        llm.ainvoke = _capture
+        with patch("mewbo_core.llm.build_chat_model", return_value=llm):
+            asyncio.run(
+                compact_conversation(
+                    [_user("hi")],
+                    mode=CompactionMode.FULL,
+                    focus_prompt="API auth refactor",
+                )
+            )
+        sys_content = captured["msgs"][0].content
+        assert "User Focus" in sys_content
+        assert "API auth refactor" in sys_content
+
+    def test_focus_prompt_omitted_when_blank(self):
+        captured: dict = {}
+
+        async def _capture(msgs):
+            captured["msgs"] = msgs
+            return MagicMock(content="<summary>ok</summary>")
+
+        llm = MagicMock()
+        llm.ainvoke = _capture
+        with patch("mewbo_core.llm.build_chat_model", return_value=llm):
+            asyncio.run(
+                compact_conversation(
+                    [_user("hi")],
+                    mode=CompactionMode.FULL,
+                    focus_prompt="   ",
+                )
+            )
+        sys_content = captured["msgs"][0].content
+        assert "User Focus" not in sys_content
+
+    def test_events_summarized_count_populated(self):
+        llm = AsyncMock()
+        llm.ainvoke.return_value = MagicMock(content="<summary>ok</summary>")
+        with patch("mewbo_core.llm.build_chat_model", return_value=llm):
+            r = asyncio.run(
+                compact_conversation(
+                    [_user("a"), _user("b"), _user("c")],
+                    mode=CompactionMode.FULL,
+                )
+            )
+        assert r.events_summarized == 3
 
 
 # -- compact_conversation ---------------------------------------------------
@@ -147,7 +300,7 @@ class TestCompactConversation:
         llm.ainvoke.return_value = MagicMock(
             content="<analysis>draft</analysis><summary>Done.</summary>"
         )
-        with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
+        with patch("mewbo_core.llm.build_chat_model", return_value=llm):
             r = asyncio.run(
                 compact_conversation(
                     [_user("do X"), _assistant("done")],
@@ -162,8 +315,8 @@ class TestCompactConversation:
         llm = AsyncMock()
         llm.ainvoke.return_value = MagicMock(content="<summary>Old</summary>")
         with (
-            patch("meeseeks_core.llm.build_chat_model", return_value=llm),
-            patch("meeseeks_core.compact.get_config_value", return_value=2),
+            patch("mewbo_core.llm.build_chat_model", return_value=llm),
+            patch("mewbo_core.compact.get_config_value", return_value=2),
         ):
             r = asyncio.run(
                 compact_conversation(
@@ -182,7 +335,7 @@ class TestCompactConversation:
     def test_partial_explicit_pivot(self):
         llm = AsyncMock()
         llm.ainvoke.return_value = MagicMock(content="<summary>s</summary>")
-        with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
+        with patch("mewbo_core.llm.build_chat_model", return_value=llm):
             r = asyncio.run(
                 compact_conversation(
                     [_user(f"m{i}") for i in range(5)],
@@ -195,7 +348,7 @@ class TestCompactConversation:
     def test_pre_compact_hook_applied(self):
         llm = AsyncMock()
         llm.ainvoke.return_value = MagicMock(content="<summary>ok</summary>")
-        with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
+        with patch("mewbo_core.llm.build_chat_model", return_value=llm):
             r = asyncio.run(
                 compact_conversation(
                     [_user("a"), _user("b"), _user("c")],
@@ -211,7 +364,7 @@ class TestCompactConversation:
 
         llm = AsyncMock()
         llm.ainvoke.return_value = MagicMock(content="<summary>fine</summary>")
-        with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
+        with patch("mewbo_core.llm.build_chat_model", return_value=llm):
             r = asyncio.run(
                 compact_conversation(
                     [_user("x")],
@@ -222,7 +375,7 @@ class TestCompactConversation:
         assert r.summary == "fine"
 
     def test_partial_nothing_to_summarize(self):
-        with patch("meeseeks_core.compact.get_config_value", return_value=10):
+        with patch("mewbo_core.compact.get_config_value", return_value=10):
             r = asyncio.run(
                 compact_conversation(
                     [_user("recent")],
@@ -248,15 +401,15 @@ class TestGetCompactPrompt:
 
     def test_defaults_to_standard_when_config_missing(self):
         # Unknown config key falls through to default=False -> standard prompt.
-        with patch("meeseeks_core.compact.get_config_value", return_value=False):
+        with patch("mewbo_core.compact.get_config_value", return_value=False):
             assert get_compact_prompt() is COMPACT_PROMPT
 
     def test_caveman_mode_true_returns_caveman_prompt(self):
-        with patch("meeseeks_core.compact.get_config_value", return_value=True):
+        with patch("mewbo_core.compact.get_config_value", return_value=True):
             assert get_compact_prompt() is CAVEMAN_COMPACT_PROMPT
 
     def test_caveman_mode_false_returns_standard_prompt(self):
-        with patch("meeseeks_core.compact.get_config_value", return_value=False):
+        with patch("mewbo_core.compact.get_config_value", return_value=False):
             assert get_compact_prompt() is COMPACT_PROMPT
 
     def test_caveman_prompt_preserves_output_structure(self):
@@ -316,7 +469,7 @@ class TestCompactFromBackgroundThread:
 
         def run_in_thread() -> None:
             try:
-                with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
+                with patch("mewbo_core.llm.build_chat_model", return_value=llm):
                     r = asyncio.run(
                         compact_conversation(
                             [_user("old msg"), _assistant("old reply")],
@@ -342,7 +495,7 @@ class TestCompactFromBackgroundThread:
         llm = AsyncMock()
         llm.ainvoke.return_value = MagicMock(content="<summary>Compact.</summary>")
         events = [_user(f"msg {i}") for i in range(10)]
-        with patch("meeseeks_core.llm.build_chat_model", return_value=llm):
+        with patch("mewbo_core.llm.build_chat_model", return_value=llm):
             r = asyncio.run(compact_conversation(events, mode=CompactionMode.FULL))
         # The summary replaces all events, so tokens_saved should be positive
         assert r.tokens_saved > 0, f"Expected positive tokens_saved, got {r.tokens_saved}"
@@ -353,34 +506,34 @@ class TestCompactFromBackgroundThread:
 
 class TestResolveCompactModels:
     def test_default_keyword_resolves_to_agent_model(self):
-        with patch("meeseeks_core.compact.get_config_value", return_value=["default"]):
+        with patch("mewbo_core.compact.get_config_value", return_value=["default"]):
             assert resolve_compact_models("agent-model") == ["agent-model"]
 
     def test_explicit_model_preserved(self):
         with patch(
-            "meeseeks_core.compact.get_config_value",
+            "mewbo_core.compact.get_config_value",
             return_value=["haiku", "default"],
         ):
             assert resolve_compact_models("sonnet") == ["haiku", "sonnet"]
 
     def test_empty_string_treated_as_default(self):
-        with patch("meeseeks_core.compact.get_config_value", return_value=["", "haiku"]):
+        with patch("mewbo_core.compact.get_config_value", return_value=["", "haiku"]):
             assert resolve_compact_models("sonnet") == ["sonnet", "haiku"]
 
     def test_empty_list_falls_back_to_agent(self):
-        with patch("meeseeks_core.compact.get_config_value", return_value=[]):
+        with patch("mewbo_core.compact.get_config_value", return_value=[]):
             assert resolve_compact_models("sonnet") == ["sonnet"]
 
     def test_deduplicates(self):
         with patch(
-            "meeseeks_core.compact.get_config_value",
+            "mewbo_core.compact.get_config_value",
             return_value=["default", "default", "haiku"],
         ):
             assert resolve_compact_models("sonnet") == ["sonnet", "haiku"]
 
     def test_non_list_config_falls_back(self):
         """If config returns a non-list (e.g. mocked int), treat as default."""
-        with patch("meeseeks_core.compact.get_config_value", return_value=42):
+        with patch("mewbo_core.compact.get_config_value", return_value=42):
             assert resolve_compact_models("sonnet") == ["sonnet"]
 
 
@@ -403,9 +556,9 @@ class TestCompactModelFallback:
             return bad_llm if call_count == 1 else good_llm
 
         with (
-            patch("meeseeks_core.llm.build_chat_model", side_effect=_build),
+            patch("mewbo_core.llm.build_chat_model", side_effect=_build),
             patch(
-                "meeseeks_core.compact.resolve_compact_models",
+                "mewbo_core.compact.resolve_compact_models",
                 return_value=["cheap-model", "fallback-model"],
             ),
         ):
@@ -423,9 +576,9 @@ class TestCompactModelFallback:
         llm = AsyncMock()
         llm.ainvoke.return_value = MagicMock(content="<summary>ok</summary>")
         with (
-            patch("meeseeks_core.llm.build_chat_model", return_value=llm),
+            patch("mewbo_core.llm.build_chat_model", return_value=llm),
             patch(
-                "meeseeks_core.compact.resolve_compact_models",
+                "mewbo_core.compact.resolve_compact_models",
                 return_value=["my-haiku"],
             ),
         ):

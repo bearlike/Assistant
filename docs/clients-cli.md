@@ -1,7 +1,7 @@
 # CLI Client
 
-<video controls preload="metadata" poster="../meeseeks-console-01-front.jpg" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
-  <source src="../meeseeks-cli-01-video.mp4" type="video/mp4" />
+<video controls preload="metadata" poster="../mewbo-console-01-front.png" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
+  <source src="../mewbo-cli-01-video.mp4" type="video/mp4" />
   Your browser does not support the video tag.
 </video>
 
@@ -11,7 +11,7 @@ See [Get Started](getting-started.md#cli-setup) for installation.
 
 ## Run
 ```bash
-uv run meeseeks
+uv run mewbo
 ```
 
 ## CLI flags
@@ -66,8 +66,8 @@ uv run meeseeks
 Sessions can be tagged for easy retrieval:
 
 ```bash
-meeseeks --tag my-project       # create or resume a tagged session
-meeseeks --session <session-id> # resume by ID
+mewbo --tag my-project       # create or resume a tagged session
+mewbo --session <session-id> # resume by ID
 ```
 
 ### Forking
@@ -75,7 +75,7 @@ meeseeks --session <session-id> # resume by ID
 Fork a session to branch from any point in its history:
 
 ```bash
-meeseeks --fork my-project      # fork from a tagged session at its current state
+mewbo --fork my-project      # fork from a tagged session at its current state
 ```
 
 Inside a running session, `/fork [tag]` creates a new session branching from the current conversation state. The optional tag names the fork for later retrieval.

@@ -2,8 +2,8 @@
 
 from unittest.mock import patch
 
-from meeseeks_core.orchestrator import Orchestrator
-from meeseeks_core.session_store import SessionStore
+from mewbo_core.orchestrator import Orchestrator
+from mewbo_core.session_store import SessionStore
 
 
 def _orchestrator(tmp_path):
@@ -33,7 +33,7 @@ def test_run_title_generation_saves_and_emits_event(tmp_path):
     async def fake_gen(_events):
         return "Fresh Title"
 
-    with patch("meeseeks_core.title_generator.generate_session_title", fake_gen):
+    with patch("mewbo_core.title_generator.generate_session_title", fake_gen):
         orch._run_title_generation(session_id)
 
     assert store.load_title(session_id) == "Fresh Title"
@@ -52,7 +52,7 @@ def test_run_title_generation_noop_when_generator_returns_none(tmp_path):
     async def fake_gen(_events):
         return None
 
-    with patch("meeseeks_core.title_generator.generate_session_title", fake_gen):
+    with patch("mewbo_core.title_generator.generate_session_title", fake_gen):
         orch._run_title_generation(session_id)
 
     assert store.load_title(session_id) is None
@@ -69,7 +69,7 @@ def test_run_title_generation_swallows_exceptions(tmp_path):
     async def fake_gen(_events):
         raise RuntimeError("boom")
 
-    with patch("meeseeks_core.title_generator.generate_session_title", fake_gen):
+    with patch("mewbo_core.title_generator.generate_session_title", fake_gen):
         orch._run_title_generation(session_id)  # Must not raise.
 
     assert store.load_title(session_id) is None
@@ -88,7 +88,7 @@ def test_title_generation_sees_assistant_event(tmp_path):
         captured_events.extend(events)
         return "Greeting Exchange"
 
-    with patch("meeseeks_core.title_generator.generate_session_title", capturing_gen):
+    with patch("mewbo_core.title_generator.generate_session_title", capturing_gen):
         orch._run_title_generation(session_id)
 
     # Verify the generator received both event types

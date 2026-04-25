@@ -3,10 +3,10 @@
 import json
 import os
 
-import meeseeks_core.classes as classes
+import mewbo_core.classes as classes
 import pytest
-from meeseeks_core.classes import ActionStep, TaskQueue, create_task_queue, set_available_tools
-from meeseeks_core.config import set_config_override
+from mewbo_core.classes import ActionStep, TaskQueue, create_task_queue, set_available_tools
+from mewbo_core.config import set_config_override
 
 
 def test_action_step_normalization():
@@ -62,7 +62,7 @@ def test_action_step_validation_logs_for_invalid_entries():
 
 def test_save_json(tmp_path, monkeypatch):
     """Write JSON payloads using the tool helper."""
-    from meeseeks_core.classes import AbstractTool
+    from mewbo_core.classes import AbstractTool
 
     class DummyTool(AbstractTool):
         def set_state(self, action_step=None):
@@ -154,7 +154,7 @@ def test_abstract_tool_init_and_run(monkeypatch, tmp_path):
 
 
 def test_abstract_tool_cache_dir_empty_resolves_home(monkeypatch):
-    """Empty cache_dir resolves to MEESEEKS_HOME/cache/<tool_id>."""
+    """Empty cache_dir resolves to MEWBO_HOME/cache/<tool_id>."""
 
     class DummyTool(classes.AbstractTool):
         def __init__(self):
@@ -162,8 +162,8 @@ def test_abstract_tool_cache_dir_empty_resolves_home(monkeypatch):
 
     set_config_override({"runtime": {"cache_dir": ""}})
     tool = DummyTool()
-    # Empty cache_dir is resolved by RuntimeConfig to ~/.meeseeks/cache
-    assert ".meeseeks" in tool.cache_dir or "cache" in tool.cache_dir
+    # Empty cache_dir is resolved by RuntimeConfig to ~/.mewbo/cache
+    assert ".mewbo" in tool.cache_dir or "cache" in tool.cache_dir
 
 
 def test_abstract_tool_rag_helpers(monkeypatch, tmp_path):

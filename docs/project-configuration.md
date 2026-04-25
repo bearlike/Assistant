@@ -1,11 +1,11 @@
 # Project Setup
 
-When you start a session, Meeseeks looks for a `CLAUDE.md` in your project, walks up the directory tree to the git root collecting any parent `CLAUDE.md` files, and injects them into the assistant's context. Deeper nested `CLAUDE.md` files (inside sub-packages) are indexed but not injected. The assistant reads them on demand with `read_file` when work reaches that directory.
+When you start a session, Mewbo looks for a `CLAUDE.md` in your project, walks up the directory tree to the git root collecting any parent `CLAUDE.md` files, and injects them into the assistant's context. Deeper nested `CLAUDE.md` files (inside sub-packages) are indexed but not injected. The assistant reads them on demand with `read_file` when work reaches that directory.
 
 The same mechanism handles MCP tool configuration, skills, and local overrides.
 
 > [!TIP] Drop-in compatible with common agent conventions
-> Meeseeks reads both the [Claude Code](https://docs.claude.com/en/docs/claude-code/memory) `CLAUDE.md` format and the open [`AGENTS.md`](https://agents.md) convention used by Codex, Aider, and other agent frameworks. MCP servers follow the [Model Context Protocol](https://modelcontextprotocol.io) and accept both `servers` (Meeseeks) and `mcpServers` (Claude Code / VS Code) keys. Skills follow the [Agent Skills](https://docs.claude.com/en/api/agent-skills) standard. If you already use any of these tools, your existing project files work in Meeseeks without modification.
+> Mewbo reads both the [Claude Code](https://docs.claude.com/en/docs/claude-code/memory) `CLAUDE.md` format and the open [`AGENTS.md`](https://agents.md) convention used by Codex, Aider, and other agent frameworks. MCP servers follow the [Model Context Protocol](https://modelcontextprotocol.io) and accept both `servers` (Mewbo) and `mcpServers` (Claude Code / VS Code) keys. Skills follow the [Agent Skills](https://docs.claude.com/en/api/agent-skills) standard. If you already use any of these tools, your existing project files work in Mewbo without modification.
 
 ---
 
@@ -13,7 +13,7 @@ The same mechanism handles MCP tool configuration, skills, and local overrides.
 
 ### Upward pass: content injected at startup
 
-At session start, Meeseeks walks up from your current working directory to the git root (or the filesystem root if you are not in a repo) and loads every instruction file it finds along the way. The full text of each file is concatenated and injected into the system prompt before the first LLM call. Each source is separated by a heading, so the assistant can tell where a rule came from.
+At session start, Mewbo walks up from your current working directory to the git root (or the filesystem root if you are not in a repo) and loads every instruction file it finds along the way. The full text of each file is concatenated and injected into the system prompt before the first LLM call. Each source is separated by a heading, so the assistant can tell where a rule came from.
 
 | Priority | Path | Scope |
 |----------|------|-------|
@@ -26,7 +26,7 @@ Lower priority means lower precedence. Higher-priority content wins on conflict.
 
 ### Downward pass: context map for on-demand loading
 
-Meeseeks also scans *down* from your working directory to a maximum depth of 5, looking for `CLAUDE.md`, `AGENTS.md`, and `.claude/CLAUDE.md` in subdirectories. Critically, the content of these files is **not** injected. Only the file paths are collected and listed in the system prompt, like so:
+Mewbo also scans *down* from your working directory to a maximum depth of 5, looking for `CLAUDE.md`, `AGENTS.md`, and `.claude/CLAUDE.md` in subdirectories. Critically, the content of these files is **not** injected. Only the file paths are collected and listed in the system prompt, like so:
 
 ```
 # Sub-package instruction files
@@ -34,9 +34,9 @@ Meeseeks also scans *down* from your working directory to a maximum depth of 5, 
 The following instruction files exist in subdirectories.
 Read them when working on the relevant package.
 
-- packages/meeseeks_core/CLAUDE.md
-- apps/meeseeks_console/CLAUDE.md
-- apps/meeseeks_api/AGENTS.md
+- packages/mewbo_core/CLAUDE.md
+- apps/mewbo_console/CLAUDE.md
+- apps/mewbo_api/AGENTS.md
 ```
 
 When the assistant begins work in one of those directories, it reads the appropriate file with `read_file` before proceeding. This keeps large monorepos manageable: only the directly applicable instructions are in the active context, and nested package instructions are fetched on demand.
@@ -45,18 +45,18 @@ When the assistant begins work in one of those directories, it reads the appropr
 
 ### Noload marker
 
-Add `<!-- meeseeks:noload -->` as the very first line of any instruction file to exclude it from both passes. The loader checks the first line before reading the rest of the file.
+Add `<!-- mewbo:noload -->` as the very first line of any instruction file to exclude it from both passes. The loader checks the first line before reading the rest of the file.
 
 Use this for shim files that redirect to another `CLAUDE.md` (so you do not get duplicate injection):
 
 ```markdown
-<!-- meeseeks:noload -->
+<!-- mewbo:noload -->
 See ../CLAUDE.md. This file exists only for tool compatibility.
 ```
 
 ### Git context
 
-Meeseeks can include git branch and status in the session context, so the assistant knows what branch you are on and what has changed since the last commit. Individual integrations (the CLI, specific skills) opt in to this. It is not always injected.
+Mewbo can include git branch and status in the session context, so the assistant knows what branch you are on and what has changed since the last commit. Individual integrations (the CLI, specific skills) opt in to this. It is not always injected.
 
 ---
 
@@ -69,13 +69,13 @@ MCP server definitions come from four layers, merged together in this order. Lat
 | Layer | Source | Priority |
 |-------|--------|----------|
 | 1 | Plugin-contributed servers | Lowest |
-| 2 | Global: `configs/mcp.json` or `$MEESEEKS_HOME/mcp.json` | Mid |
+| 2 | Global: `configs/mcp.json` or `$MEWBO_HOME/mcp.json` | Mid |
 | 3 | Subtree `.mcp.json` files, deepest-first | Mid-high |
 | 4 | CWD `.mcp.json` | Highest |
 
 The practical rule: **your CWD `.mcp.json` wins over the global one**, and subtree `.mcp.json` files deeper in the tree are merged in too. A project `.mcp.json` that adds a single server key leaves all global server definitions intact.
 
-Meeseeks re-runs this merge whenever the MCP pool reconnects, so edits to any `.mcp.json` in the hierarchy are picked up automatically. Unchanged servers keep their existing connections; changed or new servers reconnect; removed servers disconnect.
+Mewbo re-runs this merge whenever the MCP pool reconnects, so edits to any `.mcp.json` in the hierarchy are picked up automatically. Unchanged servers keep their existing connections; changed or new servers reconnect; removed servers disconnect.
 
 ### Config normalization
 

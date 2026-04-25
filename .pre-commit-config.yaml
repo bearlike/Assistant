@@ -13,7 +13,7 @@ repos:
         pass_filenames: false
       - id: console-lint
         name: console-lint
-        entry: bash -c 'cd apps/meeseeks_console && npx eslint --ext .js,.jsx,.ts,.tsx --max-warnings=0 src/'
+        entry: bash -c 'cd apps/mewbo_console && npx eslint --ext .js,.jsx,.ts,.tsx --max-warnings=0 src/'
         language: system
         pass_filenames: false
-        files: ^apps/meeseeks_console/src/
+        files: ^apps/mewbo_console/src/

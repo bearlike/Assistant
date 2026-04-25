@@ -45,7 +45,7 @@ jobs:
         run: |
           .venv/bin/coverage run \
             --data-file "${COVERAGE_FILE}" \
-            --source=meeseeks_core,meeseeks_tools,meeseeks_ha_conversation \
+            --source=mewbo_core,mewbo_tools,mewbo_ha_conversation \
             -m pytest
           .venv/bin/coverage report --data-file "${COVERAGE_FILE}" --skip-covered
           .venv/bin/coverage xml --data-file "${COVERAGE_FILE}" -o coverage.xml
@@ -54,8 +54,8 @@ jobs:
         run: |
           .venv/bin/coverage xml \
             --data-file "${COVERAGE_FILE}" \
-            --include "packages/meeseeks_core/src/meeseeks_core/*" \
-            --include "*/packages/meeseeks_core/src/meeseeks_core/*" \
+            --include "packages/mewbo_core/src/mewbo_core/*" \
+            --include "*/packages/mewbo_core/src/mewbo_core/*" \
             -o coverage-core.xml
 
       - name: Upload coverage artifact

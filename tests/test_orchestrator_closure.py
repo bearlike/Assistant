@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from meeseeks_core.orchestrator import Orchestrator, _format_assistant_closure
-from meeseeks_core.session_store import SessionStore
-from meeseeks_core.tool_use_loop import ToolUseLoop
+from mewbo_core.orchestrator import Orchestrator, _format_assistant_closure
+from mewbo_core.session_store import SessionStore
+from mewbo_core.tool_use_loop import ToolUseLoop
 
 
 async def _failing_loop_run(*_args, **_kwargs):
