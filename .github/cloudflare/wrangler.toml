@@ -1,0 +1,7 @@
+name = "mewbo-docs-discovery"
+main = "worker.js"
+compatibility_date = "2024-11-06"
+
+routes = [
+  { pattern = "docs.mewbo.com/*", zone_name = "mewbo.com" }
+]

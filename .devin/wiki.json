@@ -7,292 +7,411 @@
   "pages": [
     {
       "title": "Overview & Repo Map",
-      "purpose": "Single entry point: repo goals, module boundaries (packages/, apps/, mewbo_ha_conversation/), and top-level folder ownership. Highlights the shared-host model. New in v0.0.10: plugin system (plugins.py, agent_registry.py in mewbo_core), Web IDE integration (ide.py/ide_routes.py in mewbo_api), LSP code intelligence (mewbo_tools/integration/lsp/), chat platform channel adapters (Nextcloud Talk + Email), and conversation fork/edit/regenerate."
+      "purpose": "Single entry point: repo goals, package and app boundaries, and how the major subsystems relate. Frames the architecture as a shared core engine consumed by multiple client interfaces, with a uniform extension system layered on top."
     },
+
     {
       "title": "Core Runtime & Orchestration (mewbo_core)",
-      "purpose": "How the shared core runtime and orchestration engine work: SessionRuntime as the facade, Orchestrator as the session driver, ToolUseLoop as the execution engine. Covers the single-async-loop architecture where the LLM drives all tool calls via native bind_tools.",
+      "purpose": "The shared execution substrate that every client interface uses: SessionRuntime as the public facade, Orchestrator as the session driver, and ToolUseLoop as the single async loop that drives all LLM tool calls. This section covers the engine itself — the parts no client can opt out of.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Session Runtime, Store & Event Log",
-      "purpose": "SessionRuntime facade, RunRegistry (thread tracking), SessionStore (JSONL transcripts, tags, archives, attachments). Fork-from-message: resolve_session(fork_from=id_or_tag, fork_at_ts=iso_ts) creates a new session with only events up to the given timestamp \u2014 enables edit-and-regenerate from any point in history. Per-session temporary directory as default CWD (assigned at session creation). Polling is API-only; CLI runs in-process.",
+      "purpose": "Session lifecycle management: RunRegistry, SessionStore (JSONL transcripts, tags, attachments), and the immutable-event-log foundation that makes features like fork and replay possible.",
       "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
+      "title": "Conversation Fork, Edit & Regenerate",
+      "purpose": "Point-in-time session branching via resolve_session(fork_from, fork_at_ts), edit-and-regenerate with replacement text, and the console/CLI surfaces that expose it.",
+      "parent": "Session Runtime, Store & Event Log"
+    },
+    {
       "title": "Tool-Use Loop Execution Engine",
-      "purpose": "ToolUseLoop.run() as the single async execution engine: message construction (_build_messages with system prompt, project instructions, context, attachments, tool guidance, skill catalog, depth guidance), LLM invocation via bind_tools, tool dispatch with concurrency-safe partitioning (_partition_tool_calls batches concurrent-safe tools vs exclusive tools), per-tool timeout (asyncio.wait_for with configurable ToolSpec.timeout), non-blocking spawn for root agent (returns immediately with agent_id), check_agents/steer_agent management tools (root-only), user steering (message_queue drain and interrupt_step check), step budget tracking with graduated enforcement (NL warnings, not kill), forced synthesis with pending children at step limit, and cancellation.",
+      "purpose": "ToolUseLoop.run() as the single async execution engine. Covers message construction, LLM invocation, tool dispatch (concurrency partitioning, timeouts), step budget enforcement, user steering, and the capability-gated catalog filtering that hides tools and agents the client cannot render.",
       "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Agent Hypervisor & Sub-Agent Lifecycle",
-      "purpose": "AgentHypervisor as a dual-layer autonomous system: reflexes (code-level step tracking, stall detection via background _watchdog, budget enforcement via NL warning injection) and brain (root LLM sees global agent tree via render_agent_tree(), uses check_agents and steer_agent tools). 6-state lifecycle (submitted \u2192 running \u2192 completed/failed/cancelled/rejected per A2A v1.0). AgentResult as structured Communication Units (content, status, steps_used, summary, warnings, artifacts). Non-blocking spawn for root (epoll model \u2014 react to notifications, don't poll) vs blocking spawn for sub-agents. Bidirectional messaging (parent\u2192child via send_message/steer_agent, child\u2192parent via _run_child_lifecycle on completion). AgentHandle (per-agent runtime state with progress_note, result, message_queue). 3-phase graceful cleanup (cancel \u2192 wait \u2192 force-mark). SpawnAgentTool with filter_specs() for tool scoping.",
-      "parent": "Core Runtime & Orchestration (mewbo_core)"
-    },
-    {
-      "title": "LLM Abstraction & Model Routing",
-      "purpose": "ChatModel protocol, build_chat_model(), LiteLLM multi-provider gateway, provider-qualified model names, per-role model selection (plan/tool/default), reasoning-effort configuration (reasoning_effort field with model allowlist), proxy_model_prefix (default 'openai' \u2014 prepended to bare model names when llm.api_base is set for proxy routing, configurable to match proxy's expected prefix), and model_prefers_structured_patch() (returns bool for edit tool auto-selection). specs_to_langchain_tools() for converting ToolSpecs to LLM-bindable schemas.",
+      "purpose": "AgentHypervisor dual-layer design (code-level reflexes plus a root-LLM brain), the 6-state agent lifecycle, AgentHandle/AgentResult contracts, non-blocking vs blocking spawn, bidirectional messaging, and graceful cleanup.",
       "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Context Builder, Summaries & Compaction",
-      "purpose": "ContextBuilder.build() pipeline: transcript loading, event filtering, recent event selection, attachment reading, token budget tracking, auto-compaction triggers. Token budget now accounts for tool schema + system prompt overhead (~20-25k tokens). context_compacted events emitted at both proactive (pre-limit) and reactive (post-ContextWindowExceededError) compaction \u2014 visible in Console and CLI. Mid-loop reactive compaction prevents crashes. Two-mode compaction: FULL (summarizes everything) and PARTIAL (keeps recent events verbatim). Post-compact file restoration re-injects recently referenced files within token budgets. Micro-compaction (ANSI stripping + truncation) via pre_compact hook. AgentHandle.compaction_count tracked for hypervisor tree visibility.",
+      "purpose": "ContextBuilder pipeline from raw transcript to ContextSnapshot, token budget accounting, and the two compaction modes (FULL/PARTIAL) triggered both proactively and reactively.",
       "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
-      "title": "Permissions, Hooks & Tool Execution Gates",
-      "purpose": "PermissionPolicy (allow/deny/ask rules, fnmatch on tool_id and operation), approval callbacks (auto_approve, config-driven, interactive). HookManager with error isolation (all hooks wrapped in try/except \u2014 failing hook logs warning but doesn't block execution). Lifecycle hooks: on_session_start, on_session_end, on_compact. External command hooks via HooksConfig with fnmatch-based tool matcher filtering. Pre/post tool use hooks. Agent lifecycle hooks (on_agent_start, on_agent_stop).",
+      "title": "LLM Abstraction & Model Routing",
+      "purpose": "ChatModel protocol, build_chat_model(), LiteLLM multi-provider routing, per-role model selection, reasoning-effort configuration, model-cascade fallback, and proxy model prefix handling.",
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
+    },
+    {
+      "title": "Plan Mode & Task Decomposition",
+      "purpose": "Mechanisms that let the model think before acting and decompose complex requests: planning.py, task_master.py, and the exit_plan_mode session tool. Covers when plan mode is entered, how plans are reviewed, and how task decomposition coexists with the single-loop execution model.",
       "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Data Models, Event Types & Payload Schemas",
-      "purpose": "ActionStep (tool_id/operation/tool_input), PlanStep, TaskQueue, OrchestrationState, EventRecord, ToolResult (content/success/error/truncated), and typed payload schemas (UserPayload, AssistantPayload, ToolResultPayload with kind discriminator, ActionPlanPayload, CompletionPayload, PermissionPayload, SubAgentPayload with lifecycle state, AgentMessagePayload). Event type discrimination and JSONL serialization. Structured tool results with kind field ('shell', 'diff', 'file', 'dir') for frontend routing.",
+      "purpose": "Core data shapes: ActionStep, EventRecord, ToolResult, and the discriminated payload union that drives frontend component routing via the kind field.",
       "parent": "Core Runtime & Orchestration (mewbo_core)"
+    },
+    {
+      "title": "Multi-Project Workspaces",
+      "purpose": "How Mewbo handles multiple project directories: project_store.py, project resolution and switching, project-scoped MCP and instructions, and the surfaces that expose project selection (CLI command, API param, console picker).",
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
+    },
+    {
+      "title": "Project Instructions Loading",
+      "purpose": "The hierarchical CLAUDE.md / AGENTS.md discovery mechanism: discover_all_instructions() walks priority levels (user → project → rules → local), discover_subtree_instructions() indexes nested guidance, and the noload marker lets specific files opt out. Covers how project guidance reaches the system prompt and how subtree skills/instructions are surfaced for on-demand reading.",
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
+    },
+
+    {
+      "title": "Extension System",
+      "purpose": "How the engine is extended without being modified. Groups the cooperative mechanisms — skills, plugins, hooks, permissions, capabilities, session tools, slash commands — that let users, plugins, and clients shape behavior at runtime through stable contracts.",
+      "parent": "Overview & Repo Map"
     },
     {
       "title": "Skills System",
-      "purpose": "SkillRegistry discovers SKILL.md files from ~/.claude/skills/ and .claude/skills/. Plugin skill loading via load_extra_dir(path) (adds skills from plugin directories) and load_command_file(path) (loads skills from plugin commands.json). No-override semantics: installed plugins cannot shadow user-defined skills. Skill catalog injected into system prompt for LLM auto-invocation via activate_skill. User /skill-name invocations detected in Orchestrator. Skills scope tools via allowed-tools (filter_specs()). merge_plugin_hooks() translates Claude Code plugin hooks.json format into HookManager callbacks with ${CLAUDE_PLUGIN_ROOT} substitution.",
-      "parent": "Core Runtime & Orchestration (mewbo_core)"
+      "purpose": "SkillRegistry discovery (user and plugin directories), no-override semantics, skill catalog injection into the system prompt, and tool scoping via filter_specs().",
+      "parent": "Extension System"
     },
     {
+      "title": "Plugin System & Marketplace",
+      "purpose": "PluginManifest format, discovery (installed, builtin_plugins/, marketplace), install/uninstall lifecycle, and how load_all_plugin_components() wires skills, hooks, agents, MCP servers, and session tools into a running session.",
+      "parent": "Extension System"
+    },
+    {
+      "title": "Agent Definition Registry",
+      "purpose": "AgentDef dataclass, YAML frontmatter parsing, CC tool name mapping, capability-gated visibility, agent body variable substitution, and how agent_type in spawn_agent triggers registry lookup.",
+      "parent": "Plugin System & Marketplace"
+    },
+    {
+      "title": "Widget Builder Builtin Plugin",
+      "purpose": "The widget-builder builtin plugin: SubmitWidgetTool (a SessionTool that lints, emits widget_ready, and terminates the agent loop), the st-widget-builder sub-agent and skill, and how the console renders inline stlite widgets from widget_ready events. Acts as a worked example of the full extension stack.",
+      "parent": "Plugin System & Marketplace"
+    },
+    {
+      "title": "SessionTool Protocol",
+      "purpose": "The SessionTool Protocol in session_tools.py: per-agent plugin tools with an async handle() and a should_terminate_run() signal, managed by SessionToolRegistry. Built-ins like exit_plan_mode satisfy the same protocol so plugin and core tools share a uniform contract.",
+      "parent": "Extension System"
+    },
+    {
+      "title": "Permissions, Hooks & Tool Execution Gates",
+      "purpose": "PermissionPolicy rules (including episodic approval), the approval callback chain, and HookManager lifecycle hooks (on_session_start, on_session_end, on_compact, pre/post tool use). Covers error isolation guarantees for hooks.",
+      "parent": "Extension System"
+    },
+    {
+      "title": "Capabilities System & Feature Gating",
+      "purpose": "Client capability negotiation via the X-Mewbo-Capabilities header and the pure-function primitives in capabilities.py that filter agent, skill, and session-tool catalogs to only what the client can render.",
+      "parent": "Extension System"
+    },
+    {
+      "title": "Slash Commands & User Commands",
+      "purpose": "The user-command subsystem in commands.py: a registry of slash commands (e.g. /help, /usage, /new, /switch-project, /fork, /tag, /compact, /tokens) reused by every interface — CLI, API, console, and chat adapters — so user steering behaves consistently across surfaces.",
+      "parent": "Extension System"
+    },
+
+    {
       "title": "Tool Layer (mewbo_tools)",
-      "purpose": "Tool layer boundaries: local tools (edit, shell, file read/list), MCP tools, LSP code intelligence. AbstractTool base class with get_state/set_state/run dispatch. MockSpeaker result container. Tool results use kind-discriminated dicts (kind: 'shell'|'diff'|'file'|'dir'|'lsp') for structured frontend rendering. LSP tool (lsp_tool in mewbo_tools/integration/lsp/): graceful absence when pygls/lsprotocol not installed.",
+      "purpose": "What the model can invoke: built-in local tools, external MCP tools, and LSP code intelligence — all unified under AbstractTool with kind-discriminated results so new tool types render in clients without protocol changes.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Tool Registry & Spec System",
-      "purpose": "ToolRegistry, ToolSpec (tool_id, kind, metadata with schema/capabilities/reflect, factory for lazy instantiation), filter_specs() for allowlist/denylist filtering (shared by Orchestrator, SpawnAgentTool, and skills), specs_to_langchain_tools() conversion, and tool disabling with reasons. Conditional tool registration pattern: _edit_tool_spec_and_manifest() reads AgentConfig.edit_tool and returns matching ToolSpec + manifest entry for both _default_registry() and _built_in_manifest_entries() \u2014 single conditional, two consumers. Capabilities metadata (e.g. 'file_write') enables intent-based tool filtering in planning.",
-      "parent": "Tool Layer (mewbo_tools)"
-    },
-    {
-      "title": "Configurable Edit Tool Mechanism",
-      "purpose": "Two edit tool mechanisms selectable via AgentConfig.edit_tool: 'search_replace_block' (Aider-style) and 'structured_patch' (per-file exact). When edit_tool is empty (default), ToolUseLoop._configured_edit_tool_id() auto-selects via llm.model_prefers_structured_patch(model_name) \u2014 checking the model name string against a known list of structured-patch-preferring models. Explicit config always overrides auto-detection. Shared utilities in edit_common.py. Both tools output {'kind': 'diff'} for DiffCard compatibility. End-to-end consistency: ToolSpec bundles schema + prompt_path + factory.",
+      "purpose": "ToolRegistry, ToolSpec (schema, capabilities, factory), filter_specs() shared allowlist/denylist filtering, and specs_to_langchain_tools() conversion.",
       "parent": "Tool Layer (mewbo_tools)"
     },
     {
       "title": "Local Tools (File Edit, Shell, Read)",
-      "purpose": "AiderEditBlockTool (SEARCH/REPLACE format with aider_bridge parsing, fuzzy matching, diff generation), FileEditTool (per-file exact string replacement, strict matching, ambiguity rejection), shared edit_common.py utilities (path resolution, before-state reading, unified diff computation via difflib, canonical result formatting). AiderShellTool (command execution with structured {kind: 'shell'} results including exit_code, stdout, stderr, duration_ms). AiderReadFileTool and AiderListDirTool (read-only tools with {kind: 'file'}/{kind: 'dir'} results). All tools use resolve_safe_path() to prevent directory traversal. Approval gating for set operations.",
+      "purpose": "AiderEditBlockTool, FileEditTool, AiderShellTool, AiderReadFileTool, and AiderListDirTool: their input formats, safe path resolution, and structured result shapes.",
+      "parent": "Tool Layer (mewbo_tools)"
+    },
+    {
+      "title": "Configurable Edit Tool Mechanism",
+      "purpose": "Two edit tool implementations (search_replace_block and structured_patch), auto-selection logic based on model identity, and shared edit_common.py utilities.",
       "parent": "Tool Layer (mewbo_tools)"
     },
     {
       "title": "MCP Tool Discovery & Schema Validation",
-      "purpose": "MCP config (configs/mcp.json global, .mcp.json project-scoped), server discovery with project CWD propagation, schema normalization, per-server failure isolation, _coerce_mcp_tool_input validation, and manifest caching. MCPConnectionPool (persistent MCP connections with memoization, automatic reconnection after 3 consecutive errors, per-request 60s timeout, config change detection). MCPToolRunner uses pool as primary path with legacy one-shot client as fallback.",
+      "purpose": "MCP config (global and project-scoped), MCPConnectionPool (persistent connections with auto-reconnect), MCPToolRunner, and schema normalization/coercion.",
       "parent": "Tool Layer (mewbo_tools)"
     },
     {
-      "title": "REST API (mewbo_api)",
-      "purpose": "Flask-restx API: route structure, authentication (X-API-Key from docker.env MASTER_API_TOKEN), CORS, how handlers bind to SessionRuntime, NotificationStore, ShareStore, and the tool registry. Config API endpoints for reading/patching app.json at runtime.",
+      "title": "Tool Search & Deferred Schemas",
+      "purpose": "Solves the context-window cost of large MCP catalogs: rather than binding every tool schema upfront, ToolSearchRunner advertises tool names cheaply and lets the model fetch the schemas it actually needs via a tool_search call, after which the loop re-binds the matched tools dynamically.",
+      "parent": "Tool Layer (mewbo_tools)"
+    },
+    {
+      "title": "LSP & Code Intelligence",
+      "purpose": "LSPTool operations (diagnostics, definition, references, hover), LSPManager lazy server spawning, built-in server definitions, and the passive diagnostic injection hook.",
+      "parent": "Tool Layer (mewbo_tools)"
+    },
+
+    {
+      "title": "Client Interfaces",
+      "purpose": "The client side of the architecture: every interface (REST API, web console, CLI, Home Assistant) is a different way of reaching the same core engine. This section covers what each interface provides on top of the engine and what its users can expect.",
       "parent": "Overview & Repo Map"
+    },
+    {
+      "title": "REST API (mewbo_api)",
+      "purpose": "Flask-RESTX API overview: authentication, CORS, route structure, and how handlers bind to SessionRuntime and supporting stores. The API is the bridge layer for every non-CLI client (web console, Home Assistant, chat platforms) and for browser-based features like the Web IDE.",
+      "parent": "Client Interfaces"
     },
     {
       "title": "API Endpoints, Polling & Steering",
-      "purpose": "Session CRUD, async query execution (start_async + 202), event polling (/events?after=), SSE streaming (/stream), user steering (/message, /interrupt), agent tree (/agents), attachments, share tokens, export, notifications, config API (GET/PATCH /config), legacy sync /query. Plugin management: GET /api/plugins, GET/POST /api/plugins/marketplace, DELETE /api/plugins/<name>. Web IDE lifecycle: POST/DELETE /api/sessions/{id}/ide, POST /api/sessions/{id}/ide/extend. Git diff: GET /api/sessions/{id}/git-diff?scope=uncommitted|branch. Session fork: POST /api/sessions/{id}/fork with from_ts, model, compact, tag params. Includes allowed_tools passthrough from context.mcp_tools through SessionRuntime \u2192 Orchestrator \u2192 ToolUseLoop.",
+      "purpose": "Full endpoint inventory: session CRUD, async execution and event polling, user steering, plugin management, Web IDE lifecycle, git diff, and session fork.",
       "parent": "REST API (mewbo_api)"
     },
     {
-      "title": "Web Console (mewbo_console)",
-      "purpose": "React 18 + Vite + Tailwind CSS frontend. Session management with polling (1s interval). Conversation timeline with turn grouping. ReviewPane accordion: scope selector (last-turn / uncommitted / branch) backed by GET /api/sessions/{id}/git-diff, replaces old single-file DiffView. ForkFromHereButton and inline edit on user messages for edit-and-regenerate with model override. PluginsView: marketplace browser + install/uninstall. IdeLoader: per-session code-server container launch with floral background animation. <Button> primitive (components/ui/Button.tsx): all buttons use this with variants (primary/secondary/ghost/danger) and sizes. Session header redesigned to one-row layout with IDE capsule and overflow menu. useWebIdeEnabled(), useIdeStatus() hooks. MCP tool/skill/project pickers with TTL cache (60s). No state management or UI component libraries.",
-      "parent": "Overview & Repo Map"
-    },
-    {
-      "title": "Console UI Components",
-      "purpose": "Tool card hierarchy: LogEventCard (base \u2014 expand/collapse, accent border), TerminalCard (dark shell card), DiffCard (always-dark, diff2html, file icons, collapsed preview). Shared primitives: CopyButton (visible at rest at 50% opacity), Badge, StatusBadge, Popover, MarkdownContent. <Button> primitive in components/ui/Button.tsx (variants, sizes, iconOnly). ReviewPane (ReviewPane.tsx): accordion file list with 3-scope selector (last-turn/uncommitted/branch), useGitDiff hook, extracts non-component DiffCard utils to utils/diffCard.ts. PluginsView (PluginsView.tsx): installed plugin table + marketplace browser with search/category filter. Edit-mode MessageBubble: textarea fills max-w-[85%], dashed accent border, info note below. Failed file edits render as DiffCard with error state (synthesized from tool_input). buildLogs() and parseStructuredResult() for kind-discriminated routing.",
-      "parent": "Web Console (mewbo_console)"
-    },
-    {
-      "title": "Terminal CLI (mewbo_cli)",
-      "purpose": "CLI flow: run_cli entry point, Rich-based rendering (plan checklist, tool result cards, response panel), AgentDisplayManager + Rich Live for agent tree display during execution (collapsible tree, spinner, elapsed time, keybindings), DialogFactory (Textual-based interactive prompts), in-process SessionRuntime usage (sync, no polling), slash commands, and session management. Approval styles: inline (plain prompt), textual (TUI dialog), aider (diff-style).",
-      "parent": "Overview & Repo Map"
-    },
-    {
-      "title": "Home Assistant Integration (mewbo_ha_conversation)",
-      "purpose": "HA Conversation integration: async HTTP client calling POST /api/query on the Mewbo API, MewboApiClient, response parsing, and config flow.",
-      "parent": "Overview & Repo Map"
-    },
-    {
-      "title": "Configuration & Runtime Settings",
-      "purpose": "AppConfig hierarchy: RuntimeConfig, LLMConfig (reasoning_effort, reasoning_effort_models, proxy_model_prefix), ContextConfig, TokenBudgetConfig, ReflectionConfig, LangfuseConfig, HomeAssistantConfig, PermissionsConfig, CLIConfig, ChatConfig, APIConfig, AgentConfig (edit_tool, max_depth, max_concurrent, max_iters, sub_agent_max_steps, default_denied_tools, allowed_models, web_ide: WebIdeConfig), HooksConfig, ProjectConfig, PluginsConfig (registry_paths, marketplaces, install_path with resolver methods). Configs/app.json and configs/mcp.json resolution with MEWBO_HOME discovery chain. WebIdeConfig (enabled, image, port, ttl_hours, data_dir). PluginsConfig.resolve_registry_paths() / resolve_install_dir() / resolve_marketplace_dirs(). Conditional component enabling via evaluate() + ComponentStatus. Field validators with normalization. ConfigDict(extra='forbid').",
-      "parent": "Overview & Repo Map"
-    },
-    {
-      "title": "CI/CD, Docker & Docs Pipeline",
-      "purpose": "GitHub Actions workflows: console.yml (lint + test + build on console changes), docker-buildx.yml (multi-arch builds for base/api/console to ghcr.io on release/* branches), lint.yml (Python ruff + mypy), coverage.yml (pytest + codecov), docs.yml (mkdocs), uv-lock-refresh.yml (weekly dependency updates). Dockerfile structure: base (Python 3.11 + system packages + Node.js + uv), api (multi-stage on base with Gunicorn), console (multi-stage node:20-slim \u2192 nginx:alpine). Docker Compose with host networking, env_file, post-init script mechanism (docker/entrypoint-api.sh sources init.d scripts), volume mounts for configs and project dirs. pull_policy: always on images \u2014 use --pull never for local builds.",
-      "parent": "Overview & Repo Map"
-    },
-    {
-      "title": "Testing Patterns & Quality Gates",
-      "purpose": "Integration-first test patterns: fake tools, AsyncMock for model.ainvoke, full-turn harness tests, event stream assertions. 600+ tests across core, tools, API, and integration. New test files: test_plugins.py (discovery/manifest/marketplace/install/uninstall), test_plugin_hooks.py (hook format translation), test_plugin_integration.py (end-to-end plugin session init), test_agent_registry.py (frontmatter parsing, CC tool name mapping, agent_type lookup), test_session_runtime.py (fork_at_ts), test_ide_manager.py + test_ide_routes.py (Web IDE lifecycle, chown/exited/proxy). Pre-commit hooks (ruff, mypy, console-lint). asyncio.run() in sync tests (not pytest-asyncio). Git tests in temp dirs must set user.name/email for CI.",
-      "parent": "Overview & Repo Map"
-    },
-    {
-      "title": "Tracing, Logging & Diagnostics",
-      "purpose": "Loguru-based logging with get_logger(), session_log_context for per-session log capture. Langfuse tracing (session-scoped traces, trace names: mewbo-tool-use, mewbo-task-master, mewbo-context). Session investigation methodology: MongoDB transcript (authoritative event log) \u2192 Langfuse traces (LLM conversation chain with full system prompts and tool bindings) \u2192 API config (app.json, docker.env) \u2192 Docker environment. Error propagation through ToolUseLoop._safe_execute with per-tool timeout and structured AgentError.",
-      "parent": "Overview & Repo Map"
-    },
-    {
-      "title": "Building a New Client",
-      "purpose": "Step-by-step walkthrough for extending Mewbo with a new interface: initialize core services (load_registry with conditional edit tool, permissions, SessionRuntime), resolve sessions, handle slash commands and skill invocations, choose sync vs async execution, consume session events (including kind-discriminated tool results for frontend rendering), project instructions loading mechanism (CLAUDE.md/AGENTS.md with hierarchical discovery from user/project/rules/local levels, mewbo:noload marker, subtree discovery for nested instructions and skills).",
-      "parent": "Overview & Repo Map"
-    },
-    {
-      "title": "Plugin System & Marketplace",
-      "purpose": "PluginsConfig (registry_paths, marketplaces, install_path). plugins.py: PluginManifest dataclass (name, version, description, source, skills, commands, agents, hooks, mcp_servers), PluginComponents, substitute_plugin_vars() with ${CLAUDE_PLUGIN_ROOT} substitution, _deep_substitute(), parse_plugin_manifest(), discover_plugin_components(), discover_installed_plugins(), discover_marketplace_plugins() (clones git repos for standalone/Docker), install_plugin() (git clone or URL download), uninstall_plugin(). Security: path traversal guard on all install paths, KeyError safety on missing manifest fields, MCP format unwrap (mcpServers key normalization). load_all_plugin_components() is called during Orchestrator session init \u2014 fans out skills (SkillRegistry.load_extra_dir), hooks (merge_plugin_hooks), agent definitions (AgentRegistry.register), MCP servers (extra_servers param to get_merged_mcp_config). CLI: /plugins, /plugins marketplace, /plugins install <name>, /plugins uninstall <name>. Auto-reconcile: missing enabled plugins are re-enabled on container startup.",
-      "parent": "Core Runtime & Orchestration (mewbo_core)"
-    },
-    {
-      "title": "Agent Definition Registry",
-      "purpose": "AgentDef frozen dataclass (name, description, body, tools, model, disallowed_tools). AgentRegistry with no-override semantics (installed plugins cannot shadow user-defined agents). parse_agent_file() reads YAML frontmatter from markdown files: name, description, tools (CC tool name mapping via CC_TOOL_MAP), model, disallowedTools. CC_TOOL_MAP translates Claude Code tool names to Mewbo tool_ids (e.g., 'Bash' -> 'shell_tool', 'Edit' -> edit tool). map_cc_tool_names() applies the mapping. agent_type field in SPAWN_AGENT_SCHEMA: when provided, SpawnAgentTool looks up the AgentDef in AgentRegistry and applies body/tools/model overrides. Agent catalog injected into system prompt alongside skill catalog.",
-      "parent": "Plugin System & Marketplace"
-    },
-    {
       "title": "Chat Platform Adapters",
-      "purpose": "ChannelAdapter Protocol (channels/base.py): verify_request(request) -> bool, parse_inbound(request) -> InboundMessage | None, send_response(session_id, message) -> None, system_context property -> str. ChannelRegistry for adapter lookup. DeduplicationGuard (TTL-based replay protection). Shared _process_inbound() pipeline in routes.py: dedup -> mention gate (requires_mention()) -> session resolve (tag_session/resolve_tag) -> slash commands (@command registry: /help, /usage, /new, /switch-project) -> LLM invocation. Webhook endpoint: POST /api/webhooks/<platform> (HMAC auth). Nextcloud Talk (nextcloud_talk.py): HMAC-SHA256 verification, ActivityStreams 2.0 parsing, OCS Bot API response with replyTo. Session tags: nextcloud-talk:room:<token> and nextcloud-talk:thread:<room>:<thread_id>. Email (email_adapter.py): EmailAdapter (IMAP parse, SMTP reply, markdown->HTML via mistune), EmailPoller (daemon thread, configurable poll_interval_seconds). Session tags: email:thread:<sender>:<root-msg-id>. Email access control: allowed_senders allowlist + @Mewbo mention in multi-party threads. Channel sessions are standard API sessions (MongoDB/JSON, visible in console, Langfuse-traced).",
+      "purpose": "Extensibility surface for plugging chat platforms (Nextcloud Talk, Email today; Slack, Telegram, and others next) into the same engine. Defines the ChannelAdapter Protocol, the shared inbound pipeline (dedup, mention gating, session resolve, slash commands, LLM dispatch), and the conventions adapters follow for authentication, identity mapping, and reply rendering.",
       "parent": "REST API (mewbo_api)"
     },
     {
       "title": "Web IDE Integration",
-      "purpose": "Opt-in per-session code-server containers gated by agent.web_ide.enabled. IdeInstance frozen dataclass (session_id, container_name, port, expires_at, password, status). IdeStore (MongoDB wrapper with unique index on session_id). IdeManager (ide.py): spawn() via Docker SDK (code-server image, bridge network mewbo-ide, watchdog sh inline that polls a deadline file and kills itself when expired), reconnect() checks _container_running() (status == 'running' \u2014 not just NotFound), extend() rewrites deadline file, stop() removes container. 2s TTL-cached health probe through ide-proxy. ide-proxy (docker/nginx-ide-proxy.conf): nginx sidecar on mewbo-ide bridge, routes /ide/<session_id>/ via Docker embedded DNS (127.0.0.11), strips URI prefix via rewrite before proxy_pass. Three-way bugfix: (1) chown in entrypoint-api.sh for /tmp/mewbo-ide bind mount, (2) _container_running() catches exited containers and safe_remove before respawn, (3) nginx rewrite strips /ide/<sid>/ prefix before forwarding. Password returned only on POST. ide_routes.py: POST/DELETE /api/sessions/{id}/ide, POST /api/sessions/{id}/ide/extend (hours XOR expires_at). Console: IdeLoader page (POST -> poll -> hidden form submit to /login), useIdeStatus (visibility-aware polling), useWebIdeEnabled (reads getConfig() promise).",
+      "purpose": "Per-session code-server containers: IdeManager (Docker SDK spawn, extend, stop), IdeStore, nginx ide-proxy, and the console IdeLoader flow.",
       "parent": "REST API (mewbo_api)"
     },
     {
-      "title": "LSP & Code Intelligence",
-      "purpose": "Native LSP integration backed by pygls and lsprotocol (gracefully absent when not installed \u2014 LSP_AVAILABLE flag). LSPTool (tool_id: lsp_tool): operations: diagnostics (passive \u2014 injected after every file edit via _append_lsp_feedback hook in ToolUseLoop), definition (go-to-definition), references (find all references), hover (type/doc info). LSPManager (manager.py): one manager per session, lazy server spawning via shutil.which discovery, per-server subprocess lifecycle. ServerDef dataclass: command, args, language_ids, root_uri. BUILTIN_SERVERS (servers.py): pyright (Python), typescript-language-server (TS/JS), gopls (Go), rust-analyzer (Rust). Config: agent.lsp.enabled (default true) + agent.lsp.servers (per-server overrides or custom server definitions). Passive diagnostics: after every successful file edit, ToolUseLoop calls _append_lsp_feedback to inject diagnostics as a follow-up ToolMessage \u2014 zero extra LLM turns, signals errors immediately. Per-session shutdown via shutdown_lsp_managers().",
-      "parent": "Tool Layer (mewbo_tools)"
+      "title": "Notifications & Share Tokens",
+      "purpose": "The two API-fronted stores that handle out-of-band signaling and external visibility: NotificationStore (notifications.py) for in-app notifications and push targets, and ShareStore (share_store.py) for read-only share URLs that expose a session to non-authenticated viewers.",
+      "parent": "REST API (mewbo_api)"
     },
     {
-      "title": "Conversation Fork, Edit & Regenerate",
-      "purpose": "fork_session_at() in session_runtime.py composes resolve_session(fork_from, fork_at_ts) + truncate for point-in-time branching. resolve_recovery_query() accepts replacement_text for edit-and-regenerate (replaces the user message at fork point with new text). POST /api/sessions/{id}/fork: body params from_ts (ISO timestamp), model (optional override), compact (bool), tag (string). /recover endpoint extended with edited_text and model override params. Console: ForkFromHereButton appears on hover over any turn, inline edit on user messages (textarea fills max-w-[85%], dashed accent border, info note that prior agent actions are not reverted), model override passed through fork request. CLI: /fork --at TIMESTAMP --compact and /edit command. Session created by fork is a standard session \u2014 fully visible in console, event-streamable, archivable.",
-      "parent": "Session Runtime, Store & Event Log"
+      "title": "Web Console (mewbo_console)",
+      "purpose": "React 18 + Vite + Tailwind CSS frontend: session management, conversation timeline, ReviewPane, fork/edit-and-regenerate, PluginsView, Web IDE launch, and inline stlite widget rendering.",
+      "parent": "Client Interfaces"
+    },
+    {
+      "title": "Console UI Components",
+      "purpose": "Component hierarchy: base tool cards (LogEventCard, TerminalCard, DiffCard), hypervisor cards (CheckAgentsCard, SpawnAgentCard), widget cards (WidgetCard, StliteWidgetPanel), shared primitives, and the kind-discriminated log routing pipeline.",
+      "parent": "Web Console (mewbo_console)"
+    },
+    {
+      "title": "Terminal CLI (mewbo_cli)",
+      "purpose": "CLI flow: Rich-based rendering, AgentDisplayManager for live agent tree display, DialogFactory for interactive prompts, in-process SessionRuntime usage, and slash commands.",
+      "parent": "Client Interfaces"
+    },
+    {
+      "title": "Home Assistant Integration (mewbo_ha_conversation)",
+      "purpose": "HA Conversation integration: async HTTP client, MewboApiClient, response parsing, and config flow.",
+      "parent": "Client Interfaces"
+    },
+
+    {
+      "title": "Configuration & Runtime Settings",
+      "purpose": "AppConfig hierarchy and all sub-configs: LLMConfig, AgentConfig (edit_tool, web_ide, tool_search, lsp), PluginsConfig, HooksConfig, and the MEWBO_HOME config resolution chain.",
+      "parent": "Overview & Repo Map"
+    },
+    {
+      "title": "CI/CD, Docker & Docs Pipeline",
+      "purpose": "GitHub Actions workflows, multi-arch Docker image builds (base/api/console), docker-compose with post-init scripts, and the MkDocs docs site build and deploy pipeline.",
+      "parent": "Overview & Repo Map"
+    },
+    {
+      "title": "Testing Patterns & Quality Gates",
+      "purpose": "Integration-first test philosophy: fake tools, AsyncMock LLM boundaries, full-turn harness tests. Covers test file organization, pre-commit hooks, and the asyncio.run() pattern used throughout.",
+      "parent": "Overview & Repo Map"
+    },
+    {
+      "title": "Tracing, Logging & Diagnostics",
+      "purpose": "Loguru logging, Langfuse session-scoped tracing, and the 4-layer session investigation methodology (MongoDB transcript → Langfuse → config → Docker).",
+      "parent": "Overview & Repo Map"
+    },
+    {
+      "title": "Building a New Client",
+      "purpose": "Step-by-step guide for new interface authors: initializing the registry and SessionRuntime, resolving sessions, handling slash commands and skills, choosing sync vs async execution, and consuming kind-discriminated events.",
+      "parent": "Overview & Repo Map"
+    },
+
+    {
+      "title": "Glossary",
+      "purpose": "Canonical one-sentence definitions for domain terms that appear across multiple pages without in-context definition (e.g., ToolUseLoop, AgentResult, SessionTool, session_capabilities, widget_ready, filter_specs)."
     }
   ],
   "page_notes": [
     {
       "title": "Overview & Repo Map",
-      "notes": "Mermaid: module map with subgraphs by top-level folder. Show Console -> API -> Runtime -> Core flow. Add: Plugin system path (plugins.py -> agent_registry.py -> session init), Web IDE path (ide.py/ide_routes.py -> Docker SDK -> code-server container), LSP path (lsp/ -> language server subprocess), Channel adapters path (channels/ -> Nextcloud Talk / Email). Include fork-from-message as a SessionRuntime capability."
+      "notes": "Frame the architecture as a shared core engine reached by multiple client interfaces, with a single extension system layered on top. The reader should leave understanding which parts are shared substrate (used by everyone) and which parts are interface-specific."
     },
+
     {
       "title": "Core Runtime & Orchestration (mewbo_core)",
-      "notes": "Mermaid: runtime facade flow (SessionRuntime -> Orchestrator -> ToolUseLoop) showing how CLI (sync), API (async), and Console (via API) reach the same engine. Include skills loading path."
+      "notes": "Motivate the single-async-loop choice over the more common planner/executor/synthesizer split. Position this section as 'the engine every client uses' and clarify that nothing here is interface-specific."
     },
     {
       "title": "Session Runtime, Store & Event Log",
-      "notes": "Mermaid: two flows. (1) Async run: RunRegistry.start() -> thread + queue/event -> JSONL writes -> API polling. (2) Fork-from-message: resolve_session(fork_from, fork_at_ts) -> copy events up to ts -> new session_id -> start fresh. Include RunHandle fields and per-session temp dir assignment."
-    },
-    {
-      "title": "Tool-Use Loop Execution Engine",
-      "notes": "Mermaid: ToolUseLoop step cycle (_build_messages with all 11 sections -> LLM invoke -> _partition_tool_calls -> concurrent batch execution -> collect results -> step budget check -> check steering queue/interrupt -> repeat or done). Show non-blocking spawn returning immediately with agent_id, and check_agents/steer_agent as root-only management tools."
-    },
-    {
-      "title": "Agent Hypervisor & Sub-Agent Lifecycle",
-      "notes": "Mermaid: dual-layer diagram. Top: root LLM with check_agents/steer_agent tools seeing render_agent_tree(). Bottom: code-level reflexes (update_step on every tool call, _watchdog background task). Show 6-state lifecycle (submitted \u2192 running \u2192 terminal states). Show _run_child_lifecycle manager for non-blocking spawn with send_to_parent notification."
-    },
-    {
-      "title": "LLM Abstraction & Model Routing",
-      "notes": "Mermaid: class diagram for ChatModel protocol and build_chat_model, showing LiteLLM provider routing with proxy_model_prefix path (empty model name -> prepend proxy_model_prefix). Include reasoning_effort configuration path. Show model_prefers_structured_patch() as a utility function queried by ToolUseLoop._configured_edit_tool_id()."
-    },
-    {
-      "title": "Context Builder, Summaries & Compaction",
-      "notes": "Mermaid: data flow from transcript -> event filtering -> recent_events + selected_events + attachment_texts -> ContextSnapshot. Token budget accounting (tool schema + system prompt overhead ~20-25k). Two compaction triggers: proactive (near limit, PARTIAL mode) and reactive (post-ContextWindowExceededError). context_compacted event emitted both paths. Show post-compact file restoration step and micro-compaction pre_compact hook."
-    },
-    {
-      "title": "Permissions, Hooks & Tool Execution Gates",
-      "notes": "Mermaid: sequence of tool call -> HookManager.run_pre_tool_use -> PermissionPolicy.decide -> approval_callback (if ASK) -> execute -> HookManager.run_post_tool_use. Show error isolation wrapper. Side track for lifecycle hooks (on_session_start, on_session_end, on_compact) and external command hooks."
-    },
-    {
-      "title": "Data Models, Event Types & Payload Schemas",
-      "notes": "Mermaid: class diagram for ActionStep, TaskQueue, OrchestrationState, EventRecord with discriminated union of payload types. Include the kind field on tool results (shell/diff/file/dir) and how it drives frontend component routing."
-    },
-    {
-      "title": "Skills System",
-      "notes": "Mermaid: three skill loading paths: (1) user ~/.claude/skills/ discovery; (2) plugin load_extra_dir(path); (3) plugin load_command_file(path). All feed into SkillRegistry with no-override semantics. Show merge_plugin_hooks() translating plugin hooks.json to HookManager callbacks. Show skill catalog injection into system prompt and activate_skill invocation path."
-    },
-    {
-      "title": "Tool Layer (mewbo_tools)",
-      "notes": "Mermaid: ToolRegistry -> ToolSpec -> AbstractTool hierarchy. Branch to: local tools (edit tools, shell, file read/list), MCP adapters (MCPToolRunner + MCPConnectionPool), LSP tool (LSPTool -> LSPManager -> per-language server subprocess). Show lsp_tool result type 'lsp' and passive diagnostic injection path from ToolUseLoop._append_lsp_feedback hook."
-    },
-    {
-      "title": "Tool Registry & Spec System",
-      "notes": "Mermaid: class diagram with ToolRegistry (register, list_specs, list_specs_for_mode), ToolSpec (with metadata.schema, metadata.capabilities, factory), _edit_tool_spec_and_manifest() conditional helper, filter_specs(allowed, denied), and specs_to_langchain_tools conversion."
-    },
-    {
-      "title": "Configurable Edit Tool Mechanism",
-      "notes": "Mermaid: config-driven + auto-detect tool selection flow. Two branches: (1) explicit edit_tool config -> ToolSpec{schema, prompt_path, factory}; (2) empty edit_tool -> _configured_edit_tool_id() -> model_prefers_structured_patch(model_name) -> bool -> ToolSpec. Three parallel outputs from selected ToolSpec: bind_tools(schema) to LLM, _render_tool_guidance(prompt_path) to system message, factory() to tool instance. Show edit_common.py as shared dependency of both tools. Show format_diff_result() producing {kind: 'diff'} for DiffCard."
-    },
-    {
-      "title": "Local Tools (File Edit, Shell, Read)",
-      "notes": "Mermaid: sequence for both edit tools: input parsing -> resolve_safe_path -> read_file_contents (before state) -> apply edit -> write file -> build_unified_diff -> format_diff_result. Show the branching: AiderEditBlockTool goes through aider_bridge for SEARCH/REPLACE parsing, FileEditTool does direct str.count/str.replace. Highlight shared edit_common.py functions."
-    },
-    {
-      "title": "MCP Tool Discovery & Schema Validation",
-      "notes": "Mermaid: flow from configs/mcp.json + .mcp.json (project-scoped) -> MCPConnectionPool (memoized connections, 3-error reconnection) -> server discovery -> schema normalization -> _coerce_mcp_tool_input validation at execution time. Show fallback to legacy one-shot client."
-    },
-    {
-      "title": "REST API (mewbo_api)",
-      "notes": "Mermaid: request flow from Flask route handlers -> _require_api_key -> SessionRuntime/NotificationStore/ShareStore -> response. Show CORS after_request hook. Include config API path."
-    },
-    {
-      "title": "API Endpoints, Polling & Steering",
-      "notes": "Mermaid: grouped endpoint map. Core session flow (POST /sessions -> start_async -> poll /events). Steering (POST /message, POST /interrupt). Plugin management (GET/POST/DELETE /api/plugins, /marketplace). Web IDE (POST/DELETE/POST /sessions/{id}/ide, /extend). Fork (POST /sessions/{id}/fork with from_ts). Git diff (GET /sessions/{id}/git-diff?scope=). Include allowed_tools passthrough path."
-    },
-    {
-      "title": "Web Console (mewbo_console)",
-      "notes": "Mermaid: component hierarchy (App -> HomeView/SessionDetailView). SessionDetailView: ConversationTimeline (with ForkFromHereButton on turns, inline edit on user messages) + WorkspacePanel (ReviewPane with 3-scope selector backed by useGitDiff) + InputBar (Button primitive, searchable ConfigMenu with focus glow). New routes: /plugins (PluginsView), /ide-loader/:sessionId (IdeLoader with floral animation). Data hooks: useSessions, useSessionEvents, useMcpTools, useSkills, useProjects, useConfig, useWebIdeEnabled, useIdeStatus."
-    },
-    {
-      "title": "Console UI Components",
-      "notes": "Mermaid: component inheritance. LogEventCard as base. TerminalCard and DiffCard as specialized siblings. ReviewPane as standalone accordion (FileEntry items, 3-scope selector, useGitDiff hook). PluginsView (installed table + marketplace browser). <Button> primitive (variants: primary/secondary/ghost/danger, sizes: sm/md/lg, iconOnly mode). IdeLoader (floral SVG background + radial spotlight + backdrop-blur card). Edit-mode MessageBubble (textarea fills max-w-[85%], dashed accent border). Show data flow: EventRecord -> buildLogs(parseStructuredResult) -> kind routing -> component."
-    },
-    {
-      "title": "Terminal CLI (mewbo_cli)",
-      "notes": "Mermaid: sync flow CLI -> SessionRuntime.run_sync -> Orchestrator -> ToolUseLoop -> response rendering. Include AgentDisplayManager lifecycle hook bridge to Rich Live panel. Show approval_style switching (inline/textual/aider)."
-    },
-    {
-      "title": "Home Assistant Integration (mewbo_ha_conversation)",
-      "notes": "Mermaid: HA Assist voice -> MewboApiClient -> POST /api/query -> response parsing -> HA conversation response."
-    },
-    {
-      "title": "Configuration & Runtime Settings",
-      "notes": "Mermaid: AppConfig tree showing all sub-configs. Highlight new sections: PluginsConfig (registry_paths, marketplaces, install_path, resolve_* methods), WebIdeConfig (enabled, image, ttl_hours), LLMConfig.proxy_model_prefix. Show evaluate() pattern for conditional components (HomeAssistant, Langfuse, web_ide)."
-    },
-    {
-      "title": "CI/CD, Docker & Docs Pipeline",
-      "notes": "Mermaid: pipeline flow (push/PR -> lint + mypy + pytest -> coverage -> Docker buildx for base/api/console images -> GHCR push). Separate track for mkdocs build + deploy. Include docker-compose with post-init scripts and pull_policy note."
-    },
-    {
-      "title": "Testing Patterns & Quality Gates",
-      "notes": "Mermaid: test harness structure with fake tools + AsyncMock LLM boundary. Note new test files and coverage areas: test_plugins (20 TDD tests for manifest/install/marketplace), test_agent_registry (20 tests for frontmatter/CC mapping), test_plugin_integration (session init wiring), test_session_runtime (fork_at_ts), test_ide_manager + test_ide_routes (Web IDE, 44 new tests total). 600+ test count. Pre-commit hooks. asyncio.run() pattern."
-    },
-    {
-      "title": "Tracing, Logging & Diagnostics",
-      "notes": "Mermaid: trace flow from ToolUseLoop -> Langfuse handler -> traces (mewbo-tool-use, mewbo-task-master, mewbo-context). Show error path through _safe_execute -> ToolCallResult(success=False). Include the 4-layer investigation methodology: MongoDB \u2192 Langfuse \u2192 Config \u2192 Docker."
-    },
-    {
-      "title": "Building a New Client",
-      "notes": "Mermaid: extension flow diagram showing new client -> load_registry(conditional edit tool) + SessionRuntime + permissions -> resolve_session -> run_sync or start_async + poll events. Include project instructions loading (hierarchical CLAUDE.md discovery with noload marker, subtree skills discovery)."
-    },
-    {
-      "title": "Plugin System & Marketplace",
-      "notes": "Mermaid: plugin lifecycle flow. Discovery: registry_paths scan -> PluginManifest parse -> PluginComponents. Install: marketplace clone/download -> install_path -> manifest write. Session init: load_all_plugin_components() -> fan-out to SkillRegistry.load_extra_dir(), merge_plugin_hooks(), AgentRegistry.register(), extra_mcp_servers. Show security path: path traversal guard -> safe_path check. Show auto-reconcile on startup."
-    },
-    {
-      "title": "Agent Definition Registry",
-      "notes": "Mermaid: parse_agent_file() flow: read markdown -> extract YAML frontmatter -> map CC tool names via CC_TOOL_MAP -> AgentDef dataclass -> AgentRegistry.register() (no-override). Show spawn_agent with agent_type -> registry lookup -> apply body/tools/model overrides. Show agent catalog injection into system prompt alongside skill catalog."
-    },
-    {
-      "title": "Chat Platform Adapters",
-      "notes": "Mermaid: shared _process_inbound() pipeline (dedup -> mention gate -> session resolve -> slash commands -> LLM). Branch to webhook path (POST /api/webhooks/<platform> -> HMAC verify -> adapter.parse_inbound) and poller path (EmailPoller daemon -> adapter.parse_inbound). Both converge on _process_inbound(). Completion callback reads source_platform from context event -> adapter.send_response(). Show session tag formats for each platform."
-    },
-    {
-      "title": "Web IDE Integration",
-      "notes": "Mermaid: request flow. POST /api/sessions/{id}/ide -> IdeManager.ensure() -> Docker SDK spawn (code-server container on mewbo-ide bridge) -> IdeStore write -> return {url, password}. Nginx ide-proxy routes /ide/<sid>/ via 127.0.0.11 DNS resolver, strips prefix via rewrite. Watchdog sh polls deadline file, self-terminates on expiry. Show three-way bugfix paths: (1) entrypoint chown for bind mount, (2) _container_running() catches exited state, (3) nginx rewrite rule. Console IdeLoader: POST -> poll status -> hidden form submit to /login."
-    },
-    {
-      "title": "LSP & Code Intelligence",
-      "notes": "Mermaid: two flows. (1) Passive diagnostics: file edit tool completes -> ToolUseLoop._append_lsp_feedback hook -> LSPTool.get_diagnostics() -> inject as ToolMessage. (2) Explicit lsp_tool call: LLM invokes lsp_tool{operation: 'hover', path, position} -> LSPManager.get_or_spawn_server(language) -> shutil.which discovery -> subprocess spawn -> LSP protocol request -> format_hover()/format_references() -> result. Show graceful absence when LSP_AVAILABLE=False."
+      "notes": "Treat the event log as the source of truth and explain how immutability enables features like fork. Clarify the sync (CLI in-process) vs async (API polling) split and why both share the same store."
     },
     {
       "title": "Conversation Fork, Edit & Regenerate",
-      "notes": "Mermaid: fork flow. User clicks ForkFromHereButton at turn T -> POST /api/sessions/{id}/fork{from_ts: T.ts} -> resolve_session(fork_from=id, fork_at_ts=T.ts) -> copy events[0..T] to new session -> return {session_id}. Edit-and-regenerate: user edits user message -> POST /fork{from_ts: T-1.ts, replacement_text: new_text} -> new session with edited message -> start LLM run. Show per-message model override: fork body includes model field -> passed to start_async -> overrides LLMConfig.default_model for this session."
+      "notes": "Discuss how the immutable event log makes branching cheap, and why per-message model override matters for iterative refinement. Reader should leave understanding the UX as a natural emergent property of the data model."
+    },
+    {
+      "title": "Tool-Use Loop Execution Engine",
+      "notes": "Discuss how one loop coordinates LLM calls, tool dispatch, sub-agents, user steering, compaction, and budget enforcement. The model drives; the loop is substrate. Be explicit about what runs between steps and why."
+    },
+    {
+      "title": "Agent Hypervisor & Sub-Agent Lifecycle",
+      "notes": "Explain why hypervision is split between an LLM brain (judgement) and code-level reflexes (zero-token watchdogs). Cover lifecycle states, the cost model, and why root uses non-blocking spawn while sub-agents block."
+    },
+    {
+      "title": "Context Builder, Summaries & Compaction",
+      "notes": "Frame around the token-budget pressure problem. Explain why two compaction modes exist, when each fires, and how compaction stays invisible to the model when it works correctly."
+    },
+    {
+      "title": "LLM Abstraction & Model Routing",
+      "notes": "Discuss the provider-agnostic design and the rationale for LiteLLM as a gateway. Cover per-role model selection, reasoning effort, model-cascade fallback, and how proxies are accommodated without tight coupling."
+    },
+    {
+      "title": "Plan Mode & Task Decomposition",
+      "notes": "Discuss when planning is worth its cost and when it gets in the way. Cover how plan mode coexists with the single-loop architecture (it is not a separate engine) and how exit_plan_mode hands control back to execution. The reader should understand the tradeoff between deliberation and direct action."
+    },
+    {
+      "title": "Data Models, Event Types & Payload Schemas",
+      "notes": "Center the discussion on the kind-discriminator pattern and how it lets backend and frontend evolve independently. Payload typing is the wire contract for every interface."
+    },
+    {
+      "title": "Multi-Project Workspaces",
+      "notes": "Discuss why projects are a first-class concept (instructions, MCP servers, and CWD all scope to a project) rather than a CLI convenience. Cover how project resolution flows through the engine and how each surface lets a user switch contexts."
+    },
+    {
+      "title": "Project Instructions Loading",
+      "notes": "Discuss how user, project, rules, and local instruction layers compose to form the system prompt's project context. Cover the noload marker as an explicit escape hatch and subtree discovery as a way to surface guidance without bloating the prompt."
+    },
+
+    {
+      "title": "Extension System",
+      "notes": "Frame this section as the answer to 'how do I change behavior without modifying core?'. Discuss the design principle that every extension surface (skills, plugins, hooks, capabilities, session tools, slash commands) follows the same shape: stable contract, runtime discovery, no-override safety. The reader should leave able to pick the right extension surface for a given customization."
+    },
+    {
+      "title": "Skills System",
+      "notes": "Position skills as runtime-extensible behaviors that combine tool scoping with prompt injection. Distinguish skills from plugins and from agent definitions — they overlap in surface but differ in role."
+    },
+    {
+      "title": "Plugin System & Marketplace",
+      "notes": "Position plugins as first-class extensions that contribute to multiple registries (skills, hooks, agents, MCP, session-tools) through one manifest. Note that built-in plugins use the same format — there are no special cases."
+    },
+    {
+      "title": "Agent Definition Registry",
+      "notes": "Discuss agents-as-data: markdown with frontmatter, capability-gated visibility, and how spawn_agent's agent_type lookup makes registered agents authoritative over LLM-supplied parameters."
+    },
+    {
+      "title": "Widget Builder Builtin Plugin",
+      "notes": "Treat this as a worked example showing how capabilities, SessionTool, builtin plugin scanning, and the agent registry compose to deliver a real UX feature. Reader should leave understanding the integration shape, not the widget code."
+    },
+    {
+      "title": "SessionTool Protocol",
+      "notes": "Explain why session-scoped tools differ from regular tools — per-agent state and the ability to signal loop exit. Plugin-contributable, but built-ins (like exit-plan-mode) use the same protocol to avoid special cases."
+    },
+    {
+      "title": "Permissions, Hooks & Tool Execution Gates",
+      "notes": "Discuss how user trust and external integrations layer onto every tool call without the model needing to know. Emphasize error isolation: the runtime never lets a third-party hook block execution."
+    },
+    {
+      "title": "Capabilities System & Feature Gating",
+      "notes": "Discuss who decides what the client can render and how that decision propagates without breaking older clients. The header is the contract; the filter is enforcement; the design is intentionally additive so missing capabilities fail silently."
+    },
+    {
+      "title": "Slash Commands & User Commands",
+      "notes": "Position slash commands as a shared user-steering vocabulary that every interface inherits for free. Discuss the registry pattern, how commands return structured payloads that each surface renders natively, and why this keeps the CLI, console, and chat adapters consistent without duplicated logic."
+    },
+
+    {
+      "title": "Tool Layer (mewbo_tools)",
+      "notes": "Frame the three tool families (local, MCP, LSP) and what unifies them under AbstractTool. Discuss result kind-discrimination as the rendering contract that lets new tool types render without frontend changes."
+    },
+    {
+      "title": "Tool Registry & Spec System",
+      "notes": "Position ToolSpec as a contract object — schema, factory, and capabilities bundled together. Discuss filter_specs as the universal scoping mechanism reused by orchestrator, sub-agents, and skills."
+    },
+    {
+      "title": "Local Tools (File Edit, Shell, Read)",
+      "notes": "Emphasize the safety guarantees (safe path resolution, approval gating for destructive operations) and the structured result contract that drives frontend rendering."
+    },
+    {
+      "title": "Configurable Edit Tool Mechanism",
+      "notes": "Discuss why two edit formats exist (model preference varies by family) and how auto-detection removes the configuration burden for most users. Explicit config remains the override path."
+    },
+    {
+      "title": "MCP Tool Discovery & Schema Validation",
+      "notes": "Discuss why connection pooling matters for stability, the rationale for project-scoped vs global config layering, and how schema coercion handles loose MCP server output at the boundary."
+    },
+    {
+      "title": "Tool Search & Deferred Schemas",
+      "notes": "Lead with the context-window economics: every MCP schema bound upfront costs tokens on every turn, and large catalogs (dozens of MCP servers, hundreds of tools) make this unsustainable. Discuss the deferred-then-rebind design as a direct response to that pressure, and note the format mirrors Claude Code's pattern so the model recognises it from training."
+    },
+    {
+      "title": "LSP & Code Intelligence",
+      "notes": "Center on passive diagnostics as the headline feature — errors surface without an extra LLM turn. Discuss graceful absence (LSP_AVAILABLE) so readers know the integration is non-required."
+    },
+
+    {
+      "title": "Client Interfaces",
+      "notes": "Frame this section as 'every client is a different way to reach the same engine'. Discuss what is genuinely client-specific (rendering, approval style, polling vs in-process) and what is shared (event types, slash commands, capabilities). The reader should leave knowing where to look when adding a new interface vs modifying an existing one."
+    },
+    {
+      "title": "REST API (mewbo_api)",
+      "notes": "Position the API as the bridge layer for browsers, voice, and chat platforms. Discuss auth, CORS, and how state lives in stores rather than the API itself, which is intentionally thin."
+    },
+    {
+      "title": "API Endpoints, Polling & Steering",
+      "notes": "Discuss the polling-based async model and why it was chosen over SSE-required architectures. Cover the breadth of management surfaces (steering, fork, plugins, IDE) so reader sees the full operational picture."
+    },
+    {
+      "title": "Chat Platform Adapters",
+      "notes": "Frame this as the extensibility surface for chat integrations: today Nextcloud Talk and Email, but the same shape covers Slack, Telegram, and any future platform. Discuss what the protocol requires of an adapter, what the shared pipeline provides for free (dedup, mention gating, session routing, slash commands), and the conventions a new platform implementer must respect."
+    },
+    {
+      "title": "Web IDE Integration",
+      "notes": "Discuss why per-session ephemeral containers, why an nginx proxy is needed instead of direct port exposure, and how the deadline-based watchdog keeps cleanup self-contained."
+    },
+    {
+      "title": "Notifications & Share Tokens",
+      "notes": "Discuss these as the two ways a session escapes its own bubble: notifications push outward to a user (alerts, completion signals), shares pull inward by exposing read-only views to outsiders. Cover the security model — what a share token grants and what it does not — and where each store fits in the API surface."
+    },
+    {
+      "title": "Web Console (mewbo_console)",
+      "notes": "Treat the console as one of several interfaces, not the canonical one. Discuss why polling-based UX is simple and acceptable, and what the standout features (inline widgets, fork, IDE launch) add over a plain chat UI."
+    },
+    {
+      "title": "Console UI Components",
+      "notes": "Discuss the kind-discriminated rendering pipeline: how new event types get new components without touching the dispatcher. Cover the card hierarchy as a design pattern, not a file inventory."
+    },
+    {
+      "title": "Terminal CLI (mewbo_cli)",
+      "notes": "Emphasize the in-process runtime — no API hop — and what that simplifies. Discuss approval style choices and why Rich/Textual were chosen for terminal rendering."
+    },
+    {
+      "title": "Home Assistant Integration (mewbo_ha_conversation)",
+      "notes": "Frame as the simplest possible interface — voice in, voice out, over HTTP. Useful as a worked example of what a minimal client must do."
+    },
+
+    {
+      "title": "Configuration & Runtime Settings",
+      "notes": "Discuss the config discovery chain and why MEWBO_HOME exists. Cover Pydantic strictness (extra='forbid') and the conditional component enabling pattern that lets optional features stay truly optional."
+    },
+    {
+      "title": "CI/CD, Docker & Docs Pipeline",
+      "notes": "Discuss multi-arch image builds, the post-init script extension mechanism, and the docs deploy pipeline. Reader should understand how to plug into each stage without reading the YAML."
+    },
+    {
+      "title": "Testing Patterns & Quality Gates",
+      "notes": "Articulate the integration-first philosophy — real code paths preferred over mocks, with mocks reserved for I/O boundaries. Discuss the AsyncMock LLM boundary as the canonical pattern."
+    },
+    {
+      "title": "Tracing, Logging & Diagnostics",
+      "notes": "Center on the 4-layer investigation methodology and when to use each layer. The reader should leave with a mental triage flowchart for debugging a production session."
+    },
+    {
+      "title": "Building a New Client",
+      "notes": "Focus on minimum viable wiring: what's required, what's optional, and how to consume events incrementally. Useful as a checklist for someone porting the engine to a new surface."
+    },
+
+    {
+      "title": "Glossary",
+      "notes": "Cover terms that appear across multiple pages without in-context definition, and Mewbo-specific overloads of common words. Keep entries short — one sentence each — so the page stays a quick lookup, not a second explanation."
     }
   ]
 }
