@@ -11,6 +11,7 @@ It is applied once per plugin at discovery time via ``_deep_substitute``.
 
 from __future__ import annotations
 
+import importlib.resources
 import json
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from meeseeks_core.capabilities import parse_capabilities
 from meeseeks_core.common import get_logger
 
 logging = get_logger(name="core.plugins")
@@ -55,6 +57,10 @@ class PluginManifest:
     install_path: str = ""  # absolute path to plugin root dir
     marketplace: str = ""  # which marketplace it came from
     scope: str = "user"  # "user" | "project" | "local"
+    # Plugin-level capability gate. When non-empty, the values fan out onto
+    # every agent / skill / command this plugin contributes — authors can
+    # also repeat (or tighten) per file in the contribution's frontmatter.
+    requires_capabilities: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -67,6 +73,10 @@ class PluginComponents:
     agent_files: list[str] = field(default_factory=list)  # paths to agents/*.md files
     mcp_config: dict | None = None  # parsed .mcp.json content (vars substituted)
     hooks_config: dict | None = None  # parsed hooks/hooks.json content
+    # Plugin-contributed session tools (Meeseeks extension to the Claude Code
+    # plugin format). Each entry is a ``{tool_id, module, class}`` record used
+    # by :class:`SessionToolRegistry` to instantiate per-session handlers.
+    session_tool_entries: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -95,15 +105,16 @@ def _deep_substitute(obj: Any, plugin_root: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def parse_plugin_manifest(plugin_dir: Path | str) -> PluginManifest | None:
-    """Parse ``.claude-plugin/plugin.json`` from *plugin_dir*.
+def _read_manifest_data(plugin_dir: Path) -> dict | None:
+    """Read + JSON-parse ``.claude-plugin/plugin.json`` once.
 
-    Returns ``None`` on any error (missing file, bad JSON, missing name).
+    Returns the raw dict, or ``None`` on any error. Keeps the file read
+    in one place so ``parse_plugin_manifest`` and
+    ``discover_plugin_components`` don't open the same file twice.
     """
-    plugin_dir = Path(plugin_dir)
     manifest_path = plugin_dir / ".claude-plugin" / "plugin.json"
     try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         logging.trace("No manifest at {} — incomplete plugin cache entry", manifest_path)
         return None
@@ -111,9 +122,14 @@ def parse_plugin_manifest(plugin_dir: Path | str) -> PluginManifest | None:
         logging.debug("Failed to parse manifest at {}: {}", manifest_path, exc)
         return None
 
+
+def _manifest_from_data(data: dict, plugin_dir: Path) -> PluginManifest | None:
+    """Build a :class:`PluginManifest` from an already-parsed dict."""
     name = data.get("name", "")
     if not name:
-        logging.debug("Plugin manifest at {} missing required 'name' field", manifest_path)
+        logging.debug(
+            "Plugin manifest at {} missing required 'name' field", plugin_dir
+        )
         return None
 
     # author may be a dict {"name": "..."} or a plain string
@@ -129,7 +145,20 @@ def parse_plugin_manifest(plugin_dir: Path | str) -> PluginManifest | None:
         version=str(data.get("version", "")),
         author=author,
         install_path=str(plugin_dir),
+        requires_capabilities=parse_capabilities(data.get("requires-capabilities")),
     )
+
+
+def parse_plugin_manifest(plugin_dir: Path | str) -> PluginManifest | None:
+    """Parse ``.claude-plugin/plugin.json`` from *plugin_dir*.
+
+    Returns ``None`` on any error (missing file, bad JSON, missing name).
+    """
+    plugin_dir = Path(plugin_dir)
+    data = _read_manifest_data(plugin_dir)
+    if data is None:
+        return None
+    return _manifest_from_data(data, plugin_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +175,14 @@ def discover_plugin_components(plugin_dir: Path | str) -> PluginComponents:
     plugin_dir = Path(plugin_dir)
     plugin_root = str(plugin_dir)
 
-    manifest = parse_plugin_manifest(plugin_dir)
+    # Parse plugin.json ONCE and reuse the raw dict for both the manifest
+    # and the session_tools entries — no double file read.
+    manifest_data = _read_manifest_data(plugin_dir)
+    manifest = (
+        _manifest_from_data(manifest_data, plugin_dir)
+        if manifest_data is not None
+        else None
+    )
 
     # --- skills/
     # Return the parent skills/ directory so consumers can call load_extra_dir() directly.
@@ -194,6 +230,16 @@ def discover_plugin_components(plugin_dir: Path | str) -> PluginComponents:
         except (OSError, json.JSONDecodeError) as exc:
             logging.warning("Failed to parse hooks/hooks.json in {}: {}", plugin_dir, exc)
 
+    # --- session_tools (Meeseeks extension to the Claude Code plugin format).
+    # Each entry is a ``{tool_id, module, class}`` record the core imports and
+    # turns into a factory via :class:`SessionToolRegistry`. Read from the
+    # same manifest_data parsed above — do not reopen plugin.json.
+    session_tool_entries: list[dict] = []
+    if manifest_data is not None:
+        raw_entries = manifest_data.get("session_tools", [])
+        if isinstance(raw_entries, list):
+            session_tool_entries = [e for e in raw_entries if isinstance(e, dict)]
+
     return PluginComponents(
         manifest=manifest,
         skill_dirs=skill_dirs,
@@ -201,6 +247,7 @@ def discover_plugin_components(plugin_dir: Path | str) -> PluginComponents:
         agent_files=agent_files,
         mcp_config=mcp_config,
         hooks_config=hooks_config,
+        session_tool_entries=session_tool_entries,
     )
 
 
@@ -304,6 +351,65 @@ def discover_installed_plugins(
             result.append(components)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Built-in plugin discovery (first-party bundles shipped inside the core wheel)
+# ---------------------------------------------------------------------------
+
+
+# Test seam: tests may monkeypatch this to point ``load_all_plugin_components``
+# at a synthetic built-in root. Kept deliberately minimal — production code
+# resolves the real root via :func:`importlib.resources.files`.
+_BUILTIN_ROOT_OVERRIDE: Path | None = None
+
+
+def discover_builtin_plugins(root: Path | str) -> list[PluginComponents]:
+    """Discover first-party plugins shipped inside the core package.
+
+    Walks immediate subdirectories of *root* (no registry indirection)
+    and returns :class:`PluginComponents` for each directory that
+    contains a ``.claude-plugin/plugin.json``. Built-in plugins bypass
+    ``installed_plugins.json`` because they ship with the core wheel —
+    their presence is a property of the installation, not user action.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return []
+    result: list[PluginComponents] = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        manifest_path = child / ".claude-plugin" / "plugin.json"
+        if not manifest_path.is_file():
+            continue
+        components = discover_plugin_components(child)
+        # Mark scope = "built-in" so the origin is visible in /plugins listings.
+        if components.manifest is not None:
+            patched = replace(
+                components.manifest, scope="built-in", marketplace="built-in"
+            )
+            components = replace(components, manifest=patched)
+        result.append(components)
+    return result
+
+
+def _resolve_builtin_root() -> Path:
+    """Locate the ``builtin_plugins/`` directory inside the core package.
+
+    Uses :mod:`importlib.resources` so the lookup works from wheels,
+    editable installs, and source checkouts alike. Returns an empty
+    :class:`Path` if the resource cannot be resolved — callers must
+    still check ``is_dir()``.
+    """
+    if _BUILTIN_ROOT_OVERRIDE is not None:
+        return _BUILTIN_ROOT_OVERRIDE
+    try:
+        traversable = importlib.resources.files("meeseeks_core") / "builtin_plugins"
+        return Path(str(traversable))
+    except (ModuleNotFoundError, OSError) as exc:
+        logging.debug("Could not resolve built-in plugin root: {}", exc)
+        return Path("")
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +681,7 @@ class PluginFanOut:
     agent_files: list[str]
     mcp_servers: dict[str, dict]
     hooks_configs: list[tuple[dict, str]]  # (hooks_json, plugin_root)
+    session_tool_entries: list[dict] = field(default_factory=list)
 
 
 _fanout_cache: PluginFanOut | None = None
@@ -599,7 +706,7 @@ def load_all_plugin_components() -> PluginFanOut:
 
     cfg = get_config().plugins
     if not cfg.enabled:
-        return PluginFanOut([], [], [], [], {}, [])
+        return PluginFanOut([], [], [], [], {}, [], [])
 
     # Check cache freshness against registry file mtime
     registry_paths = cfg.resolve_registry_paths()
@@ -609,19 +716,36 @@ def load_all_plugin_components() -> PluginFanOut:
             max_mtime = max(max_mtime, Path(rp).stat().st_mtime)
         except OSError:
             pass
+
+    # Include the built-in plugin root's mtime so the cache refreshes when
+    # a developer edits a built-in plugin during local dev. Lookup is cheap
+    # (single stat call) and keeps editable installs responsive.
+    builtin_root = _resolve_builtin_root()
+    try:
+        max_mtime = max(max_mtime, builtin_root.stat().st_mtime)
+    except OSError:
+        pass
+
     if _fanout_cache is not None and max_mtime <= _fanout_cache_mtime:
         return _fanout_cache
 
-    all_components = discover_installed_plugins(
-        registry_paths=cfg.resolve_registry_paths(),
-        enabled=cfg.enabled_plugins or None,
-    )
+    # Built-in components come first so they win the dedup race inside the
+    # fan-out loop below (same-name plugin from a marketplace loses).
+    builtin_components = discover_builtin_plugins(builtin_root)
+    all_components = [
+        *builtin_components,
+        *discover_installed_plugins(
+            registry_paths=cfg.resolve_registry_paths(),
+            enabled=cfg.enabled_plugins or None,
+        ),
+    ]
 
     skill_dirs: list[str] = []
     command_files: list[str] = []
     agent_files: list[str] = []
     mcp_servers: dict[str, dict] = {}
     hooks_configs: list[tuple[dict, str]] = []
+    session_tool_entries: list[dict] = []
 
     for pc in all_components:
         if pc.manifest is None:
@@ -629,6 +753,7 @@ def load_all_plugin_components() -> PluginFanOut:
         skill_dirs.extend(pc.skill_dirs)
         command_files.extend(pc.command_files)
         agent_files.extend(pc.agent_files)
+        session_tool_entries.extend(pc.session_tool_entries)
         if pc.mcp_config:
             # Normalize Claude Code "mcpServers" → "servers"
             raw = pc.mcp_config
@@ -651,6 +776,7 @@ def load_all_plugin_components() -> PluginFanOut:
         agent_files=agent_files,
         mcp_servers=mcp_servers,
         hooks_configs=hooks_configs,
+        session_tool_entries=session_tool_entries,
     )
     _fanout_cache = result
     _fanout_cache_mtime = max_mtime

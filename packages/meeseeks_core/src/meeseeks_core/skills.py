@@ -17,12 +17,18 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml  # type: ignore[import-untyped]
 
+from meeseeks_core.capabilities import (
+    filter_by_capabilities,
+    overlay_capabilities,
+    parse_capabilities,
+)
 from meeseeks_core.common import get_logger
 
 if TYPE_CHECKING:
@@ -56,6 +62,7 @@ class SkillSpec:
     model: str | None = None
     body: str = ""
     mtime: float = 0.0
+    requires_capabilities: tuple[str, ...] = ()
 
 
 # ------------------------------------------------------------------
@@ -155,6 +162,19 @@ def _parse_skill_file(
     except OSError:
         mtime = 0.0
 
+    # Capability gating — same two-key contract as AgentDef.
+    list_form = (
+        meta.get("requires-capabilities")
+        if isinstance(meta.get("requires-capabilities"), list)
+        else []
+    )
+    scalar_form = (
+        meta.get("requires-capability")
+        if isinstance(meta.get("requires-capability"), str)
+        else ""
+    )
+    requires_capabilities = parse_capabilities([*list_form, scalar_form])
+
     return SkillSpec(
         name=name,
         description=description,
@@ -168,6 +188,7 @@ def _parse_skill_file(
         model=str(meta["model"]) if meta.get("model") else None,
         body=body,
         mtime=mtime,
+        requires_capabilities=requires_capabilities,
     )
 
 
@@ -281,25 +302,54 @@ class SkillRegistry:
         if self._skills:
             logging.info("Loaded {} skill(s)", len(self._skills))
 
-    def get(self, name: str) -> SkillSpec | None:
-        """Get a skill by name."""
-        return self._skills.get(name)
+    def get(
+        self,
+        name: str,
+        session_capabilities: Iterable[str] = (),
+    ) -> SkillSpec | None:
+        """Get a skill by name.
+
+        Skills gated by ``requires_capabilities`` that the session hasn't
+        advertised are treated as if they don't exist.
+        """
+        skill = self._skills.get(name)
+        if skill is None:
+            return None
+        visible = filter_by_capabilities([skill], session_capabilities)
+        return visible[0] if visible else None
 
     def list_all(self) -> list[SkillSpec]:
         """List all discovered skills."""
         return list(self._skills.values())
 
-    def list_user_invocable(self) -> list[SkillSpec]:
+    def visible_for(self, session_capabilities: Iterable[str]) -> list[SkillSpec]:
+        """Return skills visible given the session's advertised capabilities."""
+        return filter_by_capabilities(self._skills.values(), session_capabilities)
+
+    def list_user_invocable(
+        self, session_capabilities: Iterable[str] = ()
+    ) -> list[SkillSpec]:
         """List skills available for user slash-command invocation."""
-        return [s for s in self._skills.values() if s.user_invocable]
+        return [
+            s for s in self.visible_for(session_capabilities) if s.user_invocable
+        ]
 
-    def list_auto_invocable(self) -> list[SkillSpec]:
+    def list_auto_invocable(
+        self, session_capabilities: Iterable[str] = ()
+    ) -> list[SkillSpec]:
         """List skills the LLM can auto-invoke."""
-        return [s for s in self._skills.values() if not s.disable_model_invocation]
+        return [
+            s
+            for s in self.visible_for(session_capabilities)
+            if not s.disable_model_invocation
+        ]
 
-    def render_catalog(self) -> str:
-        """Render a compact skill catalog for system prompt injection."""
-        auto = self.list_auto_invocable()
+    def render_catalog(self, session_capabilities: Iterable[str] = ()) -> str:
+        """Render a compact skill catalog for system prompt injection.
+
+        Applies capability filtering before rendering.
+        """
+        auto = self.list_auto_invocable(session_capabilities)
         if not auto:
             return ""
         lines = ["Available skills (use activate_skill to load instructions when relevant):"]
@@ -341,8 +391,19 @@ class SkillRegistry:
             logging.info("Skills reloaded ({} active)", len(self._skills))
         return changed
 
-    def load_extra_dir(self, skills_dir: str, source: str = "plugin") -> None:
-        """Load skills from an extra directory. Does NOT override existing."""
+    def load_extra_dir(
+        self,
+        skills_dir: str,
+        source: str = "plugin",
+        *,
+        requires_capabilities: tuple[str, ...] = (),
+    ) -> None:
+        """Load skills from an extra directory. Does NOT override existing.
+
+        When ``requires_capabilities`` is non-empty (e.g. the plugin manifest
+        declared bundle-level capabilities), the values are unioned onto each
+        loaded spec's own ``requires_capabilities``.
+        """
         base = Path(skills_dir)
         if not base.is_dir():
             return
@@ -354,16 +415,28 @@ class SkillRegistry:
                     source=source,
                     default_name=child.name,
                 )
-                if spec is not None and spec.name not in self._skills:
+                if spec is None:
+                    continue
+                spec = overlay_capabilities(spec, requires_capabilities)
+                if spec.name not in self._skills:
                     self._skills[spec.name] = spec
 
-    def load_command_file(self, path: str, source: str = "plugin") -> None:
+    def load_command_file(
+        self,
+        path: str,
+        source: str = "plugin",
+        *,
+        requires_capabilities: tuple[str, ...] = (),
+    ) -> None:
         """Load a flat commands/*.md file as a skill."""
         p = Path(path)
         if not p.is_file():
             return
         spec = _parse_skill_file(p, source=source, default_name=p.stem)
-        if spec is not None and spec.name not in self._skills:
+        if spec is None:
+            return
+        spec = overlay_capabilities(spec, requires_capabilities)
+        if spec.name not in self._skills:
             self._skills[spec.name] = spec
 
 

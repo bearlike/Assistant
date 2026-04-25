@@ -231,3 +231,54 @@ def test_spawn_agent_schema_has_agent_type():
     props = SPAWN_AGENT_SCHEMA["function"]["parameters"]["properties"]
     assert "agent_type" in props
     assert "string" in str(props["agent_type"]["type"])
+
+
+def test_agent_def_parses_requires_capabilities_list(tmp_path):
+    """Frontmatter ``requires-capabilities`` list is parsed into AgentDef."""
+    md = tmp_path / "widget.md"
+    md.write_text(
+        "---\n"
+        "name: widget\n"
+        "description: Builds widgets\n"
+        "requires-capabilities: [stlite]\n"
+        "---\n"
+        "Body text.\n"
+    )
+    agent = parse_agent_file(md, source="plugin:widget-builder")
+    assert agent is not None
+    assert agent.requires_capabilities == ("stlite",)
+
+
+def test_agent_registry_filters_by_session_capabilities():
+    """render_catalog + get honour session_capabilities for gated agents."""
+    registry = AgentRegistry()
+    free = AgentDef(
+        name="free",
+        description="No gate",
+        source_path="/tmp/free.md",
+        source="test",
+        body="body",
+    )
+    gated = AgentDef(
+        name="gated",
+        description="Needs stlite",
+        source_path="/tmp/gated.md",
+        source="test",
+        body="body",
+        requires_capabilities=("stlite",),
+    )
+    registry.register(free)
+    registry.register(gated)
+
+    # Session without the capability sees only the free agent.
+    catalog_no_caps = registry.render_catalog(session_capabilities=())
+    assert "free" in catalog_no_caps
+    assert "gated" not in catalog_no_caps
+    assert registry.get("gated", session_capabilities=()) is None
+    assert registry.get("free", session_capabilities=()) is not None
+
+    # Session with the capability sees both.
+    catalog_with_caps = registry.render_catalog(session_capabilities=("stlite",))
+    assert "free" in catalog_with_caps
+    assert "gated" in catalog_with_caps
+    assert registry.get("gated", session_capabilities=("stlite",)) is not None

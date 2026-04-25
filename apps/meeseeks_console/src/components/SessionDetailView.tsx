@@ -324,6 +324,7 @@ export function SessionDetailView({
     sessionFiles,
     onRetry: !running ? () => triggerRecover("retry") : undefined,
     onContinue: !running ? () => triggerRecover("continue") : undefined,
+    isRunning: running || submitting,
   };
 
   if (isWorkspaceOpen && effectiveMaximized) {

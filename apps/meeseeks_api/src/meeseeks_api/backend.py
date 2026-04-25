@@ -610,6 +610,16 @@ class Sessions(Resource):
         if session_tag:
             runtime.session_store.tag_session(session_id, session_tag)
         context_payload = _build_context_payload(payload)
+        # Capability header — clients may declare supported features (e.g. "stlite"
+        # for the widget builder). Parse comma-separated values and persist in the
+        # session context so the Orchestrator can conditionally enable agent types.
+        capabilities_header = request.headers.get("X-Meeseeks-Capabilities", "")
+        if capabilities_header:
+            client_capabilities = [
+                c.strip() for c in capabilities_header.split(",") if c.strip()
+            ]
+            if client_capabilities:
+                context_payload["client_capabilities"] = client_capabilities
         # Include project in context if provided
         try:
             project_cwd = _resolve_project_cwd(payload)
@@ -652,6 +662,14 @@ class SessionQuery(Resource):
             return {"message": "Session is already running."}, 409
 
         context_payload = _build_context_payload(request_data)
+        # Capability header — same parsing as Sessions.post() for per-query declarations.
+        capabilities_header = request.headers.get("X-Meeseeks-Capabilities", "")
+        if capabilities_header:
+            client_capabilities = [
+                c.strip() for c in capabilities_header.split(",") if c.strip()
+            ]
+            if client_capabilities:
+                context_payload["client_capabilities"] = client_capabilities
         # Use model from context if provided, else config default
         if "model" not in context_payload:
             context_payload["model"] = get_config_value("llm", "default_model", default="unknown")

@@ -154,6 +154,58 @@ Plugin discovery and management page. Displays installed plugins and marketplace
 ### Web IDE (`components/IdeLoader.tsx`, `hooks/useWebIdeEnabled.ts`)
 "Open in Web IDE" launches per-session code-server containers via the API. `useWebIdeEnabled()` checks whether the feature is available. IDE loader shows a floral background animation during container startup.
 
+## Stlite widget rendering — Streamlit inside the React shell
+
+`StliteWidgetPanel` (`components/StliteWidgetPanel.tsx`) embeds a full Streamlit app via `@stlite/react` + Pyodide. It shares nothing with Streamlit's HTML shell, so several Streamlit / stlite defaults leak through and fight with our chat layout. These are non-obvious and keep biting — read this section before touching widget rendering.
+
+### `.stApp` is `position: absolute; inset: 0`
+It fills its NEAREST positioned ancestor. If you put `position: relative` on the outer panel wrapper (the one that holds both the chrome title bar AND the widget area), `.stApp` fills the entire card and paints **over** the chrome. **Invariant:** never put `relative` on a wrapper that contains the chrome — only on the inner widget-area div BELOW the chrome. Verify via Playwright (query `.stApp` rect vs title bar rect, check `stAppCoversTitleBar`). This bit us for multiple rebuilds because the chrome JSX / hex colors / CSS all shipped correctly — `.stApp` was simply painted on top.
+
+### Two nested scrollbars by default
+Streamlit's `<section data-testid="stMain">` ships with `overflow: auto` on both axes, AND our `.stAppViewContainer` also scrolls. Tall widgets render two stacked scrollbars; users scroll the inner one, hit its end at ~900px, and never realize the outer has more content. Kill stMain's overflow with `[&_[data-testid='stMain']]:!overflow-visible` so there's exactly one scroller (the outer `.stAppViewContainer`), themed and always-visible per `index.css`.
+
+### `document.title` hijack during Pyodide boot
+When a widget's `app.py` doesn't call `st.set_page_config(page_title=...)`, Streamlit forces `document.title = "Streamlit"` during boot. The `useTitleGuard()` MutationObserver in StliteWidgetPanel reverts ONLY the literal `"Streamlit"` string; legitimate App.tsx title updates (session renames, navigation) flow through untouched. Don't blanket-freeze the title — the guard is specifically scoped to the one value stlite forces.
+
+### `.stMainBlockContainer` has a ~736px max-width cap
+Streamlit defaults to `layout="centered"` (~736px). To fill the card edge-to-edge without requiring every widget's `app.py` to call `st.set_page_config(layout="wide")`, override `!max-w-none` + `!w-full` + `!px-4` + `!pt-4` + `!pb-4` at the panel level. This is the right place — widget authors should not have to know about the console's layout.
+
+### Kernel options are init-only
+`@stlite/react` reads `kernelOptions` exactly once on mount and exposes no `setConfig` / `setTheme`. Runtime theme or config changes require a full component remount via `key={theme}` on the inner component. Don't try to mutate the kernel's config — it won't take.
+
+### `zoom` vs `transform: scale`
+`StliteWidgetPanel` scales the stlite subtree via `zoom: 0.85`. This matters because `zoom` is part of the CSS layout tree — `scrollHeight` on descendants comes back ALREADY scaled, so `WidgetCard`'s ResizeObserver measures what the user sees. `transform: scale(0.85)` would paint smaller but keep the natural layout, leaving the card oversized by ~15%. If you ever "optimize" this to a transform, you'll break the content-height sizing.
+
+### Fonts — stlite ships Source Sans Pro, not Inter
+`theme.font: "sans serif"` maps to Streamlit's bundled Source Sans Pro. There is no runtime hook to inject Inter into the stlite worker. Accept the typography mismatch; don't spend time trying to CSS-override it — the font files are inside the Pyodide wheel.
+
+### `streamlitConfig` dotted keys that matter
+Passed through `useKernel` → spread into Streamlit's Python `load_config_options` in the worker:
+- `client.toolbarMode: "viewer"` — hides Deploy / hamburger / Rerun band
+- `theme.base: "dark" | "light"` — Streamlit's bundled palette, flipped via `key={theme}` remount
+- `theme.{background,secondaryBackground,text}Color` — override to match `--widget-panel-bg` / `--muted` / `--foreground`
+- `theme.primaryColor: "#D97757"` — brand clay
+- `theme.font: "sans serif"` — see above
+
+Belt-and-braces chrome hiding on top of `toolbarMode`: `[&_[data-testid='stHeader']]:!hidden`, `[&_[data-testid='stToolbar']]:!hidden`, `[&_[data-testid='stDecoration']]:!hidden`. Streamlit sometimes still ships the Running indicator / top gradient bar; kill them explicitly.
+
+## PWA service worker — deploy resilience
+
+Config lives in `vite.config.ts` under `VitePWA({ workbox: { ... } })`; the update UX lives in `components/UpdatePrompt.tsx` (registered in `src/index.tsx`). Non-trivial rules that MUST hold:
+
+- **`skipWaiting: true` + `clientsClaim: true`.** New SW activates immediately and claims all clients. The opposite config leaves a newly-installed SW in "waiting" state until every open tab closes, which in practice leaves users pinned to the previous deploy's precached `index.html`. That stale `index.html` references hashed bundle names that the server has since deleted → 404 cascade on every lazy chunk → widgets silently fail to mount. This has bitten us hard.
+- **Large lazy chunks are in `globIgnores`** (`StliteWidgetPanel-*.js`, `PlotlyChart-*.js`, `DeckGlJsonChart-*.js`) because they exceed Workbox's 2 MiB precache limit. They're served network-only. This HAS to pair with `skipWaiting: true` — stale index.html referencing missing hashed chunks = 404.
+- **`sw.js` must be `Cache-Control: no-cache, no-store, must-revalidate`** at nginx (`docker/nginx-console.conf`). If the browser caches `sw.js`, it never sees new versions.
+- **`UpdatePrompt.handleReload` is deliberately nuclear**: unregisters every SW via `navigator.serviceWorker.getRegistrations()` + wipes all `caches.keys()` entries, THEN `location.reload()`. Do not trust workbox's `updateServiceWorker(true)` skipWaiting+controllerchange handshake alone — browsers land in weird precache states often enough that brute-force is the only consistent fix.
+- **`registerType: "prompt"` + 15-min `registration.update()` tick** (was 60 min). Also re-ticks on `window.focus`. Users see the update notification within ~15 min of a deploy instead of up to an hour.
+
+### Deploy symptom → likely cause
+| Symptom | Likely cause |
+|---|---|
+| Widget lazy chunk 404s after deploy | Stale SW pinned to old `index.html`; user dismissed or never saw the Reload prompt |
+| Users refresh, still see old UI | Old SW never unregistered — force via Reload button (nuclear path) or DevTools → Application → Unregister |
+| `curl -sk /index.html` returns fresh, browser runs stale | SW's precache is serving stale `index.html` BEFORE the network layer sees the request |
+
 ## Dependency Selection — KISS/DRY Policy
 
 The instinct in this codebase is **always reach for an external library before writing custom code**. The whole point of the foundation reset was to delete bespoke implementations of problems that were already solved upstream. Custom code is only justified when no library fits.
@@ -260,6 +312,14 @@ The app supports light and dark mode via CSS variables in `src/index.css` (the `
 
 **Lesson learned**: TerminalCard and DiffCard initially shipped with `bg-[hsl(220_5%_12%)]` literal backgrounds and `text-white/40` colors because the original author wanted the cards to "always look like a terminal". Result: they stayed dark in light mode and looked broken next to themed siblings. The fix was a one-time CSS-variable refactor; we should never need to do it again. Any reviewer seeing a literal `hsl(...)` or `text-white` in a PR diff should reject it.
 
+### Scrollbar affordance — `overflow-y: auto` is invisible to many users
+macOS, iOS, and overlay-configured Windows hide scrollbars by default on `overflow-y: auto`. Users don't know the content is scrollable, so they miss clamped/truncated content entirely. When height is bounded and content may overflow, use `overflow-y: scroll` (track always rendered) paired with themed `::-webkit-scrollbar*` and `scrollbar-color` — see the `.stAppViewContainer` block in `src/index.css` for the canonical pattern. Give the track a faint background (`hsl(var(--muted) / 0.4)`) so the "rail" itself is visible, not just the thumb. This is a discoverability / accessibility concern; don't skip it to make the UI "cleaner".
+
+### Bundle presence ≠ visual render
+When a user says "I can't see my change", grepping the minified JS/CSS bundle only proves the code COMPILED. It doesn't prove the element mounts, isn't covered by an absolutely-positioned sibling, isn't off-screen, isn't `display: none`-d by a CSS override. For any "it's not showing" bug, **query the actual DOM and take a screenshot before concluding** — `mcp__plugin_playwright_playwright__browser_evaluate` + `browser_take_screenshot` cover both. The Library-First Principle's debugging equivalent: DOM inspection is cheaper than yet another bundle grep.
+
+Concrete example: the macOS chrome title bar on WidgetCard shipped with correct JSX, correct hex colors in the bundle, correct CSS selectors — but was completely invisible across three rebuilds because `.stApp { position: absolute; inset: 0 }` anchored to a `relative` ancestor that contained the chrome, so stlite painted over it. One DOM inspection would have caught it; three bundle-greps missed it.
+
 ### InputBar session context hydration
 When rendering InputBar in detail mode, pass `sessionContext={session.context}` so project/skill/MCP tool selections reflect the session's stored context. Without this, the toolbar defaults to null/global state regardless of what the session was created with.
 
@@ -298,7 +358,7 @@ The production console runs at `https://meeseeks.hurricane.home` (self-signed ce
   curl -sk "https://meeseeks.hurricane.home/api/sessions/<ID>/events" \
     -H "X-Api-Key: $(grep MASTER_API_TOKEN /home/kk/Projects/Personal-Assistant/docker.env | cut -d= -f2)"
   ```
-- **Playwright cannot access this site** due to `ERR_CERT_AUTHORITY_INVALID` — use curl for API inspection instead.
+- **Playwright (via the MCP plugin) CAN reach this site.** The browser context accepts the self-signed cert. Use `mcp__plugin_playwright_playwright__browser_navigate` + `browser_evaluate` + `browser_take_screenshot` to inspect rendered DOM, verify styling, and diagnose "it's not showing" bugs. (An earlier version of this doc said the opposite; that note was stale — it was written before the plugin was wired up.) Use `curl -sk` for plain API JSON endpoints where Playwright is overkill.
 
 ## Testing
 - Tests use Vitest + React Testing Library.

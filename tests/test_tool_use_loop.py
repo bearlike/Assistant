@@ -1327,3 +1327,61 @@ class TestModelFallback:
                     assert "down" in str(exc)
 
         asyncio.run(_test())
+
+
+class TestRootInjection:
+    """``_tool_call_to_action_step`` injects ``root`` only for registered non-MCP tools.
+
+    Regression: session tools with strict Pydantic schemas (e.g. ``submit_widget``
+    uses ``ConfigDict(extra='forbid')``) rejected the injected ``root`` key,
+    causing repeated validation failures in sub-agents.
+    """
+
+    def _make_loop(self, registry: ToolRegistry) -> ToolUseLoop:
+        loop = ToolUseLoop(
+            agent_context=_make_agent_context(),
+            tool_registry=registry,
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+            cwd="/tmp/project",
+        )
+        return loop
+
+    def test_registered_local_tool_gets_root_injected(self):
+        loop = self._make_loop(_make_registry(_make_spec("aider_shell_tool")))
+        step = loop._tool_call_to_action_step(
+            {"name": "aider_shell_tool", "args": {"command": "ls"}}
+        )
+        assert step.tool_input == {"command": "ls", "root": "/tmp/project"}
+
+    def test_session_tool_does_not_get_root_injected(self):
+        # ``submit_widget`` is a session tool — not in the registry.
+        loop = self._make_loop(_make_registry())
+        step = loop._tool_call_to_action_step(
+            {"name": "submit_widget", "args": {"widget_id": "w1"}}
+        )
+        assert step.tool_input == {"widget_id": "w1"}
+        assert "root" not in step.tool_input
+
+    def test_mcp_tool_does_not_get_root_injected(self):
+        mcp_spec = ToolSpec(
+            tool_id="mcp_search",
+            name="mcp_search",
+            description="",
+            factory=lambda: MagicMock(),
+            enabled=True,
+            kind="mcp",
+            metadata={},
+        )
+        loop = self._make_loop(_make_registry(mcp_spec))
+        step = loop._tool_call_to_action_step(
+            {"name": "mcp_search", "args": {"q": "x"}}
+        )
+        assert step.tool_input == {"q": "x"}
+
+    def test_explicit_root_is_preserved(self):
+        loop = self._make_loop(_make_registry(_make_spec("aider_shell_tool")))
+        step = loop._tool_call_to_action_step(
+            {"name": "aider_shell_tool", "args": {"command": "ls", "root": "/elsewhere"}}
+        )
+        assert step.tool_input["root"] == "/elsewhere"

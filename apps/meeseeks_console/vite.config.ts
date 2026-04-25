@@ -3,6 +3,13 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+// Aliases `streamlit.whl` / `stlite_lib.whl` imports (used inside
+// `@stlite/react/vite-utils` to power the `wheelUrls` binding) to the wheel
+// files shipped inside the @stlite/react package so Vite can resolve them.
+// Without this plugin Rollup fails with `Rollup failed to resolve import
+// "stlite_lib.whl"` at build time; at runtime stlite's worker skips the
+// bundled streamlit install and `import streamlit` crashes.
+import vitePluginStliteReact from '@stlite/react/vite-plugin'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -27,6 +34,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      vitePluginStliteReact(),
       VitePWA({
         registerType: "prompt",
         injectRegister: null,
@@ -66,8 +74,11 @@ export default defineConfig(({ mode }) => {
         },
         workbox: {
           globPatterns: ["**/*.{js,css,html,ico,png,svg,woff,woff2}"],
-          // runtime-config.js is rendered at container start; never precache
-          globIgnores: ["**/runtime-config.js"],
+          // runtime-config.js is rendered at container start; never precache.
+          // StliteWidgetPanel and its Streamlit/Plotly/DeckGL sub-chunks are
+          // lazily loaded WASM-heavy assets that exceed the 2 MiB precache
+          // limit — exclude them and let the network serve them on demand.
+          globIgnores: ["**/runtime-config.js", "**/StliteWidgetPanel-*.js", "**/PlotlyChart-*.js", "**/DeckGlJsonChart-*.js"],
           navigateFallback: "index.html",
           // `/ide/` is proxied to per-session code-server containers (see
           // docker/nginx-reverse-proxy.conf + docker/nginx-ide-proxy.conf).
@@ -77,8 +88,14 @@ export default defineConfig(({ mode }) => {
           // NOT match `/ide-loader/:sessionId`, which *is* a SPA route.
           navigateFallbackDenylist: [/^\/api/, /^\/runtime-config\.js$/, /^\/ide\//],
           cleanupOutdatedCaches: true,
-          clientsClaim: false,
-          skipWaiting: false,
+          // Activate a new SW and take over all clients immediately on install.
+          // Paired with `registerType: "prompt"` + UpdatePrompt: the user still
+          // sees a notification and triggers the page reload themselves, but
+          // the SW no longer sits "waiting" across deploys — so a missed prompt
+          // never leaves a tab pinned to a stale precache whose hashed bundles
+          // have since been deleted from the server (the 404 cascade we just hit).
+          clientsClaim: true,
+          skipWaiting: true,
           runtimeCaching: [
             {
               // Web IDE is a separate upstream — pass through untouched so the

@@ -35,7 +35,6 @@ from meeseeks_core.components import (
 from meeseeks_core.config import get_config_value, get_version
 from meeseeks_core.context import ContextSnapshot, render_event_lines
 from meeseeks_core.exit_plan_mode import (
-    EXIT_PLAN_MODE_SCHEMA,
     SHELL_TOOL_IDS,
     ExitPlanModeTool,
     ensure_plan_dir,
@@ -47,6 +46,11 @@ from meeseeks_core.hooks import HookManager
 from meeseeks_core.hypervisor import AgentHandle
 from meeseeks_core.llm import build_chat_model, specs_to_langchain_tools
 from meeseeks_core.permissions import PermissionDecision, PermissionPolicy
+from meeseeks_core.session_tools import (
+    DEFAULT_SESSION_TOOL_MODES,
+    SessionTool,
+    SessionToolRegistry,
+)
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
 from meeseeks_core.types import Event
 
@@ -211,8 +215,11 @@ class ToolUseLoop:
         skill_instructions: str | None = None,
         skill_registry: Any = None,
         agent_registry: Any = None,
+        session_tool_registry: SessionToolRegistry | None = None,
+        allowed_tools: list[str] | None = None,
         cwd: str | None = None,
         session_id: str | None = None,
+        session_capabilities: tuple[str, ...] = (),
     ) -> None:
         """Initialize the tool-use loop.
 
@@ -226,8 +233,20 @@ class ToolUseLoop:
             skill_instructions: Pre-rendered skill body (from user /skill invocation).
             skill_registry: SkillRegistry for auto-invocation catalog + activate_skill handling.
             agent_registry: AgentRegistry for agent type catalog + spawn_agent type lookup.
+            session_tool_registry: Registry of plugin-contributed session-tool
+                factories.  Each matching factory (filtered by ``allowed_tools``)
+                is instantiated for this agent and added to ``self._session_tools``.
+            allowed_tools: The agent's allowlist used to filter which session
+                tools the plugin registry should build for this agent.  ``None``
+                means "no plugin session tools" (root agents get only the
+                built-in ``ExitPlanModeTool``).
             cwd: Working directory for this agent (project root).
             session_id: Session identifier — used for plan-mode path scoping.
+            session_capabilities: Client-advertised capability tuple from the
+                ``X-Meeseeks-Capabilities`` header (persisted on the session
+                context event). Used to filter capability-gated agents and
+                skills out of the system-prompt catalogs and ``activate_skill``
+                / ``spawn_agent`` lookups.
         """
         self._ctx = agent_context
         self._tool_registry = tool_registry
@@ -238,8 +257,10 @@ class ToolUseLoop:
         self._skill_instructions = skill_instructions
         self._skill_registry = skill_registry
         self._agent_registry = agent_registry
+        self._session_tool_registry = session_tool_registry
         self._cwd = cwd
         self._session_id = session_id
+        self._session_capabilities = session_capabilities
 
         # Dedup cache for read_file: prevents redundant reads when the
         # same file + range hasn't changed on disk (mtime check).
@@ -267,17 +288,30 @@ class ToolUseLoop:
                 project_instructions=project_instructions,
                 cwd=cwd,
                 agent_registry=agent_registry,
+                session_tool_registry=session_tool_registry,
+                session_capabilities=session_capabilities,
             )
 
-        # Create ExitPlanModeTool for root agents with a session id.
-        # The handler is dormant until a tool call references
-        # ``exit_plan_mode`` (only possible when the schema is bound in
-        # plan mode).
-        self._exit_plan_mode_tool: ExitPlanModeTool | None = None
+        # Assemble session tools — per-agent stateful handlers that carry
+        # their own schema, dispatch, and run-termination flag. The core's
+        # built-in ``ExitPlanModeTool`` is always attached to root agents
+        # with a session id; plugin-contributed tools are filtered through
+        # the agent's ``allowed_tools`` allowlist.
+        self._session_tools: list[SessionTool] = []
         if agent_context.depth == 0 and session_id is not None:
-            self._exit_plan_mode_tool = ExitPlanModeTool(
-                session_id=session_id,
-                event_logger=agent_context.event_logger,
+            self._session_tools.append(
+                ExitPlanModeTool(
+                    session_id=session_id,
+                    event_logger=agent_context.event_logger,
+                )
+            )
+        if session_tool_registry is not None and session_id is not None:
+            self._session_tools.extend(
+                session_tool_registry.build_for(
+                    allowed_tools,
+                    session_id=session_id,
+                    event_logger=agent_context.event_logger,
+                )
             )
 
     # ------------------------------------------------------------------
@@ -313,14 +347,21 @@ class ToolUseLoop:
         final_response: str | None = None
 
         # Register self in the hypervisor registry.
-        handle = AgentHandle(
-            agent_id=self._ctx.agent_id,
-            parent_id=self._ctx.parent_id,
-            depth=self._ctx.depth,
-            model_name=self._ctx.model_name,
-            task_description=user_query[:200],
-        )
-        await self._ctx.registry.register(handle)
+        # Reuse the handle created by SpawnAgentTool when one already exists for
+        # this agent_id — avoids overwriting it and losing the reference held by
+        # the lifecycle manager (which later stores AgentResult on the handle).
+        existing = await self._ctx.registry.get(self._ctx.agent_id)
+        if existing is not None:
+            handle = existing
+        else:
+            handle = AgentHandle(
+                agent_id=self._ctx.agent_id,
+                parent_id=self._ctx.parent_id,
+                depth=self._ctx.depth,
+                model_name=self._ctx.model_name,
+                task_description=user_query[:200],
+            )
+            await self._ctx.registry.register(handle)
         handle.status = "running"
 
         # Ref: [AgentCgroup §4.2] Background watchdog for stall detection.
@@ -741,13 +782,14 @@ class ToolUseLoop:
                         action_step.result = mock(content=result.content)
                         executed_steps.append(action_step)
 
-                    # Episodic plan-mode: exit_plan_mode signals the loop to
-                    # terminate so the thread exits cleanly. Approval/rejection
-                    # happens out-of-band via SessionRuntime.
-                    if (
-                        self._exit_plan_mode_tool is not None
-                        and self._exit_plan_mode_tool.should_terminate_run()
-                    ):
+                    # Episodic plan-mode: a session tool (e.g. exit_plan_mode)
+                    # signals the loop to terminate so the thread exits
+                    # cleanly. Approval/rejection happens out-of-band via
+                    # SessionRuntime. Materialise the list so every tool's
+                    # flag is consumed — ``any`` short-circuits and would
+                    # leave a second tool's flag set for the next turn.
+                    term_flags = [t.should_terminate_run() for t in self._session_tools]
+                    if any(term_flags):
                         state.done = True
                         state.done_reason = "awaiting_approval"
                         break
@@ -1066,13 +1108,13 @@ class ToolUseLoop:
 
         # Auto-invocable skills catalog (for LLM-driven activation).
         if self._skill_registry is not None:
-            catalog = self._skill_registry.render_catalog()
+            catalog = self._skill_registry.render_catalog(self._session_capabilities)
             if catalog:
                 system_parts.append(catalog)
 
         # Registered agent types catalog (for spawn_agent agent_type selection).
         if self._agent_registry is not None:
-            agent_catalog = self._agent_registry.render_catalog()
+            agent_catalog = self._agent_registry.render_catalog(self._session_capabilities)
             if agent_catalog:
                 system_parts.append(agent_catalog)
 
@@ -1337,7 +1379,9 @@ class ToolUseLoop:
         skill_args = str(args.get("args", ""))
 
         registry = self._skill_registry
-        skill = registry.get(skill_name) if registry else None
+        skill = (
+            registry.get(skill_name, self._session_capabilities) if registry else None
+        )
         if skill is None:
             msg = f"ERROR: Unknown skill '{skill_name}'"
             return type("R", (), {"content": msg})()
@@ -1574,15 +1618,19 @@ class ToolUseLoop:
         if (
             not plan_mode
             and self._skill_registry is not None
-            and self._skill_registry.list_auto_invocable()
+            and self._skill_registry.list_auto_invocable(self._session_capabilities)
         ):
             from meeseeks_core.skills import ACTIVATE_SKILL_SCHEMA
 
             tool_schemas = [*tool_schemas, ACTIVATE_SKILL_SCHEMA]
-        # Inject exit_plan_mode schema only when plan mode is active and the
-        # root-scoped handler exists.
-        if plan_mode and self._exit_plan_mode_tool is not None:
-            tool_schemas = [*tool_schemas, EXIT_PLAN_MODE_SCHEMA]
+        # Bind session-tool schemas only for tools whose ``modes`` include
+        # the current orchestration mode. Data-driven — no tool_id string
+        # match. Plugin tools missing the attribute default to act-mode.
+        current_mode = "plan" if plan_mode else "act"
+        for session_tool in self._session_tools:
+            tool_modes = getattr(session_tool, "modes", None) or DEFAULT_SESSION_TOOL_MODES
+            if current_mode in tool_modes:
+                tool_schemas = [*tool_schemas, session_tool.schema]
         if tool_schemas:
             return model.bind_tools(tool_schemas)
         return model
@@ -1645,7 +1693,11 @@ class ToolUseLoop:
                     success=True,
                 )
 
-        # Execute — internal tools (spawn_agent, activate_skill) first, then registry.
+        # Execute — internal tools (spawn_agent, session tools, activate_skill)
+        # first, then the registry.
+        session_tool = next(
+            (t for t in self._session_tools if t.tool_id == tool_id), None
+        )
         if tool_id == "spawn_agent" and self._spawn_agent_tool is not None:
             try:
                 result = await self._spawn_agent_tool.run_async(action_step)
@@ -1682,13 +1734,11 @@ class ToolUseLoop:
                     content=f"ERROR: {exc}",
                     success=False,
                 )
-        elif tool_id == "activate_skill" and self._skill_registry is not None:
-            result = self._handle_activate_skill(action_step)
-        elif tool_id == "exit_plan_mode" and self._exit_plan_mode_tool is not None:
+        elif session_tool is not None:
             try:
-                result = await self._exit_plan_mode_tool.handle(action_step)
+                result = await session_tool.handle(action_step)
             except Exception as exc:
-                logging.error("exit_plan_mode failed: {}", exc)
+                logging.error("session tool {} failed: {}", tool_id, exc)
                 self._emit_tool_result_event(action_step, None, error=str(exc))
                 return ToolCallResult(
                     tool_call_id=tool_call_id,
@@ -1696,6 +1746,8 @@ class ToolUseLoop:
                     content=f"ERROR: {exc}",
                     success=False,
                 )
+        elif tool_id == "activate_skill" and self._skill_registry is not None:
+            result = self._handle_activate_skill(action_step)
         else:
             tool = self._tool_registry.get(tool_id)
             if tool is None:
@@ -1817,11 +1869,13 @@ class ToolUseLoop:
         """Convert an LLM tool_call dict to an ActionStep."""
         tool_id: str = tool_call.get("name") or ""
         args: Any = tool_call.get("args") or {}
-        # Inject session CWD as default root for built-in tools so the LLM
-        # doesn't need to repeat it on every file/shell call.
+        # Inject session cwd as `root` for registered local tools (aider-style
+        # file/shell tools consume it via `argument.get("root")`). Unregistered
+        # tools — session tools, spawn_agent, activate_skill — use strict
+        # schemas that reject stray keys, so they opt out by not being here.
         if self._cwd and isinstance(args, dict) and "root" not in args:
             spec = self._tool_registry.get_spec(tool_id)
-            if spec is None or spec.kind != "mcp":
+            if spec is not None and spec.kind != "mcp":
                 args = {**args, "root": self._cwd}
         operation = _infer_operation(tool_id)
         return ActionStep(
@@ -1948,7 +2002,7 @@ class ToolUseLoop:
         emits a permission event so the model and user see the refusal.
         """
         tool_id = action_step.tool_id
-        # Always allow the exit_plan_mode internal tool.
+        # Always allow internal tools that signal loop termination.
         if tool_id == "exit_plan_mode":
             return True
         # Root (depth=0) can use agent management tools to spawn and

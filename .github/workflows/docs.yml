@@ -29,7 +29,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv sync --group docs --extra tools --extra ha
+          uv sync --group docs --extra ha
 
       - name: Verify mkdocstrings imports
         run: .venv/bin/python -c "import meeseeks_core.common; print(meeseeks_core.common.__name__)"

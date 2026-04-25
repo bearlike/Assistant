@@ -79,6 +79,20 @@ export type EventRecord = {
   type: string;
   payload: Record<string, unknown>;
 };
+
+export interface WidgetReadyPayload {
+  widget_id: string;
+  session_id: string;
+  files: { "app.py": string; "data.json": string };
+  requirements: string[];
+  summary?: string;
+}
+
+export interface WidgetReadyEntry {
+  type: "widget_ready";
+  ts: string;
+  payload: WidgetReadyPayload;
+}
 export type DiffFile = {
   name: string;
   path: string;
@@ -177,7 +191,7 @@ export type PlanMeta = {
 };
 export type TimelineEntry = {
   id: string;
-  role: "user" | "assistant" | "plan";
+  role: "user" | "assistant" | "plan" | "widget";
   content: string;
   turnId: string;
   /** Timestamp of the underlying event. For user entries this is the user's
@@ -186,6 +200,7 @@ export type TimelineEntry = {
   ts?: string;
   turn?: TurnMeta;
   plan?: PlanMeta;
+  widget?: WidgetReadyPayload;
 };
 export type ParsedDiffFile = {
   name: string;
@@ -209,9 +224,22 @@ export type ParsedLine = {
   content: string;
 };
 
+export type AgentTreeNode = {
+  id: string;
+  parent_id: string | null;
+  depth: number;
+  task: string;
+  status: string;
+  steps_completed: number;
+  last_tool_id: string | null;
+  progress_note: string | null;
+  compaction_count: number;
+  result: { status: string; summary: string; content: string } | null;
+};
+
 export type LogEntry = {
   id: string;
-  type: "shell" | "diff" | "file_read" | "system" | "plan" | "permission" | "agent" | "agent_result" | "completion" | "agent_message" | "user_steer" | "compact";
+  type: "shell" | "diff" | "file_read" | "system" | "plan" | "permission" | "agent" | "agent_result" | "completion" | "agent_message" | "user_steer" | "compact" | "check_agents" | "root_steer" | "spawn_submit";
   content: string;
   title?: string;
   timestamp?: string;
@@ -269,6 +297,34 @@ export type LogEntry = {
   tokensAfter?: number;
   eventsSummarized?: number;
   compactMode?: string;
+  // check_agents fields (kind="agent_tree" tool result).
+  // parentId is reused from the sub_agent lifecycle fields above.
+  agents?: AgentTreeNode[];
+  rawText?: string;
+  wait?: boolean;
+  durationMs?: number;
+  waitedMs?: number;
+  // root_steer fields (steer_agent tool call)
+  steerAction?: string;
+  steerTargetPrefix?: string;
+  steerTargetFullId?: string;
+  steerTargetTask?: string;
+  steerMessage?: string;
+  steerResult?: string;
+  steerIsError?: boolean;
+  // spawn_submit fields (non-blocking spawn_agent tool call).
+  // The blocking case (with steps_used) keeps emitting agent_result.
+  spawnCaller?: string;
+  spawnChildId?: string;
+  spawnTask?: string;
+  spawnAgentType?: string;
+  spawnModel?: string;
+  spawnAllowedTools?: string[];
+  spawnDeniedTools?: string[];
+  spawnAcceptance?: string;
+  spawnExtras?: ReadonlyArray<readonly [string, string]>;
+  spawnMessage?: string;
+  spawnDurationMs?: number;
 };
 
 export type PlanStep = {

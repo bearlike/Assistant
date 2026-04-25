@@ -28,6 +28,12 @@ interface LogEventCardProps {
   accent: AccentColor;
   depth?: number;
   defaultExpanded?: boolean;
+  /**
+   * Optional content rendered between the header and the expand body and
+   * always visible — even when collapsed. Used by SpawnAgentCard for its
+   * branch-glyph row showing the parent → child relationship.
+   */
+  belowHeader?: ReactNode;
   children?: ReactNode;
 }
 
@@ -39,6 +45,7 @@ export function LogEventCard({
   accent,
   depth = 0,
   defaultExpanded = false,
+  belowHeader,
   children,
 }: LogEventCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -68,6 +75,7 @@ export function LogEventCard({
           />
         )}
       </div>
+      {belowHeader}
       {expanded && children && (
         <div className="px-3 pb-3 pt-0 border-t border-[hsl(var(--border))]">
           <div className="pt-2">{children}</div>

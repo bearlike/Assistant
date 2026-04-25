@@ -1,4 +1,4 @@
-import { EventRecord, LogEntry, PlanStep } from "../types";
+import { AgentTreeNode, EventRecord, LogEntry, PlanStep, WidgetReadyEntry, WidgetReadyPayload } from "../types";
 
 // ── Shared structured result parser ──────────────────────────────────
 // Tool results may be JSON strings with a `kind` discriminator.
@@ -16,6 +16,15 @@ export type ParsedResult =
       duration_ms?: number;
     }
   | { kind: "file"; path: string; text: string; total_lines?: number }
+  | {
+      kind: "agent_tree";
+      text: string;
+      agents: AgentTreeNode[];
+      parent_id: string;
+      wait?: boolean;
+      duration_ms?: number;
+      waited_ms?: number;
+    }
   | { kind: "raw"; text: string };
 
 /** Heuristic: text contains unified diff markers (--- a/... and +++ b/...). */
@@ -106,16 +115,44 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
   let planVersion = 0;
   let previousSteps: PlanStep[] = [];
 
-  // Build agent-id → model map from sub_agent start events (first pass)
+  // Build agent-id → model and agent-id → task maps from sub_agent start
+  // events (first pass). The task map lets the steer_agent renderer resolve
+  // an agent_id prefix back to a full id + task description.
   const agentModelMap = new Map<string, string>();
+  const agentTaskMap = new Map<string, string>();
   for (const event of events) {
     if (event.type === "sub_agent") {
       const p = event.payload || {};
-      if (p.action === "start" && typeof p.agent_id === "string" && typeof p.model === "string") {
-        agentModelMap.set(p.agent_id as string, p.model as string);
+      if (p.action === "start" && typeof p.agent_id === "string") {
+        if (typeof p.model === "string") {
+          agentModelMap.set(p.agent_id as string, p.model as string);
+        }
+        if (typeof p.detail === "string") {
+          agentTaskMap.set(p.agent_id as string, p.detail as string);
+        }
       }
     }
   }
+
+  // Resolve a (possibly truncated) agent_id prefix to a full {id, task} match
+  // when exactly one full agent id starts with the prefix. Returns null when
+  // ambiguous or absent.
+  const resolveAgentPrefix = (
+    prefix: string,
+  ): { id: string; task?: string } | null => {
+    if (!prefix) return null;
+    if (agentTaskMap.has(prefix)) {
+      return { id: prefix, task: agentTaskMap.get(prefix) };
+    }
+    const matches: string[] = [];
+    for (const id of agentTaskMap.keys()) {
+      if (id.startsWith(prefix)) matches.push(id);
+    }
+    if (matches.length === 1) {
+      return { id: matches[0], task: agentTaskMap.get(matches[0]) };
+    }
+    return null;
+  };
 
   for (const event of events) {
     if (event.type === "tool_result") {
@@ -137,7 +174,11 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         ? payload.model
         : eventAgentId ? agentModelMap.get(eventAgentId) : undefined;
 
-      // Parse AgentResult JSON from spawn_agent tool results
+      // Parse AgentResult JSON from spawn_agent tool results.
+      // Two payload shapes share tool_id="spawn_agent":
+      //   - Blocking sub-agent: AgentResult dict (has steps_used).
+      //   - Non-blocking root spawn: submit stub
+      //     {agent_id, status:"submitted", task, message}.
       if (toolId === "spawn_agent" && typeof result === "string") {
         try {
           const ar = JSON.parse(result);
@@ -155,11 +196,84 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
             });
             continue;
           }
+          if (typeof ar.agent_id === "string" && ar.status === "submitted") {
+            const inp = (payload.tool_input as Record<string, unknown>) || {};
+            const knownKeys = new Set([
+              "task", "model", "allowed_tools", "denied_tools",
+              "acceptance_criteria", "agent_type", "max_steps",
+            ]);
+            const extras: Array<[string, string]> = Object.entries(inp)
+              .filter(([k]) => !knownKeys.has(k))
+              .map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]);
+            const taskInput = typeof inp.task === "string" ? inp.task : "";
+            logs.push({
+              id: `spawn-submit-${idx++}`,
+              type: "spawn_submit",
+              content: "",
+              timestamp: event.ts,
+              spawnCaller: eventAgentId,
+              spawnChildId: String(ar.agent_id),
+              spawnTask: taskInput,
+              spawnAgentType: typeof inp.agent_type === "string" ? inp.agent_type : undefined,
+              spawnModel: typeof inp.model === "string" ? inp.model : undefined,
+              spawnAllowedTools: Array.isArray(inp.allowed_tools) ? inp.allowed_tools.map(String) : [],
+              spawnDeniedTools: Array.isArray(inp.denied_tools) ? inp.denied_tools.map(String) : [],
+              spawnAcceptance: typeof inp.acceptance_criteria === "string" ? inp.acceptance_criteria : undefined,
+              spawnExtras: extras,
+              spawnMessage: typeof ar.message === "string" ? ar.message : "",
+              spawnDurationMs: typeof payload.duration_ms === "number" ? payload.duration_ms : undefined,
+            });
+            continue;
+          }
         } catch { /* not JSON, fall through to shell */ }
+      }
+
+      // steer_agent → render as a chat line ("<root → agent-xxxxxx>").
+      // The result is always a short string ("Message sent.", "Agent xxx
+      // cancelled.", or "ERROR: ..."), so no JSON parse needed.
+      if (toolId === "steer_agent") {
+        const inp = (payload.tool_input as Record<string, unknown>) || {};
+        const action = typeof inp.action === "string" ? inp.action : "";
+        const targetPrefix = typeof inp.agent_id === "string" ? inp.agent_id : "";
+        const message = typeof inp.message === "string" ? inp.message : "";
+        const steerResult = typeof result === "string" ? result : "";
+        const resolved = resolveAgentPrefix(targetPrefix);
+        const isError = steerResult.startsWith("ERROR");
+        logs.push({
+          id: `steer-${idx++}`,
+          type: "root_steer",
+          content: message,
+          timestamp: event.ts,
+          steerAction: action,
+          steerTargetPrefix: targetPrefix,
+          steerTargetFullId: resolved?.id,
+          steerTargetTask: resolved?.task,
+          steerMessage: message,
+          steerResult,
+          steerIsError: isError,
+        });
+        continue;
       }
 
       // Parse structured result (diff, shell, or raw text)
       const parsedResult = parseStructuredResult(result);
+
+      // check_agents → dedicated CheckAgentsCard with hi-fi tree + raw tab.
+      if (toolId === "check_agents" && parsedResult.kind === "agent_tree") {
+        logs.push({
+          id: `check-agents-${idx++}`,
+          type: "check_agents",
+          content: "",
+          timestamp: event.ts,
+          agents: parsedResult.agents,
+          rawText: parsedResult.text,
+          parentId: parsedResult.parent_id,
+          wait: parsedResult.wait,
+          durationMs: parsedResult.duration_ms,
+          waitedMs: parsedResult.waited_ms,
+        });
+        continue;
+      }
 
       // File read result → dedicated FileReadCard
       if (parsedResult.kind === "file") {
@@ -451,7 +565,7 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
           timestamp: event.ts,
           agentId,
           depth,
-          detail: depth === 0 ? "meeseeks" : `agent-${agentId.slice(0, 6)}`,
+          detail: depth === 0 ? "root" : `agent-${agentId.slice(0, 6)}`,
         });
       }
     }
@@ -505,4 +619,18 @@ export function extractSummaryTesting(events: EventRecord[]): SummaryTesting {
     summary,
     testing
   };
+}
+
+/**
+ * Extract all widget_ready events from a session's event stream.
+ * Returns entries in the order they were emitted.
+ */
+export function extractWidgetEvents(events: EventRecord[]): WidgetReadyEntry[] {
+  return events
+    .filter((e) => e.type === "widget_ready" && e.payload != null)
+    .map((e) => ({
+      type: "widget_ready" as const,
+      ts: e.ts,
+      payload: e.payload as unknown as WidgetReadyPayload,
+    }));
 }

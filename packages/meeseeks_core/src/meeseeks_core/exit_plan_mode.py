@@ -309,7 +309,14 @@ class ExitPlanModeTool:
     and an event logger. After emitting ``plan_proposed``, sets a termination
     flag that the outer loop polls to exit cleanly — approval/rejection is
     handled episodically by ``SessionRuntime``.
+
+    Class-level ``tool_id`` and ``schema`` attributes let this class satisfy
+    the :class:`~meeseeks_core.session_tools.SessionTool` Protocol.
     """
+
+    tool_id: str = "exit_plan_mode"
+    schema: dict[str, object] = EXIT_PLAN_MODE_SCHEMA
+    modes: frozenset[str] = frozenset({"plan"})
 
     def __init__(
         self,

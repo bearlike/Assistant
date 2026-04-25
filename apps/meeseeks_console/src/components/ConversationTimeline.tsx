@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ChevronRight, Info, Loader2, Pencil } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { WidgetCard } from './WidgetCard';
 import { CopyButton } from './CopyButton';
 import { ScrollToBottom } from './ScrollToBottom';
 import { DiffFile, EventRecord, SessionUsage, TimelineEntry, TurnMeta } from '../types';
@@ -130,7 +131,9 @@ export function ConversationTimeline({
     <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto p-6 pb-24 space-y-10">
       {timeline.map((entry) =>
       <div key={entry.id} className="flex flex-col gap-2">
-          {entry.role === 'plan' ?
+          {entry.role === 'widget' ?
+        entry.widget && <WidgetCard widget={entry.widget} /> :
+          entry.role === 'plan' ?
         entry.plan && <PlanCard plan={entry.plan} onApprove={onApprovePlan} /> :
           entry.role === 'user' ?
         <div className="flex justify-end">

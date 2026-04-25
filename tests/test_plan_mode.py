@@ -1038,16 +1038,13 @@ class TestAllowedRootsIncludesPlanDir:
         finally:
             shutil.rmtree(plan_dir_for(sid), ignore_errors=True)
 
-    def test_resolve_safe_path_still_rejects_unrelated_tmp_paths(self):
-        """Widening the allowlist must not let /tmp/* outside the plan dir through."""
+    def test_resolve_safe_path_accepts_all_tmp_paths(self):
+        """All /tmp paths are accepted — file tools need to read/write widget output."""
         from meeseeks_tools.core import resolve_safe_path
 
-        try:
-            resolve_safe_path("/tmp/not-a-plan-file.sh")
-        except ValueError as exc:
-            assert "outside all allowed project roots" in str(exc)
-        else:
-            raise AssertionError("expected ValueError for /tmp/not-a-plan-file.sh")
+        # /tmp is in the allowed roots; any path under it must resolve without error.
+        resolved = resolve_safe_path("/tmp/not-a-plan-file.sh")
+        assert str(resolved).startswith("/tmp")
 
     def test_resolve_safe_path_still_rejects_system_paths(self):
         from meeseeks_tools.core import resolve_safe_path

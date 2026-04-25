@@ -73,6 +73,8 @@
     --diff-hunk-text: 213 80% 79%; /* _blue-200 */
 
     /* ── Code-surface tokens (Terminal, Diff, Review cards) — dark mode ── */
+    --widget-panel-bg: 220 5% 10%;       /* stlite widget panel background */
+
     --code-chrome: 220 5% 12%;          /* title bar / window chrome */
     --code-body: 220 5% 7%;             /* deep terminal body */
     --code-fg: 60 14% 92%;              /* primary text */
@@ -161,6 +163,8 @@
     --diff-hunk-text: 213 77% 56%; /* _blue-400 */
 
     /* ── Code-surface tokens — light mode ── */
+    --widget-panel-bg: 220 5% 96%;       /* stlite widget panel background */
+
     --code-chrome: 48 25% 92.2%;        /* #f0eee6 — Anthropic accent cream */
     --code-body: 0 0% 100%;             /* white — code on white */
     --code-fg: 0 0% 13%;                /* near-black */
@@ -291,4 +295,81 @@
   .animate-scroll-bounce {
     animation: none;
   }
+}
+
+/* Five-leaf bloom — branded "agent is working" loader. Outer group spins
+   clockwise while each petal pulses on a staggered wave. Uses theme tokens
+   so it adapts to light/dark. */
+@keyframes mss-bloom-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes mss-bloom-pulse {
+  0%, 100% { transform: scale(0.78); }
+  50%      { transform: scale(1.0); }
+}
+.mss-bloom-spin {
+  transform-origin: 100px 100px;
+  animation: mss-bloom-spin 7s linear infinite;
+}
+.mss-bloom-leaf {
+  transform-box: fill-box;
+  transform-origin: center;
+  fill: hsl(var(--primary));
+  opacity: 0.9;
+  animation: mss-bloom-pulse 1.8s ease-in-out infinite;
+}
+.mss-bloom-leaf-1 { animation-delay: 0s; }
+.mss-bloom-leaf-2 { animation-delay: 0.18s; }
+.mss-bloom-leaf-3 { animation-delay: 0.36s; }
+.mss-bloom-leaf-4 { animation-delay: 0.54s; }
+.mss-bloom-leaf-5 { animation-delay: 0.72s; }
+@media (prefers-reduced-motion: reduce) {
+  .mss-bloom-spin,
+  .mss-bloom-leaf {
+    animation: none;
+  }
+}
+
+/*
+ * Stlite widget scrollbar — always visible + theme-aware.
+ *
+ * The card clamps widget height at min(600px, 70vh) and scrolls the overflow
+ * inside `.stAppViewContainer`. Default browser behavior auto-hides the
+ * scrollbar on macOS / iOS / "overlay"-configured Windows, so users who
+ * don't know a widget can scroll never find the rest of the content.
+ * Forcing the track to render (via `overflow-y: scroll` on the element +
+ * an always-rendered ::webkit-scrollbar) gives them a visible affordance.
+ *
+ * Scoped to `.stAppViewContainer` only — this class exists exclusively
+ * inside stlite widgets, so the rest of the console's overlay scrollbars
+ * are untouched.
+ */
+.stAppViewContainer {
+  /* Firefox — `auto` width reads as ~16px (browser default) so the rail is
+     noticeable; `scrollbar-color` paints thumb against the widget bg. */
+  scrollbar-width: auto;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.55) hsl(var(--muted) / 0.4);
+}
+/* Chromium / WebKit get a slightly wider rail than the Firefox default so
+   it reads as "scrollable surface" at a glance rather than a hairline. */
+.stAppViewContainer::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+.stAppViewContainer::-webkit-scrollbar-track {
+  /* Faint rail so users can see the full scroll range, not just the thumb —
+     the key affordance that tells them "there's more content here." */
+  background-color: hsl(var(--muted) / 0.4);
+}
+.stAppViewContainer::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+  border-radius: 6px;
+  /* Transparent border + padding-box clip inset the thumb inside the rail
+     so the colored track is still visible around it. */
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.stAppViewContainer::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.75);
+  background-clip: padding-box;
 }

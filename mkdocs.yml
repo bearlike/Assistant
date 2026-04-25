@@ -88,7 +88,8 @@ nav:
       - Workspace & Execution:
           - Built-in Tools: features-builtin-tools.md
           - Web IDE: features-web-ide.md
-          - Code Intelligence (LSP): features-lsp.md
+          - Widgets: features-widgets.md
+          - Code Intelligence: features-lsp.md
           - External Tools (MCP): features-mcp.md
       - Composition & Delegation:
           - Sub-agents: features-agents.md

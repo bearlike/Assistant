@@ -23,6 +23,7 @@ from meeseeks_core.permissions import (
     load_permission_policy,
 )
 from meeseeks_core.session_store import SessionStoreBase, create_session_store
+from meeseeks_core.session_tools import SessionToolRegistry
 from meeseeks_core.skills import SkillRegistry, activate_skill
 from meeseeks_core.token_budget import get_token_budget
 from meeseeks_core.tool_registry import ToolRegistry, filter_specs, load_registry
@@ -99,6 +100,7 @@ class Orchestrator:
         # Uses the shared load_all_plugin_components() so the same logic is
         # reused by the API /skills and /tools endpoints (DRY).
         self._agent_registry = None
+        self._session_tool_registry = SessionToolRegistry()
         plugins_cfg = get_config().plugins
 
         if plugins_cfg.enabled:
@@ -119,16 +121,33 @@ class Orchestrator:
                 if pc.manifest is None:
                     continue
                 plugin_source = f"plugin:{pc.manifest.name}"
+                plugin_caps = pc.manifest.requires_capabilities
                 for sd in pc.skill_dirs:
-                    self._skill_registry.load_extra_dir(sd, source=plugin_source)
+                    self._skill_registry.load_extra_dir(
+                        sd,
+                        source=plugin_source,
+                        requires_capabilities=plugin_caps,
+                    )
                 for cf in pc.command_files:
-                    self._skill_registry.load_command_file(cf, source=plugin_source)
+                    self._skill_registry.load_command_file(
+                        cf,
+                        source=plugin_source,
+                        requires_capabilities=plugin_caps,
+                    )
+                plugin_root = pc.manifest.install_path if pc.manifest else ""
                 for af in pc.agent_files:
                     agent_def = parse_agent_file(_Path(af), source=plugin_source)
-                    if agent_def:
-                        self._agent_registry.register(agent_def)
+                    if agent_def is None:
+                        continue
+                    self._agent_registry.register(
+                        agent_def,
+                        capabilities=plugin_caps,
+                        plugin_root=plugin_root,
+                    )
             for hooks_json, plugin_root in fan_out.hooks_configs:
                 merge_plugin_hooks(self._hook_manager, hooks_json, plugin_root)
+            for entry in fan_out.session_tool_entries:
+                self._session_tool_registry.load_entry(entry)
             plugin_mcp_servers = fan_out.mcp_servers
         else:
             plugin_mcp_servers = {}
@@ -264,10 +283,17 @@ class Orchestrator:
                 builtin_ids = [s.tool_id for s in tool_specs if s.kind != "mcp"]
                 tool_specs = filter_specs(tool_specs, allowed=allowed_tools + builtin_ids)
 
+            # Resolve session capabilities once so every downstream lookup
+            # (slash-command skill activation, sub-agent catalog, activate_skill
+            # tool dispatch) sees the same client-advertised set.
+            session_caps = self._session_capabilities(session_id)
+
             # Skill invocation detection and hot-reload.
             self._skill_registry.maybe_reload()
             if skill_instructions is None:
-                _si, _ts = self._try_skill_invocation(user_query, tool_specs)
+                _si, _ts = self._try_skill_invocation(
+                    user_query, tool_specs, session_caps
+                )
                 if _si is not None:
                     skill_instructions = _si
                 if _ts is not None:
@@ -308,8 +334,11 @@ class Orchestrator:
                 skill_instructions=skill_instructions,
                 skill_registry=self._skill_registry,
                 agent_registry=self._agent_registry,
+                session_tool_registry=self._session_tool_registry,
+                allowed_tools=None,
                 cwd=self._cwd,
                 session_id=session_id,
+                session_capabilities=session_caps,
             )
             try:
                 task_queue, state = asyncio.run(
@@ -411,6 +440,29 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Session helpers (kept from original)
     # ------------------------------------------------------------------
+
+    def _session_capabilities(self, session_id: str) -> tuple[str, ...]:
+        """Return capability tuple advertised by the client for *session_id*.
+
+        Reads ``client_capabilities`` from the most recently appended
+        ``context`` event (set by the API from the
+        ``X-Meeseeks-Capabilities`` header). Returns an empty tuple on
+        any error or when the client advertised none.
+        """
+        from meeseeks_core.capabilities import parse_capabilities
+
+        try:
+            events = self._session_store.load_transcript(session_id)
+        except Exception:
+            return ()
+        advertised: object = None
+        for event in events:
+            if event.get("type") != "context":
+                continue
+            payload = event.get("payload")
+            if isinstance(payload, dict) and "client_capabilities" in payload:
+                advertised = payload["client_capabilities"]
+        return parse_capabilities(advertised)
 
     def _maybe_generate_title(self, session_id: str) -> None:
         """Kick off title generation in a daemon thread (non-blocking).
@@ -591,8 +643,13 @@ class Orchestrator:
         self,
         user_query: str,
         tool_specs: list,
+        session_capabilities: tuple[str, ...] = (),
     ) -> tuple[str | None, list | None]:
         """Detect ``/skill-name args`` in the query and activate the skill.
+
+        Honours capability gating so a slash command for a gated skill is
+        inert in sessions that haven't advertised the matching capability —
+        same semantics as the LLM's ``activate_skill`` tool dispatch.
 
         Returns ``(skill_instructions, scoped_tool_specs)`` on match,
         or ``(None, None)`` if the query is not a skill invocation.
@@ -605,7 +662,7 @@ class Orchestrator:
         name = parts[0].lstrip("/")
         args = parts[1] if len(parts) > 1 else ""
 
-        skill = self._skill_registry.get(name)
+        skill = self._skill_registry.get(name, session_capabilities)
         if skill is None:
             return None, None
 
