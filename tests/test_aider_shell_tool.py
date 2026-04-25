@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from meeseeks_core.classes import ActionStep
-from meeseeks_tools.integration import aider_shell_tool
-from meeseeks_tools.integration.aider_shell_tool import AiderShellTool
+from truss_core.classes import ActionStep
+from truss_tools.integration import aider_shell_tool
+from truss_tools.integration.aider_shell_tool import AiderShellTool
 
 
 def test_shell_tool_runs_command(monkeypatch, tmp_path):
@@ -94,7 +94,7 @@ def test_shell_tool_rejects_invalid_payload_type():
 
 def test_run_command_valid_cwd(tmp_path):
     """_run_command succeeds with a valid cwd."""
-    from meeseeks_tools.integration.aider_shell_tool import _run_command
+    from truss_tools.integration.aider_shell_tool import _run_command
 
     exit_code, output = _run_command("echo hello", str(tmp_path))
     assert exit_code == 0
@@ -103,7 +103,7 @@ def test_run_command_valid_cwd(tmp_path):
 
 def test_run_command_nonexistent_cwd(tmp_path):
     """_run_command returns error tuple for nonexistent cwd, not exception."""
-    from meeseeks_tools.integration.aider_shell_tool import _run_command
+    from truss_tools.integration.aider_shell_tool import _run_command
 
     exit_code, output = _run_command("echo hello", str(tmp_path / "does_not_exist"))
     assert exit_code != 0

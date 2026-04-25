@@ -7,9 +7,9 @@ services:
     volumes:
       - mongo-data:/data/db
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-meeseeks}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-meeseeks}
-      MONGO_INITDB_DATABASE: ${MEESEEKS_MONGODB_DATABASE:-meeseeks}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-truss}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-truss}
+      MONGO_INITDB_DATABASE: ${TRUSS_MONGODB_DATABASE:-truss}
     deploy:
       resources:
         limits:
@@ -20,13 +20,13 @@ services:
           cpus: '0.25'
 
   api:
-    image: ghcr.io/bearlike/meeseeks-api:latest
+    image: ghcr.io/bearlike/truss-api:latest
     pull_policy: build
     build:
       context: .
       dockerfile: docker/Dockerfile.api
       args:
-        BASE_IMAGE: ghcr.io/bearlike/meeseeks-base:latest
+        BASE_IMAGE: ghcr.io/bearlike/truss-base:latest
     network_mode: host
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     # Supplementary group so the api process can reach /var/run/docker.sock
@@ -42,25 +42,29 @@ services:
     volumes:
       - ./configs:/app/configs:ro
       - api-data:/app/data
-      # Plan-mode scratch dirs live at /tmp/meeseeks/plans/<session_id>/.
+      # Plan-mode scratch dirs live at /tmp/truss/plans/<session_id>/.
       # ``/tmp`` is inside the container's writable layer and would be wiped
       # on every rebuild; the named volume keeps plan markdown + revision
       # files across restarts. Survives ``docker compose down``; cleared
       # only by ``docker compose down -v`` or ``docker volume rm``.
-      - plans-data:/tmp/meeseeks/plans
+      - plans-data:/tmp/truss/plans
       # Web IDE: Docker SDK needs write access to the socket to create
       # code-server sibling containers. Deadline files bind-mounted into
-      # each IDE container live under /tmp/meeseeks-ide.
+      # each IDE container live under /tmp/truss-ide.
       - /var/run/docker.sock:/var/run/docker.sock
-      - /tmp/meeseeks-ide:/tmp/meeseeks-ide
+      - /tmp/truss-ide:/tmp/truss-ide
       # Project directories and init scripts — add in docker-compose.override.yml
       # (see docker-compose.override.example.yml for the template)
     environment:
-      - MEESEEKS_HOME=/app/data
-      - MEESEEKS_IDE_STATE_DIR=/tmp/meeseeks-ide
+      - TRUSS_HOME=/app/data
+      - TRUSS_IDE_STATE_DIR=/tmp/truss-ide
+      # CLAUDE_PLUGIN_ROOT is set at runtime from plugins.install_path in app.json
+      # (or $TRUSS_HOME/plugins/ by default). Override here or in docker.env
+      # to pin an explicit path.
+      - CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT:-}
 
   console:
-    image: ghcr.io/bearlike/meeseeks-console:latest
+    image: ghcr.io/bearlike/truss-console:latest
     pull_policy: always
     build:
       context: .
@@ -72,8 +76,8 @@ services:
 
   ide-proxy:
     image: nginx:1.27-alpine
-    container_name: meeseeks-ide-proxy
-    networks: [meeseeks-ide]
+    container_name: truss-ide-proxy
+    networks: [truss-ide]
     # Loopback-only by default for safety. If an upstream edge proxy /
     # L7 gateway sits on a different host on your LAN, publish this on
     # the right interface via docker-compose.override.yml — see
@@ -84,9 +88,9 @@ services:
     restart: unless-stopped
 
 networks:
-  meeseeks-ide:
+  truss-ide:
     driver: bridge
-    name: meeseeks-ide
+    name: truss-ide
 
 volumes:
   api-data:

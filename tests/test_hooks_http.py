@@ -5,9 +5,9 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock, patch
 
-from meeseeks_core.classes import ActionStep
-from meeseeks_core.config import HookEntry, HooksConfig
-from meeseeks_core.hooks import HookManager
+from truss_core.classes import ActionStep
+from truss_core.config import HookEntry, HooksConfig
+from truss_core.hooks import HookManager
 
 
 def _step(tool_id: str = "read_file", operation: str = "get") -> ActionStep:
@@ -22,7 +22,7 @@ class TestHttpHookFactory:
         manager = HookManager.load_from_config(config)
         assert len(manager.pre_tool_use) == 1
 
-        with patch("meeseeks_core.hooks._post_json") as mock_post:
+        with patch("truss_core.hooks._post_json") as mock_post:
             step = _step()
             result = manager.run_pre_tool_use(step)
             assert result is step
@@ -42,7 +42,7 @@ class TestHttpHookFactory:
         )
         manager = HookManager.load_from_config(config)
 
-        with patch("meeseeks_core.hooks._post_json") as mock_post:
+        with patch("truss_core.hooks._post_json") as mock_post:
             manager.run_pre_tool_use(_step("read_file"))
             time.sleep(0.05)
             mock_post.assert_not_called()
@@ -58,7 +58,7 @@ class TestHttpHookFactory:
         mock_result = MagicMock()
         mock_result.content = "some output"
 
-        with patch("meeseeks_core.hooks._post_json") as mock_post:
+        with patch("truss_core.hooks._post_json") as mock_post:
             manager.run_post_tool_use(_step(), mock_result)
             time.sleep(0.1)
             mock_post.assert_called_once()
@@ -72,7 +72,7 @@ class TestHttpHookFactory:
         )
         manager = HookManager.load_from_config(config)
 
-        with patch("meeseeks_core.hooks._post_json") as mock_post:
+        with patch("truss_core.hooks._post_json") as mock_post:
             manager.run_on_session_start("sess-123")
             time.sleep(0.1)
             mock_post.assert_called_once()
@@ -84,7 +84,7 @@ class TestHttpHookFactory:
         config = HooksConfig(on_session_end=[HookEntry(type="http", url="http://example.com/end")])
         manager = HookManager.load_from_config(config)
 
-        with patch("meeseeks_core.hooks._post_json") as mock_post:
+        with patch("truss_core.hooks._post_json") as mock_post:
             manager.run_on_session_end("sess-456", error="timeout")
             time.sleep(0.1)
             mock_post.assert_called_once()
@@ -109,7 +109,7 @@ class TestSessionEnvEnrichment:
 
     def test_session_start_passes_session_id(self) -> None:
         config = HooksConfig(
-            on_session_start=[HookEntry(type="command", command="echo $MEESEEKS_SESSION_ID")]
+            on_session_start=[HookEntry(type="command", command="echo $TRUSS_SESSION_ID")]
         )
         manager = HookManager.load_from_config(config)
 
@@ -117,7 +117,7 @@ class TestSessionEnvEnrichment:
             manager.run_on_session_start("test-session-id")
             mock_run.assert_called_once()
             env = mock_run.call_args[1]["env"]
-            assert env["MEESEEKS_SESSION_ID"] == "test-session-id"
+            assert env["TRUSS_SESSION_ID"] == "test-session-id"
 
     def test_session_end_passes_session_id_and_error(self) -> None:
         config = HooksConfig(on_session_end=[HookEntry(type="command", command="echo test")])
@@ -127,5 +127,5 @@ class TestSessionEnvEnrichment:
             manager.run_on_session_end("sess-789", error="failed")
             mock_run.assert_called_once()
             env = mock_run.call_args[1]["env"]
-            assert env["MEESEEKS_SESSION_ID"] == "sess-789"
-            assert env["MEESEEKS_ERROR"] == "failed"
+            assert env["TRUSS_SESSION_ID"] == "sess-789"
+            assert env["TRUSS_ERROR"] == "failed"

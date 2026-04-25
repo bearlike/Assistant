@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from meeseeks_core.config import AppConfig, PluginsConfig, resolve_meeseeks_home
+from truss_core.config import AppConfig, PluginsConfig, resolve_truss_home
 
 
 def test_plugins_config_defaults():
@@ -49,7 +49,7 @@ def test_plugins_config_coerce_types():
 
 def test_plugins_resolve_install_dir():
     cfg = PluginsConfig()
-    assert cfg.resolve_install_dir() == resolve_meeseeks_home() / "plugins"
+    assert cfg.resolve_install_dir() == resolve_truss_home() / "plugins"
 
 
 def test_plugins_resolve_install_dir_custom():
@@ -61,7 +61,7 @@ def test_plugins_resolve_install_dir_custom():
 # Tests for plugins.py functions
 # ---------------------------------------------------------------------------
 
-from meeseeks_core.plugins import (  # noqa: E402
+from truss_core.plugins import (  # noqa: E402
     discover_installed_plugins,
     discover_marketplace_plugins,
     discover_plugin_components,
@@ -197,7 +197,7 @@ def test_discover_plugin_components(tmp_path):
 
 
 def test_discover_plugin_components_mcp_native_format(tmp_path):
-    """Test that Meeseeks native MCP format (with top-level 'servers') is handled."""
+    """Test that Truss native MCP format (with top-level 'servers') is handled."""
     plugin_dir = tmp_path / "native-mcp"
     plugin_dir.mkdir()
     (plugin_dir / ".claude-plugin").mkdir()
@@ -421,7 +421,7 @@ def test_discover_marketplace_plugins_installed_false(tmp_path):
 # Tests for SkillRegistry plugin extensions
 # ---------------------------------------------------------------------------
 
-from meeseeks_core.skills import SkillRegistry, SkillSpec  # noqa: E402
+from truss_core.skills import SkillRegistry, SkillSpec  # noqa: E402
 
 
 def test_skill_registry_load_extra_dir(tmp_path):
