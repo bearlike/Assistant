@@ -41457,7 +41457,13 @@ silently ignored (same semantics as the subtree skill discovery).</p>
 
               <details class="mkdocstrings-source">
                 <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/agent_registry.py</code></summary>
-                <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">219</span>
+                <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">213</span>
+<span class="normal">214</span>
+<span class="normal">215</span>
+<span class="normal">216</span>
+<span class="normal">217</span>
+<span class="normal">218</span>
+<span class="normal">219</span>
 <span class="normal">220</span>
 <span class="normal">221</span>
 <span class="normal">222</span>
@@ -41523,13 +41529,7 @@ silently ignored (same semantics as the subtree skill discovery).</p>
 <span class="normal">282</span>
 <span class="normal">283</span>
 <span class="normal">284</span>
-<span class="normal">285</span>
-<span class="normal">286</span>
-<span class="normal">287</span>
-<span class="normal">288</span>
-<span class="normal">289</span>
-<span class="normal">290</span>
-<span class="normal">291</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">AgentRegistry</span><span class="p">:</span>
+<span class="normal">285</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">AgentRegistry</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Registry of agent definitions.</span>
 
 <span class="sd">    First-registered agent wins — later registrations with the same name are</span>
@@ -41636,7 +41636,13 @@ advertised are treated as if they don't exist.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/agent_registry.py</code></summary>
-              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">255</span>
+              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">249</span>
+<span class="normal">250</span>
+<span class="normal">251</span>
+<span class="normal">252</span>
+<span class="normal">253</span>
+<span class="normal">254</span>
+<span class="normal">255</span>
 <span class="normal">256</span>
 <span class="normal">257</span>
 <span class="normal">258</span>
@@ -41644,13 +41650,7 @@ advertised are treated as if they don't exist.</p>
 <span class="normal">260</span>
 <span class="normal">261</span>
 <span class="normal">262</span>
-<span class="normal">263</span>
-<span class="normal">264</span>
-<span class="normal">265</span>
-<span class="normal">266</span>
-<span class="normal">267</span>
-<span class="normal">268</span>
-<span class="normal">269</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span>
+<span class="normal">263</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">session_capabilities</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
@@ -41687,9 +41687,9 @@ advertised are treated as if they don't exist.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/agent_registry.py</code></summary>
-              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">271</span>
-<span class="normal">272</span>
-<span class="normal">273</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">list_all</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">AgentDef</span><span class="p">]:</span>
+              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">265</span>
+<span class="normal">266</span>
+<span class="normal">267</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">list_all</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">AgentDef</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Return all registered agent definitions.&quot;&quot;&quot;</span>
     <span class="k">return</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_agents</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
 </code></pre></div></td></tr></table></div></div>
@@ -41722,7 +41722,13 @@ locate the plugin's on-disk assets.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/agent_registry.py</code></summary>
-              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">229</span>
+              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">223</span>
+<span class="normal">224</span>
+<span class="normal">225</span>
+<span class="normal">226</span>
+<span class="normal">227</span>
+<span class="normal">228</span>
+<span class="normal">229</span>
 <span class="normal">230</span>
 <span class="normal">231</span>
 <span class="normal">232</span>
@@ -41740,13 +41746,7 @@ locate the plugin's on-disk assets.</p>
 <span class="normal">244</span>
 <span class="normal">245</span>
 <span class="normal">246</span>
-<span class="normal">247</span>
-<span class="normal">248</span>
-<span class="normal">249</span>
-<span class="normal">250</span>
-<span class="normal">251</span>
-<span class="normal">252</span>
-<span class="normal">253</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">register</span><span class="p">(</span>
+<span class="normal">247</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">register</span><span class="p">(</span>
     <span class="bp">self</span><span class="p">,</span>
     <span class="n">agent_def</span><span class="p">:</span> <span class="n">AgentDef</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
@@ -41795,19 +41795,19 @@ agents stay invisible to sessions that don't advertise them.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/agent_registry.py</code></summary>
-              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">279</span>
+              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">273</span>
+<span class="normal">274</span>
+<span class="normal">275</span>
+<span class="normal">276</span>
+<span class="normal">277</span>
+<span class="normal">278</span>
+<span class="normal">279</span>
 <span class="normal">280</span>
 <span class="normal">281</span>
 <span class="normal">282</span>
 <span class="normal">283</span>
 <span class="normal">284</span>
-<span class="normal">285</span>
-<span class="normal">286</span>
-<span class="normal">287</span>
-<span class="normal">288</span>
-<span class="normal">289</span>
-<span class="normal">290</span>
-<span class="normal">291</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_catalog</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_capabilities</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">())</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="normal">285</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_catalog</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_capabilities</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">())</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Render a compact agent catalog for system prompt injection.</span>
 
 <span class="sd">    Applies capability filtering before rendering so capability-gated</span>
@@ -41842,9 +41842,9 @@ agents stay invisible to sessions that don't advertise them.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>packages/meeseeks_core/src/meeseeks_core/agent_registry.py</code></summary>
-              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">275</span>
-<span class="normal">276</span>
-<span class="normal">277</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">visible_for</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_capabilities</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">AgentDef</span><span class="p">]:</span>
+              <div class="codehilite"><div class="table-wrapper"><table class="codehilitetable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">269</span>
+<span class="normal">270</span>
+<span class="normal">271</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">visible_for</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">session_capabilities</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">AgentDef</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Return agents visible given the session&#39;s advertised capabilities.&quot;&quot;&quot;</span>
     <span class="k">return</span> <span class="n">filter_by_capabilities</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_agents</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span> <span class="n">session_capabilities</span><span class="p">)</span>
 </code></pre></div></td></tr></table></div></div>
@@ -42030,13 +42030,7 @@ Meeseeks tool ID).</p>
 <span class="normal">202</span>
 <span class="normal">203</span>
 <span class="normal">204</span>
-<span class="normal">205</span>
-<span class="normal">206</span>
-<span class="normal">207</span>
-<span class="normal">208</span>
-<span class="normal">209</span>
-<span class="normal">210</span>
-<span class="normal">211</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">parse_agent_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">AgentDef</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="normal">205</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">parse_agent_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">AgentDef</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Parse an ``agents/*.md`` file into an :class:`AgentDef`, or ``None`` on failure.&quot;&quot;&quot;</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="n">raw</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">read_text</span><span class="p">(</span><span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span>
@@ -42115,16 +42109,10 @@ Meeseeks tool ID).</p>
 
     <span class="c1"># Capability gating. Accept either ``requires-capabilities`` (list) or</span>
     <span class="c1"># ``requires-capability`` (scalar string); merge if both are given.</span>
-    <span class="n">list_form</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;requires-capabilities&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;requires-capabilities&quot;</span><span class="p">),</span> <span class="nb">list</span><span class="p">)</span>
-        <span class="k">else</span> <span class="p">[]</span>
-    <span class="p">)</span>
-    <span class="n">scalar_form</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;requires-capability&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;requires-capability&quot;</span><span class="p">),</span> <span class="nb">str</span><span class="p">)</span>
-        <span class="k">else</span> <span class="s2">&quot;&quot;</span>
-    <span class="p">)</span>
+    <span class="n">_raw_list</span> <span class="o">=</span> <span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;requires-capabilities&quot;</span><span class="p">)</span>
+    <span class="n">list_form</span><span class="p">:</span> <span class="nb">list</span> <span class="o">=</span> <span class="n">_raw_list</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">_raw_list</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span> <span class="k">else</span> <span class="p">[]</span>
+    <span class="n">_raw_scalar</span> <span class="o">=</span> <span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;requires-capability&quot;</span><span class="p">)</span>
+    <span class="n">scalar_form</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">_raw_scalar</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">_raw_scalar</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
     <span class="n">requires_capabilities</span> <span class="o">=</span> <span class="n">parse_capabilities</span><span class="p">([</span><span class="o">*</span><span class="n">list_form</span><span class="p">,</span> <span class="n">scalar_form</span><span class="p">])</span>
 
     <span class="c1"># Body: everything after the closing frontmatter ---</span>
