@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import tiktoken
-from jinja2 import Environment, PackageLoader
+from jinja2 import Environment, PackageLoader, TemplateNotFound
 from loguru import logger as loguru_logger
 
 from meeseeks_core.config import get_config_value
@@ -443,6 +443,80 @@ def format_tool_input(tool_input: object) -> str:
     return str(tool_input)
 
 
+def render_jinja_prompt(name: str, **variables: object) -> str:
+    """Render a Jinja2 prompt template from ``meeseeks_core/prompts/``.
+
+    Looks up ``{name}.j2`` first, falls back to ``{name}.txt`` for
+    backward-compatibility with existing prompts that use Jinja2 syntax
+    inside ``.txt`` files (e.g. ``homeassistant-*.txt``).
+
+    Args:
+        name: Template stem without extension.
+        **variables: Keyword variables bound to the template.
+
+    Returns:
+        Rendered prompt string.
+
+    Raises:
+        RuntimeError: If no template is found (chained from the final
+            ``jinja2.TemplateNotFound`` via ``__cause__``). Other Jinja2
+            errors (``TemplateSyntaxError``, ``UndefinedError``) propagate
+            directly and are NOT swallowed.
+    """
+    log = get_logger(name="core.common.render_jinja_prompt")
+    template_env = Environment(loader=PackageLoader("meeseeks_core", "prompts"))
+    last_exc: TemplateNotFound | None = None
+    for suffix in (".j2", ".txt"):
+        try:
+            template = template_env.get_template(f"{name}{suffix}")
+        except TemplateNotFound as exc:
+            last_exc = exc
+            continue
+        log.debug("Rendered prompt `{}{}`", name, suffix)
+        return template.render(**variables)
+    raise RuntimeError(f"No template found for prompt '{name}'") from last_exc
+
+
+def pydantic_to_openai_tool(model_cls: type, *, name: str) -> dict[str, object]:
+    """Build an OpenAI function-calling tool dict from a Pydantic model.
+
+    Uses the model's docstring as the tool description and its JSON schema
+    as the parameters. Strips Pydantic's ``title`` fields that are irrelevant
+    to function-calling. Output matches the shape used by the existing
+    hand-written internal tool schemas (``SPAWN_AGENT_SCHEMA``, etc.) so
+    callers can migrate piecewise.
+
+    Args:
+        model_cls: A Pydantic ``BaseModel`` subclass defining the tool args.
+        name: The tool name (function name visible to the LLM).
+
+    Returns:
+        ``{"type": "function", "function": {"name", "description", "parameters"}}``
+
+    Raises:
+        TypeError: If ``model_cls`` is not a Pydantic ``BaseModel`` subclass.
+    """
+    from pydantic import BaseModel as _BM
+
+    if not (isinstance(model_cls, type) and issubclass(model_cls, _BM)):
+        raise TypeError(
+            "pydantic_to_openai_tool requires a Pydantic BaseModel subclass"
+        )
+    params = model_cls.model_json_schema()
+    params.pop("title", None)
+    for prop in params.get("properties", {}).values():
+        if isinstance(prop, dict):
+            prop.pop("title", None)
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": (model_cls.__doc__ or "").strip(),
+            "parameters": params,
+        },
+    }
+
+
 def ha_render_system_prompt(
     all_entities: object | None = None,
     name: str = "homeassistant-set-state",
@@ -450,12 +524,4 @@ def ha_render_system_prompt(
     """Render the Home Assistant Jinja2 system prompt."""
     if all_entities is not None:
         all_entities = str(all_entities).strip()
-    logging = get_logger(name="core.common.render_system_prompt")
-
-    # TODO: Catch and log TemplateNotFound when necessary.
-    template_env = Environment(loader=PackageLoader("meeseeks_core", "prompts"))
-    template = template_env.get_template(f"{name}.txt")
-    logging.debug("Render system prompt for `{}`", name)
-    del logging
-
-    return template.render(ALL_ENTITIES=all_entities)
+    return render_jinja_prompt(name, ALL_ENTITIES=all_entities)

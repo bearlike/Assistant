@@ -262,6 +262,11 @@ class AgentHypervisor:
         async with self._lock:
             return list(self._agents.values())
 
+    async def list_visible(self, exclude_agent_id: str | None = None) -> list[AgentHandle]:
+        """Snapshot of agents excluding the caller — used by check_agents."""
+        async with self._lock:
+            return [h for h in self._agents.values() if h.agent_id != exclude_agent_id]
+
     # ------------------------------------------------------------------
     # Budget & monitoring  (Ref: [AgentCgroup §4.2], [DeepMind-Delegation §4.4])
     # ------------------------------------------------------------------

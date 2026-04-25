@@ -1,14 +1,11 @@
 import { useRegisterSW } from "virtual:pwa-register/react";
 import { Button } from "./ui/button";
 
-// Poll every 60min while the tab is open; also check on tab-focus.
-// Workbox compares the SW bytes — if unchanged, no-op.
-const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
-// If the SW skip-waiting + controllerchange handshake doesn't reload the
-// page within this window, fall back to a manual cache-clear + hard reload.
-// Covers: no-waiting-SW (state desync), dev mode (no SW registered),
-// private browsing (caches API restricted), or any silent rejection.
-const RELOAD_FALLBACK_MS = 1500;
+// Poll every 15min while the tab is open; also check on tab-focus.
+// Workbox compares the SW bytes — if unchanged, no-op. Shorter interval
+// means users see the update prompt soon after a deploy instead of up to
+// an hour later.
+const UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
 
 async function clearAllCaches() {
   if (!("caches" in window)) return;
@@ -17,6 +14,16 @@ async function clearAllCaches() {
     await Promise.all(keys.map((k) => caches.delete(k)));
   } catch {
     // No-op: caches API is best-effort here; the hard reload still runs.
+  }
+}
+
+async function unregisterAllServiceWorkers() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map((r) => r.unregister()));
+  } catch {
+    // No-op: unregister is best-effort; the hard reload still runs.
   }
 }
 
@@ -40,17 +47,18 @@ export function UpdatePrompt() {
   if (!needRefresh) return null;
 
   const handleReload = () => {
-    // Happy path: updateServiceWorker(true) reloads the page itself once
-    // the new SW takes control. The safety timer below only fires if that
-    // handshake silently no-ops — in which case we clear caches and force
-    // a hard reload so the user is never stuck on a stale build.
-    const safety = window.setTimeout(() => {
-      void clearAllCaches().finally(() => window.location.reload());
-    }, RELOAD_FALLBACK_MS);
-    void updateServiceWorker(true).catch(() => {
-      window.clearTimeout(safety);
-      void clearAllCaches().finally(() => window.location.reload());
-    });
+    // Unconditional full reset on every Reload click: unregister every SW,
+    // wipe the Cache Storage, then hard-reload. This makes the refresh truly
+    // "complete" — no dependence on the skipWaiting/controllerchange handshake,
+    // no stale precache surviving into the next page load. Users who miss a
+    // deploy never end up in the stale-bundle 404 trap again.
+    void Promise.all([unregisterAllServiceWorkers(), clearAllCaches()])
+      .finally(() => {
+        // updateServiceWorker(true) is redundant now but kept in case the
+        // unregister/clear race with the hard reload loses on some browsers.
+        void updateServiceWorker(true).catch(() => {});
+        window.location.reload();
+      });
   };
 
   return (

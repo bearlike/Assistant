@@ -113,6 +113,58 @@ The skill registry checks file modification times and reloads changed files betw
 
 ---
 
+## Capability overlay {#capability-overlay}
+
+Capabilities are opaque string ids advertised by the client (e.g. `stlite`). They gate which agents and skills are visible to a given session. The model never sees a gated entry — the tool schema is not bound, the agent definition does not enter the spawn catalog, and the skill catalog line is omitted.
+
+### Data flow
+
+```mermaid
+flowchart LR
+    A[Client request] -- X-Meeseeks-Capabilities: stlite --> B[API route]
+    B -- client_capabilities on context event --> C[SessionStore]
+    C --> D[Orchestrator]
+    D -- tuple str, ... --> E[ToolUseLoop]
+    D -- session_capabilities --> F[AgentRegistry.visible_for]
+    D -- session_capabilities --> G[SkillRegistry.list_auto_invocable<br/>SkillRegistry.list_user_invocable]
+    F --> H[Spawn catalog / system prompt]
+    G --> H
+    E --> I[filter_specs on bound tool schema]
+```
+
+1. The HTTP layer reads `X-Meeseeks-Capabilities` (comma-separated) and passes it through to session creation.
+2. The value is persisted on the session's context event as `client_capabilities`. It survives compaction because it lives on the event transcript, not in the LLM message array.
+3. `Orchestrator` reads the event once per session, normalises it through `parse_capabilities()`, and threads a `tuple[str, ...]` into the `ToolUseLoop` constructor. The tuple is immutable for the lifetime of the session.
+4. `AgentRegistry.visible_for(session_capabilities)` and `SkillRegistry.list_auto_invocable(session_capabilities)` / `list_user_invocable(session_capabilities)` apply the filter at every render of their catalogs.
+
+### Filter implementation
+
+`packages/meeseeks_core/src/meeseeks_core/capabilities.py::filter_by_capabilities` is the single filter. An item whose `requires_capabilities` tuple is a subset of the session's set is included; an empty `requires_capabilities` is always included. Ordering and duplication of `session_capabilities` do not matter — comparison uses set semantics.
+
+| Function | Purpose |
+|---|---|
+| `parse_capabilities(raw)` | Normalise a header value, frontmatter field, or manifest field into a sorted, deduped, trimmed `tuple[str, ...]`. Accepts `None`, `str`, or `list[str]`; other shapes return `()`. |
+| `filter_by_capabilities(items, session_capabilities)` | Return the subset of items visible to the session. |
+| `overlay_capabilities(spec, extra)` | Return a copy of `spec` with `extra` unioned into its `requires_capabilities`. Used to fan a plugin-level capability out over every contributed agent and skill. |
+
+### Sources of `requires_capabilities`
+
+Capabilities can be declared at three levels. They are combined as a union at discovery time.
+
+| Source | Where it lives | Scope |
+|---|---|---|
+| `AgentDef` frontmatter | `---\nrequires-capabilities: [stlite]\n---` block in an `agents/*.md` file | Single agent |
+| `SkillSpec` frontmatter | Same block in a `SKILL.md` file | Single skill |
+| Plugin manifest | `"requires-capabilities": ["stlite"]` in `plugin.json` | Every agent and skill the plugin contributes |
+
+Plugin-level declarations are applied via `overlay_capabilities()` during discovery: the plugin's capabilities are unioned onto each contributed spec before the spec enters the registry. Authors never repeat a bundle-level capability per file.
+
+### Tool gating
+
+Session tools bound to a gated agent are also hidden. When a session does not advertise `stlite`, the `st-widget-builder` agent is not in the spawn catalog, so the `submit_widget` session tool is never instantiated. No tool-schema filtering is required at the `filter_specs()` level for this path — the agent gate is upstream of binding.
+
+---
+
 ## Sub-agents and the hypervisor {#sub-agents}
 
 Every session has a single `AgentHypervisor` instance shared across the entire agent tree. It has two layers.
@@ -427,6 +479,102 @@ flowchart TD
 **Precedence.** Plugin skills do not override personal (`~/.claude/skills/`) or project-local (`.claude/skills/`) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name. Plugin hooks are format-translated and merged into the live `HooksConfig`.
 
 `PluginsConfig` lives in `config.py` and defines `registry_paths` and `marketplaces`. The CLI exposes `/plugins`; the API exposes `GET/POST /api/plugins`, `GET/POST /api/plugins/marketplace`, and `DELETE /api/plugins/<name>`; the console renders `PluginsView`.
+
+See [Session tools](#session-tools) for plugin-contributed per-agent stateful tools.
+
+### Built-in plugin scan path
+
+A fourth scan source sits alongside the registry-driven paths: the directory `packages/meeseeks_core/src/meeseeks_core/builtin_plugins/`. Any plugin checked in under this path is discovered through the **same** pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin — manifest, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`, `session_tools` — with no `installed_plugins.json` entry required.
+
+The path is resolved at runtime via `importlib.resources.files("meeseeks_core") / "builtin_plugins"` so discovery works identically for editable installs (`pip install -e .`), wheels, and zipapps. The scanner iterates every immediate subdirectory that contains a `.claude-plugin/plugin.json`.
+
+Currently bundled: `widget_builder/` (declares `requires-capabilities: ["stlite"]`). Other bundles slot in by dropping a plugin-shaped directory next to it. No discovery code needs to change.
+
+### Path substitution
+
+Plugin-owned agent bodies and skill bodies can reference three placeholders. Substitution is a single linear `str.replace` pass per placeholder — there is no template engine, no expression language, and bodies with no placeholders are byte-identical after the pass.
+
+| Placeholder | Resolved at | Value |
+|---|---|---|
+| `${CLAUDE_PLUGIN_ROOT}` | Plugin discovery | Absolute path to the plugin's install directory on disk |
+| `${SESSION_ID}` | Agent spawn | The current session's id |
+| `${MEESEEKS_WIDGET_ROOT}` | Agent spawn | Widget-builder output root; supports `:-` default syntax |
+
+`${CLAUDE_PLUGIN_ROOT}` is also substituted inside `.mcp.json` and `hooks/hooks.json` at discovery time, as noted above. `${SESSION_ID}` and `${MEESEEKS_WIDGET_ROOT}` are agent-body-only and resolve inside `spawn_agent` just before the body is handed to the child `ToolUseLoop`.
+
+---
+
+## Session tools {#session-tools}
+
+A **session tool** is a per-agent stateful tool — a tool whose lifecycle is coupled to one specific agent instance rather than the global `ToolRegistry`. The handler holds state (accumulated across calls within the agent's run), declares its own OpenAI function schema, and can signal clean loop termination independently of the model's final text response. The core `ExitPlanModeTool` is a session tool. The widget-builder's `SubmitWidgetTool` is a session tool contributed by a plugin.
+
+Session tools are defined in `packages/meeseeks_core/src/meeseeks_core/session_tools.py`.
+
+### Protocol
+
+```python
+class SessionTool(Protocol):
+    tool_id: str
+    schema: dict[str, object]
+    modes: frozenset[str]
+
+    async def handle(self, action_step: ActionStep) -> MockSpeaker: ...
+    def should_terminate_run(self) -> bool: ...
+```
+
+| Member | Role |
+|---|---|
+| `tool_id` | Dispatch key. Must match the name the LLM sees in the bound schema. |
+| `schema` | OpenAI function schema — identical shape to any other bound tool. |
+| `modes` | Frozenset of orchestration modes (`"plan"` / `"act"`) the tool is valid in. Plugin tools default to `DEFAULT_SESSION_TOOL_MODES` = `{"act"}`; `ExitPlanModeTool` overrides to `{"plan"}`. |
+| `handle(action_step)` | Executes the call, returns a `MockSpeaker` with the tool result (consumed like any `ToolMessage`). |
+| `should_terminate_run()` | Returns `True` (once, consuming the flag) when the loop should exit cleanly after the current step. |
+
+### Registry and factories
+
+`SessionToolRegistry` holds one `SessionToolFactory` per `tool_id`. A factory is `Callable[[session_id, event_logger], SessionTool]` — construction is cheap and happens per agent.
+
+```mermaid
+sequenceDiagram
+    participant Plugin as plugin.json
+    participant Core as Session init
+    participant Reg as SessionToolRegistry
+    participant Loop as ToolUseLoop
+    participant Tool as SessionTool instance
+
+    Core->>Plugin: read session_tools[] entries
+    loop for each entry
+        Core->>Reg: load_entry({tool_id, module, class})
+        Reg->>Reg: importlib.import_module + getattr<br/>register SessionToolFactory
+    end
+    Note over Reg: factories populated, no instances yet
+    Loop->>Reg: build_for(agent.allowed_tools, session_id, event_logger)
+    Reg->>Tool: factory(session_id, event_logger)
+    Tool-->>Loop: SessionTool instance
+    Loop->>Loop: inject schema, wire dispatch,<br/>check should_terminate_run each step
+```
+
+### Plugin contract
+
+Plugins contribute session tools via a `session_tools` array in `plugin.json`:
+
+```json
+{
+  "session_tools": [
+    {
+      "tool_id": "submit_widget",
+      "module": "meeseeks_core.builtin_plugins.widget_builder.submit_widget",
+      "class": "SubmitWidgetTool"
+    }
+  ]
+}
+```
+
+`SessionToolRegistry.load_entry()` imports the class at session start and registers a factory. `build_for(allowed_tools, …)` instantiates one per-agent instance when an agent spawns with a matching `tool_id` in its `allowed_tools`. A broken plugin (missing fields, import error, constructor raises) is logged and skipped — it never crashes the host session.
+
+### Loop integration
+
+Inside `ToolUseLoop`, schema injection, dispatch, and termination all iterate a single `list[SessionTool]` — core's built-in session tools and plugin-contributed ones are handled by the same three call sites. There is no widget-specific branch; the only asymmetry is the built-in set (just `ExitPlanModeTool` today) versus the plugin-loaded set. Gated agents (see [Capability overlay](#capability-overlay)) never reach `build_for`, so a plugin session tool on a hidden agent is never instantiated.
 
 ---
 

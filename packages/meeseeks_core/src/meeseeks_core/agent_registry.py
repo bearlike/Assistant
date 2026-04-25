@@ -13,11 +13,17 @@ frozen dataclass pattern, same registry pattern with no-override semantics.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
+from meeseeks_core.capabilities import (
+    filter_by_capabilities,
+    overlay_capabilities,
+    parse_capabilities,
+)
 from meeseeks_core.common import get_logger
 
 logging = get_logger(name="core.agents")
@@ -89,6 +95,8 @@ class AgentDef:
     allowed_tools: list[str] | None = None
     denied_tools: list[str] | None = None
     model: str | None = None  # "inherit" becomes None
+    plugin_root: str = ""  # absolute path to the plugin that contributed this agent
+    requires_capabilities: tuple[str, ...] = ()
 
 
 # ------------------------------------------------------------------
@@ -173,6 +181,20 @@ def parse_agent_file(path: Path, source: str) -> AgentDef | None:
     if isinstance(model_raw, str) and model_raw.strip() and model_raw.strip() != "inherit":
         model = model_raw.strip()
 
+    # Capability gating. Accept either ``requires-capabilities`` (list) or
+    # ``requires-capability`` (scalar string); merge if both are given.
+    list_form = (
+        meta.get("requires-capabilities")
+        if isinstance(meta.get("requires-capabilities"), list)
+        else []
+    )
+    scalar_form = (
+        meta.get("requires-capability")
+        if isinstance(meta.get("requires-capability"), str)
+        else ""
+    )
+    requires_capabilities = parse_capabilities([*list_form, scalar_form])
+
     # Body: everything after the closing frontmatter ---
     body = raw[match.end() :]
 
@@ -185,6 +207,7 @@ def parse_agent_file(path: Path, source: str) -> AgentDef | None:
         allowed_tools=allowed_tools or None,
         denied_tools=denied_tools or None,
         model=model,
+        requires_capabilities=requires_capabilities,
     )
 
 
@@ -203,25 +226,67 @@ class AgentRegistry:
     def __init__(self) -> None:  # noqa: D107
         self._agents: dict[str, AgentDef] = {}
 
-    def register(self, agent_def: AgentDef) -> None:
-        """Register an agent.  Does NOT override existing entries."""
-        if agent_def.name not in self._agents:
-            self._agents[agent_def.name] = agent_def
+    def register(
+        self,
+        agent_def: AgentDef,
+        *,
+        capabilities: Iterable[str] = (),
+        plugin_root: str = "",
+    ) -> None:
+        """Register an agent.  Does NOT override existing entries.
 
-    def get(self, name: str) -> AgentDef | None:
-        """Return the agent definition with the given name, or ``None``."""
-        return self._agents.get(name)
+        When *capabilities* is non-empty, they are unioned into the
+        agent's ``requires_capabilities`` before registration — the
+        standard way a plugin fans its bundle-level requirements out
+        over every contributed agent.
+
+        When *plugin_root* is provided and the agent does not already
+        have one, it is stamped on so downstream consumers (e.g. the
+        ``${CLAUDE_PLUGIN_ROOT}`` substitution in ``spawn_agent``) can
+        locate the plugin's on-disk assets.
+        """
+        if agent_def.name in self._agents:
+            return
+        agent_def = overlay_capabilities(agent_def, capabilities)
+        if plugin_root and not agent_def.plugin_root:
+            agent_def = replace(agent_def, plugin_root=plugin_root)
+        self._agents[agent_def.name] = agent_def
+
+    def get(
+        self,
+        name: str,
+        session_capabilities: Iterable[str] = (),
+    ) -> AgentDef | None:
+        """Return the agent definition with the given name, or ``None``.
+
+        Agents gated by ``requires_capabilities`` that the session hasn't
+        advertised are treated as if they don't exist.
+        """
+        agent = self._agents.get(name)
+        if agent is None:
+            return None
+        visible = filter_by_capabilities([agent], session_capabilities)
+        return visible[0] if visible else None
 
     def list_all(self) -> list[AgentDef]:
         """Return all registered agent definitions."""
         return list(self._agents.values())
 
-    def render_catalog(self) -> str:
-        """Render a compact agent catalog for system prompt injection."""
-        if not self._agents:
+    def visible_for(self, session_capabilities: Iterable[str]) -> list[AgentDef]:
+        """Return agents visible given the session's advertised capabilities."""
+        return filter_by_capabilities(self._agents.values(), session_capabilities)
+
+    def render_catalog(self, session_capabilities: Iterable[str] = ()) -> str:
+        """Render a compact agent catalog for system prompt injection.
+
+        Applies capability filtering before rendering so capability-gated
+        agents stay invisible to sessions that don't advertise them.
+        """
+        visible = self.visible_for(session_capabilities)
+        if not visible:
             return ""
         lines = ["Available agent types (use spawn_agent with agent_type to delegate):"]
-        for agent in self._agents.values():
+        for agent in visible:
             lines.append(f"- {agent.name}: {agent.description}")
         return "\n".join(lines)
 

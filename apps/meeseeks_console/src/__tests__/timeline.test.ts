@@ -401,3 +401,92 @@ describe("buildTimeline — turn token usage (peak for input, sum for output)", 
     expect(turn?.tokenUsage?.outputTokens).toBe(380);
   });
 });
+
+describe("agent_message events — chat label in buildLogs", () => {
+  test("root agent (depth=0) is labelled 'root', not 'meeseeks'", () => {
+    const logs = buildLogs([
+      ev("2026-04-22T10:00:00Z", "agent_message", {
+        text: "hello from root",
+        agent_id: "aaaa-bbbb-cccc",
+        depth: 0,
+      }),
+    ]);
+    const msg = logs.filter(l => l.type === "agent_message");
+    expect(msg).toHaveLength(1);
+    expect(msg[0].detail).toBe("root");
+  });
+
+  test("sub-agent (depth=1) is labelled with truncated agent id", () => {
+    const logs = buildLogs([
+      ev("2026-04-22T10:00:01Z", "agent_message", {
+        text: "hello from sub",
+        agent_id: "dddd-eeee-ffff",
+        depth: 1,
+      }),
+    ]);
+    const msg = logs.filter(l => l.type === "agent_message");
+    expect(msg).toHaveLength(1);
+    expect(msg[0].detail).toBe("agent-dddd-e");
+  });
+});
+
+describe("buildTimeline — widget_ready events render inline in the turn", () => {
+  test("widget_ready inside an active turn produces a widget timeline entry", () => {
+    const widgetPayload = {
+      widget_id: "w1",
+      session_id: "s1",
+      files: { "app.py": "import streamlit as st", "data.json": "{}" },
+      requirements: ["plotly"],
+      summary: "demo",
+    };
+    const entries = buildTimeline([
+      ev("2026-04-23T08:00:00Z", "user", { text: "build a widget" }),
+      ev("2026-04-23T08:00:05Z", "widget_ready", widgetPayload),
+      ev("2026-04-23T08:00:10Z", "assistant", { text: "done" }),
+    ]);
+
+    const widgetEntries = entries.filter((e) => e.role === "widget");
+    expect(widgetEntries).toHaveLength(1);
+    expect(widgetEntries[0].widget).toEqual(widgetPayload);
+    expect(widgetEntries[0].turnId).toBe("turn-1");
+
+    // Widget entry must land between the user entry and the assistant entry
+    // so it renders inline inside the turn, not before or after.
+    const roles = entries.map((e) => e.role);
+    expect(roles).toEqual(["user", "widget", "assistant"]);
+  });
+
+  test("widget_ready outside of an open turn is ignored (no orphan entry)", () => {
+    // No `user` event to open a turn — widget should be dropped.
+    const entries = buildTimeline([
+      ev("2026-04-23T08:00:00Z", "widget_ready", {
+        widget_id: "w1",
+        session_id: "s1",
+        files: { "app.py": "", "data.json": "{}" },
+        requirements: [],
+      }),
+    ]);
+    expect(entries).toEqual([]);
+  });
+
+  test("multiple widget_ready events in one turn all render", () => {
+    const entries = buildTimeline([
+      ev("2026-04-23T08:00:00Z", "user", { text: "build two" }),
+      ev("2026-04-23T08:00:05Z", "widget_ready", {
+        widget_id: "first",
+        session_id: "s1",
+        files: { "app.py": "", "data.json": "{}" },
+        requirements: [],
+      }),
+      ev("2026-04-23T08:00:06Z", "widget_ready", {
+        widget_id: "second",
+        session_id: "s1",
+        files: { "app.py": "", "data.json": "{}" },
+        requirements: [],
+      }),
+      ev("2026-04-23T08:00:10Z", "assistant", { text: "done" }),
+    ]);
+    const widgets = entries.filter((e) => e.role === "widget");
+    expect(widgets.map((e) => e.widget?.widget_id)).toEqual(["first", "second"]);
+  });
+});

@@ -11,28 +11,31 @@ license = { text = "MIT" }
 dependencies = [
   "aniso8601>=10.0.1",
   "meeseeks-core>=0.0.10",
+  "meeseeks-tools>=0.0.10",
+  "meeseeks-cli>=0.0.10",
 ]
 
 [project.scripts]
 meeseeks = "meeseeks_cli.cli_master:main"
 
 [project.optional-dependencies]
-cli = ["meeseeks-cli>=0.0.10"]
 api = ["meeseeks-api>=0.0.10"]
 ha = ["meeseeks-ha-conversation>=0.0.10"]
-tools = ["meeseeks-tools>=0.0.10"]
 
 [dependency-groups]
 dev = [
+  "altair>=6.1.0",
   "autopep8==2.3.2",
   "flake8==7.3.0",
   "mongomock==4.3.0",
   "mypy==1.19.1",
+  "pandas>=2.3.3",
   "pre-commit==3.8.0",
   "pylint==3.3.9",
   "pytest==8.4.2",
   "pytest-cov==7.1.0",
   "ruff==0.15.8",
+  "streamlit>=1.56.0",
   "types-requests==2.33.0.20260327",
   "vulture==2.16",
 ]

@@ -19,6 +19,11 @@ function withBase(baseUrl: string, path: string) {
   return `${baseUrl.replace(/\/$/, "")}${path}`;
 }
 
+// Capability ID can be overridden at build time via VITE_WIDGET_CAPABILITY_ID
+// to stay in sync with server-side agent.widget_builder.capability_id.
+const WIDGET_CAPABILITY_ID =
+  (import.meta.env.VITE_WIDGET_CAPABILITY_ID as string | undefined) || "stlite";
+
 function authHeaders(apiKey?: string): HeadersInit {
   return apiKey ? { "X-API-Key": apiKey } : {};
 }
@@ -26,7 +31,8 @@ function authHeaders(apiKey?: string): HeadersInit {
 function headers(apiKey?: string): HeadersInit {
   return {
     ...authHeaders(apiKey),
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "X-Meeseeks-Capabilities": WIDGET_CAPABILITY_ID,
   };
 }
 

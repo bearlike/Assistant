@@ -30,4 +30,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/meeseeks_core"]
-include = ["src/meeseeks_core/prompts/**"]
+include = [
+  "src/meeseeks_core/prompts/**",
+  "src/meeseeks_core/builtin_plugins/**",
+]

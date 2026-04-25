@@ -1,4 +1,4 @@
-import { DiffFile, EventRecord, TimelineEntry, TurnMeta, TurnTokenUsage } from "../types";
+import { DiffFile, EventRecord, TimelineEntry, TurnMeta, TurnTokenUsage, WidgetReadyPayload } from "../types";
 import { extractUnifiedDiffs, mergeDiffFiles } from "./diff";
 import { parseStructuredResult } from "./logs";
 
@@ -132,6 +132,20 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
           timestamp: event.ts
         }
       });
+      continue;
+    }
+    if (event.type === "widget_ready") {
+      const payload = event.payload as unknown as WidgetReadyPayload | undefined;
+      if (payload) {
+        entries.push({
+          id: `widget-${event.ts}`,
+          role: "widget",
+          content: "",
+          turnId: currentTurnId,
+          ts: event.ts,
+          widget: payload,
+        });
+      }
       continue;
     }
     if (event.type === "plan_approved" || event.type === "plan_rejected") {

@@ -23,7 +23,7 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
 
 ## Overview
 
-Meeseeks is an AI assistant modeled as a conversation state machine. A top-level session binds an LLM to a filtered tool set via `bind_tools` and advances through a `submitted → running → terminal` lifecycle. Where parallelism is useful, the session issues `spawn_agent`; the hypervisor admits child sessions under a concurrency budget, constrains their tool scope, and resolves them into one of four terminal states — `completed`, `failed`, `cancelled`, or `rejected`. Transcripts are persisted per session, long histories are compacted, and summaries are retained across compactions.
+Meeseeks is an AI assistant modeled as a conversation state machine. A top-level session binds an LLM to a filtered tool set via `bind_tools` and advances through a `submitted → running → terminal` lifecycle. Where parallelism is useful, the session issues `spawn_agent`; the hypervisor admits child sessions under a concurrency budget, constrains their tool scope, and resolves them into one of four terminal states — `completed`, `failed`, `cancelled`, or `rejected`. Transcripts are persisted per session, long histories are compacted, and summaries are retained across compactions. The plugin and skill layers follow the Claude-ecosystem Agent Skills + Plugin standard, and the console renders interactive [stlite (Streamlit-in-WASM) widgets](docs/features-widgets.md) inline in the conversation timeline via the bundled `widget-builder` plugin.
 
 ### Meeseeks Console
 
@@ -35,8 +35,8 @@ The web console provides a task orchestration frontend backed by the REST API. I
         <th>Console landing page</th>
     </tr>
     <tr>
-        <td align="center"><img src="docs/meeseeks-console-02-tasks.jpg" alt="Meeseeks task detail page" height="360px"></td>
-        <td align="center"><img src="docs/meeseeks-console-01-front.jpg" alt="Meeseeks console landing page" height="360px"></td>
+        <td align="center"><img src="docs/meeseeks-console-02-tasks.png" alt="Meeseeks task detail page" height="360px"></td>
+        <td align="center"><img src="docs/meeseeks-console-01-front.png" alt="Meeseeks console landing page" height="360px"></td>
     </tr>
 </table>
 
@@ -59,6 +59,12 @@ The web console provides a task orchestration frontend backed by the REST API. I
         <td align="center"><img src="docs/meeseeks-console-05-plugins.jpg" alt="Plugins page with installed plugins and marketplace listings" height="300px"></td>
         <td align="center"><img src="docs/meeseeks-console-06-projects.jpg" alt="Projects page showing virtual workspaces shared across sessions" height="300px"></td>
     </tr>
+    <tr>
+        <th colspan="2">Widgets inline in chat</th>
+    </tr>
+    <tr>
+        <td colspan="2" align="center"><img src="docs/meeseeks-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Meeseeks Console" width="100%"></td>
+    </tr>
 </table>
 
 ## Features
@@ -80,9 +86,10 @@ The web console provides a task orchestration frontend backed by the REST API. I
 
 ### Tooling and integrations
 - (✅) **Tool registry:** Discovers local tools and MCP tools via persistent connection pool with automatic reconnection and config change detection.
-- (✅) **Skills:** Supports the [Agent Skills](https://agentskills.io) open standard. Place `SKILL.md` files in `~/.claude/skills/` or `.claude/skills/` to teach the assistant reusable workflows. Skills can be invoked via `/skill-name` slash commands or auto-activated by the LLM.
+- (✅) **Skills:** Supports the [Agent Skills](https://agentskills.io) open standard. Place `SKILL.md` files in `~/.claude/skills/` or `.claude/skills/` to teach the assistant reusable workflows. Skills can be invoked via `/skill-name` slash commands or auto-activated by the LLM. `requires-capabilities` frontmatter gates a skill to sessions that advertise the matching capability bundle.
 - (✅) **Configurable file editing:** Two built-in edit mechanisms — Aider-style SEARCH/REPLACE blocks and per-file structured patch (`file_path` / `old_string` / `new_string`). Select via `agent.edit_tool` in config, or let the system auto-select based on model identity. Different models perform better with different formats; the choice is transparent to the rest of the stack.
-- (✅) **Plugin system:** Discover, install, and manage plugins from configured marketplaces. Plugins can provide agent definitions, skills, hooks, and MCP tool integrations. Managed via the CLI (`/plugins`), console UI, or REST API.
+- (✅) **Plugin system:** Discover, install, and manage plugins from configured marketplaces, alongside a built-in plugin scan path for first-party bundles. Plugins can provide agent definitions, skills, hooks, MCP tool integrations, and per-agent stateful session tools via the `SessionTool` protocol. `requires-capabilities` frontmatter plus the `X-Meeseeks-Capabilities` request header gate capability bundles to compatible sessions, and `${CLAUDE_PLUGIN_ROOT}` substitution lets plugins reference their own assets by absolute path. Managed via the CLI (`/plugins`), console UI, or REST API.
+- (✅) **Interactive widgets:** Inline [stlite (Streamlit-in-WASM) widgets](docs/features-widgets.md) rendered in the conversation timeline via the bundled `widget-builder` plugin. A sub-agent writes a two-file widget (`app.py` + `data.json`), calls `submit_widget`, and the console mounts the result in a sandboxed Web Worker — no server round-trip, no CORS. Ships with a component library (GitHubRepoCard, SearchResultCard, StockTickerCard) and an AST import-allowlist lint that returns line-numbered feedback to the generating agent.
 - (✅) **Native LSP integration:** Opt-in code intelligence via `lsp_tool` (pygls/lsprotocol). Supports diagnostics, go-to-definition, find-references, and hover. Built-in servers: pyright (Python), typescript-language-server (TS/JS), gopls (Go), rust-analyzer (Rust) — auto-discovered on the PATH. Passive diagnostics inject automatically after file edits. Configure via `agent.lsp` in config.
 - (✅) **Web IDE:** Opt-in per-session code-server containers for browser-based editing, accessible from the console via "Open in Web IDE".
 - (✅) **Local file + shell tools:** Built-in tools for file reads, directory listing, and shell commands (approval-gated).

@@ -275,7 +275,7 @@ export function App() {
       document.title = 'Meeseeks | Opening Web IDE';
     } else if (isSessionRoute) {
       const title = activeSession?.title?.trim();
-      document.title = title ? `Meeseeks | ${title}` : 'Meeseeks | Session';
+      document.title = title ? `${title} | Meeseeks` : 'Session | Meeseeks';
     } else {
       document.title = 'Meeseeks';
     }

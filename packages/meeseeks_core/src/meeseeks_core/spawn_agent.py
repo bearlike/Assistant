@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+import os
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -23,6 +25,7 @@ from meeseeks_core.config import get_config_value
 from meeseeks_core.hooks import HookManager
 from meeseeks_core.hypervisor import AgentHandle
 from meeseeks_core.permissions import PermissionPolicy
+from meeseeks_core.session_tools import SessionToolRegistry
 from meeseeks_core.tool_registry import ToolRegistry, ToolSpec, filter_specs
 from meeseeks_core.types import Event
 
@@ -56,6 +59,59 @@ def _coerce_list(value: object) -> list[str]:
     if isinstance(value, str):
         return [s.strip() for s in value.split(",") if s.strip()]
     return []
+
+
+# ---------------------------------------------------------------------------
+# Plugin-generic body substitution (KISS — no Jinja, no template engine)
+# ---------------------------------------------------------------------------
+
+# ``${VAR:-default}`` — bash-style fallback. ``\w+`` caps the variable name
+# to identifier characters; ``[^}]*`` keeps the default body shell-literal
+# (no nested ``}``) without needing a full parser.
+_BASH_DEFAULT_RE = re.compile(r"\$\{(\w+):-([^}]*)\}")
+
+
+def substitute_agent_body(
+    body: str,
+    subs: Mapping[str, str],
+    env: Mapping[str, str] | None = None,
+) -> str:
+    """Render an agent's body with plugin-generic variable substitution.
+
+    Three passes, in order:
+
+    1. ``${KEY}`` literal substitution from *subs*. Core passes
+       ``SESSION_ID`` and ``CLAUDE_PLUGIN_ROOT``; plugins author their
+       prompts against these names.
+    2. Bash-style ``${VAR:-default}`` — if ``VAR`` is unset in *env*,
+       the text expands to ``default``. If ``VAR`` is set, it expands
+       to the env value. This keeps plugin prompts self-documenting
+       (operator override path is obvious in the source).
+    3. Plain ``$VAR`` expansion as a final pass, matching
+       :func:`os.path.expandvars` semantics. Unset variables remain
+       literal so authors can spot typos at glance.
+    """
+    if env is None:
+        env = os.environ
+    # Pass 1: direct substitutions.
+    for key, value in subs.items():
+        body = body.replace(f"${{{key}}}", value)
+
+    # Pass 2: bash-style ${VAR:-default}. Read from env; fall back to default.
+    def _bash_default(match: re.Match[str]) -> str:
+        var_name, default = match.group(1), match.group(2)
+        return env.get(var_name, default)
+
+    body = _BASH_DEFAULT_RE.sub(_bash_default, body)
+
+    # Pass 3: plain ``$VAR`` expansion for anything still referencing env.
+    # Matches ``os.path.expandvars`` semantics without touching the real
+    # ``os.environ`` when a test supplies a fake *env* mapping.
+    def _plain_var(match: re.Match[str]) -> str:
+        var_name = match.group(1)
+        return env.get(var_name, match.group(0))
+
+    return re.sub(r"\$(\w+)", _plain_var, body)
 
 
 # ------------------------------------------------------------------
@@ -213,6 +269,8 @@ class SpawnAgentTool:
         project_instructions: str | None = None,
         cwd: str | None = None,
         agent_registry: Any = None,
+        session_tool_registry: SessionToolRegistry | None = None,
+        session_capabilities: tuple[str, ...] = (),
     ) -> None:
         """Initialize with parent context and shared registries."""
         self._agent_context = agent_context
@@ -223,6 +281,8 @@ class SpawnAgentTool:
         self._project_instructions = project_instructions
         self._cwd = cwd
         self._agent_registry = agent_registry
+        self._session_tool_registry = session_tool_registry
+        self._session_capabilities = session_capabilities
         # Plan-mode context — set by ToolUseLoop.run() so children
         # inherit the session's plan path and mode.
         self.session_id: str | None = None
@@ -248,18 +308,31 @@ class SpawnAgentTool:
         # agent_type: look up registered agent definition and apply its config.
         agent_type = args.get("agent_type")
         if agent_type and self._agent_registry:
-            agent_def = self._agent_registry.get(agent_type)
+            agent_def = self._agent_registry.get(
+                agent_type, self._session_capabilities
+            )
             if agent_def is None:
                 return MockSpeaker(content=f"ERROR: Unknown agent type '{agent_type}'")
-            # Prepend agent system prompt to task
-            task_desc = f"{agent_def.body}\n\n---\n\nTask: {task_desc}"
+            # Prepend agent system prompt to task, running the plugin-generic
+            # body substitution first so ``${SESSION_ID}``,
+            # ``${CLAUDE_PLUGIN_ROOT}``, and bash-style ``${VAR:-default}``
+            # expansions resolve before the body hits the child LLM.
+            body_subs = {
+                "SESSION_ID": self.session_id or "",
+                "CLAUDE_PLUGIN_ROOT": agent_def.plugin_root,
+            }
+            rendered_body = substitute_agent_body(agent_def.body, body_subs)
+            task_desc = f"{rendered_body}\n\n---\n\nTask: {task_desc}"
             # Apply agent's tool scope if specified and not overridden by caller
             if agent_def.allowed_tools and "allowed_tools" not in args:
                 args["allowed_tools"] = agent_def.allowed_tools
             if agent_def.denied_tools and "denied_tools" not in args:
                 args["denied_tools"] = agent_def.denied_tools
-            # Apply agent's model if specified and not overridden
-            if agent_def.model and not model_override:
+            # Apply agent's model if specified.
+            # Registered agent types with a configured model are authoritative.
+            # LLM's model arg on spawn_agent is ignored — config has already made this decision.
+            # (Ad-hoc spawns without agent_type continue to honor the LLM's model arg.)
+            if agent_def.model:
                 model_override = agent_def.model
 
         registry = self._agent_context.registry
@@ -304,6 +377,7 @@ class SpawnAgentTool:
 
             # Ref: [DeepMind-Delegation §4.7] Privilege attenuation — sub-agents
             # inherit parent's approval policy (not None, which blocks all writes).
+            child_allowed_tools = _coerce_list(args.get("allowed_tools") or []) or None
             child_loop = ToolUseLoop(
                 agent_context=child_ctx,
                 tool_registry=self._tool_registry,
@@ -311,8 +385,11 @@ class SpawnAgentTool:
                 approval_callback=self._approval_callback,
                 hook_manager=self._hook_manager,
                 project_instructions=self._project_instructions,
+                session_tool_registry=self._session_tool_registry,
+                allowed_tools=child_allowed_tools,
                 cwd=self._cwd,
                 session_id=self.session_id,
+                session_capabilities=self._session_capabilities,
             )
             # Ref: [A2A v1.0] Transition to "running" when execution begins
             handle.status = "running"
@@ -501,7 +578,12 @@ class SpawnAgentTool:
     # ------------------------------------------------------------------
 
     async def handle_check_agents(self, action_step: ActionStep) -> MockSpeaker:
-        """Return agent tree state with completed results and progress."""
+        """Return agent tree state with completed results and progress.
+
+        Emits a JSON payload with ``kind: "agent_tree"``. The ``text`` field
+        carries the rendered ASCII tree the LLM consumes; the ``agents`` list
+        is the structured snapshot the console uses to render CheckAgentsCard.
+        """
         args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
         wait = bool(args.get("wait", False))
         timeout = float(args.get("timeout", 30))
@@ -546,7 +628,42 @@ class SpawnAgentTool:
         elif not completed:
             parts.append("No agents spawned.")
 
-        return MockSpeaker(content="\n".join(parts) or "No agents.")
+        text = "\n".join(parts) or "No agents."
+
+        agents_payload = [
+            {
+                "id": h.agent_id,
+                "parent_id": h.parent_id,
+                "depth": h.depth,
+                "task": h.task_description,
+                "status": h.status,
+                "steps_completed": h.steps_completed,
+                "last_tool_id": h.last_tool_id,
+                "progress_note": h.progress_note,
+                "compaction_count": h.compaction_count,
+                "result": (
+                    {
+                        "status": h.result.status,
+                        "summary": h.result.summary,
+                        "content": h.result.content,
+                    }
+                    if h.result is not None
+                    else None
+                ),
+            }
+            for h in await registry.list_visible(
+                exclude_agent_id=self._agent_context.agent_id,
+            )
+        ]
+
+        payload = {
+            "kind": "agent_tree",
+            "text": text,
+            "agents": agents_payload,
+            "parent_id": parent_id,
+            "wait": wait,
+        }
+        return MockSpeaker(content=json.dumps(payload))
 
     async def handle_steer_agent(self, action_step: ActionStep) -> MockSpeaker:
         """Send a steering message to or cancel a running agent."""
@@ -717,15 +834,24 @@ class SpawnAgentTool:
             for child in children:
                 if child.status == "running":
                     await registry.cancel_agent(child.agent_id)
-            await registry.unregister(child_ctx.agent_id)
-            registry.release()
 
-            # Notify parent via message queue.
-            status = handle.status if handle else "unknown"
-            await registry.send_to_parent(
-                child_ctx.agent_id,
-                f"[Agent {child_ctx.agent_id[:8]} finished: {status}]",
-            )
+            # Notify parent before releasing the semaphore slot.
+            # Result and status are set in the try/except blocks above.
+            # The handle stays in the registry so check_agents and
+            # render_agent_tree can surface the result; session cleanup()
+            # clears it at session end.
+            if handle and handle.result:
+                notification = (
+                    f"[Agent {child_ctx.agent_id[:8]} {handle.result.status}] "
+                    f"Task: {task_desc} | "
+                    f"{handle.result.summary or handle.result.content[:300]}"
+                )
+            else:
+                _status = handle.status if handle else "unknown"
+                notification = f"[Agent {child_ctx.agent_id[:8]} {_status}] Task: {task_desc}"
+            await registry.send_to_parent(child_ctx.agent_id, notification)
+
+            registry.release()
 
     async def await_lifecycle_managers(self, timeout: float = 3.0) -> None:
         """Wait for background lifecycle managers to complete cleanup.
@@ -751,4 +877,5 @@ __all__ = [
     "SPAWN_AGENT_SCHEMA",
     "STEER_AGENT_SCHEMA",
     "SpawnAgentTool",
+    "substitute_agent_body",
 ]

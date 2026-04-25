@@ -14,6 +14,7 @@ interface WorkspacePanelProps {
   sessionFiles: DiffFile[];
   onRetry?: () => void;
   onContinue?: () => void;
+  isRunning?: boolean;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
 }
@@ -27,6 +28,7 @@ export function WorkspacePanel({
   sessionFiles,
   onRetry,
   onContinue,
+  isRunning,
   isMaximized,
   onToggleMaximize
 }: WorkspacePanelProps) {
@@ -75,7 +77,7 @@ export function WorkspacePanel({
         {activeTab === 'diff' ?
         <ReviewPane sessionId={sessionId} selectedTurn={selectedTurn} sessionFiles={sessionFiles} /> :
 
-        <LogsView events={events} onRetry={onRetry} onContinue={onContinue} />
+        <LogsView events={events} onRetry={onRetry} onContinue={onContinue} isRunning={isRunning} />
         }
       </div>
     </div>);

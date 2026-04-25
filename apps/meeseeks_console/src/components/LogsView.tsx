@@ -21,52 +21,21 @@ import { TerminalCard } from './TerminalCard';
 import { DiffCard } from './DiffCard';
 import { FileReadCard } from './FileReadCard';
 import { ScrollToBottom } from './ScrollToBottom';
+import { FiveLeafBloomLoader } from './FiveLeafBloomLoader';
+import { ChatRow, Handle } from './ChatRow';
+import { CheckAgentsCard } from './CheckAgentsCard';
+import { SpawnAgentCard } from './SpawnAgentCard';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import { EventRecord, LogEntry } from '../types';
-import { formatTokens } from '../utils/time';
+import { formatTokens, formatSessionTime } from '../utils/time';
 import { buildLogs, extractSummaryTesting } from '../utils/logs';
 import { prettyJsonIfValid } from '../utils/json';
-import { formatSessionTime } from '../utils/time';
-
-function Badge({ children, color }: { children: React.ReactNode; color: string }) {
-  const colorMap: Record<string, string> = {
-    emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600',
-    red: 'border-red-500/30 bg-red-500/10 text-red-600',
-    amber: 'border-amber-500/30 bg-amber-500/10 text-amber-600',
-    blue: 'border-blue-500/30 bg-blue-500/10 text-blue-600',
-    muted: 'border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]',
-  };
-  return (
-    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border whitespace-nowrap ${colorMap[color] || colorMap.muted}`}>
-      {children}
-    </span>
-  );
-}
-
-const MODEL_TAG_CLASS =
-  'text-[10px] font-mono text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded whitespace-nowrap';
-
-const AGENT_ID_TAG_CLASS =
-  'text-[10px] font-mono px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]';
-
-function AgentIdChip({ agentId }: { agentId?: string }) {
-  if (!agentId) return null;
-  return <span className={AGENT_ID_TAG_CLASS}>{agentId.slice(0, 8)}</span>;
-}
-
-/** Hash agent ID to one of 8 cycling colors (Claude Code sub-agent palette). */
-function agentColorIndex(agentId: string): number {
-  let hash = 0;
-  for (let i = 0; i < agentId.length; i++) {
-    hash = ((hash << 5) - hash + agentId.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash) % 8;
-}
-
-const AGENT_COLOR_CLASSES = [
-  'text-agent-0', 'text-agent-1', 'text-agent-2', 'text-agent-3',
-  'text-agent-4', 'text-agent-5', 'text-agent-6', 'text-agent-7',
-] as const;
+import { AgentIdChip, Badge } from './agents';
+import {
+  AGENT_COLOR_CLASSES,
+  MODEL_TAG_CLASS,
+  agentColorIndex,
+} from '../utils/agents';
 
 /** Deterministic accent color for tool calls by tool category. */
 function toolAccent(toolId: string): AccentColor {
@@ -460,38 +429,100 @@ function renderCompaction(log: LogEntry) {
 function renderAgentMessage(log: LogEntry) {
   const colorIdx = agentColorIndex(log.agentId || 'root');
   const agentColor = AGENT_COLOR_CLASSES[colorIdx];
-  const agentName = log.detail || 'meeseeks';
+  const agentName = log.detail || 'root';
   return (
-    <div key={log.id} className="flex items-start gap-2 px-1 py-1">
-      {log.timestamp && (
-        <span className="text-[10px] text-[hsl(var(--muted-foreground))] whitespace-nowrap shrink-0 font-mono pt-0.5">
-          {formatSessionTime(log.timestamp)}
-        </span>
-      )}
-      <span className={`text-xs font-mono font-semibold whitespace-nowrap shrink-0 ${agentColor}`}>
-        &lt;{agentName}&gt;
-      </span>
-      <div className="text-xs text-[hsl(var(--foreground))] leading-relaxed opacity-80 min-w-0 overflow-hidden [&_pre]:text-[11px] [&_p]:mb-1 [&_p:last-child]:mb-0">
-        <MarkdownContent content={log.content} />
-      </div>
-    </div>
+    <ChatRow
+      key={log.id}
+      timestamp={log.timestamp}
+      handle={<Handle from={agentName} fromColor={agentColor} />}
+      bodyClassName="opacity-80 [&_pre]:text-[11px] [&_p]:mb-1 [&_p:last-child]:mb-0"
+    >
+      <MarkdownContent content={log.content} />
+    </ChatRow>
   );
 }
 
 function renderUserSteer(log: LogEntry) {
   return (
-    <div key={log.id} className="flex items-start gap-2 px-1 py-1">
-      {log.timestamp && (
-        <span className="text-[10px] text-[hsl(var(--muted-foreground))] whitespace-nowrap shrink-0 font-mono pt-0.5">
-          {formatSessionTime(log.timestamp)}
-        </span>
+    <ChatRow
+      key={log.id}
+      timestamp={log.timestamp}
+      handle={<Handle from="user" fromColor="text-blue-400" />}
+    >
+      {log.content}
+    </ChatRow>
+  );
+}
+
+function renderCheckAgents(log: LogEntry) {
+  return (
+    <CheckAgentsCard
+      key={log.id}
+      agents={log.agents || []}
+      parentId={log.parentId || ''}
+      rawText={log.rawText || ''}
+      wait={log.wait}
+      durationMs={log.durationMs}
+      waitedMs={log.waitedMs}
+      timestamp={log.timestamp}
+    />
+  );
+}
+
+function renderSpawnSubmit(log: LogEntry) {
+  return (
+    <SpawnAgentCard
+      key={log.id}
+      caller={log.spawnCaller}
+      childId={log.spawnChildId || ''}
+      task={log.spawnTask || ''}
+      agentType={log.spawnAgentType}
+      model={log.spawnModel}
+      allowedTools={log.spawnAllowedTools || []}
+      deniedTools={log.spawnDeniedTools || []}
+      acceptance={log.spawnAcceptance}
+      extras={log.spawnExtras || []}
+      message={log.spawnMessage}
+      durationMs={log.spawnDurationMs}
+      timestamp={log.timestamp}
+    />
+  );
+}
+
+function renderRootSteer(log: LogEntry) {
+  const fullId = log.steerTargetFullId || log.steerTargetPrefix || '';
+  const targetLabel = fullId
+    ? `agent-${fullId.slice(0, 6)}`
+    : (log.steerTargetPrefix || 'agent');
+  const targetColor = fullId
+    ? AGENT_COLOR_CLASSES[agentColorIndex(fullId)]
+    : 'text-[hsl(var(--muted-foreground))]';
+  const isCancel = log.steerAction === 'cancel';
+
+  return (
+    <div key={log.id}>
+      <ChatRow
+        timestamp={log.timestamp}
+        handle={
+          <Handle
+            from="root"
+            to={targetLabel}
+            fromColor="text-[hsl(var(--primary))]"
+            toColor={targetColor}
+          />
+        }
+        bodyClassName={isCancel ? 'italic opacity-65 font-mono text-[11.5px]' : undefined}
+      >
+        {isCancel ? '(cancelled)' : (log.steerMessage || log.content)}
+      </ChatRow>
+      {log.steerIsError && log.steerResult && (
+        <ChatRow
+          handle={<Handle from="system" fromColor="text-red-400" />}
+          bodyClassName="text-red-400 font-mono text-[11.5px]"
+        >
+          {log.steerResult}
+        </ChatRow>
       )}
-      <span className="text-xs font-mono font-semibold whitespace-nowrap shrink-0 text-blue-400">
-        &lt;user&gt;
-      </span>
-      <span className="text-xs text-[hsl(var(--foreground))] leading-relaxed opacity-90">
-        {log.content}
-      </span>
     </div>
   );
 }
@@ -500,10 +531,12 @@ export function LogsView({
   events,
   onRetry,
   onContinue,
+  isRunning,
 }: {
   events: EventRecord[];
   onRetry?: () => void;
   onContinue?: () => void;
+  isRunning?: boolean;
 }) {
   const logs = buildLogs(events);
   const summaryData = extractSummaryTesting(events);
@@ -582,6 +615,9 @@ export function LogsView({
           if (log.type === 'shell') return renderShell(log);
           if (log.type === 'agent_message') return renderAgentMessage(log);
           if (log.type === 'user_steer') return renderUserSteer(log);
+          if (log.type === 'check_agents') return renderCheckAgents(log);
+          if (log.type === 'root_steer') return renderRootSteer(log);
+          if (log.type === 'spawn_submit') return renderSpawnSubmit(log);
           if (log.type === 'compact') return renderCompaction(log);
           if (log.type === 'system') return renderReflection(log);
 
@@ -605,6 +641,18 @@ export function LogsView({
               summary={summaryData.summary}
               testing={summaryData.testing}
             />
+          </div>
+        )}
+        {isRunning && (
+          <div
+            className="flex flex-col items-center gap-2 pt-4 pb-2"
+            role="status"
+            aria-live="polite"
+          >
+            <FiveLeafBloomLoader size={44} label="Agent is working" />
+            <span className="text-[10px] uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
+              Working…
+            </span>
           </div>
         )}
       </div>

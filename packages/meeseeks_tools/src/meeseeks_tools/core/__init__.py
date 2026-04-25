@@ -31,6 +31,12 @@ def _get_allowed_roots() -> list[Path]:
     plan_root = Path(PLAN_DIR_ROOT).resolve()
     if plan_root not in roots:
         roots.append(plan_root)
+    # Allow all of /tmp so file tools can read and edit widget output
+    # (/tmp/meeseeks/widgets/…), plan files, and any other ephemeral
+    # scratch files without requiring an explicit project-root entry.
+    tmp_root = Path("/tmp").resolve()
+    if tmp_root not in roots:
+        roots.append(tmp_root)
     return roots
 
 
