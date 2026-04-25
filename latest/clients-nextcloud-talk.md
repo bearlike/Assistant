@@ -1,7 +1,7 @@
 # Nextcloud Talk
 
 <div style="display: flex; justify-content: center;">
-  <img src="../meeseeks-nctalk-01.jpg" alt="Meeseeks replying to an @Meeseeks mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../meeseeks-nctalk-01.png" alt="Meeseeks replying to an @Meeseeks mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 The Nextcloud Talk integration allows users to interact with Meeseeks directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Meeseeks session visible in the web console and Langfuse traces.

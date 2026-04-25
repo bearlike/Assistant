@@ -1,6 +1,6 @@
 # CLI Client
 
-<video controls preload="metadata" poster="../meeseeks-console-01-front.jpg" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
+<video controls preload="metadata" poster="../meeseeks-console-01-front.png" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
   <source src="../meeseeks-cli-01-video.mp4" type="video/mp4" />
   Your browser does not support the video tag.
 </video>
