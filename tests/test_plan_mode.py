@@ -21,10 +21,10 @@ import shutil
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage
-from meeseeks_core.agent_context import AgentContext
-from meeseeks_core.classes import ActionStep
-from meeseeks_core.context import ContextSnapshot
-from meeseeks_core.exit_plan_mode import (
+from mewbo_core.agent_context import AgentContext
+from mewbo_core.classes import ActionStep
+from mewbo_core.context import ContextSnapshot
+from mewbo_core.exit_plan_mode import (
     PLAN_DIR_ROOT,
     ExitPlanModeTool,
     ensure_plan_dir,
@@ -33,13 +33,13 @@ from meeseeks_core.exit_plan_mode import (
     plan_dir_for,
     plan_file_for,
 )
-from meeseeks_core.hooks import HookManager
-from meeseeks_core.hypervisor import AgentHypervisor
-from meeseeks_core.orchestrator import Orchestrator
-from meeseeks_core.permissions import PermissionDecision, PermissionPolicy
-from meeseeks_core.token_budget import TokenBudget
-from meeseeks_core.tool_registry import ToolRegistry, ToolSpec
-from meeseeks_core.tool_use_loop import ToolUseLoop
+from mewbo_core.hooks import HookManager
+from mewbo_core.hypervisor import AgentHypervisor
+from mewbo_core.orchestrator import Orchestrator
+from mewbo_core.permissions import PermissionDecision, PermissionPolicy
+from mewbo_core.token_budget import TokenBudget
+from mewbo_core.tool_registry import ToolRegistry, ToolSpec
+from mewbo_core.tool_use_loop import ToolUseLoop
 
 # ---------------------------------------------------------------------------
 # Helpers (mirroring test_tool_use_loop.py)
@@ -163,7 +163,7 @@ def _patch_plan_config(
     Delegates to the real config loader for any key we don't explicitly
     override, so tests do not accidentally break unrelated config reads.
     """
-    from meeseeks_core import tool_use_loop as _tul
+    from mewbo_core import tool_use_loop as _tul
 
     real_get = _tul.get_config_value
     overrides = {
@@ -177,7 +177,7 @@ def _patch_plan_config(
             return overrides[(section, key)]
         return real_get(section, key, default=default, **kwargs)
 
-    return patch("meeseeks_core.tool_use_loop.get_config_value", side_effect=fake_get)
+    return patch("mewbo_core.tool_use_loop.get_config_value", side_effect=fake_get)
 
 
 def _make_mcp_spec(tool_id: str) -> ToolSpec:
@@ -205,7 +205,7 @@ def _make_mcp_spec(tool_id: str) -> ToolSpec:
 
 class TestPathHelpers:
     def test_plan_dir_for_is_session_scoped(self):
-        assert plan_dir_for("abc123").endswith("/tmp/meeseeks/plans/abc123")
+        assert plan_dir_for("abc123").endswith("/tmp/mewbo/plans/abc123")
 
     def test_plan_file_for_points_to_plan_md(self):
         assert plan_file_for("abc123").endswith("plan.md")
@@ -522,7 +522,7 @@ class TestPlanModeSchemaFiltering:
             [read_spec, edit_spec],
             "plan",
         )
-        with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
             model_obj = MagicMock()
             mock_build.return_value = model_obj
             model_obj.bind_tools.return_value = MagicMock()
@@ -871,7 +871,7 @@ class TestPlanModeEndToEnd:
             bound = MagicMock()
             bound.ainvoke = fake_model.ainvoke
 
-            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+            with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
                 model_obj = MagicMock()
                 model_obj.bind_tools.return_value = bound
                 mock_build.return_value = model_obj
@@ -944,7 +944,7 @@ class TestPlanModeHypervisorIntegration:
             bound = MagicMock()
             bound.ainvoke = fake_model.ainvoke
 
-            with patch("meeseeks_core.tool_use_loop.build_chat_model") as mock_build:
+            with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
                 model_obj = MagicMock()
                 model_obj.bind_tools.return_value = bound
                 mock_build.return_value = model_obj
@@ -1010,10 +1010,10 @@ class TestOrchestratorModeResolution:
 class TestAllowedRootsIncludesPlanDir:
     """The edit tool's lower path guard must accept plan-dir writes.
 
-    Plan mode sends edits to ``/tmp/meeseeks/plans/<session_id>/plan.md``.
+    Plan mode sends edits to ``/tmp/mewbo/plans/<session_id>/plan.md``.
     The upper guard (``_plan_mode_permission``) approves such writes via
     ``is_inside_plan_dir``. The lower guard (``resolve_safe_path`` in
-    ``meeseeks_tools.core``) must also accept them — otherwise edits are
+    ``mewbo_tools.core``) must also accept them — otherwise edits are
     approved upstream and rejected downstream, and plan.md can never be
     written. This was the showstopper in session 3183ad5449…
     """
@@ -1021,13 +1021,13 @@ class TestAllowedRootsIncludesPlanDir:
     def test_get_allowed_roots_includes_plan_dir_root(self):
         from pathlib import Path
 
-        from meeseeks_tools.core import _get_allowed_roots
+        from mewbo_tools.core import _get_allowed_roots
 
         roots = _get_allowed_roots()
         assert Path(PLAN_DIR_ROOT).resolve() in roots
 
     def test_resolve_safe_path_accepts_plan_file(self):
-        from meeseeks_tools.core import resolve_safe_path
+        from mewbo_tools.core import resolve_safe_path
 
         sid = "roots_" + os.urandom(4).hex()
         ensure_plan_dir(sid)
@@ -1038,19 +1038,31 @@ class TestAllowedRootsIncludesPlanDir:
         finally:
             shutil.rmtree(plan_dir_for(sid), ignore_errors=True)
 
-    def test_resolve_safe_path_still_rejects_unrelated_tmp_paths(self):
-        """Widening the allowlist must not let /tmp/* outside the plan dir through."""
-        from meeseeks_tools.core import resolve_safe_path
+    def test_resolve_safe_path_accepts_mewbo_scratch_paths(self):
+        """``/tmp/mewbo/...`` is allowed — covers widget output and plan files."""
+        from mewbo_tools.core import resolve_safe_path
+
+        resolved = resolve_safe_path("/tmp/mewbo/widgets/abc/app.py")
+        assert str(resolved).startswith("/tmp/mewbo/")
+
+    def test_resolve_safe_path_rejects_unrelated_tmp_paths(self):
+        """Arbitrary ``/tmp`` files are NOT allowed — only ``/tmp/mewbo``.
+
+        Guards against the regression where the entire ``/tmp`` tree was
+        opened up; that let the edit/read tools touch other users' pytest
+        dirs, ``/tmp/ssh-*`` agent sockets, etc.
+        """
+        from mewbo_tools.core import resolve_safe_path
 
         try:
-            resolve_safe_path("/tmp/not-a-plan-file.sh")
+            resolve_safe_path("/tmp/not-a-mewbo-file.sh")
         except ValueError as exc:
             assert "outside all allowed project roots" in str(exc)
         else:
-            raise AssertionError("expected ValueError for /tmp/not-a-plan-file.sh")
+            raise AssertionError("expected ValueError for unrelated /tmp path")
 
     def test_resolve_safe_path_still_rejects_system_paths(self):
-        from meeseeks_tools.core import resolve_safe_path
+        from mewbo_tools.core import resolve_safe_path
 
         try:
             resolve_safe_path("/etc/passwd")
@@ -1064,8 +1076,8 @@ class TestEpisodicPlanApproval:
     """SessionRuntime.approve_plan/reject_plan emit transcript events."""
 
     def _make_runtime(self):
-        from meeseeks_core.session_runtime import SessionRuntime
-        from meeseeks_core.session_store import create_session_store
+        from mewbo_core.session_runtime import SessionRuntime
+        from mewbo_core.session_store import create_session_store
 
         store = create_session_store()
         return SessionRuntime(session_store=store)
@@ -1275,8 +1287,8 @@ class TestEditToolWritesPlanMdEndToEnd:
     """
 
     def test_file_edit_tool_writes_plan_md(self):
-        from meeseeks_core.classes import ActionStep as AS
-        from meeseeks_tools.integration.file_edit_tool import FileEditTool
+        from mewbo_core.classes import ActionStep as AS
+        from mewbo_tools.integration.file_edit_tool import FileEditTool
 
         sid = "e2e_" + os.urandom(4).hex()
         ensure_plan_dir(sid)

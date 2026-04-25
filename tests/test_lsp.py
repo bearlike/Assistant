@@ -6,8 +6,8 @@ import shutil
 from pathlib import Path
 from unittest.mock import patch
 
-from meeseeks_tools.integration.lsp import LSP_AVAILABLE
-from meeseeks_tools.integration.lsp.servers import (
+from mewbo_tools.integration.lsp import LSP_AVAILABLE
+from mewbo_tools.integration.lsp.servers import (
     BUILTIN_SERVERS,
     ServerDef,
     available_servers,
@@ -103,7 +103,7 @@ class TestLSPAvailability:
 class TestLSPServerManager:
     def test_manager_creates_extension_map(self):
         """Manager builds extension → server map from available servers."""
-        from meeseeks_tools.integration.lsp.manager import LSPServerManager
+        from mewbo_tools.integration.lsp.manager import LSPServerManager
 
         # Patch available_servers to return a fake server
         fake_server = ServerDef(
@@ -114,7 +114,7 @@ class TestLSPServerManager:
             language_id="python",
         )
         with patch(
-            "meeseeks_tools.integration.lsp.manager.available_servers",
+            "mewbo_tools.integration.lsp.manager.available_servers",
             return_value=[fake_server],
         ):
             mgr = LSPServerManager(cwd="/tmp")
@@ -125,10 +125,10 @@ class TestLSPServerManager:
 
     def test_manager_no_servers_available(self):
         """Manager handles zero available servers gracefully."""
-        from meeseeks_tools.integration.lsp.manager import LSPServerManager
+        from mewbo_tools.integration.lsp.manager import LSPServerManager
 
         with patch(
-            "meeseeks_tools.integration.lsp.manager.available_servers",
+            "mewbo_tools.integration.lsp.manager.available_servers",
             return_value=[],
         ):
             mgr = LSPServerManager(cwd="/tmp")
@@ -137,14 +137,14 @@ class TestLSPServerManager:
 
     def test_find_root_walks_up(self, tmp_path: Path):
         """_find_root walks up to find a root marker file."""
-        from meeseeks_tools.integration.lsp.manager import LSPServerManager
+        from mewbo_tools.integration.lsp.manager import LSPServerManager
 
         # Create structure: tmp_path/pyproject.toml, tmp_path/src/pkg/
         (tmp_path / "pyproject.toml").touch()
         (tmp_path / "src" / "pkg").mkdir(parents=True)
 
         with patch(
-            "meeseeks_tools.integration.lsp.manager.available_servers",
+            "mewbo_tools.integration.lsp.manager.available_servers",
             return_value=[],
         ):
             mgr = LSPServerManager(cwd=str(tmp_path / "src" / "pkg"))
@@ -161,10 +161,10 @@ class TestLSPServerManager:
 
     def test_cached_diagnostics_empty(self):
         """Cached diagnostics returns empty list for unknown files."""
-        from meeseeks_tools.integration.lsp.manager import LSPServerManager
+        from mewbo_tools.integration.lsp.manager import LSPServerManager
 
         with patch(
-            "meeseeks_tools.integration.lsp.manager.available_servers",
+            "mewbo_tools.integration.lsp.manager.available_servers",
             return_value=[],
         ):
             mgr = LSPServerManager(cwd="/tmp")
@@ -182,7 +182,7 @@ class TestLSPToolFormatting:
         """Empty diagnostics produce a 'clean' message."""
         from unittest.mock import MagicMock
 
-        from meeseeks_tools.integration.lsp.tool import LSPTool
+        from mewbo_tools.integration.lsp.tool import LSPTool
 
         tool = LSPTool.__new__(LSPTool)
         manager = MagicMock()
@@ -193,7 +193,7 @@ class TestLSPToolFormatting:
 
     def test_format_locations_none(self):
         """None locations produce 'not found' message."""
-        from meeseeks_tools.integration.lsp.tool import LSPTool
+        from mewbo_tools.integration.lsp.tool import LSPTool
 
         tool = LSPTool.__new__(LSPTool)
         result = tool._format_locations(None, "Definition")
@@ -201,7 +201,7 @@ class TestLSPToolFormatting:
 
     def test_format_hover_none(self):
         """None hover produces 'not available' message."""
-        from meeseeks_tools.integration.lsp.tool import LSPTool
+        from mewbo_tools.integration.lsp.tool import LSPTool
 
         tool = LSPTool.__new__(LSPTool)
         result = tool._format_hover(None)
@@ -210,7 +210,7 @@ class TestLSPToolFormatting:
     def test_format_hover_markup_content(self):
         """MarkupContent hover returns the value."""
         from lsprotocol import types
-        from meeseeks_tools.integration.lsp.tool import LSPTool
+        from mewbo_tools.integration.lsp.tool import LSPTool
 
         tool = LSPTool.__new__(LSPTool)
         hover = types.Hover(
@@ -225,7 +225,7 @@ class TestLSPToolFormatting:
     def test_format_diagnostics_filters_hints(self):
         """Only errors and warnings are shown; hints are suppressed."""
         from lsprotocol import types
-        from meeseeks_tools.integration.lsp.tool import LSPTool
+        from mewbo_tools.integration.lsp.tool import LSPTool
 
         tool = LSPTool.__new__(LSPTool)
         diags = [
@@ -265,12 +265,12 @@ class TestLSPToolFormatting:
 class TestLSPToolRegistration:
     def test_lsp_tool_in_default_registry(self, monkeypatch):
         """lsp_tool is registered in the default tool registry."""
-        monkeypatch.setenv("MEESEEKS_HOME", "/tmp/meeseeks-test-lsp")
-        from meeseeks_core.config import reset_config
+        monkeypatch.setenv("MEWBO_HOME", "/tmp/mewbo-test-lsp")
+        from mewbo_core.config import reset_config
 
         reset_config()
 
-        from meeseeks_core.tool_registry import _default_registry
+        from mewbo_core.tool_registry import _default_registry
 
         registry = _default_registry()
         specs = registry.list_specs(include_disabled=True)
@@ -279,12 +279,12 @@ class TestLSPToolRegistration:
 
     def test_lsp_tool_is_read_only(self, monkeypatch):
         """lsp_tool is read-only (safe for plan mode)."""
-        monkeypatch.setenv("MEESEEKS_HOME", "/tmp/meeseeks-test-lsp")
-        from meeseeks_core.config import reset_config
+        monkeypatch.setenv("MEWBO_HOME", "/tmp/mewbo-test-lsp")
+        from mewbo_core.config import reset_config
 
         reset_config()
 
-        from meeseeks_core.tool_registry import _default_registry
+        from mewbo_core.tool_registry import _default_registry
 
         registry = _default_registry()
         specs = {s.tool_id: s for s in registry.list_specs(include_disabled=True)}

@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from meeseeks_core.skills import (
+from mewbo_core.skills import (
     ACTIVATE_SKILL_SCHEMA,
     SkillRegistry,
     SkillSpec,
@@ -345,6 +345,42 @@ class TestSkillRegistry:
         assert changed is True
         assert len(registry.list_all()) == 2
 
+    def test_load_plugin_components_merges_skills_and_command_files(self, tmp_path):
+        """Plugin skill dirs and commands/*.md files merge into the registry.
+
+        Mirrors what the orchestrator and CLI both call, ensuring user-typed
+        ``/<name>`` lookups for plugin commands resolve and ``/skills`` lists
+        them alongside built-in skills.
+        """
+        from types import SimpleNamespace
+
+        # A plugin contributing both a skills/<name>/SKILL.md *and* a
+        # flat commands/<name>.md (Claude Code style).
+        skills_dir = tmp_path / "plugins" / "demo" / "skills"
+        _write_skill(skills_dir, "demo-skill", "skill body")
+        commands_dir = tmp_path / "plugins" / "demo" / "commands"
+        commands_dir.mkdir(parents=True)
+        (commands_dir / "demo-cmd.md").write_text(
+            "---\nname: demo-cmd\ndescription: A flat command\n---\nbody",
+            encoding="utf-8",
+        )
+
+        manifest = SimpleNamespace(name="demo", requires_capabilities=())
+        component = SimpleNamespace(
+            manifest=manifest,
+            skill_dirs=[str(skills_dir)],
+            command_files=[str(commands_dir / "demo-cmd.md")],
+        )
+        fan_out = SimpleNamespace(components=[component])
+
+        registry = SkillRegistry()
+        registry.load_plugin_components(fan_out)
+
+        names = {s.name for s in registry.list_all()}
+        assert {"demo-skill", "demo-cmd"} <= names
+        # Both should be tagged with the plugin source label.
+        assert registry.get("demo-cmd").source == "plugin:demo"
+
     def test_maybe_reload_detects_deletion(self, tmp_path):
         skills_dir = tmp_path / ".claude" / "skills"
         _write_skill(skills_dir, "deletable", "body")
@@ -417,7 +453,7 @@ class TestActivateSkill:
         assert specs is None
 
     def test_tool_scoping_filters_specs(self):
-        from meeseeks_core.tool_registry import ToolSpec
+        from mewbo_core.tool_registry import ToolSpec
 
         specs = [
             ToolSpec(tool_id="read", name="read", description="", factory=lambda: None),

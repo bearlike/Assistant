@@ -67,10 +67,10 @@ def test_plugin_components_fan_out(tmp_path):
         )
     )
 
-    from meeseeks_core.agent_registry import AgentRegistry, parse_agent_file
-    from meeseeks_core.hooks import HookManager, merge_plugin_hooks
-    from meeseeks_core.plugins import discover_installed_plugins
-    from meeseeks_core.skills import SkillRegistry
+    from mewbo_core.agent_registry import AgentRegistry, parse_agent_file
+    from mewbo_core.hooks import HookManager, merge_plugin_hooks
+    from mewbo_core.plugins import discover_installed_plugins
+    from mewbo_core.skills import SkillRegistry
 
     plugins = discover_installed_plugins(registry_paths=[registry_file])
     assert len(plugins) == 1
@@ -113,8 +113,8 @@ def test_plugin_components_fan_out(tmp_path):
 
 def test_get_merged_mcp_config_extra_servers(tmp_path):
     """get_merged_mcp_config should accept extra_servers at lowest priority."""
-    import meeseeks_core.config as _cfg_module
-    from meeseeks_core.config import get_merged_mcp_config, set_mcp_config_path
+    import mewbo_core.config as _cfg_module
+    from mewbo_core.config import get_merged_mcp_config, set_mcp_config_path
 
     # Point to an empty temp MCP config so there's no real global config to shadow extras
     empty_mcp = tmp_path / "mcp.json"

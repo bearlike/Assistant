@@ -1,0 +1,104 @@
+# Warm terracotta dual-mode Streamlit theme
+#
+# Palette: warm cream/clay tones in light; warm dark charcoal in dark
+# Fonts: Space Grotesk (body) + Space Mono (code) — served as static assets
+#
+# Table rules:
+#   [theme]               → base, fontFaces, chart colors, sidebar border, and any
+#                           values identical across both modes (fonts, radii, etc.)
+#   [theme.sidebar]       → sidebar overrides shared by both modes
+#   [theme.light]         → light-only colors
+#   [theme.light.sidebar] → light sidebar colors
+#   [theme.dark]          → dark-only colors
+#   [theme.dark.sidebar]  → dark sidebar colors
+
+[server]
+enableStaticServing = true
+
+# ── Font face declarations (must live in [theme], cannot be per-mode) ─────────
+
+[[theme.fontFaces]]
+family = "SpaceGrotesk"
+url = "app/static/SpaceGrotesk-VariableFont_wght.ttf"
+
+[[theme.fontFaces]]
+family = "SpaceMono"
+url = "app/static/SpaceMono-Regular.ttf"
+style = "normal"
+weight = 400
+
+[[theme.fontFaces]]
+family = "SpaceMono"
+url = "app/static/SpaceMono-Italic.ttf"
+style = "italic"
+weight = 400
+
+[[theme.fontFaces]]
+family = "SpaceMono"
+url = "app/static/SpaceMono-Bold.ttf"
+style = "normal"
+weight = 700
+
+[[theme.fontFaces]]
+family = "SpaceMono"
+url = "app/static/SpaceMono-BoldItalic.ttf"
+style = "italic"
+weight = 700
+
+# ── Shared settings (identical in both modes) ─────────────────────────────────
+
+[theme]
+base = "light"
+font = "SpaceGrotesk"
+headingFontWeights = [600, 500, 500, 500, 500, 500]
+headingFontSizes = ["3rem", "2rem"]
+codeFont = "SpaceMono"
+codeFontSize = ".75rem"
+showWidgetBorder = true
+baseRadius = "0.75rem"
+buttonRadius = "full"
+chartCategoricalColors = ["#d97757", "#6a9bcc", "#788c5d"]
+showSidebarBorder = true
+
+[theme.sidebar]
+headingFontSizes = ["1.6rem", "1.4rem", "1.2rem"]
+
+# ── Light mode ────────────────────────────────────────────────────────────────
+# Warm cream background with terracotta accent and dark olive text.
+
+[theme.light]
+primaryColor = "#d97757"
+backgroundColor = "#faf9f5"
+secondaryBackgroundColor = "#f0efe7"
+codeBackgroundColor = "#e8e6dc"
+textColor = "#3d3a2a"
+linkColor = "#d97757"
+borderColor = "#b8b5a8"
+
+[theme.light.sidebar]
+backgroundColor = "#eeede5"
+secondaryBackgroundColor = "#e8e6dc"
+dataframeHeaderBackgroundColor = "#dddbd3"
+
+# ── Dark mode ─────────────────────────────────────────────────────────────────
+# Warm dark charcoal surfaces with a slightly brighter terracotta accent.
+#
+#   hsl(60  2.1% 18.4%) = #30302e  →  main content background
+#   hsl(60  2.7% 14.5%) = #262624  →  sidebar / secondary surfaces
+#   hsl(30  3.3% 11.8%) = #1f1e1d  →  code blocks / deepest surface
+#   hsl(48 33.3% 97.1%) = #faf9f5  →  primary text (warm near-white)
+#   hsl(15 63.1% 59.6%) = #d97757  →  accent (brighter than light #cb785c for contrast)
+
+[theme.dark]
+primaryColor = "#d97757"
+backgroundColor = "#30302e"
+secondaryBackgroundColor = "#262624"
+codeBackgroundColor = "#1f1e1d"
+textColor = "#faf9f5"
+linkColor = "#d97757"
+borderColor = "#706d68"
+
+[theme.dark.sidebar]
+backgroundColor = "#262624"
+secondaryBackgroundColor = "#1f1e1d"
+dataframeHeaderBackgroundColor = "#1a1918"

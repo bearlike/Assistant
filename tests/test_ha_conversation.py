@@ -249,20 +249,20 @@ def _install_other_stubs():
 _install_homeassistant_stubs()
 _install_other_stubs()
 
-import meeseeks_ha_conversation as ha_module  # noqa: E402
-from meeseeks_ha_conversation import (  # noqa: E402
-    MeeseeksAgent,
+import mewbo_ha_conversation as ha_module  # noqa: E402
+from mewbo_ha_conversation import (  # noqa: E402
+    MewboAgent,
 )
-from meeseeks_ha_conversation.api import MeeseeksApiClient  # noqa: E402
-from meeseeks_ha_conversation.config_flow import (  # noqa: E402
-    MeeseeksConfigFlow,
-    MeeseeksOptionsFlow,
+from mewbo_ha_conversation.api import MewboApiClient  # noqa: E402
+from mewbo_ha_conversation.config_flow import (  # noqa: E402
+    MewboConfigFlow,
+    MewboOptionsFlow,
 )
-from meeseeks_ha_conversation.coordinator import (  # noqa: E402
-    MeeseeksDataUpdateCoordinator,
+from mewbo_ha_conversation.coordinator import (  # noqa: E402
+    MewboDataUpdateCoordinator,
 )
-from meeseeks_ha_conversation.exceptions import ApiClientError  # noqa: E402
-from meeseeks_ha_conversation.helpers import get_exposed_entities  # noqa: E402
+from mewbo_ha_conversation.exceptions import ApiClientError  # noqa: E402
+from mewbo_ha_conversation.helpers import get_exposed_entities  # noqa: E402
 
 
 class DummySession:
@@ -303,7 +303,7 @@ class DummyResponse:
 def test_api_generate_includes_session_id():
     """Include session_id in API request payloads."""
     session = DummySession({"task_result": "ok"})
-    client = MeeseeksApiClient(base_url="http://test", timeout=10, session=session)
+    client = MewboApiClient(base_url="http://test", timeout=10, session=session)
     result = asyncio.run(client.async_generate({"prompt": "hello", "session_id": "abc"}))
     assert session.last_request["json"]["session_id"] == "abc"
     assert result["response"] == "ok"
@@ -313,7 +313,7 @@ def test_api_generate_includes_session_id():
 def test_api_generate_requires_prompt():
     """Raise when API requests omit a prompt."""
     session = DummySession({"task_result": "ok"})
-    client = MeeseeksApiClient(base_url="http://test", timeout=10, session=session)
+    client = MewboApiClient(base_url="http://test", timeout=10, session=session)
     try:
         asyncio.run(client.async_generate({}))
     except ValueError:
@@ -329,7 +329,7 @@ def test_coordinator_update_success():
         async def async_get_heartbeat(self):
             return True
 
-    coordinator = MeeseeksDataUpdateCoordinator(hass=None, client=Client())
+    coordinator = MewboDataUpdateCoordinator(hass=None, client=Client())
     result = asyncio.run(coordinator._async_update_data())
     assert result is True
 
@@ -341,7 +341,7 @@ def test_coordinator_update_failure():
         async def async_get_heartbeat(self):
             raise ApiClientError("bad")
 
-    coordinator = MeeseeksDataUpdateCoordinator(hass=None, client=Client())
+    coordinator = MewboDataUpdateCoordinator(hass=None, client=Client())
     try:
         asyncio.run(coordinator._async_update_data())
     except Exception as exc:
@@ -369,7 +369,7 @@ def test_agent_process_success():
     hass = types.SimpleNamespace()
     entry = types.SimpleNamespace()
     client = types.SimpleNamespace()
-    agent = MeeseeksAgent(hass, entry, client)
+    agent = MewboAgent(hass, entry, client)
 
     async def fake_query(messages):
         return {"response": "hi", "context": {}, "session_id": "sid", "task_result": "hi"}
@@ -387,7 +387,7 @@ def test_agent_process_error():
     hass = types.SimpleNamespace()
     entry = types.SimpleNamespace()
     client = types.SimpleNamespace()
-    agent = MeeseeksAgent(hass, entry, client)
+    agent = MewboAgent(hass, entry, client)
 
     HomeAssistantError = sys.modules["homeassistant.exceptions"].HomeAssistantError
 
@@ -407,7 +407,7 @@ def test_agent_process_uses_history():
     hass = types.SimpleNamespace()
     entry = types.SimpleNamespace()
     client = types.SimpleNamespace()
-    agent = MeeseeksAgent(hass, entry, client)
+    agent = MewboAgent(hass, entry, client)
 
     async def fake_query(messages):
         return {"response": "hi", "context": {}, "session_id": "sid", "task_result": "hi"}
@@ -424,7 +424,7 @@ def test_agent_process_uses_history():
 
 def test_config_flow_show_form():
     """Show config flow form on initial step."""
-    flow = MeeseeksConfigFlow()
+    flow = MewboConfigFlow()
     flow.hass = object()
     result = asyncio.run(flow.async_step_user(None))
     assert result["type"] == "form"
@@ -432,7 +432,7 @@ def test_config_flow_show_form():
 
 def test_config_flow_duplicate(monkeypatch):
     """Abort config flow when duplicate entries exist."""
-    flow = MeeseeksConfigFlow()
+    flow = MewboConfigFlow()
     flow.hass = object()
     flow._async_current_entries = lambda include_ignore=False: [
         types.SimpleNamespace(data={"base_url": "http://test"})
@@ -448,13 +448,13 @@ def test_config_flow_duplicate(monkeypatch):
 
 def test_config_flow_success(monkeypatch):
     """Create config entries after successful validation."""
-    flow = MeeseeksConfigFlow()
+    flow = MewboConfigFlow()
     flow.hass = object()
 
     async def fake_heartbeat(self):
         return True
 
-    monkeypatch.setattr(MeeseeksApiClient, "async_get_heartbeat", fake_heartbeat)
+    monkeypatch.setattr(MewboApiClient, "async_get_heartbeat", fake_heartbeat)
     user_input = {
         "base_url": "http://test",
         "api_key": "token",
@@ -467,13 +467,13 @@ def test_config_flow_success(monkeypatch):
 
 def test_config_flow_error(monkeypatch):
     """Return error form when heartbeat raises."""
-    flow = MeeseeksConfigFlow()
+    flow = MewboConfigFlow()
     flow.hass = object()
 
     async def fake_heartbeat(self):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(MeeseeksApiClient, "async_get_heartbeat", fake_heartbeat)
+    monkeypatch.setattr(MewboApiClient, "async_get_heartbeat", fake_heartbeat)
     user_input = {
         "base_url": "http://test",
         "api_key": "token",
@@ -486,14 +486,14 @@ def test_config_flow_error(monkeypatch):
 
 def test_options_flow_menu():
     """Return options flow menu results."""
-    flow = MeeseeksOptionsFlow(types.SimpleNamespace(options={}))
+    flow = MewboOptionsFlow(types.SimpleNamespace(options={}))
     result = asyncio.run(flow.async_step_init())
     assert result["type"] == "menu"
 
 
 def test_options_flow_other_steps():
     """Cover other options flow steps."""
-    flow = MeeseeksOptionsFlow(types.SimpleNamespace(options={}))
+    flow = MewboOptionsFlow(types.SimpleNamespace(options={}))
     assert asyncio.run(flow.async_step_all_set())["type"] == "menu"
     assert asyncio.run(flow.async_step_general_config())["type"] == "menu"
     assert asyncio.run(flow.async_step_prompt_system())["type"] == "menu"
@@ -502,7 +502,7 @@ def test_options_flow_other_steps():
 
 def test_async_setup_and_unload_entry(monkeypatch):
     """Set up and unload the Home Assistant integration."""
-    from meeseeks_ha_conversation.const import CONF_BASE_URL, CONF_TIMEOUT
+    from mewbo_ha_conversation.const import CONF_BASE_URL, CONF_TIMEOUT
 
     class DummyClient:
         def __init__(self, *args, **kwargs):
@@ -518,8 +518,8 @@ def test_async_setup_and_unload_entry(monkeypatch):
         async def async_config_entry_first_refresh(self):
             return None
 
-    monkeypatch.setattr(ha_module, "MeeseeksApiClient", DummyClient)
-    monkeypatch.setattr(ha_module, "MeeseeksDataUpdateCoordinator", DummyCoordinator)
+    monkeypatch.setattr(ha_module, "MewboApiClient", DummyClient)
+    monkeypatch.setattr(ha_module, "MewboDataUpdateCoordinator", DummyCoordinator)
     monkeypatch.setattr(ha_module, "async_get_clientsession", lambda _hass: None)
 
     ConfigEntry = sys.modules["homeassistant.config_entries"].ConfigEntry
@@ -559,7 +559,7 @@ def test_supported_languages_and_prompt_render():
     hass = types.SimpleNamespace(config=types.SimpleNamespace(location_name="Home"))
     entry = types.SimpleNamespace()
     client = types.SimpleNamespace()
-    agent = MeeseeksAgent(hass, entry, client)
+    agent = MewboAgent(hass, entry, client)
     assert agent.supported_languages == "*"
     rendered = agent._async_generate_prompt("hello", [])
     assert rendered == "hello"
@@ -599,8 +599,8 @@ def test_api_wrapper_decode_json_false():
         async def request(self, **_kwargs):
             return Response()
 
-    client = MeeseeksApiClient(base_url="http://test", timeout=10, session=Session())
-    result = asyncio.run(client._meeseeks_api_wrapper("get", "http://test", decode_json=False))
+    client = MewboApiClient(base_url="http://test", timeout=10, session=Session())
+    result = asyncio.run(client._mewbo_api_wrapper("get", "http://test", decode_json=False))
     assert result == "plain"
 
 
@@ -623,9 +623,9 @@ def test_api_wrapper_handles_404():
         async def request(self, **_kwargs):
             return Response()
 
-    client = MeeseeksApiClient(base_url="http://test", timeout=10, session=Session())
+    client = MewboApiClient(base_url="http://test", timeout=10, session=Session())
     try:
-        asyncio.run(client._meeseeks_api_wrapper("get", "http://test"))
+        asyncio.run(client._mewbo_api_wrapper("get", "http://test"))
     except Exception as exc:
         assert exc.__class__.__name__ == "ApiJsonError"
     else:

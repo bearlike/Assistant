@@ -1,6 +1,6 @@
 """Tests for transcript compaction utilities."""
 
-from meeseeks_core.compaction import micro_compact_events
+from mewbo_core.compaction import micro_compact_events
 
 
 def test_micro_compact_events_truncates_large_results():

@@ -2,9 +2,9 @@
 
 import types
 
-from meeseeks_core.config import set_config_override
-from meeseeks_core.context import ContextBuilder, event_payload_text, render_event_lines
-from meeseeks_core.session_store import SessionStore
+from mewbo_core.config import set_config_override
+from mewbo_core.context import ContextBuilder, event_payload_text, render_event_lines
+from mewbo_core.session_store import SessionStore
 
 
 def _seed_long_session(store: SessionStore, *, original_task: str, extra_tool_results: int) -> str:
@@ -79,9 +79,9 @@ def test_select_context_events_keep_ids(monkeypatch, tmp_path):
             return DummyChain(self._result)
 
     monkeypatch.setattr(
-        "meeseeks_core.context.ChatPromptTemplate", lambda *args, **kwargs: DummyPrompt(selection)
+        "mewbo_core.context.ChatPromptTemplate", lambda *args, **kwargs: DummyPrompt(selection)
     )
-    monkeypatch.setattr("meeseeks_core.context.build_chat_model", lambda **_k: object())
+    monkeypatch.setattr("mewbo_core.context.build_chat_model", lambda **_k: object())
     builder = ContextBuilder(SessionStore(root_dir=str(tmp_path)))
     events = [
         {"type": "user", "payload": {"text": "one"}},
@@ -114,9 +114,9 @@ def test_select_context_events_empty_keep_ids(monkeypatch, tmp_path):
             return DummyChain(self._result)
 
     monkeypatch.setattr(
-        "meeseeks_core.context.ChatPromptTemplate", lambda *args, **kwargs: DummyPrompt(selection)
+        "mewbo_core.context.ChatPromptTemplate", lambda *args, **kwargs: DummyPrompt(selection)
     )
-    monkeypatch.setattr("meeseeks_core.context.build_chat_model", lambda **_k: object())
+    monkeypatch.setattr("mewbo_core.context.build_chat_model", lambda **_k: object())
     builder = ContextBuilder(SessionStore(root_dir=str(tmp_path)))
     events = [
         {"type": "user", "payload": {"text": "one"}},
@@ -150,9 +150,9 @@ def test_select_context_events_empty_candidates(monkeypatch, tmp_path):
             return DummyChain(self._result)
 
     monkeypatch.setattr(
-        "meeseeks_core.context.ChatPromptTemplate", lambda *args, **kwargs: DummyPrompt(selection)
+        "mewbo_core.context.ChatPromptTemplate", lambda *args, **kwargs: DummyPrompt(selection)
     )
-    monkeypatch.setattr("meeseeks_core.context.build_chat_model", lambda **_k: object())
+    monkeypatch.setattr("mewbo_core.context.build_chat_model", lambda **_k: object())
     builder = ContextBuilder(SessionStore(root_dir=str(tmp_path)))
     events = [
         {"type": "user", "payload": ""},
@@ -258,6 +258,75 @@ def test_context_builder_anchor_survives_filtered_event_types(tmp_path):
     assert len(snapshot.recent_events) == 4
 
 
+def test_context_builder_drops_events_at_or_before_compaction_boundary(tmp_path):
+    """After a ``context_compacted`` marker, prior events live inside the
+    summary — replaying them under "Recent conversation:" would leak the
+    very content the user asked us to summarize away."""
+    set_config_override(
+        {"context": {"recent_event_limit": 8, "selection_enabled": False}, "llm": {}}
+    )
+    store = SessionStore(root_dir=str(tmp_path))
+    builder = ContextBuilder(store)
+    session_id = store.create_session()
+
+    # Pre-boundary noise (must be invisible to the next prompt).
+    store.append_event(session_id, {"type": "user", "payload": {"text": "old task"}})
+    for idx in range(5):
+        store.append_event(
+            session_id,
+            {
+                "type": "tool_result",
+                "payload": {"tool_id": "t", "result": f"old-{idx}", "success": True},
+            },
+        )
+    # Boundary.
+    store.append_event(
+        session_id,
+        {
+            "type": "context_compacted",
+            "payload": {
+                "mode": "user", "model": "m", "tokens_before": 100,
+                "tokens_saved": 80, "tokens_after": 20,
+                "events_summarized": 6, "summary": "old work summarized",
+                "fallback": False,
+            },
+        },
+    )
+    store.save_summary(session_id, "old work summarized")
+    # Post-boundary: a fresh user turn arrives.
+    store.append_event(session_id, {"type": "user", "payload": {"text": "new task"}})
+
+    snapshot = builder.build(session_id, "new task", model_name=None)
+
+    texts = [e.get("payload", {}).get("text", "") for e in snapshot.recent_events]
+    results = [
+        e.get("payload", {}).get("result", "")
+        for e in snapshot.recent_events
+        if e.get("type") == "tool_result"
+    ]
+    assert "new task" in texts
+    assert "old task" not in texts, "pre-boundary anchor must be excluded"
+    assert all(not r.startswith("old-") for r in results), (
+        "pre-boundary tool_results must be excluded"
+    )
+    assert snapshot.summary == "old work summarized"
+
+
+def test_context_builder_no_boundary_means_full_transcript_visible(tmp_path):
+    """Sanity: when no ``context_compacted`` event is present, behavior is
+    unchanged — the existing anchor + recent_events logic still applies."""
+    set_config_override(
+        {"context": {"recent_event_limit": 8, "selection_enabled": False}, "llm": {}}
+    )
+    store = SessionStore(root_dir=str(tmp_path))
+    builder = ContextBuilder(store)
+    session_id = _seed_long_session(store, original_task="anchored", extra_tool_results=3)
+
+    snapshot = builder.build(session_id, "continue", model_name=None)
+    texts = [e.get("payload", {}).get("text", "") for e in snapshot.recent_events]
+    assert "anchored" in texts
+
+
 def test_recovery_continue_rendered_context_contains_original_task(tmp_path):
     """End-to-end: after recovery, the rendered system-prompt context bullet
     list includes the original user task.
@@ -269,11 +338,11 @@ def test_recovery_continue_rendered_context_contains_original_task(tmp_path):
     set_config_override(
         {"context": {"recent_event_limit": 4, "selection_enabled": False}, "llm": {}}
     )
-    from meeseeks_core.session_runtime import SessionRuntime
+    from mewbo_core.session_runtime import SessionRuntime
 
     store = SessionStore(root_dir=str(tmp_path))
     runtime = SessionRuntime(session_store=store)
-    original_task = "restructure the Meeseeks landing page layout"
+    original_task = "restructure the Mewbo landing page layout"
     session_id = _seed_long_session(store, original_task=original_task, extra_tool_results=20)
     store.append_event(
         session_id,

@@ -1,6 +1,6 @@
 # Docker Compose Deployment
 
-The recommended way to run Meeseeks in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single `docker compose up` starts the full stack. It includes the API, console, MongoDB, and the nginx proxy for the Web IDE feature.
+The recommended way to run Mewbo in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single `docker compose up` starts the full stack. It includes the API, console, MongoDB, and the nginx proxy for the Web IDE feature.
 
 ## Quick Start
 
@@ -43,8 +43,8 @@ All variables live in `docker.env` (copied from `docker.example.env`).
 | `VITE_API_BASE_URL` | No | _(empty)_ | Override the API URL the browser sends requests to. Leave empty when using the nginx proxy (the console proxies `/api/` internally). |
 | `DOCKER_GID` | No | `999` | GID of the `docker` group on the host (needed for Web IDE). Run `stat -c '%g' /var/run/docker.sock`. |
 | `MONGO_PORT` | No | `27018` | Host port MongoDB is exposed on. |
-| `MONGO_INITDB_ROOT_USERNAME` | No | `meeseeks` | MongoDB root username. |
-| `MONGO_INITDB_ROOT_PASSWORD` | No | `meeseeks` | MongoDB root password. Change this in production. |
+| `MONGO_INITDB_ROOT_USERNAME` | No | `mewbo` | MongoDB root username. |
+| `MONGO_INITDB_ROOT_PASSWORD` | No | `mewbo` | MongoDB root password. Change this in production. |
 
 LLM provider keys, Langfuse credentials, and other runtime settings belong in `configs/app.json`, not `docker.env`. See [Configuration](configuration.md).
 
@@ -54,12 +54,12 @@ The Compose file defines four services:
 
 | Service | Image | Default port | Purpose |
 |---------|-------|-------------|---------|
-| `api` | `ghcr.io/bearlike/meeseeks-api` | `5125` | Gunicorn + Flask REST API. Runs as `HOST_UID:HOST_GID`. |
-| `console` | `ghcr.io/bearlike/meeseeks-console` | `3001` | nginx serving the React SPA. Proxies `/api/` to the API. |
+| `api` | `ghcr.io/bearlike/mewbo-api` | `5125` | Gunicorn + Flask REST API. Runs as `HOST_UID:HOST_GID`. |
+| `console` | `ghcr.io/bearlike/mewbo-console` | `3001` | nginx serving the React SPA. Proxies `/api/` to the API. |
 | `mongo` | `mongo:7` | `27018` (host) | MongoDB for session storage and Web IDE state. |
 | `ide-proxy` | `nginx:1.27-alpine` | `127.0.0.1:5126` | nginx reverse proxy for per-session code-server containers. |
 
-Both `api` and `console` use **host networking** (`network_mode: host`), so they share `127.0.0.1` with the host. The `ide-proxy` runs on the `meeseeks-ide` bridge network and is bound to loopback by default.
+Both `api` and `console` use **host networking** (`network_mode: host`), so they share `127.0.0.1` with the host. The `ide-proxy` runs on the `mewbo-ide` bridge network and is bound to loopback by default.
 
 ## Named Volumes
 
@@ -67,7 +67,7 @@ Both `api` and `console` use **host networking** (`network_mode: host`), so they
 |--------|-----------|---------|
 | `api-data` | `/app/data` | Session transcripts and summaries. |
 | `mongo-data` | `/data/db` (MongoDB) | MongoDB data files. |
-| `plans-data` | `/tmp/meeseeks/plans` | Plan-mode scratch files (survive restarts). |
+| `plans-data` | `/tmp/mewbo/plans` | Plan-mode scratch files (survive restarts). |
 
 ## Mounting Project Directories
 
@@ -128,8 +128,8 @@ docker compose up --build -d
 
 | Image | Purpose |
 |-------|---------|
-| `ghcr.io/bearlike/meeseeks-api` | REST API (Gunicorn + Flask). |
-| `ghcr.io/bearlike/meeseeks-console` | Web console (nginx + React SPA). |
-| `ghcr.io/bearlike/meeseeks-base` | Base image with Python, Node, and core packages. Used as build arg for the API image. |
+| `ghcr.io/bearlike/mewbo-api` | REST API (Gunicorn + Flask). |
+| `ghcr.io/bearlike/mewbo-console` | Web console (nginx + React SPA). |
+| `ghcr.io/bearlike/mewbo-base` | Base image with Python, Node, and core packages. Used as build arg for the API image. |
 
 For production TLS, CORS hardening, and observability setup, see [Production Setup](deployment-production.md).

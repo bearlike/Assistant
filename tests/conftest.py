@@ -8,11 +8,11 @@ from pathlib import Path
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SOURCE_PATHS = [
     ROOT,
-    os.path.join(ROOT, "packages", "meeseeks_core", "src"),
-    os.path.join(ROOT, "packages", "meeseeks_tools", "src"),
-    os.path.join(ROOT, "apps", "meeseeks_cli", "src"),
-    os.path.join(ROOT, "apps", "meeseeks_api", "src"),
-    os.path.join(ROOT, "meeseeks_ha_conversation"),
+    os.path.join(ROOT, "packages", "mewbo_core", "src"),
+    os.path.join(ROOT, "packages", "mewbo_tools", "src"),
+    os.path.join(ROOT, "apps", "mewbo_cli", "src"),
+    os.path.join(ROOT, "apps", "mewbo_api", "src"),
+    os.path.join(ROOT, "mewbo_ha_conversation"),
 ]
 for path in SOURCE_PATHS:
     if path not in sys.path:
@@ -20,7 +20,7 @@ for path in SOURCE_PATHS:
 
 import pytest
 
-from meeseeks_core.config import (
+from mewbo_core.config import (
     AppConfig,
     reset_config,
     set_app_config_path,
@@ -44,7 +44,7 @@ def app_config_file(tmp_path: Path):
 def _reset_mcp_pool():
     """Reset the MCP connection pool singleton between tests."""
     try:
-        from meeseeks_tools.integration.mcp_pool import reset_mcp_pool
+        from mewbo_tools.integration.mcp_pool import reset_mcp_pool
     except ImportError:
         yield
         return

@@ -1,0 +1,82 @@
+name: Docs Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup-pr-version:
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
+      !contains(github.actor, '[bot]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install docs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv sync --group docs --extra ha
+
+      - name: Configure git for mike
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Delete PR docs version
+        run: |
+          VERSION="pr-${{ github.event.pull_request.number }}"
+          PATH=".venv/bin:$PATH" .venv/bin/mike delete --push "$VERSION" || true
+
+  bulk-delete-pr-versions:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install docs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv sync --group docs --extra ha
+
+      - name: Configure git for mike
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Delete all pr-* versions
+        run: |
+          versions=$(PATH=".venv/bin:$PATH" .venv/bin/mike list | grep -E '^pr-[0-9]+' | awk '{print $1}' || true)
+          if [ -z "$versions" ]; then
+            echo "No pr-* versions found."
+            exit 0
+          fi
+          echo "Deleting: $versions"
+          for version in $versions; do
+            PATH=".venv/bin:$PATH" .venv/bin/mike delete "$version"
+          done
+          git push origin gh-pages

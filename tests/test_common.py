@@ -1,7 +1,7 @@
 """Tests for common helpers."""
 
-import meeseeks_core.common as common
-from meeseeks_core.config import set_config_override
+import mewbo_core.common as common
+from mewbo_core.config import set_config_override
 
 
 def test_get_logger_uses_config_and_defaults(monkeypatch):

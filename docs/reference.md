@@ -2,84 +2,84 @@
 
 This page is generated from inline docstrings via mkdocstrings. The sections below are grouped by package or client.
 
-## packages/meeseeks_core (core runtime)
-::: meeseeks_core.orchestrator
+## packages/mewbo_core (core runtime)
+::: mewbo_core.orchestrator
 
-::: meeseeks_core.task_master
+::: mewbo_core.task_master
 
-::: meeseeks_core.tool_use_loop
+::: mewbo_core.tool_use_loop
 
-::: meeseeks_core.agent_context
+::: mewbo_core.agent_context
 
-::: meeseeks_core.hypervisor
+::: mewbo_core.hypervisor
 
-::: meeseeks_core.spawn_agent
+::: mewbo_core.spawn_agent
 
-::: meeseeks_core.planning
+::: mewbo_core.planning
 
-::: meeseeks_core.session_runtime
+::: mewbo_core.session_runtime
 
-::: meeseeks_core.session_store
+::: mewbo_core.session_store
 
-::: meeseeks_core.context
+::: mewbo_core.context
 
-::: meeseeks_core.compaction
+::: mewbo_core.compaction
 
-::: meeseeks_core.token_budget
+::: mewbo_core.token_budget
 
-::: meeseeks_core.tool_registry
+::: mewbo_core.tool_registry
 
-::: meeseeks_core.classes
+::: mewbo_core.classes
 
-::: meeseeks_core.types
+::: mewbo_core.types
 
-::: meeseeks_core.config
+::: mewbo_core.config
 
-::: meeseeks_core.components
+::: mewbo_core.components
 
-::: meeseeks_core.permissions
+::: mewbo_core.permissions
 
-::: meeseeks_core.hooks
+::: mewbo_core.hooks
 
-::: meeseeks_core.common
+::: mewbo_core.common
 
-::: meeseeks_core.errors
+::: mewbo_core.errors
 
-::: meeseeks_core.notifications
+::: mewbo_core.notifications
 
-::: meeseeks_core.share_store
+::: mewbo_core.share_store
 
-::: meeseeks_core.llm
+::: mewbo_core.llm
 
-::: meeseeks_core.plugins
+::: mewbo_core.plugins
 
-::: meeseeks_core.agent_registry
+::: mewbo_core.agent_registry
 
-## packages/meeseeks_tools (tool integrations)
-::: meeseeks_tools.integration.mcp
+## packages/mewbo_tools (tool integrations)
+::: mewbo_tools.integration.mcp
 
-::: meeseeks_tools.integration.homeassistant
+::: mewbo_tools.integration.homeassistant
 
-::: meeseeks_tools.integration.lsp
+::: mewbo_tools.integration.lsp
 
-::: meeseeks_tools.integration.lsp.manager
+::: mewbo_tools.integration.lsp.manager
 
-::: meeseeks_tools.integration.lsp.servers
+::: mewbo_tools.integration.lsp.servers
 
 ## Clients (apps/)
-- API entry point: `apps/meeseeks_api/src/meeseeks_api/backend.py`
-- Console: `apps/meeseeks_console/` (React + Vite, connects via REST API)
-- CLI entry point: `apps/meeseeks_cli/src/meeseeks_cli/cli_master.py`
+- API entry point: `apps/mewbo_api/src/mewbo_api/backend.py`
+- Console: `apps/mewbo_console/` (React + Vite, connects via REST API)
+- CLI entry point: `apps/mewbo_cli/src/mewbo_cli/cli_master.py`
 
-## Home Assistant integration (meeseeks_ha_conversation)
-::: meeseeks_ha_conversation.api
+## Home Assistant integration (mewbo_ha_conversation)
+::: mewbo_ha_conversation.api
 
-::: meeseeks_ha_conversation.config_flow
+::: mewbo_ha_conversation.config_flow
 
-::: meeseeks_ha_conversation.const
+::: mewbo_ha_conversation.const
 
-::: meeseeks_ha_conversation.coordinator
+::: mewbo_ha_conversation.coordinator
 
-::: meeseeks_ha_conversation.exceptions
+::: mewbo_ha_conversation.exceptions
 
-::: meeseeks_ha_conversation.helpers
+::: mewbo_ha_conversation.helpers

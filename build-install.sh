@@ -17,9 +17,9 @@ function print_usage {
 install_all() {
     uv venv .venv
     uv pip install -e .[dev]
-    uv pip install -e packages/meeseeks_core -e packages/meeseeks_tools \
-        -e apps/meeseeks_api -e apps/meeseeks_cli \
-        -e meeseeks_ha_conversation
+    uv pip install -e packages/mewbo_core -e packages/mewbo_tools \
+        -e apps/mewbo_api -e apps/mewbo_cli \
+        -e mewbo_ha_conversation
 }
 
 case ${1:-} in
@@ -27,22 +27,22 @@ case ${1:-} in
         install_all
         ;;
     api)
-        uv pip install -e apps/meeseeks_api
+        uv pip install -e apps/mewbo_api
         ;;
     console)
-        cd apps/meeseeks_console && npm install
+        cd apps/mewbo_console && npm install
         ;;
     cli)
-        uv pip install -e apps/meeseeks_cli
+        uv pip install -e apps/mewbo_cli
         ;;
     core)
-        uv pip install -e packages/meeseeks_core
+        uv pip install -e packages/mewbo_core
         ;;
     tools)
-        uv pip install -e packages/meeseeks_tools
+        uv pip install -e packages/mewbo_tools
         ;;
     ha)
-        uv pip install -e meeseeks_ha_conversation
+        uv pip install -e mewbo_ha_conversation
         ;;
     *)
         print_usage

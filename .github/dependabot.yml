@@ -25,7 +25,7 @@ updates:
       include: "scope"
 
   - package-ecosystem: "pip"
-    directory: "/packages/meeseeks_core"
+    directory: "/packages/mewbo_core"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -49,7 +49,7 @@ updates:
       include: "scope"
 
   - package-ecosystem: "pip"
-    directory: "/packages/meeseeks_tools"
+    directory: "/packages/mewbo_tools"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -73,7 +73,7 @@ updates:
       include: "scope"
 
   - package-ecosystem: "pip"
-    directory: "/apps/meeseeks_api"
+    directory: "/apps/mewbo_api"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -97,7 +97,7 @@ updates:
       include: "scope"
 
   - package-ecosystem: "npm"
-    directory: "/apps/meeseeks_console"
+    directory: "/apps/mewbo_console"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -121,7 +121,7 @@ updates:
       include: "scope"
 
   - package-ecosystem: "pip"
-    directory: "/apps/meeseeks_cli"
+    directory: "/apps/mewbo_cli"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -145,7 +145,7 @@ updates:
       include: "scope"
 
   - package-ecosystem: "pip"
-    directory: "/meeseeks_ha_conversation"
+    directory: "/mewbo_ha_conversation"
     schedule:
       interval: "weekly"
       day: "monday"

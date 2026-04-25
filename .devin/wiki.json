@@ -1,117 +1,117 @@
 {
   "repo_notes": [
     {
-      "content": "Developer documentation only. Mirror the repo structure and module boundaries (packages/, apps/, meeseeks_ha_conversation/) with minimal redundancy. Every page must include a meaningful Mermaid diagram that matches the page purpose. Name exact classes, functions, and module paths. Clarify that the API exposes polling; the CLI runs the runtime in-process (no polling); the web console connects via the REST API. Focus on system behavior, abstractions, and integration contracts rather than usage tips. Avoid anthropomorphic language when describing LLM behavior (use 'the model generates' not 'the AI decides')."
+      "content": "Developer documentation only. Mirror the repo structure and module boundaries (packages/, apps/, mewbo_ha_conversation/) with minimal redundancy. Every page must include a meaningful Mermaid diagram that matches the page purpose. Name exact classes, functions, and module paths. Clarify that the API exposes polling; the CLI runs the runtime in-process (no polling); the web console connects via the REST API. Focus on system behavior, abstractions, and integration contracts rather than usage tips. Avoid anthropomorphic language when describing LLM behavior (use 'the model generates' not 'the AI decides')."
     }
   ],
   "pages": [
     {
       "title": "Overview & Repo Map",
-      "purpose": "Single entry point: repo goals, module boundaries (packages/, apps/, meeseeks_ha_conversation/), and top-level folder ownership. Highlights the shared-host model. New in v0.0.10: plugin system (plugins.py, agent_registry.py in meeseeks_core), Web IDE integration (ide.py/ide_routes.py in meeseeks_api), LSP code intelligence (meeseeks_tools/integration/lsp/), chat platform channel adapters (Nextcloud Talk + Email), and conversation fork/edit/regenerate."
+      "purpose": "Single entry point: repo goals, module boundaries (packages/, apps/, mewbo_ha_conversation/), and top-level folder ownership. Highlights the shared-host model. New in v0.0.10: plugin system (plugins.py, agent_registry.py in mewbo_core), Web IDE integration (ide.py/ide_routes.py in mewbo_api), LSP code intelligence (mewbo_tools/integration/lsp/), chat platform channel adapters (Nextcloud Talk + Email), and conversation fork/edit/regenerate."
     },
     {
-      "title": "Core Runtime & Orchestration (meeseeks_core)",
+      "title": "Core Runtime & Orchestration (mewbo_core)",
       "purpose": "How the shared core runtime and orchestration engine work: SessionRuntime as the facade, Orchestrator as the session driver, ToolUseLoop as the execution engine. Covers the single-async-loop architecture where the LLM drives all tool calls via native bind_tools.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Session Runtime, Store & Event Log",
       "purpose": "SessionRuntime facade, RunRegistry (thread tracking), SessionStore (JSONL transcripts, tags, archives, attachments). Fork-from-message: resolve_session(fork_from=id_or_tag, fork_at_ts=iso_ts) creates a new session with only events up to the given timestamp \u2014 enables edit-and-regenerate from any point in history. Per-session temporary directory as default CWD (assigned at session creation). Polling is API-only; CLI runs in-process.",
-      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Tool-Use Loop Execution Engine",
       "purpose": "ToolUseLoop.run() as the single async execution engine: message construction (_build_messages with system prompt, project instructions, context, attachments, tool guidance, skill catalog, depth guidance), LLM invocation via bind_tools, tool dispatch with concurrency-safe partitioning (_partition_tool_calls batches concurrent-safe tools vs exclusive tools), per-tool timeout (asyncio.wait_for with configurable ToolSpec.timeout), non-blocking spawn for root agent (returns immediately with agent_id), check_agents/steer_agent management tools (root-only), user steering (message_queue drain and interrupt_step check), step budget tracking with graduated enforcement (NL warnings, not kill), forced synthesis with pending children at step limit, and cancellation.",
-      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Agent Hypervisor & Sub-Agent Lifecycle",
       "purpose": "AgentHypervisor as a dual-layer autonomous system: reflexes (code-level step tracking, stall detection via background _watchdog, budget enforcement via NL warning injection) and brain (root LLM sees global agent tree via render_agent_tree(), uses check_agents and steer_agent tools). 6-state lifecycle (submitted \u2192 running \u2192 completed/failed/cancelled/rejected per A2A v1.0). AgentResult as structured Communication Units (content, status, steps_used, summary, warnings, artifacts). Non-blocking spawn for root (epoll model \u2014 react to notifications, don't poll) vs blocking spawn for sub-agents. Bidirectional messaging (parent\u2192child via send_message/steer_agent, child\u2192parent via _run_child_lifecycle on completion). AgentHandle (per-agent runtime state with progress_note, result, message_queue). 3-phase graceful cleanup (cancel \u2192 wait \u2192 force-mark). SpawnAgentTool with filter_specs() for tool scoping.",
-      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "LLM Abstraction & Model Routing",
       "purpose": "ChatModel protocol, build_chat_model(), LiteLLM multi-provider gateway, provider-qualified model names, per-role model selection (plan/tool/default), reasoning-effort configuration (reasoning_effort field with model allowlist), proxy_model_prefix (default 'openai' \u2014 prepended to bare model names when llm.api_base is set for proxy routing, configurable to match proxy's expected prefix), and model_prefers_structured_patch() (returns bool for edit tool auto-selection). specs_to_langchain_tools() for converting ToolSpecs to LLM-bindable schemas.",
-      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Context Builder, Summaries & Compaction",
       "purpose": "ContextBuilder.build() pipeline: transcript loading, event filtering, recent event selection, attachment reading, token budget tracking, auto-compaction triggers. Token budget now accounts for tool schema + system prompt overhead (~20-25k tokens). context_compacted events emitted at both proactive (pre-limit) and reactive (post-ContextWindowExceededError) compaction \u2014 visible in Console and CLI. Mid-loop reactive compaction prevents crashes. Two-mode compaction: FULL (summarizes everything) and PARTIAL (keeps recent events verbatim). Post-compact file restoration re-injects recently referenced files within token budgets. Micro-compaction (ANSI stripping + truncation) via pre_compact hook. AgentHandle.compaction_count tracked for hypervisor tree visibility.",
-      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Permissions, Hooks & Tool Execution Gates",
       "purpose": "PermissionPolicy (allow/deny/ask rules, fnmatch on tool_id and operation), approval callbacks (auto_approve, config-driven, interactive). HookManager with error isolation (all hooks wrapped in try/except \u2014 failing hook logs warning but doesn't block execution). Lifecycle hooks: on_session_start, on_session_end, on_compact. External command hooks via HooksConfig with fnmatch-based tool matcher filtering. Pre/post tool use hooks. Agent lifecycle hooks (on_agent_start, on_agent_stop).",
-      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Data Models, Event Types & Payload Schemas",
       "purpose": "ActionStep (tool_id/operation/tool_input), PlanStep, TaskQueue, OrchestrationState, EventRecord, ToolResult (content/success/error/truncated), and typed payload schemas (UserPayload, AssistantPayload, ToolResultPayload with kind discriminator, ActionPlanPayload, CompletionPayload, PermissionPayload, SubAgentPayload with lifecycle state, AgentMessagePayload). Event type discrimination and JSONL serialization. Structured tool results with kind field ('shell', 'diff', 'file', 'dir') for frontend routing.",
-      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Skills System",
       "purpose": "SkillRegistry discovers SKILL.md files from ~/.claude/skills/ and .claude/skills/. Plugin skill loading via load_extra_dir(path) (adds skills from plugin directories) and load_command_file(path) (loads skills from plugin commands.json). No-override semantics: installed plugins cannot shadow user-defined skills. Skill catalog injected into system prompt for LLM auto-invocation via activate_skill. User /skill-name invocations detected in Orchestrator. Skills scope tools via allowed-tools (filter_specs()). merge_plugin_hooks() translates Claude Code plugin hooks.json format into HookManager callbacks with ${CLAUDE_PLUGIN_ROOT} substitution.",
-      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
-      "title": "Tool Layer (meeseeks_tools)",
-      "purpose": "Tool layer boundaries: local tools (edit, shell, file read/list), MCP tools, LSP code intelligence. AbstractTool base class with get_state/set_state/run dispatch. MockSpeaker result container. Tool results use kind-discriminated dicts (kind: 'shell'|'diff'|'file'|'dir'|'lsp') for structured frontend rendering. LSP tool (lsp_tool in meeseeks_tools/integration/lsp/): graceful absence when pygls/lsprotocol not installed.",
+      "title": "Tool Layer (mewbo_tools)",
+      "purpose": "Tool layer boundaries: local tools (edit, shell, file read/list), MCP tools, LSP code intelligence. AbstractTool base class with get_state/set_state/run dispatch. MockSpeaker result container. Tool results use kind-discriminated dicts (kind: 'shell'|'diff'|'file'|'dir'|'lsp') for structured frontend rendering. LSP tool (lsp_tool in mewbo_tools/integration/lsp/): graceful absence when pygls/lsprotocol not installed.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Tool Registry & Spec System",
       "purpose": "ToolRegistry, ToolSpec (tool_id, kind, metadata with schema/capabilities/reflect, factory for lazy instantiation), filter_specs() for allowlist/denylist filtering (shared by Orchestrator, SpawnAgentTool, and skills), specs_to_langchain_tools() conversion, and tool disabling with reasons. Conditional tool registration pattern: _edit_tool_spec_and_manifest() reads AgentConfig.edit_tool and returns matching ToolSpec + manifest entry for both _default_registry() and _built_in_manifest_entries() \u2014 single conditional, two consumers. Capabilities metadata (e.g. 'file_write') enables intent-based tool filtering in planning.",
-      "parent": "Tool Layer (meeseeks_tools)"
+      "parent": "Tool Layer (mewbo_tools)"
     },
     {
       "title": "Configurable Edit Tool Mechanism",
       "purpose": "Two edit tool mechanisms selectable via AgentConfig.edit_tool: 'search_replace_block' (Aider-style) and 'structured_patch' (per-file exact). When edit_tool is empty (default), ToolUseLoop._configured_edit_tool_id() auto-selects via llm.model_prefers_structured_patch(model_name) \u2014 checking the model name string against a known list of structured-patch-preferring models. Explicit config always overrides auto-detection. Shared utilities in edit_common.py. Both tools output {'kind': 'diff'} for DiffCard compatibility. End-to-end consistency: ToolSpec bundles schema + prompt_path + factory.",
-      "parent": "Tool Layer (meeseeks_tools)"
+      "parent": "Tool Layer (mewbo_tools)"
     },
     {
       "title": "Local Tools (File Edit, Shell, Read)",
       "purpose": "AiderEditBlockTool (SEARCH/REPLACE format with aider_bridge parsing, fuzzy matching, diff generation), FileEditTool (per-file exact string replacement, strict matching, ambiguity rejection), shared edit_common.py utilities (path resolution, before-state reading, unified diff computation via difflib, canonical result formatting). AiderShellTool (command execution with structured {kind: 'shell'} results including exit_code, stdout, stderr, duration_ms). AiderReadFileTool and AiderListDirTool (read-only tools with {kind: 'file'}/{kind: 'dir'} results). All tools use resolve_safe_path() to prevent directory traversal. Approval gating for set operations.",
-      "parent": "Tool Layer (meeseeks_tools)"
+      "parent": "Tool Layer (mewbo_tools)"
     },
     {
       "title": "MCP Tool Discovery & Schema Validation",
       "purpose": "MCP config (configs/mcp.json global, .mcp.json project-scoped), server discovery with project CWD propagation, schema normalization, per-server failure isolation, _coerce_mcp_tool_input validation, and manifest caching. MCPConnectionPool (persistent MCP connections with memoization, automatic reconnection after 3 consecutive errors, per-request 60s timeout, config change detection). MCPToolRunner uses pool as primary path with legacy one-shot client as fallback.",
-      "parent": "Tool Layer (meeseeks_tools)"
+      "parent": "Tool Layer (mewbo_tools)"
     },
     {
-      "title": "REST API (meeseeks_api)",
+      "title": "REST API (mewbo_api)",
       "purpose": "Flask-restx API: route structure, authentication (X-API-Key from docker.env MASTER_API_TOKEN), CORS, how handlers bind to SessionRuntime, NotificationStore, ShareStore, and the tool registry. Config API endpoints for reading/patching app.json at runtime.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "API Endpoints, Polling & Steering",
       "purpose": "Session CRUD, async query execution (start_async + 202), event polling (/events?after=), SSE streaming (/stream), user steering (/message, /interrupt), agent tree (/agents), attachments, share tokens, export, notifications, config API (GET/PATCH /config), legacy sync /query. Plugin management: GET /api/plugins, GET/POST /api/plugins/marketplace, DELETE /api/plugins/<name>. Web IDE lifecycle: POST/DELETE /api/sessions/{id}/ide, POST /api/sessions/{id}/ide/extend. Git diff: GET /api/sessions/{id}/git-diff?scope=uncommitted|branch. Session fork: POST /api/sessions/{id}/fork with from_ts, model, compact, tag params. Includes allowed_tools passthrough from context.mcp_tools through SessionRuntime \u2192 Orchestrator \u2192 ToolUseLoop.",
-      "parent": "REST API (meeseeks_api)"
+      "parent": "REST API (mewbo_api)"
     },
     {
-      "title": "Web Console (meeseeks_console)",
+      "title": "Web Console (mewbo_console)",
       "purpose": "React 18 + Vite + Tailwind CSS frontend. Session management with polling (1s interval). Conversation timeline with turn grouping. ReviewPane accordion: scope selector (last-turn / uncommitted / branch) backed by GET /api/sessions/{id}/git-diff, replaces old single-file DiffView. ForkFromHereButton and inline edit on user messages for edit-and-regenerate with model override. PluginsView: marketplace browser + install/uninstall. IdeLoader: per-session code-server container launch with floral background animation. <Button> primitive (components/ui/Button.tsx): all buttons use this with variants (primary/secondary/ghost/danger) and sizes. Session header redesigned to one-row layout with IDE capsule and overflow menu. useWebIdeEnabled(), useIdeStatus() hooks. MCP tool/skill/project pickers with TTL cache (60s). No state management or UI component libraries.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Console UI Components",
       "purpose": "Tool card hierarchy: LogEventCard (base \u2014 expand/collapse, accent border), TerminalCard (dark shell card), DiffCard (always-dark, diff2html, file icons, collapsed preview). Shared primitives: CopyButton (visible at rest at 50% opacity), Badge, StatusBadge, Popover, MarkdownContent. <Button> primitive in components/ui/Button.tsx (variants, sizes, iconOnly). ReviewPane (ReviewPane.tsx): accordion file list with 3-scope selector (last-turn/uncommitted/branch), useGitDiff hook, extracts non-component DiffCard utils to utils/diffCard.ts. PluginsView (PluginsView.tsx): installed plugin table + marketplace browser with search/category filter. Edit-mode MessageBubble: textarea fills max-w-[85%], dashed accent border, info note below. Failed file edits render as DiffCard with error state (synthesized from tool_input). buildLogs() and parseStructuredResult() for kind-discriminated routing.",
-      "parent": "Web Console (meeseeks_console)"
+      "parent": "Web Console (mewbo_console)"
     },
     {
-      "title": "Terminal CLI (meeseeks_cli)",
+      "title": "Terminal CLI (mewbo_cli)",
       "purpose": "CLI flow: run_cli entry point, Rich-based rendering (plan checklist, tool result cards, response panel), AgentDisplayManager + Rich Live for agent tree display during execution (collapsible tree, spinner, elapsed time, keybindings), DialogFactory (Textual-based interactive prompts), in-process SessionRuntime usage (sync, no polling), slash commands, and session management. Approval styles: inline (plain prompt), textual (TUI dialog), aider (diff-style).",
       "parent": "Overview & Repo Map"
     },
     {
-      "title": "Home Assistant Integration (meeseeks_ha_conversation)",
-      "purpose": "HA Conversation integration: async HTTP client calling POST /api/query on the Meeseeks API, MeeseeksApiClient, response parsing, and config flow.",
+      "title": "Home Assistant Integration (mewbo_ha_conversation)",
+      "purpose": "HA Conversation integration: async HTTP client calling POST /api/query on the Mewbo API, MewboApiClient, response parsing, and config flow.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Configuration & Runtime Settings",
-      "purpose": "AppConfig hierarchy: RuntimeConfig, LLMConfig (reasoning_effort, reasoning_effort_models, proxy_model_prefix), ContextConfig, TokenBudgetConfig, ReflectionConfig, LangfuseConfig, HomeAssistantConfig, PermissionsConfig, CLIConfig, ChatConfig, APIConfig, AgentConfig (edit_tool, max_depth, max_concurrent, max_iters, sub_agent_max_steps, default_denied_tools, allowed_models, web_ide: WebIdeConfig), HooksConfig, ProjectConfig, PluginsConfig (registry_paths, marketplaces, install_path with resolver methods). Configs/app.json and configs/mcp.json resolution with MEESEEKS_HOME discovery chain. WebIdeConfig (enabled, image, port, ttl_hours, data_dir). PluginsConfig.resolve_registry_paths() / resolve_install_dir() / resolve_marketplace_dirs(). Conditional component enabling via evaluate() + ComponentStatus. Field validators with normalization. ConfigDict(extra='forbid').",
+      "purpose": "AppConfig hierarchy: RuntimeConfig, LLMConfig (reasoning_effort, reasoning_effort_models, proxy_model_prefix), ContextConfig, TokenBudgetConfig, ReflectionConfig, LangfuseConfig, HomeAssistantConfig, PermissionsConfig, CLIConfig, ChatConfig, APIConfig, AgentConfig (edit_tool, max_depth, max_concurrent, max_iters, sub_agent_max_steps, default_denied_tools, allowed_models, web_ide: WebIdeConfig), HooksConfig, ProjectConfig, PluginsConfig (registry_paths, marketplaces, install_path with resolver methods). Configs/app.json and configs/mcp.json resolution with MEWBO_HOME discovery chain. WebIdeConfig (enabled, image, port, ttl_hours, data_dir). PluginsConfig.resolve_registry_paths() / resolve_install_dir() / resolve_marketplace_dirs(). Conditional component enabling via evaluate() + ComponentStatus. Field validators with normalization. ConfigDict(extra='forbid').",
       "parent": "Overview & Repo Map"
     },
     {
@@ -126,38 +126,38 @@
     },
     {
       "title": "Tracing, Logging & Diagnostics",
-      "purpose": "Loguru-based logging with get_logger(), session_log_context for per-session log capture. Langfuse tracing (session-scoped traces, trace names: meeseeks-tool-use, meeseeks-task-master, meeseeks-context). Session investigation methodology: MongoDB transcript (authoritative event log) \u2192 Langfuse traces (LLM conversation chain with full system prompts and tool bindings) \u2192 API config (app.json, docker.env) \u2192 Docker environment. Error propagation through ToolUseLoop._safe_execute with per-tool timeout and structured AgentError.",
+      "purpose": "Loguru-based logging with get_logger(), session_log_context for per-session log capture. Langfuse tracing (session-scoped traces, trace names: mewbo-tool-use, mewbo-task-master, mewbo-context). Session investigation methodology: MongoDB transcript (authoritative event log) \u2192 Langfuse traces (LLM conversation chain with full system prompts and tool bindings) \u2192 API config (app.json, docker.env) \u2192 Docker environment. Error propagation through ToolUseLoop._safe_execute with per-tool timeout and structured AgentError.",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Building a New Client",
-      "purpose": "Step-by-step walkthrough for extending Meeseeks with a new interface: initialize core services (load_registry with conditional edit tool, permissions, SessionRuntime), resolve sessions, handle slash commands and skill invocations, choose sync vs async execution, consume session events (including kind-discriminated tool results for frontend rendering), project instructions loading mechanism (CLAUDE.md/AGENTS.md with hierarchical discovery from user/project/rules/local levels, meeseeks:noload marker, subtree discovery for nested instructions and skills).",
+      "purpose": "Step-by-step walkthrough for extending Mewbo with a new interface: initialize core services (load_registry with conditional edit tool, permissions, SessionRuntime), resolve sessions, handle slash commands and skill invocations, choose sync vs async execution, consume session events (including kind-discriminated tool results for frontend rendering), project instructions loading mechanism (CLAUDE.md/AGENTS.md with hierarchical discovery from user/project/rules/local levels, mewbo:noload marker, subtree discovery for nested instructions and skills).",
       "parent": "Overview & Repo Map"
     },
     {
       "title": "Plugin System & Marketplace",
       "purpose": "PluginsConfig (registry_paths, marketplaces, install_path). plugins.py: PluginManifest dataclass (name, version, description, source, skills, commands, agents, hooks, mcp_servers), PluginComponents, substitute_plugin_vars() with ${CLAUDE_PLUGIN_ROOT} substitution, _deep_substitute(), parse_plugin_manifest(), discover_plugin_components(), discover_installed_plugins(), discover_marketplace_plugins() (clones git repos for standalone/Docker), install_plugin() (git clone or URL download), uninstall_plugin(). Security: path traversal guard on all install paths, KeyError safety on missing manifest fields, MCP format unwrap (mcpServers key normalization). load_all_plugin_components() is called during Orchestrator session init \u2014 fans out skills (SkillRegistry.load_extra_dir), hooks (merge_plugin_hooks), agent definitions (AgentRegistry.register), MCP servers (extra_servers param to get_merged_mcp_config). CLI: /plugins, /plugins marketplace, /plugins install <name>, /plugins uninstall <name>. Auto-reconcile: missing enabled plugins are re-enabled on container startup.",
-      "parent": "Core Runtime & Orchestration (meeseeks_core)"
+      "parent": "Core Runtime & Orchestration (mewbo_core)"
     },
     {
       "title": "Agent Definition Registry",
-      "purpose": "AgentDef frozen dataclass (name, description, body, tools, model, disallowed_tools). AgentRegistry with no-override semantics (installed plugins cannot shadow user-defined agents). parse_agent_file() reads YAML frontmatter from markdown files: name, description, tools (CC tool name mapping via CC_TOOL_MAP), model, disallowedTools. CC_TOOL_MAP translates Claude Code tool names to Meeseeks tool_ids (e.g., 'Bash' -> 'shell_tool', 'Edit' -> edit tool). map_cc_tool_names() applies the mapping. agent_type field in SPAWN_AGENT_SCHEMA: when provided, SpawnAgentTool looks up the AgentDef in AgentRegistry and applies body/tools/model overrides. Agent catalog injected into system prompt alongside skill catalog.",
+      "purpose": "AgentDef frozen dataclass (name, description, body, tools, model, disallowed_tools). AgentRegistry with no-override semantics (installed plugins cannot shadow user-defined agents). parse_agent_file() reads YAML frontmatter from markdown files: name, description, tools (CC tool name mapping via CC_TOOL_MAP), model, disallowedTools. CC_TOOL_MAP translates Claude Code tool names to Mewbo tool_ids (e.g., 'Bash' -> 'shell_tool', 'Edit' -> edit tool). map_cc_tool_names() applies the mapping. agent_type field in SPAWN_AGENT_SCHEMA: when provided, SpawnAgentTool looks up the AgentDef in AgentRegistry and applies body/tools/model overrides. Agent catalog injected into system prompt alongside skill catalog.",
       "parent": "Plugin System & Marketplace"
     },
     {
       "title": "Chat Platform Adapters",
-      "purpose": "ChannelAdapter Protocol (channels/base.py): verify_request(request) -> bool, parse_inbound(request) -> InboundMessage | None, send_response(session_id, message) -> None, system_context property -> str. ChannelRegistry for adapter lookup. DeduplicationGuard (TTL-based replay protection). Shared _process_inbound() pipeline in routes.py: dedup -> mention gate (requires_mention()) -> session resolve (tag_session/resolve_tag) -> slash commands (@command registry: /help, /usage, /new, /switch-project) -> LLM invocation. Webhook endpoint: POST /api/webhooks/<platform> (HMAC auth). Nextcloud Talk (nextcloud_talk.py): HMAC-SHA256 verification, ActivityStreams 2.0 parsing, OCS Bot API response with replyTo. Session tags: nextcloud-talk:room:<token> and nextcloud-talk:thread:<room>:<thread_id>. Email (email_adapter.py): EmailAdapter (IMAP parse, SMTP reply, markdown->HTML via mistune), EmailPoller (daemon thread, configurable poll_interval_seconds). Session tags: email:thread:<sender>:<root-msg-id>. Email access control: allowed_senders allowlist + @Meeseeks mention in multi-party threads. Channel sessions are standard API sessions (MongoDB/JSON, visible in console, Langfuse-traced).",
-      "parent": "REST API (meeseeks_api)"
+      "purpose": "ChannelAdapter Protocol (channels/base.py): verify_request(request) -> bool, parse_inbound(request) -> InboundMessage | None, send_response(session_id, message) -> None, system_context property -> str. ChannelRegistry for adapter lookup. DeduplicationGuard (TTL-based replay protection). Shared _process_inbound() pipeline in routes.py: dedup -> mention gate (requires_mention()) -> session resolve (tag_session/resolve_tag) -> slash commands (@command registry: /help, /usage, /new, /switch-project) -> LLM invocation. Webhook endpoint: POST /api/webhooks/<platform> (HMAC auth). Nextcloud Talk (nextcloud_talk.py): HMAC-SHA256 verification, ActivityStreams 2.0 parsing, OCS Bot API response with replyTo. Session tags: nextcloud-talk:room:<token> and nextcloud-talk:thread:<room>:<thread_id>. Email (email_adapter.py): EmailAdapter (IMAP parse, SMTP reply, markdown->HTML via mistune), EmailPoller (daemon thread, configurable poll_interval_seconds). Session tags: email:thread:<sender>:<root-msg-id>. Email access control: allowed_senders allowlist + @Mewbo mention in multi-party threads. Channel sessions are standard API sessions (MongoDB/JSON, visible in console, Langfuse-traced).",
+      "parent": "REST API (mewbo_api)"
     },
     {
       "title": "Web IDE Integration",
-      "purpose": "Opt-in per-session code-server containers gated by agent.web_ide.enabled. IdeInstance frozen dataclass (session_id, container_name, port, expires_at, password, status). IdeStore (MongoDB wrapper with unique index on session_id). IdeManager (ide.py): spawn() via Docker SDK (code-server image, bridge network meeseeks-ide, watchdog sh inline that polls a deadline file and kills itself when expired), reconnect() checks _container_running() (status == 'running' \u2014 not just NotFound), extend() rewrites deadline file, stop() removes container. 2s TTL-cached health probe through ide-proxy. ide-proxy (docker/nginx-ide-proxy.conf): nginx sidecar on meeseeks-ide bridge, routes /ide/<session_id>/ via Docker embedded DNS (127.0.0.11), strips URI prefix via rewrite before proxy_pass. Three-way bugfix: (1) chown in entrypoint-api.sh for /tmp/meeseeks-ide bind mount, (2) _container_running() catches exited containers and safe_remove before respawn, (3) nginx rewrite strips /ide/<sid>/ prefix before forwarding. Password returned only on POST. ide_routes.py: POST/DELETE /api/sessions/{id}/ide, POST /api/sessions/{id}/ide/extend (hours XOR expires_at). Console: IdeLoader page (POST -> poll -> hidden form submit to /login), useIdeStatus (visibility-aware polling), useWebIdeEnabled (reads getConfig() promise).",
-      "parent": "REST API (meeseeks_api)"
+      "purpose": "Opt-in per-session code-server containers gated by agent.web_ide.enabled. IdeInstance frozen dataclass (session_id, container_name, port, expires_at, password, status). IdeStore (MongoDB wrapper with unique index on session_id). IdeManager (ide.py): spawn() via Docker SDK (code-server image, bridge network mewbo-ide, watchdog sh inline that polls a deadline file and kills itself when expired), reconnect() checks _container_running() (status == 'running' \u2014 not just NotFound), extend() rewrites deadline file, stop() removes container. 2s TTL-cached health probe through ide-proxy. ide-proxy (docker/nginx-ide-proxy.conf): nginx sidecar on mewbo-ide bridge, routes /ide/<session_id>/ via Docker embedded DNS (127.0.0.11), strips URI prefix via rewrite before proxy_pass. Three-way bugfix: (1) chown in entrypoint-api.sh for /tmp/mewbo-ide bind mount, (2) _container_running() catches exited containers and safe_remove before respawn, (3) nginx rewrite strips /ide/<sid>/ prefix before forwarding. Password returned only on POST. ide_routes.py: POST/DELETE /api/sessions/{id}/ide, POST /api/sessions/{id}/ide/extend (hours XOR expires_at). Console: IdeLoader page (POST -> poll -> hidden form submit to /login), useIdeStatus (visibility-aware polling), useWebIdeEnabled (reads getConfig() promise).",
+      "parent": "REST API (mewbo_api)"
     },
     {
       "title": "LSP & Code Intelligence",
       "purpose": "Native LSP integration backed by pygls and lsprotocol (gracefully absent when not installed \u2014 LSP_AVAILABLE flag). LSPTool (tool_id: lsp_tool): operations: diagnostics (passive \u2014 injected after every file edit via _append_lsp_feedback hook in ToolUseLoop), definition (go-to-definition), references (find all references), hover (type/doc info). LSPManager (manager.py): one manager per session, lazy server spawning via shutil.which discovery, per-server subprocess lifecycle. ServerDef dataclass: command, args, language_ids, root_uri. BUILTIN_SERVERS (servers.py): pyright (Python), typescript-language-server (TS/JS), gopls (Go), rust-analyzer (Rust). Config: agent.lsp.enabled (default true) + agent.lsp.servers (per-server overrides or custom server definitions). Passive diagnostics: after every successful file edit, ToolUseLoop calls _append_lsp_feedback to inject diagnostics as a follow-up ToolMessage \u2014 zero extra LLM turns, signals errors immediately. Per-session shutdown via shutdown_lsp_managers().",
-      "parent": "Tool Layer (meeseeks_tools)"
+      "parent": "Tool Layer (mewbo_tools)"
     },
     {
       "title": "Conversation Fork, Edit & Regenerate",
@@ -171,7 +171,7 @@
       "notes": "Mermaid: module map with subgraphs by top-level folder. Show Console -> API -> Runtime -> Core flow. Add: Plugin system path (plugins.py -> agent_registry.py -> session init), Web IDE path (ide.py/ide_routes.py -> Docker SDK -> code-server container), LSP path (lsp/ -> language server subprocess), Channel adapters path (channels/ -> Nextcloud Talk / Email). Include fork-from-message as a SessionRuntime capability."
     },
     {
-      "title": "Core Runtime & Orchestration (meeseeks_core)",
+      "title": "Core Runtime & Orchestration (mewbo_core)",
       "notes": "Mermaid: runtime facade flow (SessionRuntime -> Orchestrator -> ToolUseLoop) showing how CLI (sync), API (async), and Console (via API) reach the same engine. Include skills loading path."
     },
     {
@@ -207,7 +207,7 @@
       "notes": "Mermaid: three skill loading paths: (1) user ~/.claude/skills/ discovery; (2) plugin load_extra_dir(path); (3) plugin load_command_file(path). All feed into SkillRegistry with no-override semantics. Show merge_plugin_hooks() translating plugin hooks.json to HookManager callbacks. Show skill catalog injection into system prompt and activate_skill invocation path."
     },
     {
-      "title": "Tool Layer (meeseeks_tools)",
+      "title": "Tool Layer (mewbo_tools)",
       "notes": "Mermaid: ToolRegistry -> ToolSpec -> AbstractTool hierarchy. Branch to: local tools (edit tools, shell, file read/list), MCP adapters (MCPToolRunner + MCPConnectionPool), LSP tool (LSPTool -> LSPManager -> per-language server subprocess). Show lsp_tool result type 'lsp' and passive diagnostic injection path from ToolUseLoop._append_lsp_feedback hook."
     },
     {
@@ -227,7 +227,7 @@
       "notes": "Mermaid: flow from configs/mcp.json + .mcp.json (project-scoped) -> MCPConnectionPool (memoized connections, 3-error reconnection) -> server discovery -> schema normalization -> _coerce_mcp_tool_input validation at execution time. Show fallback to legacy one-shot client."
     },
     {
-      "title": "REST API (meeseeks_api)",
+      "title": "REST API (mewbo_api)",
       "notes": "Mermaid: request flow from Flask route handlers -> _require_api_key -> SessionRuntime/NotificationStore/ShareStore -> response. Show CORS after_request hook. Include config API path."
     },
     {
@@ -235,7 +235,7 @@
       "notes": "Mermaid: grouped endpoint map. Core session flow (POST /sessions -> start_async -> poll /events). Steering (POST /message, POST /interrupt). Plugin management (GET/POST/DELETE /api/plugins, /marketplace). Web IDE (POST/DELETE/POST /sessions/{id}/ide, /extend). Fork (POST /sessions/{id}/fork with from_ts). Git diff (GET /sessions/{id}/git-diff?scope=). Include allowed_tools passthrough path."
     },
     {
-      "title": "Web Console (meeseeks_console)",
+      "title": "Web Console (mewbo_console)",
       "notes": "Mermaid: component hierarchy (App -> HomeView/SessionDetailView). SessionDetailView: ConversationTimeline (with ForkFromHereButton on turns, inline edit on user messages) + WorkspacePanel (ReviewPane with 3-scope selector backed by useGitDiff) + InputBar (Button primitive, searchable ConfigMenu with focus glow). New routes: /plugins (PluginsView), /ide-loader/:sessionId (IdeLoader with floral animation). Data hooks: useSessions, useSessionEvents, useMcpTools, useSkills, useProjects, useConfig, useWebIdeEnabled, useIdeStatus."
     },
     {
@@ -243,12 +243,12 @@
       "notes": "Mermaid: component inheritance. LogEventCard as base. TerminalCard and DiffCard as specialized siblings. ReviewPane as standalone accordion (FileEntry items, 3-scope selector, useGitDiff hook). PluginsView (installed table + marketplace browser). <Button> primitive (variants: primary/secondary/ghost/danger, sizes: sm/md/lg, iconOnly mode). IdeLoader (floral SVG background + radial spotlight + backdrop-blur card). Edit-mode MessageBubble (textarea fills max-w-[85%], dashed accent border). Show data flow: EventRecord -> buildLogs(parseStructuredResult) -> kind routing -> component."
     },
     {
-      "title": "Terminal CLI (meeseeks_cli)",
+      "title": "Terminal CLI (mewbo_cli)",
       "notes": "Mermaid: sync flow CLI -> SessionRuntime.run_sync -> Orchestrator -> ToolUseLoop -> response rendering. Include AgentDisplayManager lifecycle hook bridge to Rich Live panel. Show approval_style switching (inline/textual/aider)."
     },
     {
-      "title": "Home Assistant Integration (meeseeks_ha_conversation)",
-      "notes": "Mermaid: HA Assist voice -> MeeseeksApiClient -> POST /api/query -> response parsing -> HA conversation response."
+      "title": "Home Assistant Integration (mewbo_ha_conversation)",
+      "notes": "Mermaid: HA Assist voice -> MewboApiClient -> POST /api/query -> response parsing -> HA conversation response."
     },
     {
       "title": "Configuration & Runtime Settings",
@@ -264,7 +264,7 @@
     },
     {
       "title": "Tracing, Logging & Diagnostics",
-      "notes": "Mermaid: trace flow from ToolUseLoop -> Langfuse handler -> traces (meeseeks-tool-use, meeseeks-task-master, meeseeks-context). Show error path through _safe_execute -> ToolCallResult(success=False). Include the 4-layer investigation methodology: MongoDB \u2192 Langfuse \u2192 Config \u2192 Docker."
+      "notes": "Mermaid: trace flow from ToolUseLoop -> Langfuse handler -> traces (mewbo-tool-use, mewbo-task-master, mewbo-context). Show error path through _safe_execute -> ToolCallResult(success=False). Include the 4-layer investigation methodology: MongoDB \u2192 Langfuse \u2192 Config \u2192 Docker."
     },
     {
       "title": "Building a New Client",
@@ -284,7 +284,7 @@
     },
     {
       "title": "Web IDE Integration",
-      "notes": "Mermaid: request flow. POST /api/sessions/{id}/ide -> IdeManager.ensure() -> Docker SDK spawn (code-server container on meeseeks-ide bridge) -> IdeStore write -> return {url, password}. Nginx ide-proxy routes /ide/<sid>/ via 127.0.0.11 DNS resolver, strips prefix via rewrite. Watchdog sh polls deadline file, self-terminates on expiry. Show three-way bugfix paths: (1) entrypoint chown for bind mount, (2) _container_running() catches exited state, (3) nginx rewrite rule. Console IdeLoader: POST -> poll status -> hidden form submit to /login."
+      "notes": "Mermaid: request flow. POST /api/sessions/{id}/ide -> IdeManager.ensure() -> Docker SDK spawn (code-server container on mewbo-ide bridge) -> IdeStore write -> return {url, password}. Nginx ide-proxy routes /ide/<sid>/ via 127.0.0.11 DNS resolver, strips prefix via rewrite. Watchdog sh polls deadline file, self-terminates on expiry. Show three-way bugfix paths: (1) entrypoint chown for bind mount, (2) _container_running() catches exited state, (3) nginx rewrite rule. Console IdeLoader: POST -> poll status -> hidden form submit to /login."
     },
     {
       "title": "LSP & Code Intelligence",

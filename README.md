@@ -1,10 +1,10 @@
 
 <p align="center">
-  <img src="docs/logos/logo-transparent.svg" alt="Meeseeks logo" width="96" />
+  <img src="docs/logos/logo-transparent.svg" alt="Mewbo logo" width="96" />
 </p>
 
-<h1 align="center">Meeseeks</h1>
-<p align="center"><em>An AI assistant modeled as a conversation state machine. A hierarchical agent hypervisor admits, scopes, and terminates parallel sub-agents under explicit lifecycle control.</em></p>
+<h1 align="center">Mewbo</h1>
+<p align="center"><em>Open-source, self-hosted AI orchestration system for long-horizon work. Parallel sub-agents you can scope, observe, and steer, with durable context and provider-agnostic model routing.</em></p>
 
 <p align="center">
     <a href="https://deepwiki.com/bearlike/Assistant"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg"></a>
@@ -13,206 +13,68 @@
     <a href="https://github.com/bearlike/Assistant/actions/workflows/docs.yml"><img alt="Docs" src="https://github.com/bearlike/Assistant/actions/workflows/docs.yml/badge.svg"></a>
     <a href="https://codecov.io/gh/bearlike/Assistant"><img src="https://codecov.io/gh/bearlike/Assistant/graph/badge.svg?token=OJ2YUCIZ2I" alt="Codecov"></a>
     <a href="https://github.com/bearlike/Assistant/releases"><img src="https://img.shields.io/github/v/release/bearlike/Assistant" alt="GitHub Release"></a>
-    <a href="https://github.com/bearlike/Assistant/pkgs/container/meeseeks-api"><img src="https://img.shields.io/badge/ghcr.io-bearlike/meeseeks--api:latest-blue?logo=docker&logoColor=white" alt="Docker Image"></a>
+    <a href="https://github.com/bearlike/Assistant/pkgs/container/mewbo-api"><img src="https://img.shields.io/badge/ghcr.io-bearlike/mewbo--api:latest-blue?logo=docker&logoColor=white" alt="Docker Image"></a>
 </p>
 
 
 
 https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
-> Four access surfaces — terminal, web console, REST API, Home Assistant — driven by the same session state machine. Full docs at [kanth.tech/Assistant](https://kanth.tech/Assistant/).
+
+<table align="center">
+    <tr>
+        <td align="center"><img src="docs/mewbo-console-02-tasks.png" alt="Mewbo task detail page" height="320px"></td>
+        <td align="center"><img src="docs/mewbo-console-01-front.png" alt="Mewbo console landing page" height="320px"></td>
+    </tr>
+    <tr>
+        <td align="center"><img src="docs/mewbo-console-03-plan-approval.jpg" alt="Plan approval in the Mewbo console" height="280px"></td>
+        <td align="center"><img src="docs/mewbo-console-04-file-edit.jpg" alt="File-edit diff card in the Mewbo console" height="280px"></td>
+    </tr>
+    <tr>
+        <td align="center"><img src="docs/mewbo-console-05-plugins.png" alt="Plugins page with installed plugins and marketplace listings" height="280px"></td>
+        <td align="center"><img src="docs/screenshot_ha_assist_2.png" alt="Home Assistant device control" height="280px"></td>
+    </tr>
+    <tr>
+        <td colspan="2" align="center"><img src="docs/mewbo-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Mewbo Console" width="100%"></td>
+    </tr>
+    <tr>
+        <td colspan="2" align="center"><img src="docs/mewbo-email-01.jpg" alt="Mewbo email thread in Gmail" height="400px"></td>
+    </tr>
+</table>
 
 ## Overview
 
-Meeseeks is an AI assistant modeled as a conversation state machine. A top-level session binds an LLM to a filtered tool set via `bind_tools` and advances through a `submitted → running → terminal` lifecycle. Where parallelism is useful, the session issues `spawn_agent`; the hypervisor admits child sessions under a concurrency budget, constrains their tool scope, and resolves them into one of four terminal states — `completed`, `failed`, `cancelled`, or `rejected`. Transcripts are persisted per session, long histories are compacted, and summaries are retained across compactions.
-
-### Meeseeks Console
-
-The web console provides a task orchestration frontend backed by the REST API. It supports session management, real-time event polling, tool selection, and execution trace viewing.
-
-<table align="center">
-    <tr>
-        <th>Task detail page</th>
-        <th>Console landing page</th>
-    </tr>
-    <tr>
-        <td align="center"><img src="docs/meeseeks-console-02-tasks.jpg" alt="Meeseeks task detail page" height="360px"></td>
-        <td align="center"><img src="docs/meeseeks-console-01-front.jpg" alt="Meeseeks console landing page" height="360px"></td>
-    </tr>
-</table>
-
-### Capabilities at a glance
-
-<table align="center">
-    <tr>
-        <th>Plan mode approval</th>
-        <th>Live diff on every edit</th>
-    </tr>
-    <tr>
-        <td align="center"><img src="docs/meeseeks-console-03-plan-approval.jpg" alt="Plan approval in the Meeseeks console" height="300px"></td>
-        <td align="center"><img src="docs/meeseeks-console-04-file-edit.jpg" alt="File-edit diff card in the Meeseeks console" height="300px"></td>
-    </tr>
-    <tr>
-        <th>Plugin marketplace</th>
-        <th>Virtual projects</th>
-    </tr>
-    <tr>
-        <td align="center"><img src="docs/meeseeks-console-05-plugins.jpg" alt="Plugins page with installed plugins and marketplace listings" height="300px"></td>
-        <td align="center"><img src="docs/meeseeks-console-06-projects.jpg" alt="Projects page showing virtual workspaces shared across sessions" height="300px"></td>
-    </tr>
-</table>
+Mewbo is an open-source, self-hosted AI orchestration system for long-horizon work. Tasks decompose into parallel sub-agents that each carry only the tools they need, exchange compressed summaries instead of raw transcripts, and run within resource budgets you tune per deployment. You approve destructive actions, watch the agent tree as it grows, and can interrupt or steer any branch mid-flight. Sessions persist with full provenance, compact automatically near the budget, and survive across every client.
 
 ## Features
 
-### Core workflow
-- (✅) **Unified tool-use loop:** A single async `ToolUseLoop` where the LLM drives tool selection and execution via native `bind_tools`.
-- (✅) **Sub-agent spawning:** Subtasks can be delegated to parallel sub-agents via `spawn_agent`, managed by the `AgentHypervisor` control plane.
-- (✅) **Tool scoping & permissions:** Sub-agents receive scoped tool access (allowlist/denylist filtered before binding). Permission policies gate all tool execution.
-- (✅) **Concurrency-aware execution:** Tools are partitioned into concurrent-safe (parallel) and exclusive (sequential) batches with per-tool timeouts.
-- (✅) **Conversation fork & edit:** Fork a session from any message (`fork_at_ts`), edit and regenerate past turns, and override the model per-message.
+- **Agent hypervisor.** Sub-agents spawn in parallel with scoped tools and approval-gated actions. Progress shows as a live tree, and you can steer or cancel any branch mid-flight. The hypervisor enforces resource budgets through natural-language warnings rather than force-kills, and resolves every child into a structured result.
+- **Long-horizon context.** Two-mode compaction summarises older turns near the budget. Post-compact file restoration replays the working set. Conversation fork lets you branch from any message and replay against a different model.
+- **Native skills, plugins, and MCP.** Agent Skills, plugins from any compatible marketplace, and MCP servers load from user or project scope without translation. Plugins also contribute per-session stateful tools, hooks, and agent definitions.
+- **Inline interactive widgets.** Sub-agents author Streamlit-in-WASM widgets that mount in a sandboxed Web Worker inside the conversation, with no server round-trip and no CORS.
+- **Provider-agnostic, multi-surface.** Any model behind LiteLLM, accessed from a terminal CLI, web console, REST API, Home Assistant, Nextcloud Talk, or email. Same session, same tools, same transcript.
 
-### Memory and context management
-- (✅) **Session transcripts:** Writes tool activity and responses to disk for continuity.
-- (✅) **Context compaction:** Two-mode compaction (full/partial) with structured summaries, analysis scratchpad, and post-compact file restoration. Auto-compacts near the context budget using partial mode.
-- (✅) **Token awareness:** Tracks context window usage and exposes budgets in the CLI.
-- (✅) **Selective recall:** Builds context from recent turns plus a summary of prior events.
-- (✅) **Hierarchical instructions:** Discovers CLAUDE.md from user, project, rules, and local levels with priority ordering. Injects git context (branch, status, recent commits) into the system prompt.
-- (✅) **Session listing hygiene:** Filters empty sessions and supports archiving via the API.
+## Get started
 
-### Tooling and integrations
-- (✅) **Tool registry:** Discovers local tools and MCP tools via persistent connection pool with automatic reconnection and config change detection.
-- (✅) **Skills:** Supports the [Agent Skills](https://agentskills.io) open standard. Place `SKILL.md` files in `~/.claude/skills/` or `.claude/skills/` to teach the assistant reusable workflows. Skills can be invoked via `/skill-name` slash commands or auto-activated by the LLM.
-- (✅) **Configurable file editing:** Two built-in edit mechanisms — Aider-style SEARCH/REPLACE blocks and per-file structured patch (`file_path` / `old_string` / `new_string`). Select via `agent.edit_tool` in config, or let the system auto-select based on model identity. Different models perform better with different formats; the choice is transparent to the rest of the stack.
-- (✅) **Plugin system:** Discover, install, and manage plugins from configured marketplaces. Plugins can provide agent definitions, skills, hooks, and MCP tool integrations. Managed via the CLI (`/plugins`), console UI, or REST API.
-- (✅) **Native LSP integration:** Opt-in code intelligence via `lsp_tool` (pygls/lsprotocol). Supports diagnostics, go-to-definition, find-references, and hover. Built-in servers: pyright (Python), typescript-language-server (TS/JS), gopls (Go), rust-analyzer (Rust) — auto-discovered on the PATH. Passive diagnostics inject automatically after file edits. Configure via `agent.lsp` in config.
-- (✅) **Web IDE:** Opt-in per-session code-server containers for browser-based editing, accessible from the console via "Open in Web IDE".
-- (✅) **Local file + shell tools:** Built-in tools for file reads, directory listing, and shell commands (approval-gated).
-- (✅) **Chat platform adapters:** `ChannelAdapter` protocol with shared `_process_inbound()` pipeline. Adapters for [Nextcloud Talk](docs/clients-nextcloud-talk.md) (webhook-driven, HMAC-SHA256, ActivityStreams 2.0) and [Email](docs/clients-email.md) (IMAP polling with SMTP replies rendered as HTML from markdown). Session tag mapping, deduplication guard, and slash commands (`/help`, `/usage`, `/new`, `/switch-project`).
-- (✅) **REST API:** Exposes the assistant over HTTP for third-party integration.
-- (✅) **Web console:** Task orchestration frontend backed by the REST API.
-- (✅) **Terminal CLI:** Fast interactive shell with plan visibility and tool result cards.
-- (✅) **Model routing:** Supports provider-qualified model names, a configurable API base URL, and `proxy_model_prefix` for proxy routing.
-
-### Safety and observability
-- (✅) **Permission gate:** Uses approval callbacks and hooks to control tool execution.
-- (✅) **Operational visibility:** Optional Langfuse tracing (session-scoped traces) stays off if unconfigured.
-- (✅) **Hook system:** Error-isolated hooks with session lifecycle events, external command hook configuration, and fnmatch-based tool matcher filtering.
-
-### Interface notes
-- **CLI layout adapts to terminal width.** Headers and tool result cards adjust to small and wide shells.
-- **Interactive CLI controls.** Use a model picker, MCP browser, session summary, and token budget commands.
-- **Inline approvals.** Rich-based approval prompts render with padded, dotted borders and clear after input.
-- **Unified experience.** Console, API, Home Assistant, Nextcloud Talk, Email, and CLI interfaces share the same core engine to reduce duplicated maintenance.
-- **Shared session runtime.** The API exposes polling endpoints; the CLI runs the same runtime in-process for sync execution, cancellation, and summaries.
-- **Event payloads.** `action_plan` steps are `{title, description}`; `tool_result`/`permission` use `tool_id`, `operation`, and `tool_input`.
-
-### Home Assistant integration
-
-<table align="center">
-    <tr>
-        <th>Answer questions and interpret sensor information</th>
-        <th>Control devices and entities</th>
-    </tr>
-    <tr>
-        <td align="center"><img src="docs/screenshot_ha_assist_1.png" alt="Home Assistant sensor Q&A" height="360px"></td>
-        <td align="center"><img src="docs/screenshot_ha_assist_2.png" alt="Home Assistant device control" height="360px"></td>
-    </tr>
-</table>
-
-### Email integration
-
-<p align="center">
-    <img src="docs/meeseeks-email-01.jpg" alt="Meeseeks email thread in Gmail" height="480px">
-</p>
-
-## Installation
-
-<p align="center">
-    <img src="docs/meeseeks-console-banner.gif" alt="Meeseeks console banner" width="100%">
-</p>
-
-User install (core only):
-```bash
-uv sync
-```
-
-Optional components:
-```bash
-uv sync --extra cli   # CLI
-uv sync --extra api   # REST API
-cd apps/meeseeks_console && npm install  # Web console
-uv sync --extra ha    # Home Assistant integration
-```
-
-Developer install (all components + dev/test/docs):
-```bash
-uv sync --all-extras --all-groups
-```
-
-Global install (available system-wide as `meeseeks`):
-```bash
-uv tool install .
-# Set up global config:
-mkdir -p ~/.meeseeks
-cp configs/app.json ~/.meeseeks/app.json
-cp configs/mcp.json ~/.meeseeks/mcp.json
-# Or run `meeseeks` and use /init to scaffold example configs
-```
-
-Config discovery priority: `CWD/configs/`, then `$MEESEEKS_HOME/`, then `~/.meeseeks/`. Use `--config /path/to/app.json` for explicit override, or set `MEESEEKS_HOME` in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to permanently point to a custom config directory:
-```bash
-export MEESEEKS_HOME="/path/to/your/config"
-```
-
-### Docker Compose
-
-Pre-built images are published to GHCR on every release:
-
-```bash
-# Copy and edit the environment file
-cp docker.example.env docker.env
-# Edit docker.env — set MASTER_API_TOKEN, VITE_API_KEY, HOST_UID/GID
-
-# Pull and start (recommended)
-docker compose pull && docker compose up -d
-```
-
-To build from source instead: `docker compose up --build -d`.
-
-The stack uses host networking. The API serves on port `5125` and the console on `3001`. Nginx in the console container proxies `/api/` requests to the API. See [docs/getting-started.md](docs/getting-started.md) for full configuration details.
-
-## Architecture
-
-See [docs/index.md](docs/index.md) for the full architecture diagram.
-
-## Monorepo layout
-
-- `packages/meeseeks_core/`: orchestration loop, schemas, session storage, two-mode compaction, tool registry, hook system, hierarchical instruction discovery, plugin system, agent registry.
-- `packages/meeseeks_tools/`: tool implementations and integrations (including Home Assistant and MCP).
-- `apps/meeseeks_api/`: Flask REST API for programmatic access, plugin management endpoints, Web IDE lifecycle, channel adapters (Nextcloud Talk, Email).
-- `apps/meeseeks_console/`: Web console for task orchestration, plugin management, and Web IDE access.
-- `apps/meeseeks_cli/`: Terminal CLI frontend for interactive sessions.
-- `meeseeks_ha_conversation/`: Home Assistant integration that routes voice to the API.
-- `packages/meeseeks_core/src/meeseeks_core/prompts/`: planner prompts and tool instructions.
+See [docs.mewbo.com/getting-started](https://docs.mewbo.com/getting-started/) to install Mewbo and run a first session.
 
 ## Documentation
 
-Full docs live at **[kanth.tech/Assistant](https://kanth.tech/Assistant/)** — including setup, every client surface, the capability reference, deployment guides, and the internals/SDK track. The source lives under [`docs/`](docs/) and is published with MkDocs.
+Full documentation lives at **[docs.mewbo.com](https://docs.mewbo.com/)**.
 
-If you are just getting started, jump to [Get Started](https://kanth.tech/Assistant/getting-started/).
-
-## Development principles
-
-- Keep the core engine centralized. Interfaces should remain thin to avoid duplicated maintenance.
-- Organize logic into clear modules, classes, and functions. Favor readable, well-scoped blocks.
-- Prefer small, composable changes that keep behavior consistent across interfaces.
+| Section | Covers |
+| --- | --- |
+| [Get Started](https://docs.mewbo.com/getting-started/) | Install, configure an LLM, run a first session. |
+| [Configure](https://docs.mewbo.com/configuration/) | LLM setup, project config, configuration reference. |
+| [Clients](https://docs.mewbo.com/clients-cli/) | CLI, web console, REST API, Home Assistant, Nextcloud Talk, email. |
+| [Capabilities](https://docs.mewbo.com/features-builtin-tools/) | Built-in tools, sub-agents, skills, plugins, widgets, plan mode, permissions, compaction. |
+| [Deploy](https://docs.mewbo.com/deployment-docker/) | Docker Compose, storage backends, production setup. |
+| [Develop](https://docs.mewbo.com/core-orchestration/) | Architecture, session runtime, building a client, API reference. |
+| [Releases](https://github.com/bearlike/Assistant/releases) | Release notes and upgrade history. |
 
 ## Contributing
 
-We welcome contributions from the community to improve Meeseeks.
+Bugs and feature requests on the [issue tracker](https://github.com/bearlike/Assistant/issues). For development setup, see the [developer guide](https://docs.mewbo.com/developer-guide/).
 
-1. Fork the repository and clone it to your local machine.
-2. Create a new branch for your contribution.
-3. Make your changes, commit them, and push to your fork.
-4. Open a pull request describing the change and the problem it solves.
+## License
 
-If you encounter bugs or have ideas for features, open an issue on the [issue tracker](https://github.com/bearlike/Assistant/issues). Include reproduction steps and error messages when possible.
+[MIT](LICENSE) © Krishnakanth Alagiri.

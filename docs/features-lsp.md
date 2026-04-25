@@ -1,6 +1,6 @@
 # LSP Code Intelligence
 
-Meeseeks ships a native Language Server Protocol tool that gives the AI real code intelligence. It covers diagnostics, go-to-definition, find-references, and hover information. Servers are auto-discovered on your `PATH` and start lazily on first use. After every file edit, diagnostics run automatically and land in the AI's context. It sees compile errors and type issues in the same turn it made the change.
+Mewbo ships a native Language Server Protocol tool that gives the AI real code intelligence. It covers diagnostics, go-to-definition, find-references, and hover information. Servers are auto-discovered on your `PATH` and start lazily on first use. After every file edit, diagnostics run automatically and land in the AI's context. It sees compile errors and type issues in the same turn it made the change.
 
 ## Built-in language servers
 
