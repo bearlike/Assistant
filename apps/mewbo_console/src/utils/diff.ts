@@ -13,7 +13,12 @@ function deriveName(path: string): string {
  */
 export function extractUnifiedDiffs(text: string): DiffFile[] {
   if (!text) return [];
-  const parsed = parse(text);
+  let parsed: ReturnType<typeof parse>;
+  try {
+    parsed = parse(text);
+  } catch {
+    return [];
+  }
   return parsed.map((f) => ({
     name: deriveName(f.newName || f.oldName),
     path: f.newName || f.oldName,
@@ -45,7 +50,12 @@ function reconstructRawDiff(
  */
 export function parseDiffHunks(text: string): ParsedDiffFile[] {
   if (!text) return [];
-  const parsed = parse(text);
+  let parsed: ReturnType<typeof parse>;
+  try {
+    parsed = parse(text);
+  } catch {
+    return [];
+  }
   return parsed.map((f) => ({
     name: deriveName(f.newName || f.oldName),
     path: f.newName || f.oldName,

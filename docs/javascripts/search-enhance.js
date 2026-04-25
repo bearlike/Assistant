@@ -6,6 +6,10 @@
 //      results" hints into the results pane so the user always sees visible
 //      feedback while typing. The theme's version rendered nothing at all
 //      for short queries, which made search look broken.
+//   3. Rewrite search result URLs when browsing an alias version (e.g.
+//      /latest/) whose HTML has base_url hardcoded to the canonical version
+//      (e.g. /main/). mike --alias-type copy copies the HTML verbatim, so
+//      without this fix every search result on /latest/ links to /main/.
 //
 // Does not touch the search index, the worker, or any theme JS.
 
@@ -13,6 +17,53 @@
   const MIN_QUERY = 3;
   const DEBOUNCE_MS = 60;
   const RESULTS_ID = "mkdocs-search-results";
+
+  // --- version URL rewriter ------------------------------------------------
+  // base_url is a top-level const injected by MkDocs into the page HTML:
+  //   const base_url = "https://docs.mewbo.com/main";
+  // It is always the canonical version's URL even when browsing an alias
+  // (e.g. /latest/). Build a from→to pair once, then patch every result link.
+
+  const versionRewriter = (() => {
+    let from = null;
+    let to = null;
+
+    try {
+      // base_url is declared in a sibling <script> tag and is accessible here
+      // because top-level const/let in classic scripts share the global scope.
+      /* global base_url */
+      if (typeof base_url !== "undefined" && base_url) {
+        const builtVersion = base_url.replace(/\/$/, "").split("/").pop(); // "main"
+        const currentVersion = window.location.pathname.split("/").filter(Boolean)[0]; // "latest"
+        if (builtVersion && currentVersion && builtVersion !== currentVersion) {
+          from = base_url.replace(/\/$/, ""); // "https://docs.mewbo.com/main"
+          to = `${window.location.origin}/${currentVersion}`; // "https://docs.mewbo.com/latest"
+        }
+      }
+    } catch (_) {}
+
+    return function rewrite(container) {
+      if (!from || !to) return;
+      container.querySelectorAll("a[href]").forEach((a) => {
+        const href = a.getAttribute("href");
+        if (href && href.startsWith(from)) {
+          a.setAttribute("href", to + href.slice(from.length));
+        }
+      });
+    };
+  })();
+
+  const attachResultsRewriter = () => {
+    const el = document.getElementById(RESULTS_ID);
+    if (!el || el.dataset.rewriter === "1") return;
+    el.dataset.rewriter = "1";
+    // Rewrite any links already present, then watch for new ones.
+    versionRewriter(el);
+    new MutationObserver(() => versionRewriter(el)).observe(el, {
+      childList: true,
+      subtree: true,
+    });
+  };
 
   // --- trigger decoration --------------------------------------------------
 
@@ -156,6 +207,7 @@
   const init = () => {
     enhanceTrigger();
     attachInput();
+    attachResultsRewriter();
   };
 
   if (document.readyState === "loading") {

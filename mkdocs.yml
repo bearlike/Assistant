@@ -35,6 +35,9 @@ markdown_extensions:
   - attr_list
   - md_in_html
 
+exclude_docs: |
+  superpowers/
+
 plugins:
   - search
   - callouts:
@@ -65,11 +68,17 @@ extra_css:
 extra_javascript:
   - javascripts/pygments-theme.js
   - javascripts/search-enhance.js
+  - https://cdn.jsdelivr.net/npm/marked@14.1.4/lib/marked.umd.min.js
+  - javascripts/deepwiki-backend.js
+  - javascripts/ask-ai.js
   - https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js
   - javascripts/mermaid-init-v2.js
   - javascripts/version-switcher.js
   - javascripts/copy-page.js
   - javascripts/build-info.js
+  - javascripts/webmcp.js
+  - https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js
+  - javascripts/icon-inject.js
 
 nav:
   - Home: index.md

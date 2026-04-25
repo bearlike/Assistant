@@ -1,0 +1,73 @@
+{# Three-zone header: brand left, search center, utility right.
+   Every interactive control shares one optical height token (h-9) and the
+   same ghost-button shell, so the row reads as a single composed strip.
+   Icons come from the theme's existing `iconify` filter (Lucide + simple-icons),
+   already used by the sidebar — no hand-rolled SVG paths. #}
+<header class="mewbo-header bg-background sticky top-0 z-50 w-full" view-transition-name="header">
+    <div class="container-wrapper 3xl:fixed:px-0 px-6">
+        <div class="3xl:fixed:container flex h-(--header-height) items-center gap-3">
+
+            {# Mobile menu trigger (theme-styled animated hamburger; only flex below lg). #}
+            <button id="menu-button" data-slot="popover-trigger" onclick="onMobileMenuButtonClick(event)"
+                class="mewbo-menu-btn group flex lg:hidden" type="button"
+                aria-haspopup="dialog" aria-expanded="false" data-state="closed">
+                <span aria-hidden="true" class="block group-data-[state=open]:hidden">{{ "lucide:menu" | iconify(height="16px") | safe }}</span>
+                <span aria-hidden="true" class="hidden group-data-[state=open]:block">{{ "lucide:x" | iconify(height="16px") | safe }}</span>
+                <span class="text-sm font-medium">Menu</span>
+            </button>
+
+            {# LEFT — brand cluster: glyph + wordmark on a shared baseline. #}
+            <a class="mewbo-brand hidden lg:inline-flex" href="{{ config.site_url }}">
+                <span class="mewbo-brand__glyph">{% include "components/icon.html" %}</span>
+                {% if config.theme.show_title %}
+                <span class="mewbo-brand__name">{{ config.site_name }}</span>
+                {% endif %}
+            </a>
+            {% if config.theme.topbar_sections %}
+            {% include "templates/header_navigation.html" %}
+            {% endif %}
+
+            {# CENTER — search pill + Ask AI button (lg+ only). #}
+            <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
+                <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
+                    {{ "lucide:search" | iconify(height="16px") | safe }}
+                    <span>Search for anything…</span>
+                    <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
+                </button>
+                <button id="mewbo-nav-ask-ai" class="mewbo-nav-ask-ai-btn" type="button" aria-label="Ask AI">
+                    {{ "lucide:sparkles" | iconify(height="16px") | safe }}
+                    Ask AI
+                </button>
+            </div>
+
+            {# RIGHT — utility cluster. Every button is .mewbo-icon-btn (h-9 ghost). #}
+            <div class="ml-auto flex items-center gap-1">
+
+                {# Mobile-only search icon (responsive twin of the centered pill).
+                   `inline-flex lg:hidden`: visible inline-flex below lg, hidden at lg+.
+                   Display utilities live in @layer utilities so the cascade resolves
+                   correctly without our custom CSS interfering. #}
+                <button id="mewbo-mobile-search" class="mewbo-icon-btn inline-flex lg:hidden" type="button" aria-label="Search">
+                    {{ "lucide:search" | iconify(height="16px") | safe }}
+                </button>
+
+                {% if config.repo_url %}
+                <a class="mewbo-icon-btn inline-flex{% if config.theme.show_stargazers %} mewbo-icon-btn--wide{% endif %}"
+                    href="{{ config.repo_url }}" target="_blank" rel="noreferrer" aria-label="GitHub repository">
+                    {{ "simple-icons:github" | iconify(height="16px") | safe }}
+                    {% if config.theme.show_stargazers %}
+                    <span id="stargazers" class="mewbo-stargazers" onload="test()"></span>
+                    {% endif %}
+                </a>
+                {% endif %}
+
+                {# Theme toggle: sun/moon cross-dissolve (rotate-90 + scale-0 swap). #}
+                <button class="mewbo-icon-btn inline-flex mewbo-theme-toggle" type="button" title="Toggle theme" onclick="onThemeSwitch(event)" aria-label="Toggle theme">
+                    <span class="mewbo-theme-toggle__sun">{{ "lucide:sun" | iconify(height="16px") | safe }}</span>
+                    <span class="mewbo-theme-toggle__moon">{{ "lucide:moon" | iconify(height="16px") | safe }}</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</header>
+{% include "templates/search.html" %}
