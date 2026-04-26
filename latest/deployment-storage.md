@@ -1,14 +1,14 @@
 # Storage Backends
 
-Meeseeks stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store. It has zero dependencies and works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the [Web IDE](features-web-ide.md) feature (which requires MongoDB for container state).
+Truss stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store. It has zero dependencies and works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the [Web IDE](features-web-ide.md) feature (which requires MongoDB for container state).
 
 ## JSON (Default)
 
-The JSON driver writes one file per session under `$MEESEEKS_HOME/sessions/` (default: `~/.meeseeks/sessions/`). No extra dependencies are needed.
+The JSON driver writes one file per session under `$TRUSS_HOME/sessions/` (default: `~/.truss/sessions/`). No extra dependencies are needed.
 
 ```bash
 # These two are equivalent. JSON is the default
-MEESEEKS_STORAGE_DRIVER=json
+TRUSS_STORAGE_DRIVER=json
 # or simply leave it unset
 ```
 
@@ -19,9 +19,9 @@ MEESEEKS_STORAGE_DRIVER=json
 ## MongoDB
 
 ```bash
-MEESEEKS_STORAGE_DRIVER=mongodb
-MEESEEKS_MONGODB_URI=mongodb://meeseeks:meeseeks@localhost:27018/meeseeks?authSource=admin
-MEESEEKS_MONGODB_DATABASE=meeseeks
+TRUSS_STORAGE_DRIVER=mongodb
+TRUSS_MONGODB_URI=mongodb://truss:truss@localhost:27018/truss?authSource=admin
+TRUSS_MONGODB_DATABASE=truss
 ```
 
 The MongoDB driver stores all session data in collections within the configured database. Connection settings are read from environment variables, which override anything set in `configs/app.json`.
@@ -38,9 +38,9 @@ MongoDB is already defined as a service in `docker-compose.yml`. To activate it,
 
 ```dotenv
 # docker.env
-MEESEEKS_STORAGE_DRIVER=mongodb
-MEESEEKS_MONGODB_URI=mongodb://meeseeks:meeseeks@127.0.0.1:27018/meeseeks?authSource=admin
-MEESEEKS_MONGODB_DATABASE=meeseeks
+TRUSS_STORAGE_DRIVER=mongodb
+TRUSS_MONGODB_URI=mongodb://truss:truss@127.0.0.1:27018/truss?authSource=admin
+TRUSS_MONGODB_DATABASE=truss
 ```
 
 The MongoDB service uses host networking (`ports: ["${MONGO_PORT:-27018}:27017"]`), so `127.0.0.1:27018` is reachable from the API container (also on host network).
@@ -51,17 +51,17 @@ The MongoDB service uses host networking (`ports: ["${MONGO_PORT:-27018}:27017"]
 services:
   api:
     environment:
-      - MEESEEKS_STORAGE_DRIVER=mongodb
-      - MEESEEKS_MONGODB_URI=mongodb://meeseeks:meeseeks@127.0.0.1:27018/meeseeks?authSource=admin
+      - TRUSS_STORAGE_DRIVER=mongodb
+      - TRUSS_MONGODB_URI=mongodb://truss:truss@127.0.0.1:27018/truss?authSource=admin
 ```
 
 ### External MongoDB
 
-If you are using Atlas or another hosted MongoDB service, set `MEESEEKS_MONGODB_URI` to your connection string and ensure the URI includes the `authSource` parameter if required:
+If you are using Atlas or another hosted MongoDB service, set `TRUSS_MONGODB_URI` to your connection string and ensure the URI includes the `authSource` parameter if required:
 
 ```dotenv
-MEESEEKS_MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/meeseeks
-MEESEEKS_MONGODB_DATABASE=meeseeks
+TRUSS_MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/truss
+TRUSS_MONGODB_DATABASE=truss
 ```
 
 ## Switching Between Drivers
@@ -70,18 +70,18 @@ There is **no automatic migration** between storage drivers. If you switch from 
 
 To preserve history before switching:
 1. Export sessions you want to keep via `GET /api/sessions/{id}/export`.
-2. Change `MEESEEKS_STORAGE_DRIVER` and restart.
+2. Change `TRUSS_STORAGE_DRIVER` and restart.
 
 ## Configuration Reference
 
 | Variable / Config key | Source | Default | Description |
 |----------------------|--------|---------|-------------|
-| `MEESEEKS_STORAGE_DRIVER` | Env var | `json` | Storage driver: `json` or `mongodb`. Env var takes precedence over `configs/app.json`. |
-| `MEESEEKS_MONGODB_URI` | Env var | `mongodb://localhost:27017` | Full MongoDB connection URI. |
-| `MEESEEKS_MONGODB_DATABASE` | Env var | `meeseeks` | MongoDB database name. |
-| `MEESEEKS_HOME` | Env var | `~/.meeseeks` | Data root for the JSON driver. In Docker, set to `/app/data` (mapped to the `api-data` named volume). |
-| `storage.driver` | `configs/app.json` | `json` | Config file equivalent of `MEESEEKS_STORAGE_DRIVER` (env var wins). |
-| `storage.mongodb.uri` | `configs/app.json` | `mongodb://localhost:27017` | Config file equivalent of `MEESEEKS_MONGODB_URI` (env var wins). |
-| `storage.mongodb.database` | `configs/app.json` | `meeseeks` | Config file equivalent of `MEESEEKS_MONGODB_DATABASE` (env var wins). |
+| `TRUSS_STORAGE_DRIVER` | Env var | `json` | Storage driver: `json` or `mongodb`. Env var takes precedence over `configs/app.json`. |
+| `TRUSS_MONGODB_URI` | Env var | `mongodb://localhost:27017` | Full MongoDB connection URI. |
+| `TRUSS_MONGODB_DATABASE` | Env var | `truss` | MongoDB database name. |
+| `TRUSS_HOME` | Env var | `~/.truss` | Data root for the JSON driver. In Docker, set to `/app/data` (mapped to the `api-data` named volume). |
+| `storage.driver` | `configs/app.json` | `json` | Config file equivalent of `TRUSS_STORAGE_DRIVER` (env var wins). |
+| `storage.mongodb.uri` | `configs/app.json` | `mongodb://localhost:27017` | Config file equivalent of `TRUSS_MONGODB_URI` (env var wins). |
+| `storage.mongodb.database` | `configs/app.json` | `truss` | Config file equivalent of `TRUSS_MONGODB_DATABASE` (env var wins). |
 
 Environment variables always take precedence over values in `configs/app.json`.

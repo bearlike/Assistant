@@ -41,7 +41,7 @@
 
 
 
-<title>Architecture Overview - Meeseeks docs</title>
+<title>Architecture Overview - Truss docs</title>
 
 
 
@@ -1422,11 +1422,11 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page is the canonical internals document for Meeseeks. It is written for developers embedding the core as a library, contributing new tools or channel adapters, or debugging session behaviour. Every other page in the documentation describes <em>what</em> a feature does; this page describes <em>how</em> each feature is implemented, which modules own the behaviour, and which data structures survive compaction or restart.</p>
+    <p>This page is the canonical internals document for Truss. It is written for developers embedding the core as a library, contributing new tools or channel adapters, or debugging session behaviour. Every other page in the documentation describes <em>what</em> a feature does; this page describes <em>how</em> each feature is implemented, which modules own the behaviour, and which data structures survive compaction or restart.</p>
 <p>If you are setting up the product, start at <a href="../getting-started/">Get Started</a>. If you are looking up a capability, browse the <a href="../features-builtin-tools/">Capabilities</a> section. The Feature pages link back here for the implementation detail they intentionally omit.</p>
 <hr />
 <h2 id="execution-model">Execution model</h2>
-<p>Meeseeks uses a single async execution engine for every agent at every depth: <code>ToolUseLoop</code>. There is no separate planner, executor, or synthesiser. The LLM drives tool selection via native <code>bind_tools</code>. The orchestration layer steps the message array forward.</p>
+<p>Truss uses a single async execution engine for every agent at every depth: <code>ToolUseLoop</code>. There is no separate planner, executor, or synthesiser. The LLM drives tool selection via native <code>bind_tools</code>. The orchestration layer steps the message array forward.</p>
 <p>The loop runs until the LLM emits a text response with no tool calls. Budget warnings are injected as <code>SystemMessage</code> entries as the session approaches limits. The loop is never force-killed.</p>
 <pre class="mermaid"><code>sequenceDiagram
     participant Client
@@ -1534,11 +1534,11 @@
 <p>The full text of each file is concatenated and injected into the system prompt before the first LLM call. Each source is separated by a heading so content is traceable. When both <code>CLAUDE.md</code> and <code>AGENTS.md</code> exist at the same path, <code>CLAUDE.md</code> takes precedence.</p>
 <p><code>discover_subtree_instructions()</code> performs a <strong>downward pass</strong> from CWD to a maximum depth of 5, scanning for <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/CLAUDE.md</code>. Content is <strong>not</strong> injected; only paths are. The system prompt receives an index like:</p>
 <div class="codehilite"><pre><span></span><code># Sub-package instruction files
-- packages/meeseeks_core/CLAUDE.md
-- apps/meeseeks_console/CLAUDE.md
+- packages/truss_core/CLAUDE.md
+- apps/truss_console/CLAUDE.md
 </code></pre></div>
-<p>When a later tool call targets a file inside <code>packages/meeseeks_core/</code>, the model's next prediction produces a <code>read_file</code> call that pulls the relevant <code>CLAUDE.md</code> into the message array as a tool result. This keeps large monorepos manageable. Only directly applicable instructions occupy the active context.</p>
-<p>Pruned directories (never walked): <code>node_modules</code>, <code>__pycache__</code>, <code>.venv</code>, <code>venv</code>, and all dotfile directories. A <code>&lt;!-- meeseeks:noload --&gt;</code> marker on line 1 of any instruction file excludes it from both passes.</p>
+<p>When a later tool call targets a file inside <code>packages/truss_core/</code>, the model's next prediction produces a <code>read_file</code> call that pulls the relevant <code>CLAUDE.md</code> into the message array as a tool result. This keeps large monorepos manageable. Only directly applicable instructions occupy the active context.</p>
+<p>Pruned directories (never walked): <code>node_modules</code>, <code>__pycache__</code>, <code>.venv</code>, <code>venv</code>, and all dotfile directories. A <code>&lt;!-- truss:noload --&gt;</code> marker on line 1 of any instruction file excludes it from both passes.</p>
 <p><code>get_git_context()</code> collects branch, working-tree status, and recent commits. It is available as a helper; individual integrations decide whether to include it.</p>
 <hr />
 <h2 id="skill-loading">Skill loading</h2>
@@ -1565,7 +1565,7 @@
 <p>Capabilities are opaque string ids advertised by the client (e.g. <code>stlite</code>). They gate which agents and skills are visible to a given session. The model never sees a gated entry — the tool schema is not bound, the agent definition does not enter the spawn catalog, and the skill catalog line is omitted.</p>
 <h3 id="data-flow">Data flow</h3>
 <pre class="mermaid"><code>flowchart LR
-    A[Client request] -- X-Meeseeks-Capabilities: stlite --&gt; B[API route]
+    A[Client request] -- X-Truss-Capabilities: stlite --&gt; B[API route]
     B -- client_capabilities on context event --&gt; C[SessionStore]
     C --&gt; D[Orchestrator]
     D -- tuple str, ... --&gt; E[ToolUseLoop]
@@ -1575,13 +1575,13 @@
     G --&gt; H
     E --&gt; I[filter_specs on bound tool schema]</code></pre>
 <ol>
-<li>The HTTP layer reads <code>X-Meeseeks-Capabilities</code> (comma-separated) and passes it through to session creation.</li>
+<li>The HTTP layer reads <code>X-Truss-Capabilities</code> (comma-separated) and passes it through to session creation.</li>
 <li>The value is persisted on the session's context event as <code>client_capabilities</code>. It survives compaction because it lives on the event transcript, not in the LLM message array.</li>
 <li><code>Orchestrator</code> reads the event once per session, normalises it through <code>parse_capabilities()</code>, and threads a <code>tuple[str, ...]</code> into the <code>ToolUseLoop</code> constructor. The tuple is immutable for the lifetime of the session.</li>
 <li><code>AgentRegistry.visible_for(session_capabilities)</code> and <code>SkillRegistry.list_auto_invocable(session_capabilities)</code> / <code>list_user_invocable(session_capabilities)</code> apply the filter at every render of their catalogs.</li>
 </ol>
 <h3 id="filter-implementation">Filter implementation</h3>
-<p><code>packages/meeseeks_core/src/meeseeks_core/capabilities.py::filter_by_capabilities</code> is the single filter. An item whose <code>requires_capabilities</code> tuple is a subset of the session's set is included; an empty <code>requires_capabilities</code> is always included. Ordering and duplication of <code>session_capabilities</code> do not matter — comparison uses set semantics.</p>
+<p><code>packages/truss_core/src/truss_core/capabilities.py::filter_by_capabilities</code> is the single filter. An item whose <code>requires_capabilities</code> tuple is a subset of the session's set is included; an empty <code>requires_capabilities</code> is always included. Ordering and duplication of <code>session_capabilities</code> do not matter — comparison uses set semantics.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1770,7 +1770,7 @@
 <p><code>HookManager</code> dispatches hooks at lifecycle points and around individual tool calls. Every invocation is wrapped in <code>try/except</code>. A failing hook logs a warning and never blocks execution. <code>HookManager.load_from_config()</code> wires external hooks declared in <code>HooksConfig</code> into the manager. The API server calls this at startup and passes <code>hook_manager</code> to every <code>start_async()</code> call.</p>
 <p>Two hook types:</p>
 <ul>
-<li><strong>Command hooks.</strong> Shell subprocess. <code>_session_env()</code> provides <code>MEESEEKS_SESSION_ID</code>, <code>MEESEEKS_ERROR</code>, <code>MEESEEKS_TOOL_ID</code>, <code>MEESEEKS_OPERATION</code>, and <code>MEESEEKS_TOOL_RESULT</code> (first 2 000 chars). Waits up to <code>timeout</code> seconds (default 30), then moves on.</li>
+<li><strong>Command hooks.</strong> Shell subprocess. <code>_session_env()</code> provides <code>TRUSS_SESSION_ID</code>, <code>TRUSS_ERROR</code>, <code>TRUSS_TOOL_ID</code>, <code>TRUSS_OPERATION</code>, and <code>TRUSS_TOOL_RESULT</code> (first 2 000 chars). Waits up to <code>timeout</code> seconds (default 30), then moves on.</li>
 <li><strong>HTTP hooks.</strong> Fire-and-forget JSON POST to an external URL in a daemon thread. Does not block execution. Failures are logged.</li>
 </ul>
 <p>An optional <code>matcher</code> (fnmatch pattern) restricts which tool IDs trigger the hook. <code>matcher: "mcp__*"</code> restricts to all MCP tools; omitting the matcher matches every call.</p>
@@ -1782,7 +1782,7 @@
 <p>Plan approval is <strong>episodic</strong>: approval and rejection events persist in the session transcript and survive process restarts. <code>SessionRuntime.resolve_session()</code> checks for unresolved <code>plan_proposed</code> events before starting a new run.</p>
 <p>Each <code>exit_plan_mode</code> call increments a per-session counter stored at <code>&lt;plan_dir&gt;/revision.txt</code>. The revision number appears in <code>plan_proposed</code> events so the UI can distinguish between first drafts and revised plans.</p>
 <h3 id="shell-allowlist">Shell allowlist</h3>
-<p>During exploration Meeseeks enforces a shell allowlist via <code>agent.plan_mode_shell_allowlist</code>. Only commands whose first token matches a configured prefix are permitted. Commands containing an unquoted pipe (<code>|</code>), redirect (<code>&gt;</code>, <code>&lt;</code>), chain (<code>&amp;</code>, <code>;</code>), variable expansion (<code>$</code>), or command substitution (<code>`</code>) are rejected regardless of the allowlist. Prefixes match at word boundaries. For example, <code>"git log"</code> matches <code>"git log --oneline"</code> but not <code>"git logger"</code>. An empty list blocks shell access entirely.</p>
+<p>During exploration Truss enforces a shell allowlist via <code>agent.plan_mode_shell_allowlist</code>. Only commands whose first token matches a configured prefix are permitted. Commands containing an unquoted pipe (<code>|</code>), redirect (<code>&gt;</code>, <code>&lt;</code>), chain (<code>&amp;</code>, <code>;</code>), variable expansion (<code>$</code>), or command substitution (<code>`</code>) are rejected regardless of the allowlist. Prefixes match at word boundaries. For example, <code>"git log"</code> matches <code>"git log --oneline"</code> but not <code>"git logger"</code>. An empty list blocks shell access entirely.</p>
 <p><code>agent.plan_mode_allow_mcp</code> defaults to <code>true</code>; MCP tools are available in plan mode unless explicitly disabled.</p>
 <hr />
 <h2 id="compaction">Compaction pipeline</h2>
@@ -1806,13 +1806,13 @@
 <span class="nt">&lt;/summary&gt;</span>
 </code></pre></div>
 <p>Only the <code>&lt;summary&gt;</code> block is stored. The <code>&lt;analysis&gt;</code> scratchpad is stripped before injection into subsequent prompts.</p>
-<p>After the summary is generated, Meeseeks scans summarised events for file paths referenced by tool calls and re-reads up to 5 files (up to 5 000 tokens each) back into the compacted context. Recently edited files land in the prompt as literal content so the model can continue editing without re-reading them.</p>
+<p>After the summary is generated, Truss scans summarised events for file paths referenced by tool calls and re-reads up to 5 files (up to 5 000 tokens each) back into the compacted context. Recently edited files land in the prompt as literal content so the model can continue editing without re-reading them.</p>
 <p><strong>Caveman mode</strong> (<code>compaction.caveman_mode = true</code>) activates a terse summarisation prompt. It drops articles, filler phrases, and hedging. Code blocks, file paths, URLs, commands, and error strings are preserved verbatim. Output tokens drop by ~30–60 % on prose-heavy sessions without changing the XML structure.</p>
 <p>Each compaction emits a <code>context_compacted</code> event with payload <code>{model, tokens_before, tokens_saved, events_summarized}</code>. The console timeline renders compaction events as a distinct pill. The context-window bar popover includes a <strong>Compactions</strong> row when at least one has run.</p>
 <p>Auto-compact fires when the most recent root prompt size crosses <code>token_budget.auto_compact_threshold</code> (default 0.8 of the model's context window). The threshold is evaluated after every LLM call using the actual <code>input_tokens</code> reported by the provider. This is not a character-count estimate.</p>
 <hr />
 <h2 id="token-tracking">Token tracking</h2>
-<p>Meeseeks tracks usage separately for the root agent (depth = 0) and all sub-agents (depth ≥ 1). Three distinct input-token semantics:</p>
+<p>Truss tracks usage separately for the root agent (depth = 0) and all sub-agents (depth ≥ 1). Three distinct input-token semantics:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1840,8 +1840,8 @@
 </tbody>
 </table></div>
 <p>Do <strong>not</strong> sum <code>input_tokens</code> across calls within a turn. The prompt grows as tool results accumulate. Each step re-sends the full context, so summing double-counts the baseline. Use the peak or the last value. Output tokens are always additive. Each output token is produced once.</p>
-<p>Prompt caching auto-enables via LiteLLM for models that report support. No configuration is required. Meeseeks queries <code>litellm.utils.supports_prompt_caching</code> to decide whether to enable caching for a given model name.</p>
-<p>When using a proxy (<code>llm.api_base</code> set), the proxy must expose <code>/v1/model/info</code> advertising each model's capabilities. Meeseeks fetches this endpoint once per process at startup and registers the results with LiteLLM so <code>supports_prompt_caching</code> returns accurate results for proxy-routed custom model names. Without <code>/v1/model/info</code>, caching falls back to disabled for those models.</p>
+<p>Prompt caching auto-enables via LiteLLM for models that report support. No configuration is required. Truss queries <code>litellm.utils.supports_prompt_caching</code> to decide whether to enable caching for a given model name.</p>
+<p>When using a proxy (<code>llm.api_base</code> set), the proxy must expose <code>/v1/model/info</code> advertising each model's capabilities. Truss fetches this endpoint once per process at startup and registers the results with LiteLLM so <code>supports_prompt_caching</code> returns accurate results for proxy-routed custom model names. Without <code>/v1/model/info</code>, caching falls back to disabled for those models.</p>
 <hr />
 <h2 id="mcp">MCP connection pool</h2>
 <p>MCP server definitions are assembled from four layers, merged deepest-first with deep-merge semantics (later layers win on key conflicts):</p>
@@ -1861,7 +1861,7 @@
 </tr>
 <tr>
 <td>2</td>
-<td>Global: <code>configs/mcp.json</code> or <code>$MEESEEKS_HOME/mcp.json</code></td>
+<td>Global: <code>configs/mcp.json</code> or <code>$TRUSS_HOME/mcp.json</code></td>
 <td>Middle</td>
 </tr>
 <tr>
@@ -1984,7 +1984,7 @@
     IdeManager--&gt;&gt;API: (instance, created=True)
     API--&gt;&gt;Console: { url, password, status: "starting" }
     Console-&gt;&gt;User: Open /ide/{id}/ in new tab</code></pre>
-<p>The session's project directory is mounted at <code>/home/coder/project</code>. A deadline file is bind-mounted at <code>/meeseeks/deadline</code>. The container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. <code>POST /api/sessions/{id}/ide/extend</code> overwrites the deadline file and updates MongoDB. <code>DELETE</code> force-removes the container, deadline file, and MongoDB document.</p>
+<p>The session's project directory is mounted at <code>/home/coder/project</code>. A deadline file is bind-mounted at <code>/truss/deadline</code>. The container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. <code>POST /api/sessions/{id}/ide/extend</code> overwrites the deadline file and updates MongoDB. <code>DELETE</code> force-removes the container, deadline file, and MongoDB document.</p>
 <hr />
 <h2 id="built-in-tools">Built-in tools</h2>
 <h3 id="read_file-cache">read_file cache</h3>
@@ -2024,8 +2024,8 @@
 <p><code>PluginsConfig</code> lives in <code>config.py</code> and defines <code>registry_paths</code> and <code>marketplaces</code>. The CLI exposes <code>/plugins</code>; the API exposes <code>GET/POST /api/plugins</code>, <code>GET/POST /api/plugins/marketplace</code>, and <code>DELETE /api/plugins/&lt;name&gt;</code>; the console renders <code>PluginsView</code>.</p>
 <p>See <a href="#session-tools">Session tools</a> for plugin-contributed per-agent stateful tools.</p>
 <h3 id="built-in-plugin-scan-path">Built-in plugin scan path</h3>
-<p>A fourth scan source sits alongside the registry-driven paths: the directory <code>packages/meeseeks_core/src/meeseeks_core/builtin_plugins/</code>. Any plugin checked in under this path is discovered through the <strong>same</strong> pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin — manifest, <code>agents/</code>, <code>skills/</code>, <code>hooks/hooks.json</code>, <code>.mcp.json</code>, <code>session_tools</code> — with no <code>installed_plugins.json</code> entry required.</p>
-<p>The path is resolved at runtime via <code>importlib.resources.files("meeseeks_core") / "builtin_plugins"</code> so discovery works identically for editable installs (<code>pip install -e .</code>), wheels, and zipapps. The scanner iterates every immediate subdirectory that contains a <code>.claude-plugin/plugin.json</code>.</p>
+<p>A fourth scan source sits alongside the registry-driven paths: the directory <code>packages/truss_core/src/truss_core/builtin_plugins/</code>. Any plugin checked in under this path is discovered through the <strong>same</strong> pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin — manifest, <code>agents/</code>, <code>skills/</code>, <code>hooks/hooks.json</code>, <code>.mcp.json</code>, <code>session_tools</code> — with no <code>installed_plugins.json</code> entry required.</p>
+<p>The path is resolved at runtime via <code>importlib.resources.files("truss_core") / "builtin_plugins"</code> so discovery works identically for editable installs (<code>pip install -e .</code>), wheels, and zipapps. The scanner iterates every immediate subdirectory that contains a <code>.claude-plugin/plugin.json</code>.</p>
 <p>Currently bundled: <code>widget_builder/</code> (declares <code>requires-capabilities: ["stlite"]</code>). Other bundles slot in by dropping a plugin-shaped directory next to it. No discovery code needs to change.</p>
 <h3 id="path-substitution">Path substitution</h3>
 <p>Plugin-owned agent bodies and skill bodies can reference three placeholders. Substitution is a single linear <code>str.replace</code> pass per placeholder — there is no template engine, no expression language, and bodies with no placeholders are byte-identical after the pass.</p>
@@ -2049,17 +2049,17 @@
 <td>The current session's id</td>
 </tr>
 <tr>
-<td><code>${MEESEEKS_WIDGET_ROOT}</code></td>
+<td><code>${TRUSS_WIDGET_ROOT}</code></td>
 <td>Agent spawn</td>
 <td>Widget-builder output root; supports <code>:-</code> default syntax</td>
 </tr>
 </tbody>
 </table></div>
-<p><code>${CLAUDE_PLUGIN_ROOT}</code> is also substituted inside <code>.mcp.json</code> and <code>hooks/hooks.json</code> at discovery time, as noted above. <code>${SESSION_ID}</code> and <code>${MEESEEKS_WIDGET_ROOT}</code> are agent-body-only and resolve inside <code>spawn_agent</code> just before the body is handed to the child <code>ToolUseLoop</code>.</p>
+<p><code>${CLAUDE_PLUGIN_ROOT}</code> is also substituted inside <code>.mcp.json</code> and <code>hooks/hooks.json</code> at discovery time, as noted above. <code>${SESSION_ID}</code> and <code>${TRUSS_WIDGET_ROOT}</code> are agent-body-only and resolve inside <code>spawn_agent</code> just before the body is handed to the child <code>ToolUseLoop</code>.</p>
 <hr />
 <h2 id="session-tools">Session tools</h2>
 <p>A <strong>session tool</strong> is a per-agent stateful tool — a tool whose lifecycle is coupled to one specific agent instance rather than the global <code>ToolRegistry</code>. The handler holds state (accumulated across calls within the agent's run), declares its own OpenAI function schema, and can signal clean loop termination independently of the model's final text response. The core <code>ExitPlanModeTool</code> is a session tool. The widget-builder's <code>SubmitWidgetTool</code> is a session tool contributed by a plugin.</p>
-<p>Session tools are defined in <code>packages/meeseeks_core/src/meeseeks_core/session_tools.py</code>.</p>
+<p>Session tools are defined in <code>packages/truss_core/src/truss_core/session_tools.py</code>.</p>
 <h3 id="protocol">Protocol</h3>
 <div class="codehilite"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">SessionTool</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
     <span class="n">tool_id</span><span class="p">:</span> <span class="nb">str</span>
@@ -2124,7 +2124,7 @@
 <span class="w">  </span><span class="nt">&quot;session_tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
 <span class="w">      </span><span class="nt">&quot;tool_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;submit_widget&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;meeseeks_core.builtin_plugins.widget_builder.submit_widget&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;truss_core.builtin_plugins.widget_builder.submit_widget&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;class&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;SubmitWidgetTool&quot;</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">]</span>
@@ -2163,7 +2163,7 @@
 </tbody>
 </table></div>
 <p><code>ChannelRegistry</code> lookup and <code>DeduplicationGuard</code> replay protection are shared. The webhook endpoint <code>POST /api/webhooks/&lt;platform&gt;</code> authenticates via HMAC (not API key). Poll-driven channels (e.g. Email) call <code>_process_inbound()</code> directly from their own poller instead of via the webhook route.</p>
-<p>The shared <code>_process_inbound()</code> pipeline in <code>routes.py</code> runs dedup → mention gate → session resolve → commands → LLM for every channel. <code>requires_mention(message)</code> is optional on the adapter for dynamic mention gating (Email uses this to skip the <code>@Meeseeks</code> requirement on 1-to-1 threads).</p>
+<p>The shared <code>_process_inbound()</code> pipeline in <code>routes.py</code> runs dedup → mention gate → session resolve → commands → LLM for every channel. <code>requires_mention(message)</code> is optional on the adapter for dynamic mention gating (Email uses this to skip the <code>@Truss</code> requirement on 1-to-1 threads).</p>
 <p>Channel sessions are standard API sessions. They are created via <code>session_store.create_session()</code>, mapped via session tags (<code>tag_session</code> / <code>resolve_tag</code>), and visible in the console and Langfuse. The completion callback reads <code>source_platform</code> from the transcript context event and dispatches the final answer through the adapter.</p>
 <p>Existing adapters: Nextcloud Talk (<code>nextcloud_talk.py</code>, HMAC-SHA256, ActivityStreams 2.0, OCS Bot API) and Email (<code>email_adapter.py</code>, IMAP polling + SMTP reply, markdown-to-HTML rendering via <code>mistune</code>, Jinja2 HTML template).</p>
 <hr />

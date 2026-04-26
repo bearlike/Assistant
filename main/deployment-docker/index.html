@@ -41,7 +41,7 @@
 
 
 
-<title>Docker Compose - Meeseeks docs</title>
+<title>Docker Compose - Truss docs</title>
 
 
 
@@ -1422,7 +1422,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>The recommended way to run Meeseeks in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single <code>docker compose up</code> starts the full stack. It includes the API, console, MongoDB, and the nginx proxy for the Web IDE feature.</p>
+    <p>The recommended way to run Truss in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single <code>docker compose up</code> starts the full stack. It includes the API, console, MongoDB, and the nginx proxy for the Web IDE feature.</p>
 <h2 id="quick-start">Quick Start</h2>
 <p><strong>Step 1. Copy the environment template:</strong></p>
 <div class="codehilite"><pre><span></span><code>cp<span class="w"> </span>docker.example.env<span class="w"> </span>docker.env
@@ -1517,13 +1517,13 @@ HOST_UID=1000                            # output of `id -u`
 <tr>
 <td><code>MONGO_INITDB_ROOT_USERNAME</code></td>
 <td>No</td>
-<td><code>meeseeks</code></td>
+<td><code>truss</code></td>
 <td>MongoDB root username.</td>
 </tr>
 <tr>
 <td><code>MONGO_INITDB_ROOT_PASSWORD</code></td>
 <td>No</td>
-<td><code>meeseeks</code></td>
+<td><code>truss</code></td>
 <td>MongoDB root password. Change this in production.</td>
 </tr>
 </tbody>
@@ -1543,13 +1543,13 @@ HOST_UID=1000                            # output of `id -u`
 <tbody>
 <tr>
 <td><code>api</code></td>
-<td><code>ghcr.io/bearlike/meeseeks-api</code></td>
+<td><code>ghcr.io/bearlike/truss-api</code></td>
 <td><code>5125</code></td>
 <td>Gunicorn + Flask REST API. Runs as <code>HOST_UID:HOST_GID</code>.</td>
 </tr>
 <tr>
 <td><code>console</code></td>
-<td><code>ghcr.io/bearlike/meeseeks-console</code></td>
+<td><code>ghcr.io/bearlike/truss-console</code></td>
 <td><code>3001</code></td>
 <td>nginx serving the React SPA. Proxies <code>/api/</code> to the API.</td>
 </tr>
@@ -1567,7 +1567,7 @@ HOST_UID=1000                            # output of `id -u`
 </tr>
 </tbody>
 </table></div>
-<p>Both <code>api</code> and <code>console</code> use <strong>host networking</strong> (<code>network_mode: host</code>), so they share <code>127.0.0.1</code> with the host. The <code>ide-proxy</code> runs on the <code>meeseeks-ide</code> bridge network and is bound to loopback by default.</p>
+<p>Both <code>api</code> and <code>console</code> use <strong>host networking</strong> (<code>network_mode: host</code>), so they share <code>127.0.0.1</code> with the host. The <code>ide-proxy</code> runs on the <code>truss-ide</code> bridge network and is bound to loopback by default.</p>
 <h2 id="named-volumes">Named Volumes</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1590,7 +1590,7 @@ HOST_UID=1000                            # output of `id -u`
 </tr>
 <tr>
 <td><code>plans-data</code></td>
-<td><code>/tmp/meeseeks/plans</code></td>
+<td><code>/tmp/truss/plans</code></td>
 <td>Plan-mode scratch files (survive restarts).</td>
 </tr>
 </tbody>
@@ -1650,15 +1650,15 @@ HOST_UID=1000                            # output of `id -u`
 </thead>
 <tbody>
 <tr>
-<td><code>ghcr.io/bearlike/meeseeks-api</code></td>
+<td><code>ghcr.io/bearlike/truss-api</code></td>
 <td>REST API (Gunicorn + Flask).</td>
 </tr>
 <tr>
-<td><code>ghcr.io/bearlike/meeseeks-console</code></td>
+<td><code>ghcr.io/bearlike/truss-console</code></td>
 <td>Web console (nginx + React SPA).</td>
 </tr>
 <tr>
-<td><code>ghcr.io/bearlike/meeseeks-base</code></td>
+<td><code>ghcr.io/bearlike/truss-base</code></td>
 <td>Base image with Python, Node, and core packages. Used as build arg for the API image.</td>
 </tr>
 </tbody>

@@ -41,7 +41,7 @@
 
 
 
-<title>Building a Client - Meeseeks docs</title>
+<title>Building a Client - Truss docs</title>
 
 
 
@@ -1425,20 +1425,20 @@
     <p>This page summarizes the code layout, core interfaces, and the minimal steps needed to build a new client.</p>
 <h2 id="monorepo-layout">Monorepo layout</h2>
 <ul>
-<li><code>packages/meeseeks_core/</code>: orchestration loop, session runtime, schemas, session storage, compaction, tool registry, plugin system (<code>plugins.py</code>), agent definition registry (<code>agent_registry.py</code>).</li>
-<li><code>packages/meeseeks_tools/</code>: tool implementations and integration glue.</li>
-<li><code>packages/meeseeks_tools/src/meeseeks_tools/vendor/aider</code>: vendored Aider utilities used by local file and shell tools.</li>
-<li><code>apps/meeseeks_api/</code>: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (<code>ide.py</code>, <code>ide_routes.py</code>).</li>
-<li><code>apps/meeseeks_console/</code>: Web console for task orchestration, plugin management, and Web IDE access (React + Vite).</li>
-<li><code>apps/meeseeks_cli/</code>: terminal CLI for interactive sessions.</li>
-<li><code>meeseeks_ha_conversation/</code>: Home Assistant integration that routes voice requests to the API.</li>
+<li><code>packages/truss_core/</code>: orchestration loop, session runtime, schemas, session storage, compaction, tool registry, plugin system (<code>plugins.py</code>), agent definition registry (<code>agent_registry.py</code>).</li>
+<li><code>packages/truss_tools/</code>: tool implementations and integration glue.</li>
+<li><code>packages/truss_tools/src/truss_tools/vendor/aider</code>: vendored Aider utilities used by local file and shell tools.</li>
+<li><code>apps/truss_api/</code>: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (<code>ide.py</code>, <code>ide_routes.py</code>).</li>
+<li><code>apps/truss_console/</code>: Web console for task orchestration, plugin management, and Web IDE access (React + Vite).</li>
+<li><code>apps/truss_cli/</code>: terminal CLI for interactive sessions.</li>
+<li><code>truss_ha_conversation/</code>: Home Assistant integration that routes voice requests to the API.</li>
 </ul>
 <h2 id="project-instructions-claudemd-agentsmd">Project instructions (<code>CLAUDE.md</code> / <code>AGENTS.md</code>)</h2>
-<p>The orchestrator loads project instructions from the working directory and injects them into the system prompt. <code>discover_project_instructions()</code> in <code>meeseeks_core.common</code> checks for <code>CLAUDE.md</code> first, then falls back to <code>AGENTS.md</code>.</p>
+<p>The orchestrator loads project instructions from the working directory and injects them into the system prompt. <code>discover_project_instructions()</code> in <code>truss_core.common</code> checks for <code>CLAUDE.md</code> first, then falls back to <code>AGENTS.md</code>.</p>
 <ul>
 <li>Place a <code>CLAUDE.md</code> at the repo root or in any sub-package to provide context-specific guidance to the orchestration loop.</li>
 <li><code>AGENTS.md</code> is a fallback for tools that look for that filename. In this repo the <code>AGENTS.md</code> files are shims that redirect to <code>CLAUDE.md</code>.</li>
-<li>To <strong>skip</strong> a file from being loaded (e.g., a shim that would duplicate content), add <code>&lt;!-- meeseeks:noload --&gt;</code> as the very first line. The loader checks for this marker and skips the file.</li>
+<li>To <strong>skip</strong> a file from being loaded (e.g., a shim that would duplicate content), add <code>&lt;!-- truss:noload --&gt;</code> as the very first line. The loader checks for this marker and skips the file.</li>
 </ul>
 <h2 id="model-and-provider-support">Model and provider support</h2>
 <ul>
@@ -1448,17 +1448,17 @@
 </ul>
 <h2 id="core-abstractions-and-interfaces">Core abstractions and interfaces</h2>
 <ul>
-<li><code>AbstractTool</code> (<code>meeseeks_core.classes</code>): base class for local tools; implement <code>get_state</code> and <code>set_state</code> and return a <code>MockSpeaker</code>.</li>
-<li><code>ToolRunner</code> protocol (<code>meeseeks_core.tool_registry</code>): interface for tool runners with <code>run(ActionStep)</code>.</li>
-<li><code>ToolSpec</code> / <code>ToolRegistry</code> (<code>meeseeks_core.tool_registry</code>): register tools with <code>tool_id</code>, metadata, and a factory. The file edit tool is conditionally registered based on <code>agent.edit_tool</code> config. The value is either <code>aider_edit_block_tool</code> or <code>file_edit_tool</code>. When <code>edit_tool</code> is empty, <code>ToolUseLoop</code> auto-selects based on model identity via <code>model_prefers_structured_patch()</code>. The <code>read_file</code> tool is always registered as a native built-in (see <a href="#built-in-read_file-tool">Built-in <code>read_file</code> tool</a> below).</li>
-<li><code>PluginSystem</code> (<code>meeseeks_core.plugins</code>): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by <code>agent_registry.py</code>), skills, hooks, and MCP tool configurations. Loaded via <code>load_all_plugin_components()</code> during session init.</li>
-<li><code>ActionStep</code>, <code>Plan</code>, <code>TaskQueue</code> (<code>meeseeks_core.classes</code>): planning and tool-execution payloads.</li>
-<li><code>PermissionPolicy</code> (<code>meeseeks_core.permissions</code>): allow/deny/ask rules for tool execution.</li>
-<li><code>HookManager</code> (<code>meeseeks_core.hooks</code>): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports <code>"command"</code> (shell) and <code>"http"</code> (fire-and-forget POST) hook types via <code>HooksConfig</code>.</li>
-<li><code>ChannelAdapter</code> protocol (<code>meeseeks_api.channels.base</code>): abstraction for chat platform integrations with four methods (<code>verify_request</code>, <code>parse_inbound</code>, <code>send_response</code>, <code>system_context</code>). All adapters share the <code>_process_inbound()</code> pipeline in <code>routes.py</code>. Current adapters: Nextcloud Talk (webhook-driven) and Email (IMAP polling with SMTP replies rendered as HTML from markdown).</li>
-<li><code>SessionStore</code> / <code>SessionRuntime</code> (<code>meeseeks_core.session_store</code>, <code>meeseeks_core.session_runtime</code>): transcripts and the shared runtime facade.</li>
-<li><code>ChatModel</code> protocol (<code>meeseeks_core.llm</code>): interface for LLM backends via <code>build_chat_model</code>. Supports <code>proxy_model_prefix</code> for proxy routing and <code>model_prefers_structured_patch()</code> for edit tool auto-selection.</li>
-<li><code>LSPTool</code> (<code>meeseeks_tools.integration.lsp.tool</code>): code intelligence via pygls language servers. Operations: <code>diagnostics</code>, <code>definition</code>, <code>references</code>, <code>hover</code>. Servers are <code>ServerDef</code> instances in <code>lsp/servers.py</code>, matched by file extension and auto-discovered on the PATH. Passive diagnostics are injected after file edits via <code>_append_lsp_feedback</code> in <code>ToolUseLoop</code>. Config: <code>agent.lsp.enabled</code> and <code>agent.lsp.servers</code> (override built-ins or add custom servers). Requires the <code>pygls</code> optional dependency; silently absent when not installed.</li>
+<li><code>AbstractTool</code> (<code>truss_core.classes</code>): base class for local tools; implement <code>get_state</code> and <code>set_state</code> and return a <code>MockSpeaker</code>.</li>
+<li><code>ToolRunner</code> protocol (<code>truss_core.tool_registry</code>): interface for tool runners with <code>run(ActionStep)</code>.</li>
+<li><code>ToolSpec</code> / <code>ToolRegistry</code> (<code>truss_core.tool_registry</code>): register tools with <code>tool_id</code>, metadata, and a factory. The file edit tool is conditionally registered based on <code>agent.edit_tool</code> config. The value is either <code>aider_edit_block_tool</code> or <code>file_edit_tool</code>. When <code>edit_tool</code> is empty, <code>ToolUseLoop</code> auto-selects based on model identity via <code>model_prefers_structured_patch()</code>. The <code>read_file</code> tool is always registered as a native built-in (see <a href="#built-in-read_file-tool">Built-in <code>read_file</code> tool</a> below).</li>
+<li><code>PluginSystem</code> (<code>truss_core.plugins</code>): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by <code>agent_registry.py</code>), skills, hooks, and MCP tool configurations. Loaded via <code>load_all_plugin_components()</code> during session init.</li>
+<li><code>ActionStep</code>, <code>Plan</code>, <code>TaskQueue</code> (<code>truss_core.classes</code>): planning and tool-execution payloads.</li>
+<li><code>PermissionPolicy</code> (<code>truss_core.permissions</code>): allow/deny/ask rules for tool execution.</li>
+<li><code>HookManager</code> (<code>truss_core.hooks</code>): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports <code>"command"</code> (shell) and <code>"http"</code> (fire-and-forget POST) hook types via <code>HooksConfig</code>.</li>
+<li><code>ChannelAdapter</code> protocol (<code>truss_api.channels.base</code>): abstraction for chat platform integrations with four methods (<code>verify_request</code>, <code>parse_inbound</code>, <code>send_response</code>, <code>system_context</code>). All adapters share the <code>_process_inbound()</code> pipeline in <code>routes.py</code>. Current adapters: Nextcloud Talk (webhook-driven) and Email (IMAP polling with SMTP replies rendered as HTML from markdown).</li>
+<li><code>SessionStore</code> / <code>SessionRuntime</code> (<code>truss_core.session_store</code>, <code>truss_core.session_runtime</code>): transcripts and the shared runtime facade.</li>
+<li><code>ChatModel</code> protocol (<code>truss_core.llm</code>): interface for LLM backends via <code>build_chat_model</code>. Supports <code>proxy_model_prefix</code> for proxy routing and <code>model_prefers_structured_patch()</code> for edit tool auto-selection.</li>
+<li><code>LSPTool</code> (<code>truss_tools.integration.lsp.tool</code>): code intelligence via pygls language servers. Operations: <code>diagnostics</code>, <code>definition</code>, <code>references</code>, <code>hover</code>. Servers are <code>ServerDef</code> instances in <code>lsp/servers.py</code>, matched by file extension and auto-discovered on the PATH. Passive diagnostics are injected after file edits via <code>_append_lsp_feedback</code> in <code>ToolUseLoop</code>. Config: <code>agent.lsp.enabled</code> and <code>agent.lsp.servers</code> (override built-ins or add custom servers). Requires the <code>pygls</code> optional dependency; silently absent when not installed.</li>
 </ul>
 <h2 id="new-client-walkthrough-concrete-steps">New client walkthrough (concrete steps)</h2>
 <ol>
@@ -1482,11 +1482,11 @@
 <li>Use <code>session_log_context(session_id)</code> to capture per-session logs.</li>
 </ol>
 <h3 id="minimal-sync-example">Minimal sync example</h3>
-<div class="codehilite"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.common</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_logger</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.permissions</span><span class="w"> </span><span class="kn">import</span> <span class="n">approval_callback_from_config</span><span class="p">,</span> <span class="n">load_permission_policy</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.session_runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionRuntime</span><span class="p">,</span> <span class="n">parse_core_command</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.session_store</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionStore</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.tool_registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_registry</span>
+<div class="codehilite"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.common</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_logger</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.permissions</span><span class="w"> </span><span class="kn">import</span> <span class="n">approval_callback_from_config</span><span class="p">,</span> <span class="n">load_permission_policy</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.session_runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionRuntime</span><span class="p">,</span> <span class="n">parse_core_command</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.session_store</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionStore</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.tool_registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_registry</span>
 
 <span class="n">logger</span> <span class="o">=</span> <span class="n">get_logger</span><span class="p">(</span><span class="s2">&quot;client&quot;</span><span class="p">)</span>
 
@@ -1514,9 +1514,9 @@
 <li>Subclass <code>AbstractTool</code> and implement <code>get_state</code> / <code>set_state</code>.</li>
 <li>Register the tool with a <code>ToolSpec</code> factory in the registry.</li>
 </ol>
-<div class="codehilite"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.classes</span><span class="w"> </span><span class="kn">import</span> <span class="n">AbstractTool</span><span class="p">,</span> <span class="n">ActionStep</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.common</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_mock_speaker</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.tool_registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">ToolRegistry</span><span class="p">,</span> <span class="n">ToolSpec</span>
+<div class="codehilite"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.classes</span><span class="w"> </span><span class="kn">import</span> <span class="n">AbstractTool</span><span class="p">,</span> <span class="n">ActionStep</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.common</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_mock_speaker</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.tool_registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">ToolRegistry</span><span class="p">,</span> <span class="n">ToolSpec</span>
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ExampleTool</span><span class="p">(</span><span class="n">AbstractTool</span><span class="p">):</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -1539,7 +1539,7 @@
 <span class="p">)</span>
 </code></pre></div>
 <h2 id="new-channel-adapter-walkthrough">New channel adapter walkthrough</h2>
-<p>Channel adapters connect external chat platforms (Nextcloud Talk, Email, Slack, Discord, etc.) to Meeseeks. All adapters share the same inbound pipeline and produce standard API sessions visible in the console and Langfuse.</p>
+<p>Channel adapters connect external chat platforms (Nextcloud Talk, Email, Slack, Discord, etc.) to Truss. All adapters share the same inbound pipeline and produce standard API sessions visible in the console and Langfuse.</p>
 <h3 id="architecture">Architecture</h3>
 <pre class="mermaid"><code>flowchart TD
     A["Platform webhook or poller"] --&gt; B["ChannelAdapter.verify_request()"]
@@ -1553,7 +1553,7 @@
     H -- No --&gt; J["SessionRuntime.start_async()"]
     J --&gt; K["Completion callback"]
     K --&gt; L["adapter.send_response()"]</code></pre>
-<p>Key files in <code>apps/meeseeks_api/src/meeseeks_api/channels/</code>:</p>
+<p>Key files in <code>apps/truss_api/src/truss_api/channels/</code>:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1601,14 +1601,14 @@
 <p><strong>For poll-driven channels</strong> (like Email's IMAP poller): create a daemon thread that polls the external source and calls <code>_process_inbound()</code> directly, bypassing the webhook route.</p>
 </li>
 <li>
-<p><strong>Optionally implement <code>requires_mention(message)</code>.</strong> Return <code>False</code> to skip the mention gate for specific message types. For example, Email skips mentions for 1-to-1 but requires <code>@Meeseeks</code> in multi-party threads.</p>
+<p><strong>Optionally implement <code>requires_mention(message)</code>.</strong> Return <code>False</code> to skip the mention gate for specific message types. For example, Email skips mentions for 1-to-1 but requires <code>@Truss</code> in multi-party threads.</p>
 </li>
 <li>
 <p><strong>Add platform-specific slash commands</strong> (optional). Use the <code>@command</code> decorator in <code>routes.py</code>. Help text auto-generates from the registry.</p>
 </li>
 </ol>
 <h3 id="session-mapping">Session mapping</h3>
-<p>Channel sessions use session tags to map platform threads to Meeseeks sessions.</p>
+<p>Channel sessions use session tags to map platform threads to Truss sessions.</p>
 <ul>
 <li><strong>Tag format:</strong> <code>"&lt;platform&gt;:&lt;scope&gt;:&lt;id&gt;"</code> (for example, <code>nextcloud-talk:room:abc123</code> or <code>email:thread:alice@example.com:msg-id-001</code>).</li>
 <li>The <code>_process_inbound()</code> pipeline calls <code>session_store.resolve_tag(tag)</code> to look up an existing session. If no session exists, it creates one with <code>create_session()</code> and binds it with <code>tag_session()</code>.</li>
@@ -1650,9 +1650,9 @@
 </ul>
 <h2 id="built-in-read_file-tool">Built-in <code>read_file</code> tool</h2>
 <p>The <code>read_file</code> tool (<code>tool_id: "read_file"</code>) is a native built-in for reading local files with line-based windowing and a dedup cache that prevents redundant reads from bloating the LLM's context.</p>
-<p><strong>Implementation:</strong> <code>packages/meeseeks_tools/src/meeseeks_tools/integration/aider_file_tools.py</code> (<code>ReadFileTool</code> class)
-<strong>Registration:</strong> <code>packages/meeseeks_core/src/meeseeks_core/tool_registry.py</code>
-<strong>Prompt:</strong> <code>packages/meeseeks_core/src/meeseeks_core/prompts/tools/read-file.txt</code></p>
+<p><strong>Implementation:</strong> <code>packages/truss_tools/src/truss_tools/integration/aider_file_tools.py</code> (<code>ReadFileTool</code> class)
+<strong>Registration:</strong> <code>packages/truss_core/src/truss_core/tool_registry.py</code>
+<strong>Prompt:</strong> <code>packages/truss_core/src/truss_core/prompts/tools/read-file.txt</code></p>
 <h3 id="parameters">Parameters</h3>
 <div class="table-wrapper"><table>
 <thead>

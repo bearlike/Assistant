@@ -41,7 +41,7 @@
 
 
 
-<title>Web Console + API - Meeseeks docs</title>
+<title>Web Console + API - Truss docs</title>
 
 
 
@@ -1423,20 +1423,20 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;">
-  <img src="../meeseeks-console-01-front.png" alt="Meeseeks Console landing page" style="width: 100%; max-width: 520px; height: auto;" />
-  <img src="../meeseeks-console-02-tasks.png" alt="Meeseeks Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../truss-console-01-front.png" alt="Truss Console landing page" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../truss-console-02-tasks.png" alt="Truss Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-<p>The REST API is the programmable surface for Meeseeks. You send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration. The console gives you session management, an event timeline, and rich visualization of tool output.</p>
+<p>The REST API is the programmable surface for Truss. You send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration. The console gives you session management, an event timeline, and rich visualization of tool output.</p>
 <p>See <a href="../getting-started/#api-setup">Get Started</a> for installation and <a href="../deployment-docker/">Docker Compose</a> for container deployment.</p>
 <h2 id="run-the-rest-api">Run the REST API</h2>
-<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>meeseeks-api
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>truss-api
 </code></pre></div>
 <p>API notes:</p>
 <ul>
 <li>Protected routes require <code>X-API-Key</code> matching <code>api.master_token</code> in <code>configs/app.json</code>.</li>
 <li>Session runtime endpoints support async runs and event polling.</li>
-<li><code>X-Meeseeks-Capabilities</code> is an optional request header advertising what the client can render. See <a href="#client-capability-negotiation">Client capability negotiation</a> below.</li>
+<li><code>X-Truss-Capabilities</code> is an optional request header advertising what the client can render. See <a href="#client-capability-negotiation">Client capability negotiation</a> below.</li>
 </ul>
 <p>Core endpoints:</p>
 <ul>
@@ -1466,7 +1466,7 @@
 <li><code>POST /api/sessions/{session_id}/ide/extend</code> extend the IDE session TTL</li>
 </ul>
 <h2 id="run-the-console">Run the Console</h2>
-<div class="codehilite"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>apps/meeseeks_console
+<div class="codehilite"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>apps/truss_console
 npm<span class="w"> </span>install
 npm<span class="w"> </span>run<span class="w"> </span>dev
 </code></pre></div>
@@ -1476,7 +1476,7 @@ npm<span class="w"> </span>run<span class="w"> </span>dev
 - Set <code>VITE_API_MODE</code> to <code>live</code> for direct API access or <code>auto</code> (default) for fallback to mock data.
 - During development, the Vite dev server proxies <code>/api/</code> requests to the API backend.</p>
 <h2 id="client-capability-negotiation">Client capability negotiation</h2>
-<p>Clients advertise the UI primitives they can render by sending the <code>X-Meeseeks-Capabilities</code> request header. The value is a comma-separated list of capability ids (for example <code>stlite</code>, or <code>stlite,foo</code>). The header travels on every request that creates or drives a session.</p>
+<p>Clients advertise the UI primitives they can render by sending the <code>X-Truss-Capabilities</code> request header. The value is a comma-separated list of capability ids (for example <code>stlite</code>, or <code>stlite,foo</code>). The header travels on every request that creates or drives a session.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1487,7 +1487,7 @@ npm<span class="w"> </span>run<span class="w"> </span>dev
 <tbody>
 <tr>
 <td>Client</td>
-<td>Sets <code>X-Meeseeks-Capabilities</code> per request. The console sets <code>stlite</code> automatically; other clients opt in explicitly.</td>
+<td>Sets <code>X-Truss-Capabilities</code> per request. The console sets <code>stlite</code> automatically; other clients opt in explicitly.</td>
 </tr>
 <tr>
 <td>API</td>
@@ -1505,7 +1505,7 @@ npm<span class="w"> </span>run<span class="w"> </span>dev
 </table></div>
 <div class="admonition note">
 <p class="admonition-title">No header means no capability-gated surface</p>
-<p>A REST caller that omits <code>X-Meeseeks-Capabilities: stlite</code> will not see the <code>st-widget-builder</code> agent_type, will not see the <code>/st-widget-builder</code> skill, and will not have the <code>submit_widget</code> tool bound on its sessions. The same applies to any third-party plugin that declares <code>requires-capabilities</code>.</p>
+<p>A REST caller that omits <code>X-Truss-Capabilities: stlite</code> will not see the <code>st-widget-builder</code> agent_type, will not see the <code>/st-widget-builder</code> skill, and will not have the <code>submit_widget</code> tool bound on its sessions. The same applies to any third-party plugin that declares <code>requires-capabilities</code>.</p>
 </div>
 <p>See <a href="../features-widgets/">Widgets</a> for the reference use case and <a href="../features-plugins/#capability-gating">Plugins &amp; Marketplace → Capability gating</a> for the full contract.</p>
 <h2 id="widgets-in-the-timeline">Widgets in the timeline</h2>
@@ -1578,7 +1578,7 @@ POST /api/sessions/{id}/interrupt   → signals the current step to pause
 <h2 id="multi-project-support">Multi-project support</h2>
 <p>The console supports multiple projects that appear as virtual workspaces shared across sessions. Each project has its own working directory, its own <code>.mcp.json</code>, and its own <code>.claude/skills/</code> directory, so tools and skills scope cleanly to the project you are in.</p>
 <div style="display: flex; justify-content: center;">
-  <img src="../meeseeks-console-06-projects.jpg" alt="The Projects page in the Meeseeks console showing two virtual workspaces with their paths" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../truss-console-06-projects.png" alt="The Projects page in the Truss console showing two virtual workspaces with their paths" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 <p>Create and switch projects from the <strong>Projects</strong> page or the project selector in the ConfigMenu. In the REST API, projects are identified by the working directory path you pass in the session context.</p>

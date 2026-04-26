@@ -9,10 +9,10 @@
 
 <p class="ms-hero__eyebrow">bearlike / Assistant</p>
 
-# Meeseeks is an AI agent that plans, delegates, and completes your work.
+# Truss is an AI agent that plans, delegates, and completes your work.
 
 <p class="ms-hero__lede">
-Hand off a goal. Meeseeks drafts a plan and spawns parallel sub-agents for the independent
+Hand off a goal. Truss drafts a plan and spawns parallel sub-agents for the independent
 pieces. A live hypervisor watches every child for stalls, drift, and budget overruns. You get
 one synthesised answer with the full audit trail. Any model works. Your existing MCP configs,
 skills, plugins, and project instructions drop in unchanged.
@@ -24,7 +24,7 @@ skills, plugins, and project instructions drop in unchanged.
   <a class="ms-btn ms-btn--ghost" href="reference/">API reference</a>
 </div>
 
-<div class="ms-pills" aria-label="What makes Meeseeks different">
+<div class="ms-pills" aria-label="What makes Truss different">
   <span class="ms-pill">
     <svg class="ms-pill__icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>
@@ -58,9 +58,9 @@ skills, plugins, and project instructions drop in unchanged.
 </div>
 
 <div class="ms-hero__screens">
-  <img src="meeseeks-console-01-front.png" alt="Meeseeks Console landing page" />
-  <img src="meeseeks-console-02-tasks.png" alt="Meeseeks Console tasks page" />
-  <img src="meeseeks-console-07-widgets.png" alt="Widgets rendered inline in the Meeseeks Console" />
+  <img src="truss-console-01-front.png" alt="Truss Console landing page" />
+  <img src="truss-console-02-tasks.png" alt="Truss Console tasks page" />
+  <img src="truss-console-07-widgets.png" alt="Widgets rendered inline in the Truss Console" />
 </div>
 
 </section>
@@ -133,7 +133,7 @@ One engine. Five clients. Pick whichever matches where the work already happens 
 
 Ask for it in plain English on whichever surface is closest. In plan mode, the root agent drafts the steps first and waits for your approval. Destructive work never runs before you sign off on the plan.
 
-### Meeseeks delegates in parallel
+### Truss delegates in parallel
 
 The root agent spawns sub-agents for any pieces of work that can run at the same time. A test run, a search, a refactor, and an MCP call against an external service can all execute in parallel. A live hypervisor watches every child for stalls. It steers drifting agents back with natural-language nudges between tool steps, and enforces per-agent token budgets without killing in-flight context. The tree grows in real time and you can steer or cancel any branch.
 
@@ -158,7 +158,7 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 
 <a class="ms-card" href="features-plugins/">
 <span class="ms-card__title">Plugin and Agent Skills platform</span>
-<span class="ms-card__body">Extend Meeseeks with new agent types, skills, hooks, and tools using the same plugin format as Claude Code. Plugins are compatible with the official Claude plugins marketplace and activate automatically at session start. Capability gating ensures features only appear on surfaces that can support them. The bundled widget-builder is the reference example.</span>
+<span class="ms-card__body">Extend Truss with new agent types, skills, hooks, and tools using the same plugin format as Claude Code. Plugins are compatible with the official Claude plugins marketplace and activate automatically at session start. Capability gating ensures features only appear on surfaces that can support them. The bundled widget-builder is the reference example.</span>
 </a>
 
 </div>
@@ -167,13 +167,13 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 
 ## Already using Claude Code or Codex? { .ms-h2-icon data-icon="plug" }
 
-Meeseeks reads the configuration you already have. Point it at a project and it picks up your MCP servers, skills, plugins, and instruction hierarchy automatically. No rewrites, no new formats.
+Truss reads the configuration you already have. Point it at a project and it picks up your MCP servers, skills, plugins, and instruction hierarchy automatically. No rewrites, no new formats.
 
 <div class="ms-grid ms-grid--5">
 
 <div class="ms-card">
 <span class="ms-card__title">MCP servers</span>
-<span class="ms-card__body">Both the Meeseeks <code>servers</code> and the Claude Code / VS Code <code>mcpServers</code> schemas are accepted at project and user scope.</span>
+<span class="ms-card__body">Both the Truss <code>servers</code> and the Claude Code / VS Code <code>mcpServers</code> schemas are accepted at project and user scope.</span>
 </div>
 
 <div class="ms-card">
@@ -183,7 +183,7 @@ Meeseeks reads the configuration you already have. Point it at a project and it 
 
 <div class="ms-card">
 <span class="ms-card__title">Plugins &amp; marketplaces</span>
-<span class="ms-card__body">Claude Code plugin manifests install without translation. Point Meeseeks at any Claude Code-compatible marketplace and it just works.</span>
+<span class="ms-card__body">Claude Code plugin manifests install without translation. Point Truss at any Claude Code-compatible marketplace and it just works.</span>
 </div>
 
 <div class="ms-card">

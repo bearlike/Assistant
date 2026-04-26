@@ -41,7 +41,7 @@
 
 
 
-<title>Built-in Tools - Meeseeks docs</title>
+<title>Built-in Tools - Truss docs</title>
 
 
 
@@ -1422,7 +1422,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Meeseeks ships a set of first-party tools that every session has available by default. These tools cover the full local-development surface. You get reading files, editing them, running shell commands, and browsing directory trees. Because they are bundled with the core, no MCP server or external process is required. They activate the moment a session starts.</p>
+    <p>Truss ships a set of first-party tools that every session has available by default. These tools cover the full local-development surface. You get reading files, editing them, running shell commands, and browsing directory trees. Because they are bundled with the core, no MCP server or external process is required. They activate the moment a session starts.</p>
 <p>This page documents every built-in tool, its parameters, example output, and the configuration switches that control which editing backend is active.</p>
 <p>For setup and installation, see <a href="../getting-started/">Getting Started</a>. For tool permissions and approval modes, see the <a href="../clients-cli/">CLI client</a> page.</p>
 <h2 id="tool-catalog">Tool catalog</h2>
@@ -1482,9 +1482,9 @@
 </table></div>
 <hr />
 <h2 id="read_file">read_file</h2>
-<p><code>read_file</code> reads a local file and returns its content with 1-based line numbers, mirroring <code>cat -n</code> output. Reads are line-windowed: the default window is 2 000 lines, and <code>offset</code> / <code>limit</code> let the session page through arbitrarily large files without exhausting the context window. Meeseeks also deduplicates repeated reads of the same slice so the same content does not consume context twice. In the web console, every <code>read_file</code> call renders as an expandable card in the session timeline showing the project, file path, and the exact line window the assistant pulled into context.</p>
+<p><code>read_file</code> reads a local file and returns its content with 1-based line numbers, mirroring <code>cat -n</code> output. Reads are line-windowed: the default window is 2 000 lines, and <code>offset</code> / <code>limit</code> let the session page through arbitrarily large files without exhausting the context window. Truss also deduplicates repeated reads of the same slice so the same content does not consume context twice. In the web console, every <code>read_file</code> call renders as an expandable card in the session timeline showing the project, file path, and the exact line window the assistant pulled into context.</p>
 <div style="display: flex; justify-content: center;">
-  <img src="../meeseeks-console-file-read-log.jpg" alt="A read_file tool card in the Meeseeks console showing lines 81 through 90 of a 733-line litellm-config.yml with a truncated tag" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../truss-console-file-read-log.jpg" alt="A read_file tool card in the Truss console showing lines 81 through 90 of a 733-line litellm-config.yml with a truncated tag" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 <h3 id="parameters">Parameters</h3>
@@ -1542,9 +1542,9 @@
 </code></pre></div>
 <hr />
 <h2 id="file-editing">File editing</h2>
-<p>Meeseeks has two editing backends. Both apply edits atomically and return a unified diff so you can see exactly what changed. In the web console, every file edit is rendered as an expandable diff card in the session timeline, with line-level additions and deletions highlighted in green and red.</p>
+<p>Truss has two editing backends. Both apply edits atomically and return a unified diff so you can see exactly what changed. In the web console, every file edit is rendered as an expandable diff card in the session timeline, with line-level additions and deletions highlighted in green and red.</p>
 <div style="display: flex; justify-content: center;">
-  <img src="../meeseeks-console-04-file-edit.jpg" alt="A file-edit tool card in the Meeseeks console showing a unified diff with +23 additions and -2 deletions" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../truss-console-04-file-edit.jpg" alt="A file-edit tool card in the Truss console showing a unified diff with +23 additions and -2 deletions" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 <p>The active backend for a session is chosen automatically based on the model, or you can pin it via <a href="../configuration/#agentconfig"><code>agent.edit_tool</code></a> in <code>configs/app.json</code>.</p>
@@ -1608,7 +1608,7 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 <h2 id="aider_shell_tool">aider_shell_tool</h2>
 <p><code>aider_shell_tool</code> runs an arbitrary shell command and returns stdout, stderr, exit code, and wall-clock duration. In the web console, every shell call renders as a terminal card in the session timeline with the command, the working directory, and the captured output so you can review exactly what the assistant ran.</p>
 <div style="display: flex; justify-content: center;">
-  <img src="../meeseeks-console-shell-log.jpg" alt="A shell tool card in the Meeseeks console showing a gh release list command with its JSON response and a 348ms duration" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../truss-console-shell-log.jpg" alt="A shell tool card in the Truss console showing a gh release list command with its JSON response and a 348ms duration" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 <h3 id="parameters_1">Parameters</h3>
@@ -1701,7 +1701,7 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 </code></pre></div>
 <hr />
 <h2 id="configuring-the-edit-tool">Configuring the edit tool</h2>
-<p>When <code>agent.edit_tool</code> is empty (the default), Meeseeks picks the right backend for the active model automatically. Override it only when you want to force a single backend regardless of which model is running.</p>
+<p>When <code>agent.edit_tool</code> is empty (the default), Truss picks the right backend for the active model automatically. Override it only when you want to force a single backend regardless of which model is running.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>

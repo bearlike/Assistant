@@ -41,7 +41,7 @@
 
 
 
-<title>Troubleshooting - Meeseeks docs</title>
+<title>Troubleshooting - Truss docs</title>
 
 
 
@@ -1458,13 +1458,13 @@
 <li>Both services use host networking. Verify nothing else is on ports 5125 or 3001.</li>
 <li><code>HOST_UID</code> and <code>HOST_GID</code> must match your actual user: run <code>id</code> to find them.</li>
 <li>Volume paths must match exactly between host and container.</li>
-<li>Check logs: <code>docker compose logs -f meeseeks-api</code>.</li>
+<li>Check logs: <code>docker compose logs -f truss-api</code>.</li>
 </ol>
 <h2 id="session-stuck-not-completing">Session stuck / not completing</h2>
 <p><strong>Symptom:</strong> Session runs for a very long time or appears to stall.</p>
 <p>Notes:</p>
 <ul>
-<li>Meeseeks uses a natural-completion loop. It runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.</li>
+<li>Truss uses a natural-completion loop. It runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.</li>
 <li>Budget warnings are injected as messages as the context window fills up.</li>
 <li>If a session appears stuck, use mid-session steering:</li>
 </ul>
@@ -1476,18 +1476,18 @@
 <p><strong>Symptom:</strong> API starts but Web IDE or storage fails; MongoDB connection errors in logs.</p>
 <p>Checks:</p>
 <ol>
-<li><code>MEESEEKS_STORAGE_DRIVER=mongodb</code> is set in the environment.</li>
-<li><code>MEESEEKS_MONGODB_URI</code> format: <code>mongodb://user:pass@host:27017/dbname?authSource=admin</code>.</li>
+<li><code>TRUSS_STORAGE_DRIVER=mongodb</code> is set in the environment.</li>
+<li><code>TRUSS_MONGODB_URI</code> format: <code>mongodb://user:pass@host:27017/dbname?authSource=admin</code>.</li>
 <li>In Docker: MongoDB must be on the same network or accessible via host networking.</li>
 <li>Default production port: <code>27017</code>. (Port <code>27018</code> is used for direct dev-environment access.)</li>
 </ol>
 <h2 id="getting-logs">Getting logs</h2>
 <p><strong>CLI verbose mode:</strong></p>
-<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>meeseeks<span class="w"> </span>-v<span class="w">    </span><span class="c1"># debug</span>
-uv<span class="w"> </span>run<span class="w"> </span>meeseeks<span class="w"> </span>-vv<span class="w">   </span><span class="c1"># trace (very verbose)</span>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>truss<span class="w"> </span>-v<span class="w">    </span><span class="c1"># debug</span>
+uv<span class="w"> </span>run<span class="w"> </span>truss<span class="w"> </span>-vv<span class="w">   </span><span class="c1"># trace (very verbose)</span>
 </code></pre></div>
 <p><strong>Docker API logs:</strong></p>
-<div class="codehilite"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>meeseeks-api
+<div class="codehilite"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>truss-api
 </code></pre></div>
 <p><strong>Langfuse traces</strong> (if enabled):</p>
 <p>Session traces appear grouped by <code>session_id</code>. Look for <code>done_reason: "error"</code> in completion events.

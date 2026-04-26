@@ -41,7 +41,7 @@
 
 
 
-<title>LLM Setup - Meeseeks docs</title>
+<title>LLM Setup - Truss docs</title>
 
 
 
@@ -1477,7 +1477,7 @@
 </tbody>
 </table></div>
 <h2 id="model-fallback">Model fallback</h2>
-<p>When the primary model fails with a retryable error, Meeseeks walks an ordered fallback
+<p>When the primary model fails with a retryable error, Truss walks an ordered fallback
 list before giving up. Useful for rate-limit tolerance and provider outages.</p>
 <p>Config (in <code>configs/app.json</code>):</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1512,7 +1512,7 @@ list before giving up. Useful for rate-limit tolerance and provider outages.</p>
 <ol>
 <li>Create <code>configs/mcp.json</code> (or run <code>/mcp init</code> in the CLI).</li>
 <li>Add MCP server URLs and headers.</li>
-<li>Start a client once to auto-discover tools and cache the manifest under <code>~/.meeseeks/</code>.</li>
+<li>Start a client once to auto-discover tools and cache the manifest under <code>~/.truss/</code>.</li>
 </ol>
 <p>For more details, see <a href="../getting-started/">Installation</a>.</p>
 <h2 id="litellm-provider-support">LiteLLM provider support</h2>

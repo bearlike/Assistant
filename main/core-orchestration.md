@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This page is the canonical internals document for Meeseeks. It is written for developers embedding the core as a library, contributing new tools or channel adapters, or debugging session behaviour. Every other page in the documentation describes *what* a feature does; this page describes *how* each feature is implemented, which modules own the behaviour, and which data structures survive compaction or restart.
+This page is the canonical internals document for Truss. It is written for developers embedding the core as a library, contributing new tools or channel adapters, or debugging session behaviour. Every other page in the documentation describes *what* a feature does; this page describes *how* each feature is implemented, which modules own the behaviour, and which data structures survive compaction or restart.
 
 If you are setting up the product, start at [Get Started](getting-started.md). If you are looking up a capability, browse the [Capabilities](features-builtin-tools.md) section. The Feature pages link back here for the implementation detail they intentionally omit.
 
@@ -8,7 +8,7 @@ If you are setting up the product, start at [Get Started](getting-started.md). I
 
 ## Execution model
 
-Meeseeks uses a single async execution engine for every agent at every depth: `ToolUseLoop`. There is no separate planner, executor, or synthesiser. The LLM drives tool selection via native `bind_tools`. The orchestration layer steps the message array forward.
+Truss uses a single async execution engine for every agent at every depth: `ToolUseLoop`. There is no separate planner, executor, or synthesiser. The LLM drives tool selection via native `bind_tools`. The orchestration layer steps the message array forward.
 
 The loop runs until the LLM emits a text response with no tool calls. Budget warnings are injected as `SystemMessage` entries as the session approaches limits. The loop is never force-killed.
 
@@ -73,13 +73,13 @@ The full text of each file is concatenated and injected into the system prompt b
 
 ```
 # Sub-package instruction files
-- packages/meeseeks_core/CLAUDE.md
-- apps/meeseeks_console/CLAUDE.md
+- packages/truss_core/CLAUDE.md
+- apps/truss_console/CLAUDE.md
 ```
 
-When a later tool call targets a file inside `packages/meeseeks_core/`, the model's next prediction produces a `read_file` call that pulls the relevant `CLAUDE.md` into the message array as a tool result. This keeps large monorepos manageable. Only directly applicable instructions occupy the active context.
+When a later tool call targets a file inside `packages/truss_core/`, the model's next prediction produces a `read_file` call that pulls the relevant `CLAUDE.md` into the message array as a tool result. This keeps large monorepos manageable. Only directly applicable instructions occupy the active context.
 
-Pruned directories (never walked): `node_modules`, `__pycache__`, `.venv`, `venv`, and all dotfile directories. A `<!-- meeseeks:noload -->` marker on line 1 of any instruction file excludes it from both passes.
+Pruned directories (never walked): `node_modules`, `__pycache__`, `.venv`, `venv`, and all dotfile directories. A `<!-- truss:noload -->` marker on line 1 of any instruction file excludes it from both passes.
 
 `get_git_context()` collects branch, working-tree status, and recent commits. It is available as a helper; individual integrations decide whether to include it.
 
@@ -121,7 +121,7 @@ Capabilities are opaque string ids advertised by the client (e.g. `stlite`). The
 
 ```mermaid
 flowchart LR
-    A[Client request] -- X-Meeseeks-Capabilities: stlite --> B[API route]
+    A[Client request] -- X-Truss-Capabilities: stlite --> B[API route]
     B -- client_capabilities on context event --> C[SessionStore]
     C --> D[Orchestrator]
     D -- tuple str, ... --> E[ToolUseLoop]
@@ -132,14 +132,14 @@ flowchart LR
     E --> I[filter_specs on bound tool schema]
 ```
 
-1. The HTTP layer reads `X-Meeseeks-Capabilities` (comma-separated) and passes it through to session creation.
+1. The HTTP layer reads `X-Truss-Capabilities` (comma-separated) and passes it through to session creation.
 2. The value is persisted on the session's context event as `client_capabilities`. It survives compaction because it lives on the event transcript, not in the LLM message array.
 3. `Orchestrator` reads the event once per session, normalises it through `parse_capabilities()`, and threads a `tuple[str, ...]` into the `ToolUseLoop` constructor. The tuple is immutable for the lifetime of the session.
 4. `AgentRegistry.visible_for(session_capabilities)` and `SkillRegistry.list_auto_invocable(session_capabilities)` / `list_user_invocable(session_capabilities)` apply the filter at every render of their catalogs.
 
 ### Filter implementation
 
-`packages/meeseeks_core/src/meeseeks_core/capabilities.py::filter_by_capabilities` is the single filter. An item whose `requires_capabilities` tuple is a subset of the session's set is included; an empty `requires_capabilities` is always included. Ordering and duplication of `session_capabilities` do not matter — comparison uses set semantics.
+`packages/truss_core/src/truss_core/capabilities.py::filter_by_capabilities` is the single filter. An item whose `requires_capabilities` tuple is a subset of the session's set is included; an empty `requires_capabilities` is always included. Ordering and duplication of `session_capabilities` do not matter — comparison uses set semantics.
 
 | Function | Purpose |
 |---|---|
@@ -259,7 +259,7 @@ Matching uses `fnmatch` glob patterns on both `tool_id` and `operation`. If no r
 
 Two hook types:
 
-- **Command hooks.** Shell subprocess. `_session_env()` provides `MEESEEKS_SESSION_ID`, `MEESEEKS_ERROR`, `MEESEEKS_TOOL_ID`, `MEESEEKS_OPERATION`, and `MEESEEKS_TOOL_RESULT` (first 2 000 chars). Waits up to `timeout` seconds (default 30), then moves on.
+- **Command hooks.** Shell subprocess. `_session_env()` provides `TRUSS_SESSION_ID`, `TRUSS_ERROR`, `TRUSS_TOOL_ID`, `TRUSS_OPERATION`, and `TRUSS_TOOL_RESULT` (first 2 000 chars). Waits up to `timeout` seconds (default 30), then moves on.
 - **HTTP hooks.** Fire-and-forget JSON POST to an external URL in a daemon thread. Does not block execution. Failures are logged.
 
 An optional `matcher` (fnmatch pattern) restricts which tool IDs trigger the hook. `matcher: "mcp__*"` restricts to all MCP tools; omitting the matcher matches every call.
@@ -280,7 +280,7 @@ Each `exit_plan_mode` call increments a per-session counter stored at `<plan_dir
 
 ### Shell allowlist
 
-During exploration Meeseeks enforces a shell allowlist via `agent.plan_mode_shell_allowlist`. Only commands whose first token matches a configured prefix are permitted. Commands containing an unquoted pipe (`|`), redirect (`>`, `<`), chain (`&`, `;`), variable expansion (`$`), or command substitution (`` ` ``) are rejected regardless of the allowlist. Prefixes match at word boundaries. For example, `"git log"` matches `"git log --oneline"` but not `"git logger"`. An empty list blocks shell access entirely.
+During exploration Truss enforces a shell allowlist via `agent.plan_mode_shell_allowlist`. Only commands whose first token matches a configured prefix are permitted. Commands containing an unquoted pipe (`|`), redirect (`>`, `<`), chain (`&`, `;`), variable expansion (`$`), or command substitution (`` ` ``) are rejected regardless of the allowlist. Prefixes match at word boundaries. For example, `"git log"` matches `"git log --oneline"` but not `"git logger"`. An empty list blocks shell access entirely.
 
 `agent.plan_mode_allow_mcp` defaults to `true`; MCP tools are available in plan mode unless explicitly disabled.
 
@@ -312,7 +312,7 @@ The compaction LLM receives the raw event transcript and produces a structured r
 
 Only the `<summary>` block is stored. The `<analysis>` scratchpad is stripped before injection into subsequent prompts.
 
-After the summary is generated, Meeseeks scans summarised events for file paths referenced by tool calls and re-reads up to 5 files (up to 5 000 tokens each) back into the compacted context. Recently edited files land in the prompt as literal content so the model can continue editing without re-reading them.
+After the summary is generated, Truss scans summarised events for file paths referenced by tool calls and re-reads up to 5 files (up to 5 000 tokens each) back into the compacted context. Recently edited files land in the prompt as literal content so the model can continue editing without re-reading them.
 
 **Caveman mode** (`compaction.caveman_mode = true`) activates a terse summarisation prompt. It drops articles, filler phrases, and hedging. Code blocks, file paths, URLs, commands, and error strings are preserved verbatim. Output tokens drop by ~30–60 % on prose-heavy sessions without changing the XML structure.
 
@@ -324,7 +324,7 @@ Auto-compact fires when the most recent root prompt size crosses `token_budget.a
 
 ## Token tracking {#token-tracking}
 
-Meeseeks tracks usage separately for the root agent (depth = 0) and all sub-agents (depth ≥ 1). Three distinct input-token semantics:
+Truss tracks usage separately for the root agent (depth = 0) and all sub-agents (depth ≥ 1). Three distinct input-token semantics:
 
 | Semantic | Fields | When to use |
 |----------|--------|-------------|
@@ -334,9 +334,9 @@ Meeseeks tracks usage separately for the root agent (depth = 0) and all sub-agen
 
 Do **not** sum `input_tokens` across calls within a turn. The prompt grows as tool results accumulate. Each step re-sends the full context, so summing double-counts the baseline. Use the peak or the last value. Output tokens are always additive. Each output token is produced once.
 
-Prompt caching auto-enables via LiteLLM for models that report support. No configuration is required. Meeseeks queries `litellm.utils.supports_prompt_caching` to decide whether to enable caching for a given model name.
+Prompt caching auto-enables via LiteLLM for models that report support. No configuration is required. Truss queries `litellm.utils.supports_prompt_caching` to decide whether to enable caching for a given model name.
 
-When using a proxy (`llm.api_base` set), the proxy must expose `/v1/model/info` advertising each model's capabilities. Meeseeks fetches this endpoint once per process at startup and registers the results with LiteLLM so `supports_prompt_caching` returns accurate results for proxy-routed custom model names. Without `/v1/model/info`, caching falls back to disabled for those models.
+When using a proxy (`llm.api_base` set), the proxy must expose `/v1/model/info` advertising each model's capabilities. Truss fetches this endpoint once per process at startup and registers the results with LiteLLM so `supports_prompt_caching` returns accurate results for proxy-routed custom model names. Without `/v1/model/info`, caching falls back to disabled for those models.
 
 ---
 
@@ -347,7 +347,7 @@ MCP server definitions are assembled from four layers, merged deepest-first with
 | Layer | Source | Priority |
 |-------|--------|----------|
 | 1 | Plugin-contributed servers | Lowest |
-| 2 | Global: `configs/mcp.json` or `$MEESEEKS_HOME/mcp.json` | Middle |
+| 2 | Global: `configs/mcp.json` or `$TRUSS_HOME/mcp.json` | Middle |
 | 3 | Subtree `.mcp.json` files, deepest-first | Middle |
 | 4 | CWD `.mcp.json` | Highest |
 
@@ -421,7 +421,7 @@ sequenceDiagram
     Console->>User: Open /ide/{id}/ in new tab
 ```
 
-The session's project directory is mounted at `/home/coder/project`. A deadline file is bind-mounted at `/meeseeks/deadline`. The container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. `POST /api/sessions/{id}/ide/extend` overwrites the deadline file and updates MongoDB. `DELETE` force-removes the container, deadline file, and MongoDB document.
+The session's project directory is mounted at `/home/coder/project`. A deadline file is bind-mounted at `/truss/deadline`. The container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. `POST /api/sessions/{id}/ide/extend` overwrites the deadline file and updates MongoDB. `DELETE` force-removes the container, deadline file, and MongoDB document.
 
 ---
 
@@ -484,9 +484,9 @@ See [Session tools](#session-tools) for plugin-contributed per-agent stateful to
 
 ### Built-in plugin scan path
 
-A fourth scan source sits alongside the registry-driven paths: the directory `packages/meeseeks_core/src/meeseeks_core/builtin_plugins/`. Any plugin checked in under this path is discovered through the **same** pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin — manifest, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`, `session_tools` — with no `installed_plugins.json` entry required.
+A fourth scan source sits alongside the registry-driven paths: the directory `packages/truss_core/src/truss_core/builtin_plugins/`. Any plugin checked in under this path is discovered through the **same** pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin — manifest, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`, `session_tools` — with no `installed_plugins.json` entry required.
 
-The path is resolved at runtime via `importlib.resources.files("meeseeks_core") / "builtin_plugins"` so discovery works identically for editable installs (`pip install -e .`), wheels, and zipapps. The scanner iterates every immediate subdirectory that contains a `.claude-plugin/plugin.json`.
+The path is resolved at runtime via `importlib.resources.files("truss_core") / "builtin_plugins"` so discovery works identically for editable installs (`pip install -e .`), wheels, and zipapps. The scanner iterates every immediate subdirectory that contains a `.claude-plugin/plugin.json`.
 
 Currently bundled: `widget_builder/` (declares `requires-capabilities: ["stlite"]`). Other bundles slot in by dropping a plugin-shaped directory next to it. No discovery code needs to change.
 
@@ -498,9 +498,9 @@ Plugin-owned agent bodies and skill bodies can reference three placeholders. Sub
 |---|---|---|
 | `${CLAUDE_PLUGIN_ROOT}` | Plugin discovery | Absolute path to the plugin's install directory on disk |
 | `${SESSION_ID}` | Agent spawn | The current session's id |
-| `${MEESEEKS_WIDGET_ROOT}` | Agent spawn | Widget-builder output root; supports `:-` default syntax |
+| `${TRUSS_WIDGET_ROOT}` | Agent spawn | Widget-builder output root; supports `:-` default syntax |
 
-`${CLAUDE_PLUGIN_ROOT}` is also substituted inside `.mcp.json` and `hooks/hooks.json` at discovery time, as noted above. `${SESSION_ID}` and `${MEESEEKS_WIDGET_ROOT}` are agent-body-only and resolve inside `spawn_agent` just before the body is handed to the child `ToolUseLoop`.
+`${CLAUDE_PLUGIN_ROOT}` is also substituted inside `.mcp.json` and `hooks/hooks.json` at discovery time, as noted above. `${SESSION_ID}` and `${TRUSS_WIDGET_ROOT}` are agent-body-only and resolve inside `spawn_agent` just before the body is handed to the child `ToolUseLoop`.
 
 ---
 
@@ -508,7 +508,7 @@ Plugin-owned agent bodies and skill bodies can reference three placeholders. Sub
 
 A **session tool** is a per-agent stateful tool — a tool whose lifecycle is coupled to one specific agent instance rather than the global `ToolRegistry`. The handler holds state (accumulated across calls within the agent's run), declares its own OpenAI function schema, and can signal clean loop termination independently of the model's final text response. The core `ExitPlanModeTool` is a session tool. The widget-builder's `SubmitWidgetTool` is a session tool contributed by a plugin.
 
-Session tools are defined in `packages/meeseeks_core/src/meeseeks_core/session_tools.py`.
+Session tools are defined in `packages/truss_core/src/truss_core/session_tools.py`.
 
 ### Protocol
 
@@ -563,7 +563,7 @@ Plugins contribute session tools via a `session_tools` array in `plugin.json`:
   "session_tools": [
     {
       "tool_id": "submit_widget",
-      "module": "meeseeks_core.builtin_plugins.widget_builder.submit_widget",
+      "module": "truss_core.builtin_plugins.widget_builder.submit_widget",
       "class": "SubmitWidgetTool"
     }
   ]
@@ -591,7 +591,7 @@ Chat-platform adapters implement the `ChannelAdapter` protocol (`channels/base.p
 
 `ChannelRegistry` lookup and `DeduplicationGuard` replay protection are shared. The webhook endpoint `POST /api/webhooks/<platform>` authenticates via HMAC (not API key). Poll-driven channels (e.g. Email) call `_process_inbound()` directly from their own poller instead of via the webhook route.
 
-The shared `_process_inbound()` pipeline in `routes.py` runs dedup → mention gate → session resolve → commands → LLM for every channel. `requires_mention(message)` is optional on the adapter for dynamic mention gating (Email uses this to skip the `@Meeseeks` requirement on 1-to-1 threads).
+The shared `_process_inbound()` pipeline in `routes.py` runs dedup → mention gate → session resolve → commands → LLM for every channel. `requires_mention(message)` is optional on the adapter for dynamic mention gating (Email uses this to skip the `@Truss` requirement on 1-to-1 threads).
 
 Channel sessions are standard API sessions. They are created via `session_store.create_session()`, mapped via session tags (`tag_session` / `resolve_tag`), and visible in the console and Langfuse. The completion callback reads `source_platform` from the transcript context event and dispatches the final answer through the adapter.
 

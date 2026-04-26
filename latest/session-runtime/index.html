@@ -41,7 +41,7 @@
 
 
 
-<title>Session Runtime - Meeseeks docs</title>
+<title>Session Runtime - Truss docs</title>
 
 
 
@@ -1449,8 +1449,8 @@
 - <code>action_plan</code> payloads include <code>steps: [{title, description}]</code>.
 - Tool activity uses <code>tool_id</code>, <code>operation</code>, and <code>tool_input</code> in <code>tool_result</code> and <code>permission</code> events.</p>
 <h2 id="minimal-usage-python">Minimal usage (Python)</h2>
-<div class="codehilite"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.session_runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionRuntime</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">meeseeks_core.session_store</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionStore</span>
+<div class="codehilite"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.session_runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionRuntime</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">truss_core.session_store</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionStore</span>
 
 <span class="n">runtime</span> <span class="o">=</span> <span class="n">SessionRuntime</span><span class="p">(</span><span class="n">session_store</span><span class="o">=</span><span class="n">SessionStore</span><span class="p">())</span>
 <span class="n">session_id</span> <span class="o">=</span> <span class="n">runtime</span><span class="o">.</span><span class="n">resolve_session</span><span class="p">(</span><span class="n">session_tag</span><span class="o">=</span><span class="s2">&quot;primary&quot;</span><span class="p">)</span>

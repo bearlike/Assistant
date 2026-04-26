@@ -41,7 +41,7 @@
 
 
 
-<title>Configuration Reference - Meeseeks docs</title>
+<title>Configuration Reference - Truss docs</title>
 
 
 
@@ -1424,7 +1424,7 @@
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <!-- AUTO-GENERATED from configs/app.schema.json. Do not edit manually. -->
 <h1 id="configuration-reference">Configuration Reference</h1>
-<p>Meeseeks is configured via <code>configs/app.json</code>. This reference is auto-generated
+<p>Truss is configured via <code>configs/app.json</code>. This reference is auto-generated
 from the JSON Schema at <a href="https://github.com/bearlike/Assistant/blob/main/configs/app.schema.json"><code>configs/app.schema.json</code></a>.</p>
 <p>Copy <code>configs/app.example.json</code> to <code>configs/app.json</code> to get started.
 See <a href="../getting-started/">Get Started</a> for the full setup walkthrough.</p>
@@ -1475,19 +1475,19 @@ See <a href="../getting-started/">Get Started</a> for the full setup walkthrough
 <td><code>cache_dir</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Directory for tool caches. Defaults to $MEESEEKS_HOME/cache. ⚠️</td>
+<td>Directory for tool caches. Defaults to $TRUSS_HOME/cache. ⚠️</td>
 </tr>
 <tr>
 <td><code>session_dir</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Directory for session transcripts. Defaults to $MEESEEKS_HOME/sessions. ⚠️</td>
+<td>Directory for session transcripts. Defaults to $TRUSS_HOME/sessions. ⚠️</td>
 </tr>
 <tr>
 <td><code>config_dir</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Root configuration directory. Defaults to $MEESEEKS_HOME. ⚠️</td>
+<td>Root configuration directory. Defaults to $TRUSS_HOME. ⚠️</td>
 </tr>
 <tr>
 <td><code>result_export_dir</code></td>
@@ -1499,7 +1499,7 @@ See <a href="../getting-started/">Get Started</a> for the full setup walkthrough
 <td><code>projects_home</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Directory for virtual project folders. Defaults to $MEESEEKS_HOME/projects. ⚠️</td>
+<td>Directory for virtual project folders. Defaults to $TRUSS_HOME/projects. ⚠️</td>
 </tr>
 </tbody>
 </table></div>
@@ -2014,6 +2014,12 @@ Reduces output tokens in the compaction summary without changing the
 <td></td>
 <td></td>
 </tr>
+<tr>
+<td><code>tool_search</code></td>
+<td>ToolSearchConfig</td>
+<td></td>
+<td>Deferred tool loading via on-demand schema fetching.</td>
+</tr>
 </tbody>
 </table></div>
 <details class="note">
@@ -2117,7 +2123,7 @@ Reduces output tokens in the compaction summary without changing the
 <td><code>install_path</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Override install path for Meeseeks-managed plugins. Defaults to $MEESEEKS_HOME/plugins/ (via resolve_meeseeks_home).</td>
+<td>Override install path for Truss-managed plugins. Defaults to $TRUSS_HOME/plugins/ (via resolve_truss_home).</td>
 </tr>
 </tbody>
 </table></div>

@@ -41,7 +41,7 @@
 
 
 
-<title>Email - Meeseeks docs</title>
+<title>Email - Truss docs</title>
 
 
 
@@ -1423,20 +1423,20 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <div style="display: flex; justify-content: center;">
-  <img src="../meeseeks-email-01.jpg" alt="Meeseeks email thread in Gmail" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../truss-email-01.jpg" alt="Truss email thread in Gmail" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-<p>Meeseeks can be reached via email. Send a message to the configured mailbox and the agent replies with a styled HTML email. Thread replies continue the same session.</p>
+<p>Truss can be reached via email. Send a message to the configured mailbox and the agent replies with a styled HTML email. Thread replies continue the same session.</p>
 <h2 id="how-it-works">How it works</h2>
-<p>Meeseeks checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel. Session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.</p>
+<p>Truss checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel. Session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.</p>
 <h2 id="access-control">Access control</h2>
 <ul>
 <li><strong><code>allowed_senders</code></strong>: Only emails from listed addresses are processed. All others are silently ignored and marked as read. This is the primary gate.</li>
 <li><strong>1-to-1 emails</strong> (single recipient): Always processed. No mention keyword needed.</li>
-<li><strong>Multi-party threads</strong> (multiple To/Cc recipients): The agent only responds when <code>@Meeseeks</code> appears in the message body.</li>
+<li><strong>Multi-party threads</strong> (multiple To/Cc recipients): The agent only responds when <code>@Truss</code> appears in the message body.</li>
 </ul>
 <h2 id="session-model">Session model</h2>
-<p>Email threads map to Meeseeks sessions via the <code>References</code> and <code>In-Reply-To</code> headers:</p>
+<p>Email threads map to Truss sessions via the <code>References</code> and <code>In-Reply-To</code> headers:</p>
 <ul>
 <li><strong>New email</strong> (no <code>In-Reply-To</code>): Creates a new session. Tag: <code>email:thread:&lt;sender&gt;:&lt;Message-ID&gt;</code>.</li>
 <li><strong>Reply</strong> (has <code>In-Reply-To</code> / <code>References</code>): Resolves the existing session via the thread root's <code>Message-ID</code>.</li>
@@ -1481,9 +1481,9 @@
 <span class="w">  </span><span class="nt">&quot;smtp_host&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;smtp.example.com&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;smtp_port&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">587</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;smtp_starttls&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;meeseeks@example.com&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;truss@example.com&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;password&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;app-password-here&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;from_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Meeseeks &lt;meeseeks@example.com&gt;&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;from_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Truss &lt;truss@example.com&gt;&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;mailbox&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;INBOX&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;poll_interval_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;allowed_senders&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;bob@example.com&quot;</span><span class="p">]</span>

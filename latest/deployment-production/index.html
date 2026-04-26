@@ -41,7 +41,7 @@
 
 
 
-<title>Production Setup - Meeseeks docs</title>
+<title>Production Setup - Truss docs</title>
 
 
 
@@ -1422,7 +1422,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Running Meeseeks in production means hardening the default Docker Compose setup with TLS termination, proper authentication tokens, CORS restriction, and observability. This page covers the production checklist and the nginx reverse proxy configuration.</p>
+    <p>Running Truss in production means hardening the default Docker Compose setup with TLS termination, proper authentication tokens, CORS restriction, and observability. This page covers the production checklist and the nginx reverse proxy configuration.</p>
 <h2 id="security-checklist">Security Checklist</h2>
 <ol>
 <li>
@@ -1433,7 +1433,7 @@
 </li>
 <li>
 <p><strong>Restrict <code>CORS_ORIGIN</code></strong>. The default <code>*</code> allows any origin. In production, set it to your actual domain:
-   <div class="codehilite"><pre><span></span><code>CORS_ORIGIN=https://meeseeks.example.com
+   <div class="codehilite"><pre><span></span><code>CORS_ORIGIN=https://truss.example.com
 </code></pre></div></p>
 </li>
 <li>
@@ -1443,20 +1443,20 @@
 <p><strong>Set <code>GITHUB_TOKEN</code> in <code>docker.env</code></strong>. If you mount git repositories, the <code>10-git-setup.sh</code> init script uses this token to configure <code>gh CLI</code> authentication. That lets <code>git fetch/push/pull</code> work without prompts.</p>
 </li>
 <li>
-<p><strong>Change MongoDB credentials</strong>. Update <code>MONGO_INITDB_ROOT_USERNAME</code> and <code>MONGO_INITDB_ROOT_PASSWORD</code> in <code>docker.env</code> from their defaults. Then update <code>MEESEEKS_MONGODB_URI</code> to match.</p>
+<p><strong>Change MongoDB credentials</strong>. Update <code>MONGO_INITDB_ROOT_USERNAME</code> and <code>MONGO_INITDB_ROOT_PASSWORD</code> in <code>docker.env</code> from their defaults. Then update <code>TRUSS_MONGODB_URI</code> to match.</p>
 </li>
 </ol>
 <h2 id="tls-with-nginx">TLS with nginx</h2>
 <p>The repository includes a ready-to-use nginx reverse proxy config. Install it on the host machine (outside Docker):</p>
-<div class="codehilite"><pre><span></span><code>sudo<span class="w"> </span>ln<span class="w"> </span>-s<span class="w"> </span>/path/to/meeseeks/docker/nginx-reverse-proxy.conf<span class="w"> </span><span class="se">\</span>
-<span class="w">           </span>/etc/nginx/sites-enabled/meeseeks
+<div class="codehilite"><pre><span></span><code>sudo<span class="w"> </span>ln<span class="w"> </span>-s<span class="w"> </span>/path/to/truss/docker/nginx-reverse-proxy.conf<span class="w"> </span><span class="se">\</span>
+<span class="w">           </span>/etc/nginx/sites-enabled/truss
 sudo<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>sudo<span class="w"> </span>systemctl<span class="w"> </span>reload<span class="w"> </span>nginx
 </code></pre></div>
 <p>Edit the file to set your <code>server_name</code>, <code>ssl_certificate</code>, and <code>ssl_certificate_key</code> before enabling it.</p>
 <p><strong>Full nginx server block (from <code>docker/nginx-reverse-proxy.conf</code>):</strong></p>
 <div class="codehilite"><pre><span></span><code><span class="k">server</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">443</span><span class="w"> </span><span class="s">ssl</span><span class="w"> </span><span class="s">http2</span><span class="p">;</span>
-<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">meeseeks.example.com</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">truss.example.com</span><span class="p">;</span>
 
 <span class="w">    </span><span class="kn">ssl_certificate</span><span class="w">     </span><span class="s">/path/to/your/server.crt</span><span class="p">;</span>
 <span class="w">    </span><span class="kn">ssl_certificate_key</span><span class="w"> </span><span class="s">/path/to/your/server.key</span><span class="p">;</span>
@@ -1510,11 +1510,11 @@ sudo<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </sp
 <span class="c1"># HTTP → HTTPS redirect</span>
 <span class="k">server</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
-<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">meeseeks.example.com</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">truss.example.com</span><span class="p">;</span>
 <span class="w">    </span><span class="kn">return</span><span class="w"> </span><span class="mi">301</span><span class="w"> </span><span class="s">https://</span><span class="nv">$host$request_uri</span><span class="p">;</span>
 <span class="p">}</span>
 </code></pre></div>
-<h3 id="key-nginx-settings-for-meeseeks">Key nginx settings for Meeseeks</h3>
+<h3 id="key-nginx-settings-for-truss">Key nginx settings for Truss</h3>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1566,7 +1566,7 @@ sudo<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </sp
 curl<span class="w"> </span>-sk<span class="w"> </span>http://localhost:5125/api/tools<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;X-API-Key: your-token&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>length
 
 <span class="c1"># Stream container logs</span>
-docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>meeseeks-api
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>truss-api
 
 <span class="c1"># Check container status</span>
 docker<span class="w"> </span>compose<span class="w"> </span>ps
@@ -2754,10 +2754,10 @@ VITE_API_KEY=new-strong-random-token
         </a>
         
         
-        <a href="#key-nginx-settings-for-meeseeks"
+        <a href="#key-nginx-settings-for-truss"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#key-nginx-settings-for-meeseeks');">
-            Key nginx settings for Meeseeks
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#key-nginx-settings-for-truss');">
+            Key nginx settings for Truss
         </a>
         
         

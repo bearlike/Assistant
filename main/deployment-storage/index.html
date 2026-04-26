@@ -41,7 +41,7 @@
 
 
 
-<title>Storage Backends - Meeseeks docs</title>
+<title>Storage Backends - Truss docs</title>
 
 
 
@@ -1422,19 +1422,19 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Meeseeks stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store. It has zero dependencies and works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the <a href="../features-web-ide/">Web IDE</a> feature (which requires MongoDB for container state).</p>
+    <p>Truss stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store. It has zero dependencies and works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the <a href="../features-web-ide/">Web IDE</a> feature (which requires MongoDB for container state).</p>
 <h2 id="json-default">JSON (Default)</h2>
-<p>The JSON driver writes one file per session under <code>$MEESEEKS_HOME/sessions/</code> (default: <code>~/.meeseeks/sessions/</code>). No extra dependencies are needed.</p>
+<p>The JSON driver writes one file per session under <code>$TRUSS_HOME/sessions/</code> (default: <code>~/.truss/sessions/</code>). No extra dependencies are needed.</p>
 <div class="codehilite"><pre><span></span><code><span class="c1"># These two are equivalent. JSON is the default</span>
-<span class="nv">MEESEEKS_STORAGE_DRIVER</span><span class="o">=</span>json
+<span class="nv">TRUSS_STORAGE_DRIVER</span><span class="o">=</span>json
 <span class="c1"># or simply leave it unset</span>
 </code></pre></div>
 <p><strong>Suitable for:</strong> single-instance use, local development, CLI sessions.</p>
 <p><strong>Not suitable for:</strong> running multiple API workers simultaneously (no cross-process locking), or when you need the Web IDE feature.</p>
 <h2 id="mongodb">MongoDB</h2>
-<div class="codehilite"><pre><span></span><code><span class="nv">MEESEEKS_STORAGE_DRIVER</span><span class="o">=</span>mongodb
-<span class="nv">MEESEEKS_MONGODB_URI</span><span class="o">=</span>mongodb://meeseeks:meeseeks@localhost:27018/meeseeks?authSource<span class="o">=</span>admin
-<span class="nv">MEESEEKS_MONGODB_DATABASE</span><span class="o">=</span>meeseeks
+<div class="codehilite"><pre><span></span><code><span class="nv">TRUSS_STORAGE_DRIVER</span><span class="o">=</span>mongodb
+<span class="nv">TRUSS_MONGODB_URI</span><span class="o">=</span>mongodb://truss:truss@localhost:27018/truss?authSource<span class="o">=</span>admin
+<span class="nv">TRUSS_MONGODB_DATABASE</span><span class="o">=</span>truss
 </code></pre></div>
 <p>The MongoDB driver stores all session data in collections within the configured database. Connection settings are read from environment variables, which override anything set in <code>configs/app.json</code>.</p>
 <div class="admonition important">
@@ -1448,28 +1448,28 @@
 <h3 id="adding-mongodb-to-the-docker-compose-stack">Adding MongoDB to the Docker Compose Stack</h3>
 <p>MongoDB is already defined as a service in <code>docker-compose.yml</code>. To activate it, add the following to your <code>docker-compose.override.yml</code> (or <code>docker.env</code>):</p>
 <div class="codehilite"><pre><span></span><code># docker.env
-MEESEEKS_STORAGE_DRIVER=mongodb
-MEESEEKS_MONGODB_URI=mongodb://meeseeks:meeseeks@127.0.0.1:27018/meeseeks?authSource=admin
-MEESEEKS_MONGODB_DATABASE=meeseeks
+TRUSS_STORAGE_DRIVER=mongodb
+TRUSS_MONGODB_URI=mongodb://truss:truss@127.0.0.1:27018/truss?authSource=admin
+TRUSS_MONGODB_DATABASE=truss
 </code></pre></div>
 <p>The MongoDB service uses host networking (<code>ports: ["${MONGO_PORT:-27018}:27017"]</code>), so <code>127.0.0.1:27018</code> is reachable from the API container (also on host network).</p>
 <p><strong>Example <code>docker-compose.override.yml</code> snippet for a self-hosted MongoDB:</strong></p>
 <div class="codehilite"><pre><span></span><code><span class="nt">services</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">api</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MEESEEKS_STORAGE_DRIVER=mongodb</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MEESEEKS_MONGODB_URI=mongodb://meeseeks:meeseeks@127.0.0.1:27018/meeseeks?authSource=admin</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TRUSS_STORAGE_DRIVER=mongodb</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TRUSS_MONGODB_URI=mongodb://truss:truss@127.0.0.1:27018/truss?authSource=admin</span>
 </code></pre></div>
 <h3 id="external-mongodb">External MongoDB</h3>
-<p>If you are using Atlas or another hosted MongoDB service, set <code>MEESEEKS_MONGODB_URI</code> to your connection string and ensure the URI includes the <code>authSource</code> parameter if required:</p>
-<div class="codehilite"><pre><span></span><code>MEESEEKS_MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/meeseeks
-MEESEEKS_MONGODB_DATABASE=meeseeks
+<p>If you are using Atlas or another hosted MongoDB service, set <code>TRUSS_MONGODB_URI</code> to your connection string and ensure the URI includes the <code>authSource</code> parameter if required:</p>
+<div class="codehilite"><pre><span></span><code>TRUSS_MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/truss
+TRUSS_MONGODB_DATABASE=truss
 </code></pre></div>
 <h2 id="switching-between-drivers">Switching Between Drivers</h2>
 <p>There is <strong>no automatic migration</strong> between storage drivers. If you switch from JSON to MongoDB (or vice versa), existing sessions in the old store are not accessible from the new driver.</p>
 <p>To preserve history before switching:
 1. Export sessions you want to keep via <code>GET /api/sessions/{id}/export</code>.
-2. Change <code>MEESEEKS_STORAGE_DRIVER</code> and restart.</p>
+2. Change <code>TRUSS_STORAGE_DRIVER</code> and restart.</p>
 <h2 id="configuration-reference">Configuration Reference</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1482,46 +1482,46 @@ MEESEEKS_MONGODB_DATABASE=meeseeks
 </thead>
 <tbody>
 <tr>
-<td><code>MEESEEKS_STORAGE_DRIVER</code></td>
+<td><code>TRUSS_STORAGE_DRIVER</code></td>
 <td>Env var</td>
 <td><code>json</code></td>
 <td>Storage driver: <code>json</code> or <code>mongodb</code>. Env var takes precedence over <code>configs/app.json</code>.</td>
 </tr>
 <tr>
-<td><code>MEESEEKS_MONGODB_URI</code></td>
+<td><code>TRUSS_MONGODB_URI</code></td>
 <td>Env var</td>
 <td><code>mongodb://localhost:27017</code></td>
 <td>Full MongoDB connection URI.</td>
 </tr>
 <tr>
-<td><code>MEESEEKS_MONGODB_DATABASE</code></td>
+<td><code>TRUSS_MONGODB_DATABASE</code></td>
 <td>Env var</td>
-<td><code>meeseeks</code></td>
+<td><code>truss</code></td>
 <td>MongoDB database name.</td>
 </tr>
 <tr>
-<td><code>MEESEEKS_HOME</code></td>
+<td><code>TRUSS_HOME</code></td>
 <td>Env var</td>
-<td><code>~/.meeseeks</code></td>
+<td><code>~/.truss</code></td>
 <td>Data root for the JSON driver. In Docker, set to <code>/app/data</code> (mapped to the <code>api-data</code> named volume).</td>
 </tr>
 <tr>
 <td><code>storage.driver</code></td>
 <td><code>configs/app.json</code></td>
 <td><code>json</code></td>
-<td>Config file equivalent of <code>MEESEEKS_STORAGE_DRIVER</code> (env var wins).</td>
+<td>Config file equivalent of <code>TRUSS_STORAGE_DRIVER</code> (env var wins).</td>
 </tr>
 <tr>
 <td><code>storage.mongodb.uri</code></td>
 <td><code>configs/app.json</code></td>
 <td><code>mongodb://localhost:27017</code></td>
-<td>Config file equivalent of <code>MEESEEKS_MONGODB_URI</code> (env var wins).</td>
+<td>Config file equivalent of <code>TRUSS_MONGODB_URI</code> (env var wins).</td>
 </tr>
 <tr>
 <td><code>storage.mongodb.database</code></td>
 <td><code>configs/app.json</code></td>
-<td><code>meeseeks</code></td>
-<td>Config file equivalent of <code>MEESEEKS_MONGODB_DATABASE</code> (env var wins).</td>
+<td><code>truss</code></td>
+<td>Config file equivalent of <code>TRUSS_MONGODB_DATABASE</code> (env var wins).</td>
 </tr>
 </tbody>
 </table></div>

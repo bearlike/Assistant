@@ -41,7 +41,7 @@
 
 
 
-<title>Home Assistant - Meeseeks docs</title>
+<title>Home Assistant - Truss docs</title>
 
 
 
@@ -1427,26 +1427,26 @@
   <img src="../screenshot_ha_assist_2.png" alt="HA Assist control entities screenshot" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-<p>The Home Assistant integration lives in <code>meeseeks_ha_conversation/</code> and proxies voice requests to the API. It is designed for hands-free voice control: HA handles wake words and intent capture, then forwards the request to the API for orchestration and responses.</p>
+<p>The Home Assistant integration lives in <code>truss_ha_conversation/</code> and proxies voice requests to the API. It is designed for hands-free voice control: HA handles wake words and intent capture, then forwards the request to the API for orchestration and responses.</p>
 <p>See <a href="../getting-started/#ha-setup">Get Started</a> for installation prerequisites.</p>
 <h2 id="how-it-works">How it works</h2>
-<p>Voice requests flow through the HA Assist pipeline, which forwards the transcript to the Meeseeks API. The API runs the orchestration loop and returns a text response that HA Assist reads aloud.</p>
+<p>Voice requests flow through the HA Assist pipeline, which forwards the transcript to the Truss API. The API runs the orchestration loop and returns a text response that HA Assist reads aloud.</p>
 <pre class="mermaid"><code>sequenceDiagram
     participant User
     participant HA as Home Assistant
-    participant API as Meeseeks API
+    participant API as Truss API
 
     User-&gt;&gt;HA: voice utterance (wake word + query)
     HA-&gt;&gt;API: POST /api/sessions/{id}/query
     API--&gt;&gt;HA: session events (streamed)
     HA--&gt;&gt;User: TTS response</code></pre>
-<p>The custom component handles session creation and maps HA conversation threads to Meeseeks sessions via session tags.</p>
+<p>The custom component handles session creation and maps HA conversation threads to Truss sessions via session tags.</p>
 <h2 id="install-the-custom-component">Install the custom component</h2>
 <ol>
 <li>Ensure the API is running (see <a href="../clients-web-api/">Web + API</a>).</li>
-<li>Copy the contents of <code>meeseeks_ha_conversation/</code> into Home Assistant under
-   <code>custom_components/meeseeks_conversation/</code>.</li>
-<li>In Home Assistant, add the "Meeseeks" conversation integration and set:</li>
+<li>Copy the contents of <code>truss_ha_conversation/</code> into Home Assistant under
+   <code>custom_components/truss_conversation/</code>.</li>
+<li>In Home Assistant, add the "Truss" conversation integration and set:</li>
 <li>Base URL: the API base URL (for example, <code>http://host:5123</code>).</li>
 <li>API key: the API master token (<code>api.master_token</code> in <code>configs/app.json</code>).</li>
 </ol>

@@ -41,7 +41,7 @@
 
 
 
-<title>CLI - Meeseeks docs</title>
+<title>CLI - Truss docs</title>
 
 
 
@@ -1422,15 +1422,15 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <video controls preload="metadata" poster="../meeseeks-console-01-front.png" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
-  <source src="../meeseeks-cli-01-video.mp4" type="video/mp4" />
+    <video controls preload="metadata" poster="../truss-console-01-front.png" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
+  <source src="../truss-cli-01-video.mp4" type="video/mp4" />
   Your browser does not support the video tag.
 </video>
 
 <p>The CLI is a terminal-native client for developers working in their local environment. It runs the core runtime in-process, so tools execute directly against your local files and shell. There is no API round-trip. The main difference from the web console is execution context and autonomy. The CLI operates on your local machine, while the web console delegates work through the API. Both clients share the same underlying runtime and can run long-lived tasks.</p>
 <p>See <a href="../getting-started/#cli-setup">Get Started</a> for installation.</p>
 <h2 id="run">Run</h2>
-<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>meeseeks
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>truss
 </code></pre></div>
 <h2 id="cli-flags">CLI flags</h2>
 <div class="table-wrapper"><table>
@@ -1628,12 +1628,12 @@
 <h2 id="session-management">Session management</h2>
 <h3 id="tags-and-resuming">Tags and resuming</h3>
 <p>Sessions can be tagged for easy retrieval:</p>
-<div class="codehilite"><pre><span></span><code>meeseeks<span class="w"> </span>--tag<span class="w"> </span>my-project<span class="w">       </span><span class="c1"># create or resume a tagged session</span>
-meeseeks<span class="w"> </span>--session<span class="w"> </span>&lt;session-id&gt;<span class="w"> </span><span class="c1"># resume by ID</span>
+<div class="codehilite"><pre><span></span><code>truss<span class="w"> </span>--tag<span class="w"> </span>my-project<span class="w">       </span><span class="c1"># create or resume a tagged session</span>
+truss<span class="w"> </span>--session<span class="w"> </span>&lt;session-id&gt;<span class="w"> </span><span class="c1"># resume by ID</span>
 </code></pre></div>
 <h3 id="forking">Forking</h3>
 <p>Fork a session to branch from any point in its history:</p>
-<div class="codehilite"><pre><span></span><code>meeseeks<span class="w"> </span>--fork<span class="w"> </span>my-project<span class="w">      </span><span class="c1"># fork from a tagged session at its current state</span>
+<div class="codehilite"><pre><span></span><code>truss<span class="w"> </span>--fork<span class="w"> </span>my-project<span class="w">      </span><span class="c1"># fork from a tagged session at its current state</span>
 </code></pre></div>
 <p>Inside a running session, <code>/fork [tag]</code> creates a new session branching from the current conversation state. The optional tag names the fork for later retrieval.</p>
 <h3 id="forking-from-a-message">Forking from a message</h3>

@@ -41,7 +41,7 @@
 
 
 
-<title>Web IDE - Meeseeks docs</title>
+<title>Web IDE - Truss docs</title>
 
 
 
@@ -1422,12 +1422,12 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <video controls preload="metadata" poster="../meeseeks-console-01-front.png" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
-  <source src="../meeseeks-console-coder-demo-1.mp4" type="video/mp4" />
+    <video controls preload="metadata" poster="../truss-console-01-front.png" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
+  <source src="../truss-console-coder-demo-1.mp4" type="video/mp4" />
   Your browser does not support the video tag.
 </video>
 
-<p>Meeseeks can launch a per-session <a href="https://github.com/coder/code-server">code-server</a> (VS Code in the browser) tied to a session's working directory. This gives you a full IDE alongside the AI. You can review diffs, edit files directly, and run terminals while Meeseeks works in parallel. One container is created per session, started on demand, and automatically stopped after a configurable time-to-live.</p>
+<p>Truss can launch a per-session <a href="https://github.com/coder/code-server">code-server</a> (VS Code in the browser) tied to a session's working directory. This gives you a full IDE alongside the AI. You can review diffs, edit files directly, and run terminals while Truss works in parallel. One container is created per session, started on demand, and automatically stopped after a configurable time-to-live.</p>
 <h2 id="enabling">Enabling</h2>
 <p>Set <code>agent.web_ide.enabled</code> to <code>true</code> in <code>configs/app.json</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1476,7 +1476,7 @@
 </table></div>
 <p>The <code>POST</code> response includes a one-time <code>password</code> field (omitted from <code>GET</code> responses). The IDE is reachable at <code>/ide/{session_id}/</code> behind the built-in nginx proxy.</p>
 <p><strong>Example.</strong> Create an IDE session:</p>
-<div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-sk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>https://meeseeks.example.com/api/sessions/abc123.../ide<span class="w"> </span><span class="se">\</span>
+<div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-sk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>https://truss.example.com/api/sessions/abc123.../ide<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-Key: your-token&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </code></pre></div>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1489,7 +1489,7 @@
 <span class="p">}</span>
 </code></pre></div>
 <p><strong>Extend the deadline:</strong></p>
-<div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-sk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>https://meeseeks.example.com/api/sessions/abc123.../ide/extend<span class="w"> </span><span class="se">\</span>
+<div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-sk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>https://truss.example.com/api/sessions/abc123.../ide/extend<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-Key: your-token&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;hours&quot;: 2}&#39;</span>
@@ -1519,7 +1519,7 @@
 </tr>
 <tr>
 <td>Reconnect</td>
-<td><code>POST .../ide</code> on an existing session returns the current URL and password. If the container exited unexpectedly, Meeseeks respawns it automatically.</td>
+<td><code>POST .../ide</code> on an existing session returns the current URL and password. If the container exited unexpectedly, Truss respawns it automatically.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1571,12 +1571,12 @@
 </tr>
 <tr>
 <td><code>network</code></td>
-<td><code>meeseeks-ide</code></td>
+<td><code>truss-ide</code></td>
 <td>Docker network the containers join.</td>
 </tr>
 <tr>
 <td><code>state_dir</code></td>
-<td><code>/tmp/meeseeks-ide</code></td>
+<td><code>/tmp/truss-ide</code></td>
 <td>Host directory used for bookkeeping files.</td>
 </tr>
 </tbody>

@@ -1,13 +1,13 @@
 # Plugins & Marketplace
 
 <div style="display: flex; justify-content: center;">
-  <img src="../meeseeks-console-05-plugins.jpg" alt="The Plugins page in the Meeseeks console showing four installed plugins and a marketplace listing with install buttons" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../truss-console-05-plugins.png" alt="The Plugins page in the Truss console showing four installed plugins and a marketplace listing with install buttons" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-Plugins extend Meeseeks with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory. They activate automatically at session start without a restart. Plugins are first-class citizens. A plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.
+Plugins extend Truss with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory. They activate automatically at session start without a restart. Plugins are first-class citizens. A plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.
 
 > [!TIP] Drop-in compatible with Claude Code plugins
-> Meeseeks reads the exact same [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins) manifest, directory layout (`.claude-plugin/plugin.json`, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`), and marketplace format. The default marketplace is the [official Claude plugins marketplace](https://github.com/anthropics/claude-plugins-official). Any private marketplace that follows the Claude Code marketplace schema works too. Point `plugins.marketplaces` at the repo and it loads without translation. Plugins authored for Claude Code work in Meeseeks unchanged.
+> Truss reads the exact same [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins) manifest, directory layout (`.claude-plugin/plugin.json`, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`), and marketplace format. The default marketplace is the [official Claude plugins marketplace](https://github.com/anthropics/claude-plugins-official). Any private marketplace that follows the Claude Code marketplace schema works too. Point `plugins.marketplaces` at the repo and it loads without translation. Plugins authored for Claude Code work in Truss unchanged.
 
 For setup and installation, see [Getting Started](getting-started.md).
 
@@ -79,7 +79,7 @@ Inside any plugin-owned file — `.mcp.json`, `hooks/hooks.json`, `agents/*.md` 
 |---|---|
 | `${CLAUDE_PLUGIN_ROOT}` | Absolute path to the plugin's install directory |
 | `${SESSION_ID}` | The current session's id |
-| `${MEESEEKS_WIDGET_ROOT}` | Widget output root (widget-builder only); `:-` default syntax supported |
+| `${TRUSS_WIDGET_ROOT}` | Widget output root (widget-builder only); `:-` default syntax supported |
 
 Substitution is a single linear `replace` pass — no template engine — so a body with no placeholders is byte-identical after substitution.
 
@@ -120,7 +120,7 @@ Plugin system settings live under `plugins` in [`configs/app.json`](configuratio
 | `plugins.enabled` | boolean | `true` | Enable or disable the entire plugin system |
 | `plugins.enabled_plugins` | array | `[]` | Explicit allowlist of plugin names to activate; empty = all installed plugins |
 | `plugins.marketplaces` | array | `["anthropics/claude-plugins-official"]` | GitHub repos (`owner/repo`) that contain a `marketplace.json` index |
-| `plugins.install_path` | string | `""` | Override for the plugin cache directory; defaults to `$MEESEEKS_HOME/plugins/` |
+| `plugins.install_path` | string | `""` | Override for the plugin cache directory; defaults to `$TRUSS_HOME/plugins/` |
 
 ```json
 {
@@ -135,7 +135,7 @@ Plugin system settings live under `plugins` in [`configs/app.json`](configuratio
 }
 ```
 
-When `marketplaces` lists repos that are not yet cloned locally, Meeseeks shallow-clones them the first time you browse or install. Subsequent runs use the local cache; a fast-forward `git pull` keeps it up to date.
+When `marketplaces` lists repos that are not yet cloned locally, Truss shallow-clones them the first time you browse or install. Subsequent runs use the local cache; a fast-forward `git pull` keeps it up to date.
 
 Plugin skills never override personal (`~/.claude/skills/`) or project-local (`.claude/skills/`) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name.
 
@@ -147,7 +147,7 @@ A plugin can declare that its agents, skills, and session tools only make sense 
 
 Capabilities flow top-down:
 
-1. The **client** announces its capabilities on every request. The web console sends `X-Meeseeks-Capabilities: stlite` by default. Other clients (CLI, webhook adapters) send nothing unless configured to.
+1. The **client** announces its capabilities on every request. The web console sends `X-Truss-Capabilities: stlite` by default. Other clients (CLI, webhook adapters) send nothing unless configured to.
 2. The **API** writes the advertised list onto the session's context event.
 3. The **orchestrator** resolves `session_capabilities` once per session and passes the tuple to `ToolUseLoop`.
 4. The **registries** apply `filter_by_capabilities` before rendering the agent and skill catalogs. An entry whose `requires-capabilities` is not a subset of the session's set is invisible — no tool schema, no catalog line, no accidental invocation.
@@ -187,7 +187,7 @@ Plugins contribute session tools through the `session_tools` array in `plugin.js
   "session_tools": [
     {
       "tool_id": "submit_widget",
-      "module": "meeseeks_core.builtin_plugins.widget_builder.submit_widget",
+      "module": "truss_core.builtin_plugins.widget_builder.submit_widget",
       "class": "SubmitWidgetTool"
     }
   ]
@@ -211,7 +211,7 @@ This keeps core widget-agnostic: the full contract for a capability bundle is **
 
 ## Built-in plugins
 
-Some plugins ship inside the core package at `packages/meeseeks_core/src/meeseeks_core/builtin_plugins/`. They are discovered through the same plugin pipeline as user and marketplace plugins — byte-for-byte normal plugins, indistinguishable except for their location on the scan path. No `installed_plugins.json` entry is needed.
+Some plugins ship inside the core package at `packages/truss_core/src/truss_core/builtin_plugins/`. They are discovered through the same plugin pipeline as user and marketplace plugins — byte-for-byte normal plugins, indistinguishable except for their location on the scan path. No `installed_plugins.json` entry is needed.
 
 Currently bundled:
 
@@ -227,7 +227,7 @@ The built-in path is resolved via `importlib.resources`, so it survives editable
 
 To develop a plugin locally before publishing it to a marketplace, place the plugin directory anywhere on disk and point `plugins.registry_paths` at a custom `installed_plugins.json` that references it. Alternatively, use the CLI install flow with a `./relative-path` source in a local `marketplace.json`.
 
-The minimum viable plugin is a directory containing only `.claude-plugin/plugin.json`. Everything else (`skills/`, `agents/`, `hooks/`, `.mcp.json`, `session_tools`) is optional and discovered automatically. The bundled [widget-builder](features-widgets.md) is a complete working example — see `packages/meeseeks_core/src/meeseeks_core/builtin_plugins/widget_builder/`.
+The minimum viable plugin is a directory containing only `.claude-plugin/plugin.json`. Everything else (`skills/`, `agents/`, `hooks/`, `.mcp.json`, `session_tools`) is optional and discovered automatically. The bundled [widget-builder](features-widgets.md) is a complete working example — see `packages/truss_core/src/truss_core/builtin_plugins/widget_builder/`.
 
 ---
 

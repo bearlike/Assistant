@@ -30,7 +30,7 @@ See the optional configuration table below.
 
 ## Model fallback
 
-When the primary model fails with a retryable error, Meeseeks walks an ordered fallback
+When the primary model fails with a retryable error, Truss walks an ordered fallback
 list before giving up. Useful for rate-limit tolerance and provider outages.
 
 Config (in `configs/app.json`):
@@ -70,7 +70,7 @@ MCP servers are optional. When enabled, they add external tools to the registry.
 
 1. Create `configs/mcp.json` (or run `/mcp init` in the CLI).
 2. Add MCP server URLs and headers.
-3. Start a client once to auto-discover tools and cache the manifest under `~/.meeseeks/`.
+3. Start a client once to auto-discover tools and cache the manifest under `~/.truss/`.
 
 For more details, see [Installation](getting-started.md).
 

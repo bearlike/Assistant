@@ -41,7 +41,7 @@
 
 
 
-<title>Get Started - Meeseeks docs</title>
+<title>Get Started - Truss docs</title>
 
 
 
@@ -1422,7 +1422,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Meeseeks runs as a local CLI, a REST API + web console, or a containerised stack. Pick the path that fits your setup.</p>
+    <p>Truss runs as a local CLI, a REST API + web console, or a containerised stack. Pick the path that fits your setup.</p>
 <h2 id="prerequisites">Prerequisites</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1450,9 +1450,9 @@
 <h3 id="cli-setup">CLI</h3>
 <p>The CLI is the fastest way to start a local session.</p>
 <div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span>cli
-uv<span class="w"> </span>run<span class="w"> </span>meeseeks
+uv<span class="w"> </span>run<span class="w"> </span>truss
 </code></pre></div>
-<p>For a global install so <code>meeseeks</code> works from anywhere:
+<p>For a global install so <code>truss</code> works from anywhere:
 <div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>tool<span class="w"> </span>install<span class="w"> </span>.
 </code></pre></div></p>
 <p>See <a href="../clients-cli/">CLI client</a> for usage details, slash commands, and approval modes.</p>
@@ -1462,13 +1462,13 @@ uv<span class="w"> </span>run<span class="w"> </span>meeseeks
 uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span>api
 
 <span class="c1"># Install console frontend dependencies (once)</span>
-<span class="nb">cd</span><span class="w"> </span>apps/meeseeks_console<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>-
+<span class="nb">cd</span><span class="w"> </span>apps/truss_console<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>-
 
 <span class="c1"># Start the API</span>
-uv<span class="w"> </span>run<span class="w"> </span>meeseeks-api
+uv<span class="w"> </span>run<span class="w"> </span>truss-api
 
 <span class="c1"># Start the console (separate terminal)</span>
-<span class="nb">cd</span><span class="w"> </span>apps/meeseeks_console<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
+<span class="nb">cd</span><span class="w"> </span>apps/truss_console<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
 </code></pre></div>
 <p>The console proxies <code>/api/</code> requests to the API at <code>127.0.0.1:5125</code> by default.</p>
 <p>See <a href="../clients-web-api/">Console + API</a> for configuration, auth, and session management.</p>
@@ -1516,11 +1516,11 @@ uv<span class="w"> </span>run<span class="w"> </span>meeseeks-api
 </tbody>
 </table></div>
 <h2 id="configuration">Configuration</h2>
-<p>Meeseeks loads config files from the first directory that contains them, checked in order:</p>
+<p>Truss loads config files from the first directory that contains them, checked in order:</p>
 <ol>
 <li><code>CWD/configs/</code>: project-local config (highest priority)</li>
-<li><code>$MEESEEKS_HOME/</code>: custom home dir if set</li>
-<li><code>~/.meeseeks/</code>: user home fallback</li>
+<li><code>$TRUSS_HOME/</code>: custom home dir if set</li>
+<li><code>~/.truss/</code>: user home fallback</li>
 </ol>
 <p>Bootstrap from the example template:</p>
 <div class="codehilite"><pre><span></span><code>cp<span class="w"> </span>configs/app.example.json<span class="w"> </span>configs/app.json
@@ -1551,7 +1551,7 @@ uv<span class="w"> </span>run<span class="w"> </span>meeseeks-api
 </ul>
 <h2 id="first-run">First run</h2>
 <p>After copying and editing <code>configs/app.json</code>:</p>
-<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>meeseeks
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>truss
 </code></pre></div>
 <p>On first run, type <code>/init</code> to scaffold any missing config files. A minimal working <code>configs/app.json</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1595,7 +1595,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>pull<span class="w"
 </table></div>
 <p>See <a href="../deployment-docker/">Docker Compose</a> for the full reference: volume mounts, project directories, init scripts, reverse proxy, and runtime config.</p>
 <h2 id="project-instructions">Project instructions</h2>
-<p>Meeseeks discovers <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/rules/*.md</code> files
+<p>Truss discovers <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/rules/*.md</code> files
 automatically. The discovery is compatible with the Claude Code and AGENTS.md conventions.</p>
 <p>Place a <code>CLAUDE.md</code> at your project root and it will be loaded at session start.
 Nested packages are handled via an on-demand index: sub-directory instruction files

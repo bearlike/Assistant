@@ -41,7 +41,7 @@
 
 
 
-<title>Skills - Meeseeks docs</title>
+<title>Skills - Truss docs</title>
 
 
 
@@ -1422,10 +1422,10 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>A skill is a small, self-contained instruction file that teaches the assistant a specific way of working. Examples include running code review, drafting a changelog, or triaging an incident. Each skill lives in its own directory as a <code>SKILL.md</code> file (YAML frontmatter plus a markdown body). Meeseeks only pulls the full body of a skill into context when that skill actually activates, so you can keep dozens of skills installed without burning context on skills you aren't using.</p>
+    <p>A skill is a small, self-contained instruction file that teaches the assistant a specific way of working. Examples include running code review, drafting a changelog, or triaging an incident. Each skill lives in its own directory as a <code>SKILL.md</code> file (YAML frontmatter plus a markdown body). Truss only pulls the full body of a skill into context when that skill actually activates, so you can keep dozens of skills installed without burning context on skills you aren't using.</p>
 <div class="admonition tip">
 <p class="admonition-title">Drop-in compatible with Claude Code</p>
-<p>Skills follow the <a href="https://docs.claude.com/en/api/agent-skills">Agent Skills standard</a> (also published as the open <a href="https://agentskills.io"><code>agentskills.io</code></a> spec). Meeseeks uses the same directory conventions (<code>~/.claude/skills/</code> for user-global, <code>.claude/skills/</code> for project-local), the same <code>SKILL.md</code> frontmatter, the same <code>allowed-tools</code> scoping, and the same <code>/skill-name</code> invocation pattern. Any skill written for Claude Code works unchanged in Meeseeks.</p>
+<p>Skills follow the <a href="https://docs.claude.com/en/api/agent-skills">Agent Skills standard</a> (also published as the open <a href="https://agentskills.io"><code>agentskills.io</code></a> spec). Truss uses the same directory conventions (<code>~/.claude/skills/</code> for user-global, <code>.claude/skills/</code> for project-local), the same <code>SKILL.md</code> frontmatter, the same <code>allowed-tools</code> scoping, and the same <code>/skill-name</code> invocation pattern. Any skill written for Claude Code works unchanged in Truss.</p>
 </div>
 <hr />
 <h2 id="writing-a-skill">Writing a skill</h2>
@@ -1472,7 +1472,7 @@ You are performing a thorough code review. Follow this checklist:
 <td><code>requires-capabilities</code></td>
 <td>string or list</td>
 <td>No</td>
-<td>Capability ids this skill needs; space-delimited string or YAML list. The skill is hidden from sessions that do not advertise all of them on <code>X-Meeseeks-Capabilities</code>. See <a href="../features-plugins/#capability-gating">Plugins &amp; Marketplace → Capability gating</a>.</td>
+<td>Capability ids this skill needs; space-delimited string or YAML list. The skill is hidden from sessions that do not advertise all of them on <code>X-Truss-Capabilities</code>. See <a href="../features-plugins/#capability-gating">Plugins &amp; Marketplace → Capability gating</a>.</td>
 </tr>
 <tr>
 <td><code>allowed-tools</code></td>
@@ -1514,13 +1514,13 @@ You are performing a thorough code review. Follow this checklist:
 </table></div>
 <hr />
 <h2 id="tool-scoping">Tool scoping</h2>
-<p>When <code>allowed-tools</code> is set, activating the skill narrows the tool set for the duration of the skill to just those tools. Use the same tool IDs you would use anywhere else in Meeseeks:</p>
+<p>When <code>allowed-tools</code> is set, activating the skill narrows the tool set for the duration of the skill to just those tools. Use the same tool IDs you would use anywhere else in Truss:</p>
 <div class="codehilite"><pre><span></span><code><span class="nt">allowed-tools</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">read_file aider_list_dir_tool</span>
 </code></pre></div>
 <p>When <code>allowed-tools</code> is omitted, the skill inherits the full tool set of the current session.</p>
 <hr />
 <h2 id="capability-gating">Capability gating</h2>
-<p>A skill can opt out of sessions that lack a required runtime by declaring <code>requires-capabilities</code> in its frontmatter. The client advertises capabilities via the <code>X-Meeseeks-Capabilities</code> header; the orchestrator resolves the session capability set once, and <code>SkillRegistry</code> then filters both the auto-invocation catalog and the <code>/skill-name</code> lookup. Skills whose <code>requires-capabilities</code> is not a subset of the session capabilities are invisible — they are not surfaced to the model and cannot be invoked explicitly. The built-in <code>widget-builder</code> plugin uses this: its <code>st-widget-builder</code> skill declares <code>requires-capabilities: [stlite]</code>, so it never appears on CLI sessions that do not advertise stlite.</p>
+<p>A skill can opt out of sessions that lack a required runtime by declaring <code>requires-capabilities</code> in its frontmatter. The client advertises capabilities via the <code>X-Truss-Capabilities</code> header; the orchestrator resolves the session capability set once, and <code>SkillRegistry</code> then filters both the auto-invocation catalog and the <code>/skill-name</code> lookup. Skills whose <code>requires-capabilities</code> is not a subset of the session capabilities are invisible — they are not surfaced to the model and cannot be invoked explicitly. The built-in <code>widget-builder</code> plugin uses this: its <code>st-widget-builder</code> skill declares <code>requires-capabilities: [stlite]</code>, so it never appears on CLI sessions that do not advertise stlite.</p>
 <div class="codehilite"><pre><span></span><code><span class="nn">---</span>
 <span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">st-widget-builder</span>
 <span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Build an interactive stlite widget rendered inline in the console.</span>
@@ -1575,7 +1575,7 @@ You are performing a thorough code review. Follow this checklist:
 <p>Sub-agents also see the skill catalogue in their system prompt, so delegating work to a sub-agent and naming a skill in the task description works as expected.</p>
 <hr />
 <h2 id="hot-reload">Hot-reload</h2>
-<p>Meeseeks notices when a <code>SKILL.md</code> file changes and picks up the new version automatically. New skill directories that appear while the server is running are detected on the next scan. No restart is required.</p>
+<p>Truss notices when a <code>SKILL.md</code> file changes and picks up the new version automatically. New skill directories that appear while the server is running are detected on the next scan. No restart is required.</p>
 <hr />
 <div class="admonition note">
 <p class="admonition-title">How it works internally</p>

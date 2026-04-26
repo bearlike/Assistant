@@ -127,6 +127,10 @@
         },
         "lsp": {
           "$ref": "#/$defs/LSPConfig"
+        },
+        "tool_search": {
+          "$ref": "#/$defs/ToolSearchConfig",
+          "description": "Deferred tool loading via on-demand schema fetching."
         }
       },
       "title": "AgentConfig",
@@ -569,16 +573,16 @@
           "default": "mongodb://localhost:27017",
           "description": "MongoDB connection URI (includes host, port, credentials).",
           "examples": [
-            "mongodb://user:pass@localhost:27017/meeseeks?authSource=admin"
+            "mongodb://user:pass@localhost:27017/truss?authSource=admin"
           ],
           "title": "Uri",
           "type": "string"
         },
         "database": {
-          "default": "meeseeks",
+          "default": "truss",
           "description": "MongoDB database name for session storage.",
           "examples": [
-            "meeseeks"
+            "truss"
           ],
           "title": "Database",
           "type": "string"
@@ -639,7 +643,7 @@
         },
         "install_path": {
           "default": "",
-          "description": "Override install path for Meeseeks-managed plugins. Defaults to $MEESEEKS_HOME/plugins/ (via resolve_meeseeks_home).",
+          "description": "Override install path for Truss-managed plugins. Defaults to $TRUSS_HOME/plugins/ (via resolve_truss_home).",
           "title": "Install Path",
           "type": "string"
         }
@@ -735,9 +739,9 @@
         },
         "cache_dir": {
           "default": "",
-          "description": "Directory for tool caches. Defaults to $MEESEEKS_HOME/cache.",
+          "description": "Directory for tool caches. Defaults to $TRUSS_HOME/cache.",
           "examples": [
-            "~/.meeseeks/cache"
+            "~/.truss/cache"
           ],
           "title": "Cache Dir",
           "type": "string",
@@ -745,9 +749,9 @@
         },
         "session_dir": {
           "default": "",
-          "description": "Directory for session transcripts. Defaults to $MEESEEKS_HOME/sessions.",
+          "description": "Directory for session transcripts. Defaults to $TRUSS_HOME/sessions.",
           "examples": [
-            "~/.meeseeks/sessions"
+            "~/.truss/sessions"
           ],
           "title": "Session Dir",
           "type": "string",
@@ -755,9 +759,9 @@
         },
         "config_dir": {
           "default": "",
-          "description": "Root configuration directory. Defaults to $MEESEEKS_HOME.",
+          "description": "Root configuration directory. Defaults to $TRUSS_HOME.",
           "examples": [
-            "~/.meeseeks"
+            "~/.truss"
           ],
           "title": "Config Dir",
           "type": "string",
@@ -767,16 +771,16 @@
           "default": "",
           "description": "Directory for large tool result exports. Empty to disable.",
           "examples": [
-            "/tmp/meeseeks-results"
+            "/tmp/truss-results"
           ],
           "title": "Result Export Dir",
           "type": "string"
         },
         "projects_home": {
           "default": "",
-          "description": "Directory for virtual project folders. Defaults to $MEESEEKS_HOME/projects.",
+          "description": "Directory for virtual project folders. Defaults to $TRUSS_HOME/projects.",
           "examples": [
-            "~/.meeseeks/projects"
+            "~/.truss/projects"
           ],
           "title": "Projects Home",
           "type": "string",
@@ -840,6 +844,24 @@
       "title": "TokenBudgetConfig",
       "type": "object"
     },
+    "ToolSearchConfig": {
+      "additionalProperties": false,
+      "description": "Deferred tool loading via on-demand schema fetching.\n\nWhen ``mode='on'``, MCP tool schemas (and any spec with\n``metadata.deferred=True``) are stripped from the initial ``bind_tools``\ncall and surfaced to the model by name only via\n``<available-deferred-tools>``. The model fetches schemas it actually\nneeds by calling the built-in ``tool_search`` tool. Mirrors Claude\nCode's ``ToolSearchTool`` mechanism \u2014 saves substantial context tokens\non sessions with many MCP servers connected.",
+      "properties": {
+        "mode": {
+          "default": "off",
+          "description": "'off' (default) keeps every tool's schema in the initial bind. 'on' defers MCP tools and any spec with metadata.deferred=True; the model loads schemas on demand via tool_search.",
+          "enum": [
+            "off",
+            "on"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "ToolSearchConfig",
+      "type": "object"
+    },
     "WebIdeConfig": {
       "additionalProperties": false,
       "description": "Config for the per-session code-server \"Open in Web IDE\" feature.",
@@ -889,13 +911,13 @@
           "type": "integer"
         },
         "network": {
-          "default": "meeseeks-ide",
+          "default": "truss-ide",
           "pattern": "^[a-zA-Z0-9_-]+$",
           "title": "Network",
           "type": "string"
         },
         "state_dir": {
-          "default": "/tmp/meeseeks-ide",
+          "default": "/tmp/truss-ide",
           "title": "State Dir",
           "type": "string"
         }
@@ -904,7 +926,7 @@
       "type": "object"
     }
   },
-  "description": "Typed configuration for the Meeseeks runtime.",
+  "description": "Typed configuration for the Truss runtime.",
   "properties": {
     "runtime": {
       "$ref": "#/$defs/RuntimeConfig"

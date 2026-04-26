@@ -41,7 +41,7 @@
 
 
 
-<title>Permissions & Hooks - Meeseeks docs</title>
+<title>Permissions & Hooks - Truss docs</title>
 
 
 
@@ -1422,7 +1422,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Meeseeks runs every tool call through a <strong>permission policy</strong> before it executes, and lets you wire <strong>hooks</strong> into session lifecycle events and individual tool calls. Together they give you a security boundary and a clean place to hang automation. Think notifications, audit logging, webhook fan-out, and external guardrails.</p>
+    <p>Truss runs every tool call through a <strong>permission policy</strong> before it executes, and lets you wire <strong>hooks</strong> into session lifecycle events and individual tool calls. Together they give you a security boundary and a clean place to hang automation. Think notifications, audit logging, webhook fan-out, and external guardrails.</p>
 <p><strong>Quick example.</strong> Auto-approve all tool calls in the current session:</p>
 <div class="codehilite"><pre><span></span><code>/automatic --yes
 </code></pre></div>
@@ -1434,7 +1434,7 @@
 <hr />
 <h2 id="permission-policies">Permission policies</h2>
 <h3 id="the-three-outcomes">The three outcomes</h3>
-<p>Every tool call carries a <code>tool_id</code> (which tool it is, e.g. <code>aider_shell_tool</code>, <code>file_edit_tool</code>, <code>mcp__my_server__my_tool</code>) and an <code>operation</code> (what kind of action it is, e.g. <code>get</code>, <code>set</code>). Before the call runs, Meeseeks consults your policy and resolves to one of three outcomes:</p>
+<p>Every tool call carries a <code>tool_id</code> (which tool it is, e.g. <code>aider_shell_tool</code>, <code>file_edit_tool</code>, <code>mcp__my_server__my_tool</code>) and an <code>operation</code> (what kind of action it is, e.g. <code>get</code>, <code>set</code>). Before the call runs, Truss consults your policy and resolves to one of three outcomes:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1457,7 +1457,7 @@
 </tr>
 </tbody>
 </table></div>
-<p>Rules are evaluated in order; the first match wins. If no rule matches, Meeseeks falls back to per-operation defaults (<code>get</code> → <code>allow</code>, <code>set</code> → <code>ask</code>) and then to a catch-all <code>default_decision</code>.</p>
+<p>Rules are evaluated in order; the first match wins. If no rule matches, Truss falls back to per-operation defaults (<code>get</code> → <code>allow</code>, <code>set</code> → <code>ask</code>) and then to a catch-all <code>default_decision</code>.</p>
 <h3 id="rule-syntax">Rule syntax</h3>
 <p>Rules live in a JSON or TOML policy file pointed to by <code>permissions.policy_path</code>. Each rule matches on <code>tool_id</code> and <code>operation</code> using <code>fnmatch</code> glob patterns:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1548,8 +1548,8 @@
 </table></div>
 <h3 id="two-hook-types">Two hook types</h3>
 <h4 id="command-hooks">Command hooks</h4>
-<p>A command hook runs a shell command. Meeseeks waits up to <code>timeout</code> seconds (default 30) for the process to finish before moving on. Use this when you want the hook to complete before the session continues, for example when prepping a workspace at session start.</p>
-<p>Meeseeks sets these environment variables on the subprocess:</p>
+<p>A command hook runs a shell command. Truss waits up to <code>timeout</code> seconds (default 30) for the process to finish before moving on. Use this when you want the hook to complete before the session continues, for example when prepping a workspace at session start.</p>
+<p>Truss sets these environment variables on the subprocess:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1560,27 +1560,27 @@
 </thead>
 <tbody>
 <tr>
-<td><code>MEESEEKS_SESSION_ID</code></td>
+<td><code>TRUSS_SESSION_ID</code></td>
 <td><code>on_session_start</code>, <code>on_session_end</code></td>
 <td>Session identifier</td>
 </tr>
 <tr>
-<td><code>MEESEEKS_ERROR</code></td>
+<td><code>TRUSS_ERROR</code></td>
 <td><code>on_session_end</code> (error cases only)</td>
 <td>Error message string</td>
 </tr>
 <tr>
-<td><code>MEESEEKS_TOOL_ID</code></td>
+<td><code>TRUSS_TOOL_ID</code></td>
 <td><code>pre_tool_use</code>, <code>post_tool_use</code></td>
 <td>Tool identifier</td>
 </tr>
 <tr>
-<td><code>MEESEEKS_OPERATION</code></td>
+<td><code>TRUSS_OPERATION</code></td>
 <td><code>pre_tool_use</code>, <code>post_tool_use</code></td>
 <td>Operation name</td>
 </tr>
 <tr>
-<td><code>MEESEEKS_TOOL_RESULT</code></td>
+<td><code>TRUSS_TOOL_RESULT</code></td>
 <td><code>post_tool_use</code></td>
 <td>First 2 000 characters of the result</td>
 </tr>
@@ -1591,14 +1591,14 @@
 <span class="w">  </span><span class="nt">&quot;on_session_end&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
 <span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;command&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;notify-send &#39;Meeseeks&#39; \&quot;Session $MEESEEKS_SESSION_ID done\&quot;&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;notify-send &#39;Truss&#39; \&quot;Session $TRUSS_SESSION_ID done\&quot;&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;timeout&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">]</span>
 <span class="p">}</span>
 </code></pre></div>
 <h4 id="http-hooks">HTTP hooks</h4>
-<p>An HTTP hook posts a JSON body to a URL. HTTP hooks are non-blocking. Meeseeks does not wait for the response, and failures are logged rather than raised. Use this when you want to feed Meeseeks events into a webhook, audit log, or chat integration without slowing the agent down.</p>
+<p>An HTTP hook posts a JSON body to a URL. HTTP hooks are non-blocking. Truss does not wait for the response, and failures are logged rather than raised. Use this when you want to feed Truss events into a webhook, audit log, or chat integration without slowing the agent down.</p>
 <p>Payload for <code>on_session_end</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;session_end&quot;</span><span class="p">,</span>
@@ -1619,7 +1619,7 @@
 <span class="w">  </span><span class="nt">&quot;on_session_end&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
 <span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://your-webhook.example.com/meeseeks&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://your-webhook.example.com/truss&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;headers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;Authorization&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Bearer YOUR_TOKEN&quot;</span><span class="w"> </span><span class="p">},</span>
 <span class="w">      </span><span class="nt">&quot;timeout&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span>
 <span class="w">    </span><span class="p">}</span>
@@ -1653,7 +1653,7 @@
 <span class="w">  </span><span class="nt">&quot;on_session_start&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
 <span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;command&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;logger -t meeseeks \&quot;Session $MEESEEKS_SESSION_ID started\&quot;&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;logger -t truss \&quot;Session $TRUSS_SESSION_ID started\&quot;&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;timeout&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">],</span>
