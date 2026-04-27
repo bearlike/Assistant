@@ -36,6 +36,6 @@ The custom component handles session creation and maps HA conversation threads t
    - API key: the API master token (`api.master_token` in `configs/app.json`).
 
 ## Optional: enable the Home Assistant tool
-If bearlike/Assistant should control Home Assistant entities directly:
+If Truss should control Home Assistant entities directly:
 - Set `home_assistant.enabled` to `true` in `configs/app.json`.
 - Provide the Home Assistant URL and token in `home_assistant.*`.
