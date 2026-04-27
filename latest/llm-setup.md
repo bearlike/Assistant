@@ -1,6 +1,6 @@
 # LLM Setup
 
-This page covers the minimum LLM configuration required to run bearlike/Assistant.
+This page covers the minimum LLM configuration required to run Truss.
 
 ## Minimum configuration
 Set these keys in `configs/app.json`:
