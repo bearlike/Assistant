@@ -36,7 +36,7 @@ dev = [
   "pytest-cov==7.1.0",
   "ruff==0.15.8",
   "streamlit>=1.56.0",
-  "types-requests==2.33.0.20260327",
+  "types-requests==2.33.0.20260408",
   "vulture==2.16",
 ]
 docs = [
