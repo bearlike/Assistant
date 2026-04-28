@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Web Console + API - Truss docs</title>
+<title>Web Console + API - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/clients-web-api/">
+<link rel="canonical" href="https://docs.mewbo.com/main/clients-web-api/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/clients-web-api/">
+<meta property="og:url" content="https://docs.mewbo.com/main/clients-web-api/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/clients-web-api.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/clients-web-api.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1423,20 +1423,20 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;">
-  <img src="../truss-console-01-front.png" alt="Truss Console landing page" style="width: 100%; max-width: 520px; height: auto;" />
-  <img src="../truss-console-02-tasks.png" alt="Truss Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../mewbo-console-01-front.png" alt="Mewbo Console landing page" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../mewbo-console-02-tasks.png" alt="Mewbo Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-<p>The REST API is the programmable surface for Truss. You send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration. The console gives you session management, an event timeline, and rich visualization of tool output.</p>
+<p>The REST API is the programmable surface for Mewbo. You send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration. The console gives you session management, an event timeline, and rich visualization of tool output.</p>
 <p>See <a href="../getting-started/#api-setup">Get Started</a> for installation and <a href="../deployment-docker/">Docker Compose</a> for container deployment.</p>
 <h2 id="run-the-rest-api">Run the REST API</h2>
-<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>truss-api
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
 </code></pre></div>
 <p>API notes:</p>
 <ul>
 <li>Protected routes require <code>X-API-Key</code> matching <code>api.master_token</code> in <code>configs/app.json</code>.</li>
 <li>Session runtime endpoints support async runs and event polling.</li>
-<li><code>X-Truss-Capabilities</code> is an optional request header advertising what the client can render. See <a href="#client-capability-negotiation">Client capability negotiation</a> below.</li>
+<li><code>X-Mewbo-Capabilities</code> is an optional request header advertising what the client can render. See <a href="#client-capability-negotiation">Client capability negotiation</a> below.</li>
 </ul>
 <p>Core endpoints:</p>
 <ul>
@@ -1466,7 +1466,7 @@
 <li><code>POST /api/sessions/{session_id}/ide/extend</code> extend the IDE session TTL</li>
 </ul>
 <h2 id="run-the-console">Run the Console</h2>
-<div class="codehilite"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>apps/truss_console
+<div class="codehilite"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>apps/mewbo_console
 npm<span class="w"> </span>install
 npm<span class="w"> </span>run<span class="w"> </span>dev
 </code></pre></div>
@@ -1476,7 +1476,7 @@ npm<span class="w"> </span>run<span class="w"> </span>dev
 - Set <code>VITE_API_MODE</code> to <code>live</code> for direct API access or <code>auto</code> (default) for fallback to mock data.
 - During development, the Vite dev server proxies <code>/api/</code> requests to the API backend.</p>
 <h2 id="client-capability-negotiation">Client capability negotiation</h2>
-<p>Clients advertise the UI primitives they can render by sending the <code>X-Truss-Capabilities</code> request header. The value is a comma-separated list of capability ids (for example <code>stlite</code>, or <code>stlite,foo</code>). The header travels on every request that creates or drives a session.</p>
+<p>Clients advertise the UI primitives they can render by sending the <code>X-Mewbo-Capabilities</code> request header. The value is a comma-separated list of capability ids (for example <code>stlite</code>, or <code>stlite,foo</code>). The header travels on every request that creates or drives a session.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1487,7 +1487,7 @@ npm<span class="w"> </span>run<span class="w"> </span>dev
 <tbody>
 <tr>
 <td>Client</td>
-<td>Sets <code>X-Truss-Capabilities</code> per request. The console sets <code>stlite</code> automatically; other clients opt in explicitly.</td>
+<td>Sets <code>X-Mewbo-Capabilities</code> per request. The console sets <code>stlite</code> automatically; other clients opt in explicitly.</td>
 </tr>
 <tr>
 <td>API</td>
@@ -1505,7 +1505,7 @@ npm<span class="w"> </span>run<span class="w"> </span>dev
 </table></div>
 <div class="admonition note">
 <p class="admonition-title">No header means no capability-gated surface</p>
-<p>A REST caller that omits <code>X-Truss-Capabilities: stlite</code> will not see the <code>st-widget-builder</code> agent_type, will not see the <code>/st-widget-builder</code> skill, and will not have the <code>submit_widget</code> tool bound on its sessions. The same applies to any third-party plugin that declares <code>requires-capabilities</code>.</p>
+<p>A REST caller that omits <code>X-Mewbo-Capabilities: stlite</code> will not see the <code>st-widget-builder</code> agent_type, will not see the <code>/st-widget-builder</code> skill, and will not have the <code>submit_widget</code> tool bound on its sessions. The same applies to any third-party plugin that declares <code>requires-capabilities</code>.</p>
 </div>
 <p>See <a href="../features-widgets/">Widgets</a> for the reference use case and <a href="../features-plugins/#capability-gating">Plugins &amp; Marketplace → Capability gating</a> for the full contract.</p>
 <h2 id="widgets-in-the-timeline">Widgets in the timeline</h2>
@@ -1578,7 +1578,7 @@ POST /api/sessions/{id}/interrupt   → signals the current step to pause
 <h2 id="multi-project-support">Multi-project support</h2>
 <p>The console supports multiple projects that appear as virtual workspaces shared across sessions. Each project has its own working directory, its own <code>.mcp.json</code>, and its own <code>.claude/skills/</code> directory, so tools and skills scope cleanly to the project you are in.</p>
 <div style="display: flex; justify-content: center;">
-  <img src="../truss-console-06-projects.png" alt="The Projects page in the Truss console showing two virtual workspaces with their paths" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../mewbo-console-06-projects.png" alt="The Projects page in the Mewbo console showing two virtual workspaces with their paths" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 <p>Create and switch projects from the <strong>Projects</strong> page or the project selector in the ConfigMenu. In the REST API, projects are identified by the working directory path you pass in the session context.</p>

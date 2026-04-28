@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Get Started - Truss docs</title>
+<title>Get Started - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/getting-started/">
+<link rel="canonical" href="https://docs.mewbo.com/main/getting-started/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/getting-started/">
+<meta property="og:url" content="https://docs.mewbo.com/main/getting-started/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/getting-started.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/getting-started.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1422,7 +1422,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Truss runs as a local CLI, a REST API + web console, or a containerised stack. Pick the path that fits your setup.</p>
+    <p>Mewbo runs as a local CLI, a REST API + web console, or a containerised stack. Pick the path that fits your setup.</p>
 <h2 id="prerequisites">Prerequisites</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1450,9 +1450,9 @@
 <h3 id="cli-setup">CLI</h3>
 <p>The CLI is the fastest way to start a local session.</p>
 <div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span>cli
-uv<span class="w"> </span>run<span class="w"> </span>truss
+uv<span class="w"> </span>run<span class="w"> </span>mewbo
 </code></pre></div>
-<p>For a global install so <code>truss</code> works from anywhere:
+<p>For a global install so <code>mewbo</code> works from anywhere:
 <div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>tool<span class="w"> </span>install<span class="w"> </span>.
 </code></pre></div></p>
 <p>See <a href="../clients-cli/">CLI client</a> for usage details, slash commands, and approval modes.</p>
@@ -1462,13 +1462,13 @@ uv<span class="w"> </span>run<span class="w"> </span>truss
 uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span>api
 
 <span class="c1"># Install console frontend dependencies (once)</span>
-<span class="nb">cd</span><span class="w"> </span>apps/truss_console<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>-
+<span class="nb">cd</span><span class="w"> </span>apps/mewbo_console<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>-
 
 <span class="c1"># Start the API</span>
-uv<span class="w"> </span>run<span class="w"> </span>truss-api
+uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
 
 <span class="c1"># Start the console (separate terminal)</span>
-<span class="nb">cd</span><span class="w"> </span>apps/truss_console<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
+<span class="nb">cd</span><span class="w"> </span>apps/mewbo_console<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
 </code></pre></div>
 <p>The console proxies <code>/api/</code> requests to the API at <code>127.0.0.1:5125</code> by default.</p>
 <p>See <a href="../clients-web-api/">Console + API</a> for configuration, auth, and session management.</p>
@@ -1516,11 +1516,11 @@ uv<span class="w"> </span>run<span class="w"> </span>truss-api
 </tbody>
 </table></div>
 <h2 id="configuration">Configuration</h2>
-<p>Truss loads config files from the first directory that contains them, checked in order:</p>
+<p>Mewbo loads config files from the first directory that contains them, checked in order:</p>
 <ol>
 <li><code>CWD/configs/</code>: project-local config (highest priority)</li>
-<li><code>$TRUSS_HOME/</code>: custom home dir if set</li>
-<li><code>~/.truss/</code>: user home fallback</li>
+<li><code>$MEWBO_HOME/</code>: custom home dir if set</li>
+<li><code>~/.mewbo/</code>: user home fallback</li>
 </ol>
 <p>Bootstrap from the example template:</p>
 <div class="codehilite"><pre><span></span><code>cp<span class="w"> </span>configs/app.example.json<span class="w"> </span>configs/app.json
@@ -1551,7 +1551,7 @@ uv<span class="w"> </span>run<span class="w"> </span>truss-api
 </ul>
 <h2 id="first-run">First run</h2>
 <p>After copying and editing <code>configs/app.json</code>:</p>
-<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>truss
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>mewbo
 </code></pre></div>
 <p>On first run, type <code>/init</code> to scaffold any missing config files. A minimal working <code>configs/app.json</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1595,7 +1595,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>pull<span class="w"
 </table></div>
 <p>See <a href="../deployment-docker/">Docker Compose</a> for the full reference: volume mounts, project directories, init scripts, reverse proxy, and runtime config.</p>
 <h2 id="project-instructions">Project instructions</h2>
-<p>Truss discovers <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/rules/*.md</code> files
+<p>Mewbo discovers <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/rules/*.md</code> files
 automatically. The discovery is compatible with the Claude Code and AGENTS.md conventions.</p>
 <p>Place a <code>CLAUDE.md</code> at your project root and it will be loaded at session start.
 Nested packages are handled via an on-demand index: sub-directory instruction files

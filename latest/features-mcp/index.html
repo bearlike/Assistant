@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>External Tools (MCP) - Truss docs</title>
+<title>External Tools (MCP) - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/features-mcp/">
+<link rel="canonical" href="https://docs.mewbo.com/main/features-mcp/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/features-mcp/">
+<meta property="og:url" content="https://docs.mewbo.com/main/features-mcp/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/features-mcp.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/features-mcp.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1422,13 +1422,13 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Model Context Protocol (MCP) tools extend Truss with external tool servers. Any MCP-compatible server can be plugged in via a config file. This includes file systems, databases, APIs, code execution environments, and search engines. Tools contributed by MCP servers appear in the tool registry alongside Truss' built-in tools and are available to every session.</p>
+    <p>Model Context Protocol (MCP) tools extend Mewbo with external tool servers. Any MCP-compatible server can be plugged in via a config file. This includes file systems, databases, APIs, code execution environments, and search engines. Tools contributed by MCP servers appear in the tool registry alongside Mewbo' built-in tools and are available to every session.</p>
 <div class="admonition tip">
 <p class="admonition-title">Drop-in compatible with Claude Code and VS Code</p>
-<p>Truss reads the same <code>.mcp.json</code> / <code>mcp.json</code> schema, accepting both the <code>servers</code> (Truss-native) and <code>mcpServers</code> (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same <code>${VAR}</code> convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official <a href="https://modelcontextprotocol.io">Model Context Protocol</a> specification.</p>
+<p>Mewbo reads the same <code>.mcp.json</code> / <code>mcp.json</code> schema, accepting both the <code>servers</code> (Mewbo-native) and <code>mcpServers</code> (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same <code>${VAR}</code> convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official <a href="https://modelcontextprotocol.io">Model Context Protocol</a> specification.</p>
 </div>
 <h2 id="configuring-mcp-servers">Configuring MCP servers</h2>
-<p>Define the servers you want the assistant to reach through a JSON config. The primary file is <code>configs/mcp.json</code> at the repo root (or <code>$TRUSS_HOME/mcp.json</code> for a global install).</p>
+<p>Define the servers you want the assistant to reach through a JSON config. The primary file is <code>configs/mcp.json</code> at the repo root (or <code>$MEWBO_HOME/mcp.json</code> for a global install).</p>
 <p><strong>Example <code>configs/mcp.json</code>:</strong></p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;servers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -1446,7 +1446,7 @@
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<p><code>${VAR_NAME}</code> and <code>$VAR_NAME</code> patterns are expanded from the process environment at load time. Both <code>"servers"</code> and <code>"mcpServers"</code> (Claude Code / VS Code format) are accepted as the top-level key. Truss normalises them to a common shape internally, so you can drop in config files written for other tools.</p>
+<p><code>${VAR_NAME}</code> and <code>$VAR_NAME</code> patterns are expanded from the process environment at load time. Both <code>"servers"</code> and <code>"mcpServers"</code> (Claude Code / VS Code format) are accepted as the top-level key. Mewbo normalises them to a common shape internally, so you can drop in config files written for other tools.</p>
 <h2 id="supported-transports">Supported transports</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1475,7 +1475,7 @@
 </tbody>
 </table></div>
 <h2 id="tool-discovery">Tool discovery</h2>
-<p>At session start, Truss connects to each configured MCP server, fetches its tool schema, and registers those tools in the registry. Connections are persistent. There is no per-request reconnect overhead, and a config change picks up on the next session.</p>
+<p>At session start, Mewbo connects to each configured MCP server, fetches its tool schema, and registers those tools in the registry. Connections are persistent. There is no per-request reconnect overhead, and a config change picks up on the next session.</p>
 <h2 id="choosing-which-tools-a-session-sees">Choosing which tools a session sees</h2>
 <p>You can control which MCP tools are bound to a session:</p>
 <ul>
@@ -1495,7 +1495,7 @@
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>Both the Truss schema (<code>"servers"</code>) and the Claude Code schema (<code>"mcpServers"</code>) are accepted. See <a href="../project-configuration/#project-level-mcp-configuration">Project Configuration</a> for the full merge reference.</p>
+<p>Both the Mewbo schema (<code>"servers"</code>) and the Claude Code schema (<code>"mcpServers"</code>) are accepted. See <a href="../project-configuration/#project-level-mcp-configuration">Project Configuration</a> for the full merge reference.</p>
 <h2 id="troubleshooting">Troubleshooting</h2>
 <h3 id="mcp-server-x-not-found-in-config">"MCP server 'X' not found in config"</h3>
 <p>The session started without the project directory set correctly, so the project-level <code>.mcp.json</code> was not picked up. Make sure the session has a valid <code>project</code> set and that the project path is mounted (Docker) or accessible on the host.</p>
@@ -1516,7 +1516,7 @@
 </tr>
 <tr>
 <td>Tool schema validation error at startup</td>
-<td>Server returned a schema Truss cannot parse; check server version compatibility.</td>
+<td>Server returned a schema Mewbo cannot parse; check server version compatibility.</td>
 </tr>
 <tr>
 <td><code>Tool 'X' not found on server 'Y' after reconnect</code></td>

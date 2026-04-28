@@ -1,13 +1,13 @@
 # MCP Tools
 
-Model Context Protocol (MCP) tools extend Truss with external tool servers. Any MCP-compatible server can be plugged in via a config file. This includes file systems, databases, APIs, code execution environments, and search engines. Tools contributed by MCP servers appear in the tool registry alongside Truss' built-in tools and are available to every session.
+Model Context Protocol (MCP) tools extend Mewbo with external tool servers. Any MCP-compatible server can be plugged in via a config file. This includes file systems, databases, APIs, code execution environments, and search engines. Tools contributed by MCP servers appear in the tool registry alongside Mewbo' built-in tools and are available to every session.
 
 > [!TIP] Drop-in compatible with Claude Code and VS Code
-> Truss reads the same `.mcp.json` / `mcp.json` schema, accepting both the `servers` (Truss-native) and `mcpServers` (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same `${VAR}` convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official [Model Context Protocol](https://modelcontextprotocol.io) specification.
+> Mewbo reads the same `.mcp.json` / `mcp.json` schema, accepting both the `servers` (Mewbo-native) and `mcpServers` (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same `${VAR}` convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official [Model Context Protocol](https://modelcontextprotocol.io) specification.
 
 ## Configuring MCP servers
 
-Define the servers you want the assistant to reach through a JSON config. The primary file is `configs/mcp.json` at the repo root (or `$TRUSS_HOME/mcp.json` for a global install).
+Define the servers you want the assistant to reach through a JSON config. The primary file is `configs/mcp.json` at the repo root (or `$MEWBO_HOME/mcp.json` for a global install).
 
 **Example `configs/mcp.json`:**
 
@@ -29,7 +29,7 @@ Define the servers you want the assistant to reach through a JSON config. The pr
 }
 ```
 
-`${VAR_NAME}` and `$VAR_NAME` patterns are expanded from the process environment at load time. Both `"servers"` and `"mcpServers"` (Claude Code / VS Code format) are accepted as the top-level key. Truss normalises them to a common shape internally, so you can drop in config files written for other tools.
+`${VAR_NAME}` and `$VAR_NAME` patterns are expanded from the process environment at load time. Both `"servers"` and `"mcpServers"` (Claude Code / VS Code format) are accepted as the top-level key. Mewbo normalises them to a common shape internally, so you can drop in config files written for other tools.
 
 ## Supported transports
 
@@ -41,7 +41,7 @@ Define the servers you want the assistant to reach through a JSON config. The pr
 
 ## Tool discovery
 
-At session start, Truss connects to each configured MCP server, fetches its tool schema, and registers those tools in the registry. Connections are persistent. There is no per-request reconnect overhead, and a config change picks up on the next session.
+At session start, Mewbo connects to each configured MCP server, fetches its tool schema, and registers those tools in the registry. Connections are persistent. There is no per-request reconnect overhead, and a config change picks up on the next session.
 
 ## Choosing which tools a session sees
 
@@ -68,7 +68,7 @@ Drop a `.mcp.json` file at your project root. When you start a session inside th
 }
 ```
 
-Both the Truss schema (`"servers"`) and the Claude Code schema (`"mcpServers"`) are accepted. See [Project Configuration](project-configuration.md#project-level-mcp-configuration) for the full merge reference.
+Both the Mewbo schema (`"servers"`) and the Claude Code schema (`"mcpServers"`) are accepted. See [Project Configuration](project-configuration.md#project-level-mcp-configuration) for the full merge reference.
 
 ## Troubleshooting
 
@@ -85,7 +85,7 @@ Edits to `mcp.json` are picked up on the next session start. Start a new session
 | Symptom | Cause |
 |---------|-------|
 | `ERROR: Connection refused` | Server URL unreachable or the process isn't running. |
-| Tool schema validation error at startup | Server returned a schema Truss cannot parse; check server version compatibility. |
+| Tool schema validation error at startup | Server returned a schema Mewbo cannot parse; check server version compatibility. |
 | `Tool 'X' not found on server 'Y' after reconnect` | The tool was removed from the server between sessions. |
 | Session starts but MCP tools missing | An `allowed_tools` filter excluded them; check the console tool selector or the API payload. |
 

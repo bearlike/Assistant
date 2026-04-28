@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Configuration Reference - Truss docs</title>
+<title>Configuration Reference - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/configuration/">
+<link rel="canonical" href="https://docs.mewbo.com/main/configuration/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/configuration/">
+<meta property="og:url" content="https://docs.mewbo.com/main/configuration/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/configuration.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/configuration.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1424,7 +1424,7 @@
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <!-- AUTO-GENERATED from configs/app.schema.json. Do not edit manually. -->
 <h1 id="configuration-reference">Configuration Reference</h1>
-<p>Truss is configured via <code>configs/app.json</code>. This reference is auto-generated
+<p>Mewbo is configured via <code>configs/app.json</code>. This reference is auto-generated
 from the JSON Schema at <a href="https://github.com/bearlike/Assistant/blob/main/configs/app.schema.json"><code>configs/app.schema.json</code></a>.</p>
 <p>Copy <code>configs/app.example.json</code> to <code>configs/app.json</code> to get started.
 See <a href="../getting-started/">Get Started</a> for the full setup walkthrough.</p>
@@ -1475,19 +1475,19 @@ See <a href="../getting-started/">Get Started</a> for the full setup walkthrough
 <td><code>cache_dir</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Directory for tool caches. Defaults to $TRUSS_HOME/cache. ⚠️</td>
+<td>Directory for tool caches. Defaults to $MEWBO_HOME/cache. ⚠️</td>
 </tr>
 <tr>
 <td><code>session_dir</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Directory for session transcripts. Defaults to $TRUSS_HOME/sessions. ⚠️</td>
+<td>Directory for session transcripts. Defaults to $MEWBO_HOME/sessions. ⚠️</td>
 </tr>
 <tr>
 <td><code>config_dir</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Root configuration directory. Defaults to $TRUSS_HOME. ⚠️</td>
+<td>Root configuration directory. Defaults to $MEWBO_HOME. ⚠️</td>
 </tr>
 <tr>
 <td><code>result_export_dir</code></td>
@@ -1499,7 +1499,7 @@ See <a href="../getting-started/">Get Started</a> for the full setup walkthrough
 <td><code>projects_home</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Directory for virtual project folders. Defaults to $TRUSS_HOME/projects. ⚠️</td>
+<td>Directory for virtual project folders. Defaults to $MEWBO_HOME/projects. ⚠️</td>
 </tr>
 </tbody>
 </table></div>
@@ -2123,7 +2123,7 @@ Reduces output tokens in the compaction summary without changing the
 <td><code>install_path</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Override install path for Truss-managed plugins. Defaults to $TRUSS_HOME/plugins/ (via resolve_truss_home).</td>
+<td>Override install path for Mewbo-managed plugins. Defaults to $MEWBO_HOME/plugins/ (via resolve_mewbo_home).</td>
 </tr>
 </tbody>
 </table></div>

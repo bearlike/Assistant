@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Production Setup - Truss docs</title>
+<title>Production Setup - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/deployment-production/">
+<link rel="canonical" href="https://docs.mewbo.com/main/deployment-production/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/deployment-production/">
+<meta property="og:url" content="https://docs.mewbo.com/main/deployment-production/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/deployment-production.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/deployment-production.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1422,7 +1422,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Running Truss in production means hardening the default Docker Compose setup with TLS termination, proper authentication tokens, CORS restriction, and observability. This page covers the production checklist and the nginx reverse proxy configuration.</p>
+    <p>Running Mewbo in production means hardening the default Docker Compose setup with TLS termination, proper authentication tokens, CORS restriction, and observability. This page covers the production checklist and the nginx reverse proxy configuration.</p>
 <h2 id="security-checklist">Security Checklist</h2>
 <ol>
 <li>
@@ -1433,7 +1433,7 @@
 </li>
 <li>
 <p><strong>Restrict <code>CORS_ORIGIN</code></strong>. The default <code>*</code> allows any origin. In production, set it to your actual domain:
-   <div class="codehilite"><pre><span></span><code>CORS_ORIGIN=https://truss.example.com
+   <div class="codehilite"><pre><span></span><code>CORS_ORIGIN=https://mewbo.example.com
 </code></pre></div></p>
 </li>
 <li>
@@ -1443,20 +1443,20 @@
 <p><strong>Set <code>GITHUB_TOKEN</code> in <code>docker.env</code></strong>. If you mount git repositories, the <code>10-git-setup.sh</code> init script uses this token to configure <code>gh CLI</code> authentication. That lets <code>git fetch/push/pull</code> work without prompts.</p>
 </li>
 <li>
-<p><strong>Change MongoDB credentials</strong>. Update <code>MONGO_INITDB_ROOT_USERNAME</code> and <code>MONGO_INITDB_ROOT_PASSWORD</code> in <code>docker.env</code> from their defaults. Then update <code>TRUSS_MONGODB_URI</code> to match.</p>
+<p><strong>Change MongoDB credentials</strong>. Update <code>MONGO_INITDB_ROOT_USERNAME</code> and <code>MONGO_INITDB_ROOT_PASSWORD</code> in <code>docker.env</code> from their defaults. Then update <code>MEWBO_MONGODB_URI</code> to match.</p>
 </li>
 </ol>
 <h2 id="tls-with-nginx">TLS with nginx</h2>
 <p>The repository includes a ready-to-use nginx reverse proxy config. Install it on the host machine (outside Docker):</p>
-<div class="codehilite"><pre><span></span><code>sudo<span class="w"> </span>ln<span class="w"> </span>-s<span class="w"> </span>/path/to/truss/docker/nginx-reverse-proxy.conf<span class="w"> </span><span class="se">\</span>
-<span class="w">           </span>/etc/nginx/sites-enabled/truss
+<div class="codehilite"><pre><span></span><code>sudo<span class="w"> </span>ln<span class="w"> </span>-s<span class="w"> </span>/path/to/mewbo/docker/nginx-reverse-proxy.conf<span class="w"> </span><span class="se">\</span>
+<span class="w">           </span>/etc/nginx/sites-enabled/mewbo
 sudo<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>sudo<span class="w"> </span>systemctl<span class="w"> </span>reload<span class="w"> </span>nginx
 </code></pre></div>
 <p>Edit the file to set your <code>server_name</code>, <code>ssl_certificate</code>, and <code>ssl_certificate_key</code> before enabling it.</p>
 <p><strong>Full nginx server block (from <code>docker/nginx-reverse-proxy.conf</code>):</strong></p>
 <div class="codehilite"><pre><span></span><code><span class="k">server</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">443</span><span class="w"> </span><span class="s">ssl</span><span class="w"> </span><span class="s">http2</span><span class="p">;</span>
-<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">truss.example.com</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">mewbo.example.com</span><span class="p">;</span>
 
 <span class="w">    </span><span class="kn">ssl_certificate</span><span class="w">     </span><span class="s">/path/to/your/server.crt</span><span class="p">;</span>
 <span class="w">    </span><span class="kn">ssl_certificate_key</span><span class="w"> </span><span class="s">/path/to/your/server.key</span><span class="p">;</span>
@@ -1510,11 +1510,11 @@ sudo<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </sp
 <span class="c1"># HTTP → HTTPS redirect</span>
 <span class="k">server</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">80</span><span class="p">;</span>
-<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">truss.example.com</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">mewbo.example.com</span><span class="p">;</span>
 <span class="w">    </span><span class="kn">return</span><span class="w"> </span><span class="mi">301</span><span class="w"> </span><span class="s">https://</span><span class="nv">$host$request_uri</span><span class="p">;</span>
 <span class="p">}</span>
 </code></pre></div>
-<h3 id="key-nginx-settings-for-truss">Key nginx settings for Truss</h3>
+<h3 id="key-nginx-settings-for-mewbo">Key nginx settings for Mewbo</h3>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1566,7 +1566,7 @@ sudo<span class="w"> </span>nginx<span class="w"> </span>-t<span class="w"> </sp
 curl<span class="w"> </span>-sk<span class="w"> </span>http://localhost:5125/api/tools<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;X-API-Key: your-token&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>length
 
 <span class="c1"># Stream container logs</span>
-docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>truss-api
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>mewbo-api
 
 <span class="c1"># Check container status</span>
 docker<span class="w"> </span>compose<span class="w"> </span>ps
@@ -2754,10 +2754,10 @@ VITE_API_KEY=new-strong-random-token
         </a>
         
         
-        <a href="#key-nginx-settings-for-truss"
+        <a href="#key-nginx-settings-for-mewbo"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#key-nginx-settings-for-truss');">
-            Key nginx settings for Truss
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#key-nginx-settings-for-mewbo');">
+            Key nginx settings for Mewbo
         </a>
         
         

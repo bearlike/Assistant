@@ -1,6 +1,6 @@
 # Production Setup
 
-Running Truss in production means hardening the default Docker Compose setup with TLS termination, proper authentication tokens, CORS restriction, and observability. This page covers the production checklist and the nginx reverse proxy configuration.
+Running Mewbo in production means hardening the default Docker Compose setup with TLS termination, proper authentication tokens, CORS restriction, and observability. This page covers the production checklist and the nginx reverse proxy configuration.
 
 ## Security Checklist
 
@@ -12,22 +12,22 @@ Running Truss in production means hardening the default Docker Compose setup wit
 
 2. **Restrict `CORS_ORIGIN`**. The default `*` allows any origin. In production, set it to your actual domain:
    ```dotenv
-   CORS_ORIGIN=https://truss.example.com
+   CORS_ORIGIN=https://mewbo.example.com
    ```
 
 3. **Use TLS**. Terminate TLS at a reverse proxy such as nginx, Caddy, or Traefik. Never expose the API or console ports directly on a public interface.
 
 4. **Set `GITHUB_TOKEN` in `docker.env`**. If you mount git repositories, the `10-git-setup.sh` init script uses this token to configure `gh CLI` authentication. That lets `git fetch/push/pull` work without prompts.
 
-5. **Change MongoDB credentials**. Update `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD` in `docker.env` from their defaults. Then update `TRUSS_MONGODB_URI` to match.
+5. **Change MongoDB credentials**. Update `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD` in `docker.env` from their defaults. Then update `MEWBO_MONGODB_URI` to match.
 
 ## TLS with nginx
 
 The repository includes a ready-to-use nginx reverse proxy config. Install it on the host machine (outside Docker):
 
 ```bash
-sudo ln -s /path/to/truss/docker/nginx-reverse-proxy.conf \
-           /etc/nginx/sites-enabled/truss
+sudo ln -s /path/to/mewbo/docker/nginx-reverse-proxy.conf \
+           /etc/nginx/sites-enabled/mewbo
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
@@ -38,7 +38,7 @@ Edit the file to set your `server_name`, `ssl_certificate`, and `ssl_certificate
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name truss.example.com;
+    server_name mewbo.example.com;
 
     ssl_certificate     /path/to/your/server.crt;
     ssl_certificate_key /path/to/your/server.key;
@@ -92,12 +92,12 @@ server {
 # HTTP → HTTPS redirect
 server {
     listen 80;
-    server_name truss.example.com;
+    server_name mewbo.example.com;
     return 301 https://$host$request_uri;
 }
 ```
 
-### Key nginx settings for Truss
+### Key nginx settings for Mewbo
 
 | Setting | Why |
 |---------|-----|
@@ -139,7 +139,7 @@ The API does not expose a dedicated health endpoint. Use one of these approaches
 curl -sk http://localhost:5125/api/tools -H "X-API-Key: your-token" | jq length
 
 # Stream container logs
-docker compose logs -f truss-api
+docker compose logs -f mewbo-api
 
 # Check container status
 docker compose ps

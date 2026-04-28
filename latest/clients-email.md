@@ -1,24 +1,24 @@
 # Email
 
 <div style="display: flex; justify-content: center;">
-  <img src="../truss-email-01.jpg" alt="Truss email thread in Gmail" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../mewbo-email-01.jpg" alt="Mewbo email thread in Gmail" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-Truss can be reached via email. Send a message to the configured mailbox and the agent replies with a styled HTML email. Thread replies continue the same session.
+Mewbo can be reached via email. Send a message to the configured mailbox and the agent replies with a styled HTML email. Thread replies continue the same session.
 
 ## How it works
 
-Truss checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel. Session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.
+Mewbo checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel. Session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.
 
 ## Access control
 
 - **`allowed_senders`**: Only emails from listed addresses are processed. All others are silently ignored and marked as read. This is the primary gate.
 - **1-to-1 emails** (single recipient): Always processed. No mention keyword needed.
-- **Multi-party threads** (multiple To/Cc recipients): The agent only responds when `@Truss` appears in the message body.
+- **Multi-party threads** (multiple To/Cc recipients): The agent only responds when `@Mewbo` appears in the message body.
 
 ## Session model
 
-Email threads map to Truss sessions via the `References` and `In-Reply-To` headers:
+Email threads map to Mewbo sessions via the `References` and `In-Reply-To` headers:
 
 - **New email** (no `In-Reply-To`): Creates a new session. Tag: `email:thread:<sender>:<Message-ID>`.
 - **Reply** (has `In-Reply-To` / `References`): Resolves the existing session via the thread root's `Message-ID`.
@@ -51,9 +51,9 @@ Add to `configs/app.json` under `channels`:
   "smtp_host": "smtp.example.com",
   "smtp_port": 587,
   "smtp_starttls": true,
-  "username": "truss@example.com",
+  "username": "mewbo@example.com",
   "password": "app-password-here",
-  "from_address": "Truss <truss@example.com>",
+  "from_address": "Mewbo <mewbo@example.com>",
   "mailbox": "INBOX",
   "poll_interval_seconds": 30,
   "allowed_senders": ["alice@example.com", "bob@example.com"]

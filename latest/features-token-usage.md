@@ -1,6 +1,6 @@
 # Token Usage & Caching
 
-Truss tracks token consumption for every session, splits it between the root agent and any sub-agents it spawns, and surfaces the numbers in the web console, the CLI, and the REST API. Prompt caching slashes the per-turn cost of re-sending system prompts and tool schemas. It auto-enables for capable providers (Anthropic, OpenAI, Bedrock) with no configuration.
+Mewbo tracks token consumption for every session, splits it between the root agent and any sub-agents it spawns, and surfaces the numbers in the web console, the CLI, and the REST API. Prompt caching slashes the per-turn cost of re-sending system prompts and tool schemas. It auto-enables for capable providers (Anthropic, OpenAI, Bedrock) with no configuration.
 
 ---
 
@@ -51,7 +51,7 @@ Cache read and write tokens are zero on models that do not support prompt cachin
 
 ## Root vs sub-agent split
 
-Truss tracks usage separately for the root agent and any sub-agents it spawns. This lets you see at a glance whether token pressure is coming from the orchestrating agent or from the workers it delegated to. A session that spawns many sub-agents will typically show low root pressure alongside high combined sub-agent totals.
+Mewbo tracks usage separately for the root agent and any sub-agents it spawns. This lets you see at a glance whether token pressure is coming from the orchestrating agent or from the workers it delegated to. A session that spawns many sub-agents will typically show low root pressure alongside high combined sub-agent totals.
 
 The console footer and the context-bar popover both show root and sub-agent counts in parallel. The API returns them as separate fields so you can build dashboards that split the two.
 
@@ -154,7 +154,7 @@ These values use the provider-reported input token count from the most recent LL
 
 ## Prompt caching
 
-Truss auto-enables provider prompt caching when the model reports it supports caching. No configuration is required. If you are on a supported model, caching is already on.
+Mewbo auto-enables provider prompt caching when the model reports it supports caching. No configuration is required. If you are on a supported model, caching is already on.
 
 ### Supported providers
 
@@ -168,7 +168,7 @@ The per-provider syntax differences are handled transparently. You interact with
 
 ### Proxy models
 
-When using a proxy (`llm.api_base` is set), the proxy must advertise model capabilities for caching to activate. See the architecture page for details. If the proxy does not report caching support, Truss conservatively leaves caching disabled for that model rather than risk malformed requests.
+When using a proxy (`llm.api_base` is set), the proxy must advertise model capabilities for caching to activate. See the architecture page for details. If the proxy does not report caching support, Mewbo conservatively leaves caching disabled for that model rather than risk malformed requests.
 
 ### Seeing cache savings
 

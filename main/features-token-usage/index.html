@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Token Usage - Truss docs</title>
+<title>Token Usage - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/features-token-usage/">
+<link rel="canonical" href="https://docs.mewbo.com/main/features-token-usage/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/features-token-usage/">
+<meta property="og:url" content="https://docs.mewbo.com/main/features-token-usage/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/features-token-usage.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/features-token-usage.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1422,7 +1422,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Truss tracks token consumption for every session, splits it between the root agent and any sub-agents it spawns, and surfaces the numbers in the web console, the CLI, and the REST API. Prompt caching slashes the per-turn cost of re-sending system prompts and tool schemas. It auto-enables for capable providers (Anthropic, OpenAI, Bedrock) with no configuration.</p>
+    <p>Mewbo tracks token consumption for every session, splits it between the root agent and any sub-agents it spawns, and surfaces the numbers in the web console, the CLI, and the REST API. Prompt caching slashes the per-turn cost of re-sending system prompts and tool schemas. It auto-enables for capable providers (Anthropic, OpenAI, Bedrock) with no configuration.</p>
 <hr />
 <h2 id="the-context-window-bar-console">The context window bar (console)</h2>
 <p>The context window bar sits in the console navbar and in each session's detail header. It shows how full the root agent's context window is right now.</p>
@@ -1516,7 +1516,7 @@
 <p>Cache read and write tokens are zero on models that do not support prompt caching. Reasoning tokens are zero on non-thinking models.</p>
 <hr />
 <h2 id="root-vs-sub-agent-split">Root vs sub-agent split</h2>
-<p>Truss tracks usage separately for the root agent and any sub-agents it spawns. This lets you see at a glance whether token pressure is coming from the orchestrating agent or from the workers it delegated to. A session that spawns many sub-agents will typically show low root pressure alongside high combined sub-agent totals.</p>
+<p>Mewbo tracks usage separately for the root agent and any sub-agents it spawns. This lets you see at a glance whether token pressure is coming from the orchestrating agent or from the workers it delegated to. A session that spawns many sub-agents will typically show low root pressure alongside high combined sub-agent totals.</p>
 <p>The console footer and the context-bar popover both show root and sub-agent counts in parallel. The API returns them as separate fields so you can build dashboards that split the two.</p>
 <p>The console shows current context pressure; the API response exposes the full breakdown (current, peak, and cumulative billable totals) for dashboards and cost tracking.</p>
 <hr />
@@ -1638,7 +1638,7 @@ X-Api-Key: &lt;your-token&gt;
 <p>These values use the provider-reported input token count from the most recent LLM response when available, falling back to a local estimate for sessions that have not yet made a call.</p>
 <hr />
 <h2 id="prompt-caching">Prompt caching</h2>
-<p>Truss auto-enables provider prompt caching when the model reports it supports caching. No configuration is required. If you are on a supported model, caching is already on.</p>
+<p>Mewbo auto-enables provider prompt caching when the model reports it supports caching. No configuration is required. If you are on a supported model, caching is already on.</p>
 <h3 id="supported-providers">Supported providers</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1668,7 +1668,7 @@ X-Api-Key: &lt;your-token&gt;
 </table></div>
 <p>The per-provider syntax differences are handled transparently. You interact with one consistent usage API regardless of which provider is behind it.</p>
 <h3 id="proxy-models">Proxy models</h3>
-<p>When using a proxy (<code>llm.api_base</code> is set), the proxy must advertise model capabilities for caching to activate. See the architecture page for details. If the proxy does not report caching support, Truss conservatively leaves caching disabled for that model rather than risk malformed requests.</p>
+<p>When using a proxy (<code>llm.api_base</code> is set), the proxy must advertise model capabilities for caching to activate. See the architecture page for details. If the proxy does not report caching support, Mewbo conservatively leaves caching disabled for that model rather than risk malformed requests.</p>
 <h3 id="seeing-cache-savings">Seeing cache savings</h3>
 <p>Cache savings appear immediately in the per-turn chip as <strong>cache read</strong> tokens. Accumulated session savings are visible in the context window bar popover under <strong>Cache reads</strong> (with a tooltip noting the per-provider billing rate). The <code>/api/sessions/{id}/usage</code> endpoint surfaces <code>total_cache_read_tokens</code> for programmatic access.</p>
 <hr />

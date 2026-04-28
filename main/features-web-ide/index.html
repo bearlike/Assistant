@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Web IDE - Truss docs</title>
+<title>Web IDE - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/features-web-ide/">
+<link rel="canonical" href="https://docs.mewbo.com/main/features-web-ide/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/features-web-ide/">
+<meta property="og:url" content="https://docs.mewbo.com/main/features-web-ide/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/features-web-ide.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/features-web-ide.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1422,12 +1422,12 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <video controls preload="metadata" poster="../truss-console-01-front.png" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
-  <source src="../truss-console-coder-demo-1.mp4" type="video/mp4" />
+    <video controls preload="metadata" poster="../mewbo-console-01-front.png" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 0 auto;">
+  <source src="../mewbo-console-coder-demo-1.mp4" type="video/mp4" />
   Your browser does not support the video tag.
 </video>
 
-<p>Truss can launch a per-session <a href="https://github.com/coder/code-server">code-server</a> (VS Code in the browser) tied to a session's working directory. This gives you a full IDE alongside the AI. You can review diffs, edit files directly, and run terminals while Truss works in parallel. One container is created per session, started on demand, and automatically stopped after a configurable time-to-live.</p>
+<p>Mewbo can launch a per-session <a href="https://github.com/coder/code-server">code-server</a> (VS Code in the browser) tied to a session's working directory. This gives you a full IDE alongside the AI. You can review diffs, edit files directly, and run terminals while Mewbo works in parallel. One container is created per session, started on demand, and automatically stopped after a configurable time-to-live.</p>
 <h2 id="enabling">Enabling</h2>
 <p>Set <code>agent.web_ide.enabled</code> to <code>true</code> in <code>configs/app.json</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1476,7 +1476,7 @@
 </table></div>
 <p>The <code>POST</code> response includes a one-time <code>password</code> field (omitted from <code>GET</code> responses). The IDE is reachable at <code>/ide/{session_id}/</code> behind the built-in nginx proxy.</p>
 <p><strong>Example.</strong> Create an IDE session:</p>
-<div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-sk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>https://truss.example.com/api/sessions/abc123.../ide<span class="w"> </span><span class="se">\</span>
+<div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-sk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>https://mewbo.example.com/api/sessions/abc123.../ide<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-Key: your-token&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </code></pre></div>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1489,7 +1489,7 @@
 <span class="p">}</span>
 </code></pre></div>
 <p><strong>Extend the deadline:</strong></p>
-<div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-sk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>https://truss.example.com/api/sessions/abc123.../ide/extend<span class="w"> </span><span class="se">\</span>
+<div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-sk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>https://mewbo.example.com/api/sessions/abc123.../ide/extend<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-Key: your-token&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;hours&quot;: 2}&#39;</span>
@@ -1519,7 +1519,7 @@
 </tr>
 <tr>
 <td>Reconnect</td>
-<td><code>POST .../ide</code> on an existing session returns the current URL and password. If the container exited unexpectedly, Truss respawns it automatically.</td>
+<td><code>POST .../ide</code> on an existing session returns the current URL and password. If the container exited unexpectedly, Mewbo respawns it automatically.</td>
 </tr>
 </tbody>
 </table></div>
@@ -1571,12 +1571,12 @@
 </tr>
 <tr>
 <td><code>network</code></td>
-<td><code>truss-ide</code></td>
+<td><code>mewbo-ide</code></td>
 <td>Docker network the containers join.</td>
 </tr>
 <tr>
 <td><code>state_dir</code></td>
-<td><code>/tmp/truss-ide</code></td>
+<td><code>/tmp/mewbo-ide</code></td>
 <td>Host directory used for bookkeeping files.</td>
 </tr>
 </tbody>

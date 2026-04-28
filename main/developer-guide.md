@@ -3,21 +3,21 @@
 This page summarizes the code layout, core interfaces, and the minimal steps needed to build a new client.
 
 ## Monorepo layout
-- `packages/truss_core/`: orchestration loop, session runtime, schemas, session storage, compaction, tool registry, plugin system (`plugins.py`), agent definition registry (`agent_registry.py`).
-- `packages/truss_tools/`: tool implementations and integration glue.
-- `packages/truss_tools/src/truss_tools/vendor/aider`: vendored Aider utilities used by local file and shell tools.
-- `apps/truss_api/`: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (`ide.py`, `ide_routes.py`).
-- `apps/truss_console/`: Web console for task orchestration, plugin management, and Web IDE access (React + Vite).
-- `apps/truss_cli/`: terminal CLI for interactive sessions.
-- `truss_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
+- `packages/mewbo_core/`: orchestration loop, session runtime, schemas, session storage, compaction, tool registry, plugin system (`plugins.py`), agent definition registry (`agent_registry.py`).
+- `packages/mewbo_tools/`: tool implementations and integration glue.
+- `packages/mewbo_tools/src/mewbo_tools/vendor/aider`: vendored Aider utilities used by local file and shell tools.
+- `apps/mewbo_api/`: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (`ide.py`, `ide_routes.py`).
+- `apps/mewbo_console/`: Web console for task orchestration, plugin management, and Web IDE access (React + Vite).
+- `apps/mewbo_cli/`: terminal CLI for interactive sessions.
+- `mewbo_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
 
 ## Project instructions (`CLAUDE.md` / `AGENTS.md`)
 
-The orchestrator loads project instructions from the working directory and injects them into the system prompt. `discover_project_instructions()` in `truss_core.common` checks for `CLAUDE.md` first, then falls back to `AGENTS.md`.
+The orchestrator loads project instructions from the working directory and injects them into the system prompt. `discover_project_instructions()` in `mewbo_core.common` checks for `CLAUDE.md` first, then falls back to `AGENTS.md`.
 
 - Place a `CLAUDE.md` at the repo root or in any sub-package to provide context-specific guidance to the orchestration loop.
 - `AGENTS.md` is a fallback for tools that look for that filename. In this repo the `AGENTS.md` files are shims that redirect to `CLAUDE.md`.
-- To **skip** a file from being loaded (e.g., a shim that would duplicate content), add `<!-- truss:noload -->` as the very first line. The loader checks for this marker and skips the file.
+- To **skip** a file from being loaded (e.g., a shim that would duplicate content), add `<!-- mewbo:noload -->` as the very first line. The loader checks for this marker and skips the file.
 
 ## Model and provider support
 - **Model gateway:** Uses LiteLLM for OpenAI-compatible access across multiple providers.
@@ -25,17 +25,17 @@ The orchestrator loads project instructions from the working directory and injec
 - **Model routing:** Supports provider-qualified model names and a configurable API base URL. Per-role model selection (plan, tool, default) is configured in `configs/app.json`.
 
 ## Core abstractions and interfaces
-- `AbstractTool` (`truss_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
-- `ToolRunner` protocol (`truss_core.tool_registry`): interface for tool runners with `run(ActionStep)`.
-- `ToolSpec` / `ToolRegistry` (`truss_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config. The value is either `aider_edit_block_tool` or `file_edit_tool`. When `edit_tool` is empty, `ToolUseLoop` auto-selects based on model identity via `model_prefers_structured_patch()`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
-- `PluginSystem` (`truss_core.plugins`): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by `agent_registry.py`), skills, hooks, and MCP tool configurations. Loaded via `load_all_plugin_components()` during session init.
-- `ActionStep`, `Plan`, `TaskQueue` (`truss_core.classes`): planning and tool-execution payloads.
-- `PermissionPolicy` (`truss_core.permissions`): allow/deny/ask rules for tool execution.
-- `HookManager` (`truss_core.hooks`): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports `"command"` (shell) and `"http"` (fire-and-forget POST) hook types via `HooksConfig`.
-- `ChannelAdapter` protocol (`truss_api.channels.base`): abstraction for chat platform integrations with four methods (`verify_request`, `parse_inbound`, `send_response`, `system_context`). All adapters share the `_process_inbound()` pipeline in `routes.py`. Current adapters: Nextcloud Talk (webhook-driven) and Email (IMAP polling with SMTP replies rendered as HTML from markdown).
-- `SessionStore` / `SessionRuntime` (`truss_core.session_store`, `truss_core.session_runtime`): transcripts and the shared runtime facade.
-- `ChatModel` protocol (`truss_core.llm`): interface for LLM backends via `build_chat_model`. Supports `proxy_model_prefix` for proxy routing and `model_prefers_structured_patch()` for edit tool auto-selection.
-- `LSPTool` (`truss_tools.integration.lsp.tool`): code intelligence via pygls language servers. Operations: `diagnostics`, `definition`, `references`, `hover`. Servers are `ServerDef` instances in `lsp/servers.py`, matched by file extension and auto-discovered on the PATH. Passive diagnostics are injected after file edits via `_append_lsp_feedback` in `ToolUseLoop`. Config: `agent.lsp.enabled` and `agent.lsp.servers` (override built-ins or add custom servers). Requires the `pygls` optional dependency; silently absent when not installed.
+- `AbstractTool` (`mewbo_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
+- `ToolRunner` protocol (`mewbo_core.tool_registry`): interface for tool runners with `run(ActionStep)`.
+- `ToolSpec` / `ToolRegistry` (`mewbo_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config. The value is either `aider_edit_block_tool` or `file_edit_tool`. When `edit_tool` is empty, `ToolUseLoop` auto-selects based on model identity via `model_prefers_structured_patch()`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
+- `PluginSystem` (`mewbo_core.plugins`): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by `agent_registry.py`), skills, hooks, and MCP tool configurations. Loaded via `load_all_plugin_components()` during session init.
+- `ActionStep`, `Plan`, `TaskQueue` (`mewbo_core.classes`): planning and tool-execution payloads.
+- `PermissionPolicy` (`mewbo_core.permissions`): allow/deny/ask rules for tool execution.
+- `HookManager` (`mewbo_core.hooks`): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports `"command"` (shell) and `"http"` (fire-and-forget POST) hook types via `HooksConfig`.
+- `ChannelAdapter` protocol (`mewbo_api.channels.base`): abstraction for chat platform integrations with four methods (`verify_request`, `parse_inbound`, `send_response`, `system_context`). All adapters share the `_process_inbound()` pipeline in `routes.py`. Current adapters: Nextcloud Talk (webhook-driven) and Email (IMAP polling with SMTP replies rendered as HTML from markdown).
+- `SessionStore` / `SessionRuntime` (`mewbo_core.session_store`, `mewbo_core.session_runtime`): transcripts and the shared runtime facade.
+- `ChatModel` protocol (`mewbo_core.llm`): interface for LLM backends via `build_chat_model`. Supports `proxy_model_prefix` for proxy routing and `model_prefers_structured_patch()` for edit tool auto-selection.
+- `LSPTool` (`mewbo_tools.integration.lsp.tool`): code intelligence via pygls language servers. Operations: `diagnostics`, `definition`, `references`, `hover`. Servers are `ServerDef` instances in `lsp/servers.py`, matched by file extension and auto-discovered on the PATH. Passive diagnostics are injected after file edits via `_append_lsp_feedback` in `ToolUseLoop`. Config: `agent.lsp.enabled` and `agent.lsp.servers` (override built-ins or add custom servers). Requires the `pygls` optional dependency; silently absent when not installed.
 
 ## New client walkthrough (concrete steps)
 1. Load config and initialize core services:
@@ -59,11 +59,11 @@ The orchestrator loads project instructions from the working directory and injec
 
 ### Minimal sync example
 ```python
-from truss_core.common import get_logger
-from truss_core.permissions import approval_callback_from_config, load_permission_policy
-from truss_core.session_runtime import SessionRuntime, parse_core_command
-from truss_core.session_store import SessionStore
-from truss_core.tool_registry import load_registry
+from mewbo_core.common import get_logger
+from mewbo_core.permissions import approval_callback_from_config, load_permission_policy
+from mewbo_core.session_runtime import SessionRuntime, parse_core_command
+from mewbo_core.session_store import SessionStore
+from mewbo_core.tool_registry import load_registry
 
 logger = get_logger("client")
 
@@ -92,9 +92,9 @@ else:
 2. Register the tool with a `ToolSpec` factory in the registry.
 
 ```python
-from truss_core.classes import AbstractTool, ActionStep
-from truss_core.common import get_mock_speaker
-from truss_core.tool_registry import ToolRegistry, ToolSpec
+from mewbo_core.classes import AbstractTool, ActionStep
+from mewbo_core.common import get_mock_speaker
+from mewbo_core.tool_registry import ToolRegistry, ToolSpec
 
 class ExampleTool(AbstractTool):
     def __init__(self) -> None:
@@ -119,7 +119,7 @@ registry.register(
 
 ## New channel adapter walkthrough
 
-Channel adapters connect external chat platforms (Nextcloud Talk, Email, Slack, Discord, etc.) to Truss. All adapters share the same inbound pipeline and produce standard API sessions visible in the console and Langfuse.
+Channel adapters connect external chat platforms (Nextcloud Talk, Email, Slack, Discord, etc.) to Mewbo. All adapters share the same inbound pipeline and produce standard API sessions visible in the console and Langfuse.
 
 ### Architecture
 
@@ -138,7 +138,7 @@ flowchart TD
     K --> L["adapter.send_response()"]
 ```
 
-Key files in `apps/truss_api/src/truss_api/channels/`:
+Key files in `apps/mewbo_api/src/mewbo_api/channels/`:
 
 | File | Purpose |
 |------|---------|
@@ -164,13 +164,13 @@ Key files in `apps/truss_api/src/truss_api/channels/`:
 
 4. **For poll-driven channels** (like Email's IMAP poller): create a daemon thread that polls the external source and calls `_process_inbound()` directly, bypassing the webhook route.
 
-5. **Optionally implement `requires_mention(message)`.** Return `False` to skip the mention gate for specific message types. For example, Email skips mentions for 1-to-1 but requires `@Truss` in multi-party threads.
+5. **Optionally implement `requires_mention(message)`.** Return `False` to skip the mention gate for specific message types. For example, Email skips mentions for 1-to-1 but requires `@Mewbo` in multi-party threads.
 
 6. **Add platform-specific slash commands** (optional). Use the `@command` decorator in `routes.py`. Help text auto-generates from the registry.
 
 ### Session mapping
 
-Channel sessions use session tags to map platform threads to Truss sessions.
+Channel sessions use session tags to map platform threads to Mewbo sessions.
 
 - **Tag format:** `"<platform>:<scope>:<id>"` (for example, `nextcloud-talk:room:abc123` or `email:thread:alice@example.com:msg-id-001`).
 - The `_process_inbound()` pipeline calls `session_store.resolve_tag(tag)` to look up an existing session. If no session exists, it creates one with `create_session()` and binds it with `tag_session()`.
@@ -197,9 +197,9 @@ Commands run without LLM invocation. Adding a new command is one `@command` deco
 
 The `read_file` tool (`tool_id: "read_file"`) is a native built-in for reading local files with line-based windowing and a dedup cache that prevents redundant reads from bloating the LLM's context.
 
-**Implementation:** `packages/truss_tools/src/truss_tools/integration/aider_file_tools.py` (`ReadFileTool` class)
-**Registration:** `packages/truss_core/src/truss_core/tool_registry.py`
-**Prompt:** `packages/truss_core/src/truss_core/prompts/tools/read-file.txt`
+**Implementation:** `packages/mewbo_tools/src/mewbo_tools/integration/aider_file_tools.py` (`ReadFileTool` class)
+**Registration:** `packages/mewbo_core/src/mewbo_core/tool_registry.py`
+**Prompt:** `packages/mewbo_core/src/mewbo_core/prompts/tools/read-file.txt`
 
 ### Parameters
 

@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Troubleshooting - Truss docs</title>
+<title>Troubleshooting - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/troubleshooting/">
+<link rel="canonical" href="https://docs.mewbo.com/main/troubleshooting/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/troubleshooting/">
+<meta property="og:url" content="https://docs.mewbo.com/main/troubleshooting/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/troubleshooting.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/troubleshooting.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1458,13 +1458,13 @@
 <li>Both services use host networking. Verify nothing else is on ports 5125 or 3001.</li>
 <li><code>HOST_UID</code> and <code>HOST_GID</code> must match your actual user: run <code>id</code> to find them.</li>
 <li>Volume paths must match exactly between host and container.</li>
-<li>Check logs: <code>docker compose logs -f truss-api</code>.</li>
+<li>Check logs: <code>docker compose logs -f mewbo-api</code>.</li>
 </ol>
 <h2 id="session-stuck-not-completing">Session stuck / not completing</h2>
 <p><strong>Symptom:</strong> Session runs for a very long time or appears to stall.</p>
 <p>Notes:</p>
 <ul>
-<li>Truss uses a natural-completion loop. It runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.</li>
+<li>Mewbo uses a natural-completion loop. It runs until the LLM emits text with no tool calls. There is no hard step limit enforced at runtime.</li>
 <li>Budget warnings are injected as messages as the context window fills up.</li>
 <li>If a session appears stuck, use mid-session steering:</li>
 </ul>
@@ -1476,18 +1476,18 @@
 <p><strong>Symptom:</strong> API starts but Web IDE or storage fails; MongoDB connection errors in logs.</p>
 <p>Checks:</p>
 <ol>
-<li><code>TRUSS_STORAGE_DRIVER=mongodb</code> is set in the environment.</li>
-<li><code>TRUSS_MONGODB_URI</code> format: <code>mongodb://user:pass@host:27017/dbname?authSource=admin</code>.</li>
+<li><code>MEWBO_STORAGE_DRIVER=mongodb</code> is set in the environment.</li>
+<li><code>MEWBO_MONGODB_URI</code> format: <code>mongodb://user:pass@host:27017/dbname?authSource=admin</code>.</li>
 <li>In Docker: MongoDB must be on the same network or accessible via host networking.</li>
 <li>Default production port: <code>27017</code>. (Port <code>27018</code> is used for direct dev-environment access.)</li>
 </ol>
 <h2 id="getting-logs">Getting logs</h2>
 <p><strong>CLI verbose mode:</strong></p>
-<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>truss<span class="w"> </span>-v<span class="w">    </span><span class="c1"># debug</span>
-uv<span class="w"> </span>run<span class="w"> </span>truss<span class="w"> </span>-vv<span class="w">   </span><span class="c1"># trace (very verbose)</span>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>mewbo<span class="w"> </span>-v<span class="w">    </span><span class="c1"># debug</span>
+uv<span class="w"> </span>run<span class="w"> </span>mewbo<span class="w"> </span>-vv<span class="w">   </span><span class="c1"># trace (very verbose)</span>
 </code></pre></div>
 <p><strong>Docker API logs:</strong></p>
-<div class="codehilite"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>truss-api
+<div class="codehilite"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>mewbo-api
 </code></pre></div>
 <p><strong>Langfuse traces</strong> (if enabled):</p>
 <p>Session traces appear grouped by <code>session_id</code>. Look for <code>done_reason: "error"</code> in completion events.

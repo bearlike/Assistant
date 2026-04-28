@@ -573,16 +573,16 @@
           "default": "mongodb://localhost:27017",
           "description": "MongoDB connection URI (includes host, port, credentials).",
           "examples": [
-            "mongodb://user:pass@localhost:27017/truss?authSource=admin"
+            "mongodb://user:pass@localhost:27017/mewbo?authSource=admin"
           ],
           "title": "Uri",
           "type": "string"
         },
         "database": {
-          "default": "truss",
+          "default": "mewbo",
           "description": "MongoDB database name for session storage.",
           "examples": [
-            "truss"
+            "mewbo"
           ],
           "title": "Database",
           "type": "string"
@@ -643,7 +643,7 @@
         },
         "install_path": {
           "default": "",
-          "description": "Override install path for Truss-managed plugins. Defaults to $TRUSS_HOME/plugins/ (via resolve_truss_home).",
+          "description": "Override install path for Mewbo-managed plugins. Defaults to $MEWBO_HOME/plugins/ (via resolve_mewbo_home).",
           "title": "Install Path",
           "type": "string"
         }
@@ -739,9 +739,9 @@
         },
         "cache_dir": {
           "default": "",
-          "description": "Directory for tool caches. Defaults to $TRUSS_HOME/cache.",
+          "description": "Directory for tool caches. Defaults to $MEWBO_HOME/cache.",
           "examples": [
-            "~/.truss/cache"
+            "~/.mewbo/cache"
           ],
           "title": "Cache Dir",
           "type": "string",
@@ -749,9 +749,9 @@
         },
         "session_dir": {
           "default": "",
-          "description": "Directory for session transcripts. Defaults to $TRUSS_HOME/sessions.",
+          "description": "Directory for session transcripts. Defaults to $MEWBO_HOME/sessions.",
           "examples": [
-            "~/.truss/sessions"
+            "~/.mewbo/sessions"
           ],
           "title": "Session Dir",
           "type": "string",
@@ -759,9 +759,9 @@
         },
         "config_dir": {
           "default": "",
-          "description": "Root configuration directory. Defaults to $TRUSS_HOME.",
+          "description": "Root configuration directory. Defaults to $MEWBO_HOME.",
           "examples": [
-            "~/.truss"
+            "~/.mewbo"
           ],
           "title": "Config Dir",
           "type": "string",
@@ -771,16 +771,16 @@
           "default": "",
           "description": "Directory for large tool result exports. Empty to disable.",
           "examples": [
-            "/tmp/truss-results"
+            "/tmp/mewbo-results"
           ],
           "title": "Result Export Dir",
           "type": "string"
         },
         "projects_home": {
           "default": "",
-          "description": "Directory for virtual project folders. Defaults to $TRUSS_HOME/projects.",
+          "description": "Directory for virtual project folders. Defaults to $MEWBO_HOME/projects.",
           "examples": [
-            "~/.truss/projects"
+            "~/.mewbo/projects"
           ],
           "title": "Projects Home",
           "type": "string",
@@ -911,13 +911,13 @@
           "type": "integer"
         },
         "network": {
-          "default": "truss-ide",
+          "default": "mewbo-ide",
           "pattern": "^[a-zA-Z0-9_-]+$",
           "title": "Network",
           "type": "string"
         },
         "state_dir": {
-          "default": "/tmp/truss-ide",
+          "default": "/tmp/mewbo-ide",
           "title": "State Dir",
           "type": "string"
         }
@@ -926,7 +926,7 @@
       "type": "object"
     }
   },
-  "description": "Typed configuration for the Truss runtime.",
+  "description": "Typed configuration for the Mewbo runtime.",
   "properties": {
     "runtime": {
       "$ref": "#/$defs/RuntimeConfig"

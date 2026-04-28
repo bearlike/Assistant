@@ -1,6 +1,6 @@
 # Sub-agents
 
-Truss can spawn child agents to work on independent subtasks in parallel. The root agent acts as an orchestrator: it delegates bounded work to sub-agents, monitors their progress, collects structured results, and synthesises a final answer. Sub-agents inherit the parent's permission policy, tool registry, and session context, so they can pick up a task and run with it without re-authorising every tool call.
+Mewbo can spawn child agents to work on independent subtasks in parallel. The root agent acts as an orchestrator: it delegates bounded work to sub-agents, monitors their progress, collects structured results, and synthesises a final answer. Sub-agents inherit the parent's permission policy, tool registry, and session context, so they can pick up a task and run with it without re-authorising every tool call.
 
 For setup and installation, see [Getting Started](getting-started.md).
 

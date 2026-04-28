@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Home Assistant - Truss docs</title>
+<title>Home Assistant - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/clients-home-assistant/">
+<link rel="canonical" href="https://docs.mewbo.com/main/clients-home-assistant/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/clients-home-assistant/">
+<meta property="og:url" content="https://docs.mewbo.com/main/clients-home-assistant/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/clients-home-assistant.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/clients-home-assistant.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1427,31 +1427,31 @@
   <img src="../screenshot_ha_assist_2.png" alt="HA Assist control entities screenshot" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-<p>The Home Assistant integration lives in <code>truss_ha_conversation/</code> and proxies voice requests to the API. It is designed for hands-free voice control: HA handles wake words and intent capture, then forwards the request to the API for orchestration and responses.</p>
+<p>The Home Assistant integration lives in <code>mewbo_ha_conversation/</code> and proxies voice requests to the API. It is designed for hands-free voice control: HA handles wake words and intent capture, then forwards the request to the API for orchestration and responses.</p>
 <p>See <a href="../getting-started/#ha-setup">Get Started</a> for installation prerequisites.</p>
 <h2 id="how-it-works">How it works</h2>
-<p>Voice requests flow through the HA Assist pipeline, which forwards the transcript to the Truss API. The API runs the orchestration loop and returns a text response that HA Assist reads aloud.</p>
+<p>Voice requests flow through the HA Assist pipeline, which forwards the transcript to the Mewbo API. The API runs the orchestration loop and returns a text response that HA Assist reads aloud.</p>
 <pre class="mermaid"><code>sequenceDiagram
     participant User
     participant HA as Home Assistant
-    participant API as Truss API
+    participant API as Mewbo API
 
     User-&gt;&gt;HA: voice utterance (wake word + query)
     HA-&gt;&gt;API: POST /api/sessions/{id}/query
     API--&gt;&gt;HA: session events (streamed)
     HA--&gt;&gt;User: TTS response</code></pre>
-<p>The custom component handles session creation and maps HA conversation threads to Truss sessions via session tags.</p>
+<p>The custom component handles session creation and maps HA conversation threads to Mewbo sessions via session tags.</p>
 <h2 id="install-the-custom-component">Install the custom component</h2>
 <ol>
 <li>Ensure the API is running (see <a href="../clients-web-api/">Web + API</a>).</li>
-<li>Copy the contents of <code>truss_ha_conversation/</code> into Home Assistant under
-   <code>custom_components/truss_conversation/</code>.</li>
-<li>In Home Assistant, add the "Truss" conversation integration and set:</li>
+<li>Copy the contents of <code>mewbo_ha_conversation/</code> into Home Assistant under
+   <code>custom_components/mewbo_conversation/</code>.</li>
+<li>In Home Assistant, add the "Mewbo" conversation integration and set:</li>
 <li>Base URL: the API base URL (for example, <code>http://host:5123</code>).</li>
 <li>API key: the API master token (<code>api.master_token</code> in <code>configs/app.json</code>).</li>
 </ol>
 <h2 id="optional-enable-the-home-assistant-tool">Optional: enable the Home Assistant tool</h2>
-<p>If Truss should control Home Assistant entities directly:
+<p>If Mewbo should control Home Assistant entities directly:
 - Set <code>home_assistant.enabled</code> to <code>true</code> in <code>configs/app.json</code>.
 - Provide the Home Assistant URL and token in <code>home_assistant.*</code>.</p>
   </div>

@@ -1,6 +1,6 @@
 # Built-in Tools
 
-Truss ships a set of first-party tools that every session has available by default. These tools cover the full local-development surface. You get reading files, editing them, running shell commands, and browsing directory trees. Because they are bundled with the core, no MCP server or external process is required. They activate the moment a session starts.
+Mewbo ships a set of first-party tools that every session has available by default. These tools cover the full local-development surface. You get reading files, editing them, running shell commands, and browsing directory trees. Because they are bundled with the core, no MCP server or external process is required. They activate the moment a session starts.
 
 This page documents every built-in tool, its parameters, example output, and the configuration switches that control which editing backend is active.
 
@@ -22,10 +22,10 @@ For setup and installation, see [Getting Started](getting-started.md). For tool 
 
 ## read_file
 
-`read_file` reads a local file and returns its content with 1-based line numbers, mirroring `cat -n` output. Reads are line-windowed: the default window is 2 000 lines, and `offset` / `limit` let the session page through arbitrarily large files without exhausting the context window. Truss also deduplicates repeated reads of the same slice so the same content does not consume context twice. In the web console, every `read_file` call renders as an expandable card in the session timeline showing the project, file path, and the exact line window the assistant pulled into context.
+`read_file` reads a local file and returns its content with 1-based line numbers, mirroring `cat -n` output. Reads are line-windowed: the default window is 2 000 lines, and `offset` / `limit` let the session page through arbitrarily large files without exhausting the context window. Mewbo also deduplicates repeated reads of the same slice so the same content does not consume context twice. In the web console, every `read_file` call renders as an expandable card in the session timeline showing the project, file path, and the exact line window the assistant pulled into context.
 
 <div style="display: flex; justify-content: center;">
-  <img src="../truss-console-file-read-log.jpg" alt="A read_file tool card in the Truss console showing lines 81 through 90 of a 733-line litellm-config.yml with a truncated tag" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../mewbo-console-file-read-log.jpg" alt="A read_file tool card in the Mewbo console showing lines 81 through 90 of a 733-line litellm-config.yml with a truncated tag" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 ### Parameters
@@ -65,10 +65,10 @@ Read lines 200–400 of a large source file:
 
 ## File editing
 
-Truss has two editing backends. Both apply edits atomically and return a unified diff so you can see exactly what changed. In the web console, every file edit is rendered as an expandable diff card in the session timeline, with line-level additions and deletions highlighted in green and red.
+Mewbo has two editing backends. Both apply edits atomically and return a unified diff so you can see exactly what changed. In the web console, every file edit is rendered as an expandable diff card in the session timeline, with line-level additions and deletions highlighted in green and red.
 
 <div style="display: flex; justify-content: center;">
-  <img src="../truss-console-04-file-edit.jpg" alt="A file-edit tool card in the Truss console showing a unified diff with +23 additions and -2 deletions" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../mewbo-console-04-file-edit.jpg" alt="A file-edit tool card in the Mewbo console showing a unified diff with +23 additions and -2 deletions" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 The active backend for a session is chosen automatically based on the model, or you can pin it via [`agent.edit_tool`](configuration.md#agentconfig) in `configs/app.json`.
@@ -144,7 +144,7 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 `aider_shell_tool` runs an arbitrary shell command and returns stdout, stderr, exit code, and wall-clock duration. In the web console, every shell call renders as a terminal card in the session timeline with the command, the working directory, and the captured output so you can review exactly what the assistant ran.
 
 <div style="display: flex; justify-content: center;">
-  <img src="../truss-console-shell-log.jpg" alt="A shell tool card in the Truss console showing a gh release list command with its JSON response and a 348ms duration" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../mewbo-console-shell-log.jpg" alt="A shell tool card in the Mewbo console showing a gh release list command with its JSON response and a 348ms duration" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 ### Parameters
@@ -202,7 +202,7 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 
 ## Configuring the edit tool
 
-When `agent.edit_tool` is empty (the default), Truss picks the right backend for the active model automatically. Override it only when you want to force a single backend regardless of which model is running.
+When `agent.edit_tool` is empty (the default), Mewbo picks the right backend for the active model automatically. Override it only when you want to force a single backend regardless of which model is running.
 
 | Value | Backend | When to use |
 |---|---|---|

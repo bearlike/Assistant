@@ -1,10 +1,10 @@
 # Widgets
 
 <div style="display: flex; justify-content: center;">
-  <img src="../truss-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Truss Console" style="width: 100%; max-width: 960px; height: auto;" />
+  <img src="../mewbo-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Mewbo Console" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
 
-Ask Truss to visualise a result and an interactive widget appears inline in the conversation — right where the answer landed, no separate tabs, no external tools.
+Ask Mewbo to visualise a result and an interactive widget appears inline in the conversation — right where the answer landed, no separate tabs, no external tools.
 
 ---
 
@@ -46,7 +46,7 @@ The sub-agent picks from a built-in library of ready-made components — repo ca
 
 ## Availability
 
-Widgets are exclusive to the **Truss Console**. The console signals widget support to the API on each request; sessions from the CLI, REST API, email, and chat adapters will not see the widget-builder. The feature is on by default — no configuration needed.
+Widgets are exclusive to the **Mewbo Console**. The console signals widget support to the API on each request; sessions from the CLI, REST API, email, and chat adapters will not see the widget-builder. The feature is on by default — no configuration needed.
 
 > [!NOTE] Going deeper
 > See [Plugins & Marketplace](features-plugins.md) for the capability model that gates the feature per surface, and [Architecture Overview](core-orchestration.md) for the session-tool protocol and component authoring contract.
