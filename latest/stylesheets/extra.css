@@ -13,6 +13,18 @@
    ───────────────────────────────────────────────────────────────────────── */
 @view-transition { navigation: auto; }
 
+/* When navigating TO a page whose named elements (header, toc) have no
+   counterpart on the source page (e.g. switching versions where the old
+   build predates the custom header/toc templates), the browser fades those
+   elements in from invisible — making them appear to momentarily disappear.
+   Setting duration to 0 makes them appear instantly instead. */
+::view-transition-new(header):only-child,
+::view-transition-old(header):only-child,
+::view-transition-new(toc):only-child,
+::view-transition-old(toc):only-child {
+  animation-duration: 0s;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after, ::backdrop {
     animation-duration: 0.01ms !important;
@@ -191,6 +203,58 @@ article hr + *,
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+   Heading wrap fix — prevent page-level headings from breaking mid-word on
+   narrow viewports.
+
+   Root cause: the theme sets `word-break: break-all` on h1 in @layer base,
+   which fragments at every character rather than at word boundaries.
+   Overriding to `normal` means line breaks only happen at spaces; pairing
+   with `overflow-wrap: break-word` still handles truly unbreakable tokens
+   (long URLs, identifiers) gracefully without mid-character cuts.
+
+   `clamp()` font-size scales h1 and h2 down smoothly on phones so a typical
+   heading (10–20 chars) fits on one line at ~360 px viewport width while
+   still reaching full size above the md breakpoint.
+
+   UI chrome labels (sidebar group headers, TOC title) are short fixed
+   strings we control, so `white-space: nowrap` + ellipsis is safe.
+   ───────────────────────────────────────────────────────────────────────── */
+
+article h1,
+.md-content h1 {
+  word-break: normal;
+  overflow-wrap: break-word;
+  font-size: clamp(1.6rem, 5.5vw, 2.25rem);
+}
+
+article h2,
+.md-content h2 {
+  word-break: normal;
+  overflow-wrap: break-word;
+  font-size: clamp(1.15rem, 4vw, 1.5rem);
+}
+
+article h3,
+.md-content h3 {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+/* Sidebar group label: short fixed label that should not wrap in the narrow
+   sidebar column. */
+.mewbo-sidebar-group-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* TOC section heading ("On this page"): already height-constrained to 1.5rem;
+   nowrap keeps it on one line when the TOC panel is narrow. */
+.mewbo-toc__heading {
+  white-space: nowrap;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    Mobile navigation dialog. The override at overrides/templates/bottom_sidebar.html
    simply includes the desktop sidebar (templates/sidebar.html) inside a
    full-viewport <dialog>, so the mobile menu reuses the exact same items,
@@ -284,6 +348,20 @@ article .admonition > p.admonition-title iconify-icon,
   height: 1rem;
   color: var(--adm-accent);
 }
+
+/* Space-holder shown until icon-inject.js fires (before DOMContentLoaded).
+   Uses :not(:has(iconify-icon)) so it disappears the moment the element
+   is injected — no flash, no inline SVGs. */
+article .admonition > p.admonition-title:not(:has(iconify-icon))::before,
+.md-content .admonition > p.admonition-title:not(:has(iconify-icon))::before {
+  content: "·";
+  flex: 0 0 1rem;
+  text-align: center;
+  color: var(--adm-accent);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
 
 /* Body paragraphs: shadcn sets them inline too; force block and tighten spacing. */
 article .admonition > p:not(.admonition-title),
