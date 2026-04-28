@@ -1,6 +1,6 @@
 # Permissions & Hooks
 
-Truss runs every tool call through a **permission policy** before it executes, and lets you wire **hooks** into session lifecycle events and individual tool calls. Together they give you a security boundary and a clean place to hang automation. Think notifications, audit logging, webhook fan-out, and external guardrails.
+Mewbo runs every tool call through a **permission policy** before it executes, and lets you wire **hooks** into session lifecycle events and individual tool calls. Together they give you a security boundary and a clean place to hang automation. Think notifications, audit logging, webhook fan-out, and external guardrails.
 
 **Quick example.** Auto-approve all tool calls in the current session:
 
@@ -22,7 +22,7 @@ Or configure it globally:
 
 ### The three outcomes
 
-Every tool call carries a `tool_id` (which tool it is, e.g. `aider_shell_tool`, `file_edit_tool`, `mcp__my_server__my_tool`) and an `operation` (what kind of action it is, e.g. `get`, `set`). Before the call runs, Truss consults your policy and resolves to one of three outcomes:
+Every tool call carries a `tool_id` (which tool it is, e.g. `aider_shell_tool`, `file_edit_tool`, `mcp__my_server__my_tool`) and an `operation` (what kind of action it is, e.g. `get`, `set`). Before the call runs, Mewbo consults your policy and resolves to one of three outcomes:
 
 | Decision | Meaning |
 |----------|---------|
@@ -30,7 +30,7 @@ Every tool call carries a `tool_id` (which tool it is, e.g. `aider_shell_tool`, 
 | `deny` | Block unconditionally |
 | `ask` | Prompt the user. On the CLI this is an interactive prompt; in the console it is an approval card |
 
-Rules are evaluated in order; the first match wins. If no rule matches, Truss falls back to per-operation defaults (`get` → `allow`, `set` → `ask`) and then to a catch-all `default_decision`.
+Rules are evaluated in order; the first match wins. If no rule matches, Mewbo falls back to per-operation defaults (`get` → `allow`, `set` → `ask`) and then to a catch-all `default_decision`.
 
 ### Rule syntax
 
@@ -104,17 +104,17 @@ Hooks run custom code at specific moments in a session's life. They are declared
 
 #### Command hooks
 
-A command hook runs a shell command. Truss waits up to `timeout` seconds (default 30) for the process to finish before moving on. Use this when you want the hook to complete before the session continues, for example when prepping a workspace at session start.
+A command hook runs a shell command. Mewbo waits up to `timeout` seconds (default 30) for the process to finish before moving on. Use this when you want the hook to complete before the session continues, for example when prepping a workspace at session start.
 
-Truss sets these environment variables on the subprocess:
+Mewbo sets these environment variables on the subprocess:
 
 | Variable | Available in | Value |
 |----------|-------------|-------|
-| `TRUSS_SESSION_ID` | `on_session_start`, `on_session_end` | Session identifier |
-| `TRUSS_ERROR` | `on_session_end` (error cases only) | Error message string |
-| `TRUSS_TOOL_ID` | `pre_tool_use`, `post_tool_use` | Tool identifier |
-| `TRUSS_OPERATION` | `pre_tool_use`, `post_tool_use` | Operation name |
-| `TRUSS_TOOL_RESULT` | `post_tool_use` | First 2 000 characters of the result |
+| `MEWBO_SESSION_ID` | `on_session_start`, `on_session_end` | Session identifier |
+| `MEWBO_ERROR` | `on_session_end` (error cases only) | Error message string |
+| `MEWBO_TOOL_ID` | `pre_tool_use`, `post_tool_use` | Tool identifier |
+| `MEWBO_OPERATION` | `pre_tool_use`, `post_tool_use` | Operation name |
+| `MEWBO_TOOL_RESULT` | `post_tool_use` | First 2 000 characters of the result |
 
 Example. Send a desktop notification when a session ends:
 
@@ -123,7 +123,7 @@ Example. Send a desktop notification when a session ends:
   "on_session_end": [
     {
       "type": "command",
-      "command": "notify-send 'Truss' \"Session $TRUSS_SESSION_ID done\"",
+      "command": "notify-send 'Mewbo' \"Session $MEWBO_SESSION_ID done\"",
       "timeout": 5
     }
   ]
@@ -132,7 +132,7 @@ Example. Send a desktop notification when a session ends:
 
 #### HTTP hooks
 
-An HTTP hook posts a JSON body to a URL. HTTP hooks are non-blocking. Truss does not wait for the response, and failures are logged rather than raised. Use this when you want to feed Truss events into a webhook, audit log, or chat integration without slowing the agent down.
+An HTTP hook posts a JSON body to a URL. HTTP hooks are non-blocking. Mewbo does not wait for the response, and failures are logged rather than raised. Use this when you want to feed Mewbo events into a webhook, audit log, or chat integration without slowing the agent down.
 
 Payload for `on_session_end`:
 
@@ -162,7 +162,7 @@ Example. Notify an external webhook:
   "on_session_end": [
     {
       "type": "http",
-      "url": "https://your-webhook.example.com/truss",
+      "url": "https://your-webhook.example.com/mewbo",
       "headers": { "Authorization": "Bearer YOUR_TOKEN" },
       "timeout": 10
     }
@@ -204,7 +204,7 @@ Add a `matcher` (an `fnmatch` pattern) to any hook entry to restrict which tool 
   "on_session_start": [
     {
       "type": "command",
-      "command": "logger -t truss \"Session $TRUSS_SESSION_ID started\"",
+      "command": "logger -t mewbo \"Session $MEWBO_SESSION_ID started\"",
       "timeout": 3
     }
   ],

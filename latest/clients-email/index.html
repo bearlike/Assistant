@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Email - Truss docs</title>
+<title>Email - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/clients-email/">
+<link rel="canonical" href="https://docs.mewbo.com/main/clients-email/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/clients-email/">
+<meta property="og:url" content="https://docs.mewbo.com/main/clients-email/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/clients-email.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/clients-email.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1423,20 +1423,20 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <div style="display: flex; justify-content: center;">
-  <img src="../truss-email-01.jpg" alt="Truss email thread in Gmail" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../mewbo-email-01.jpg" alt="Mewbo email thread in Gmail" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
-<p>Truss can be reached via email. Send a message to the configured mailbox and the agent replies with a styled HTML email. Thread replies continue the same session.</p>
+<p>Mewbo can be reached via email. Send a message to the configured mailbox and the agent replies with a styled HTML email. Thread replies continue the same session.</p>
 <h2 id="how-it-works">How it works</h2>
-<p>Truss checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel. Session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.</p>
+<p>Mewbo checks your inbox for new messages on an interval. Each new email goes through the same pipeline as any other channel. Session resolution, slash command handling, and LLM invocation all behave identically to the web console or Nextcloud Talk. Replies are sent back over SMTP as multipart emails that include both a styled HTML body and a plain-text fallback.</p>
 <h2 id="access-control">Access control</h2>
 <ul>
 <li><strong><code>allowed_senders</code></strong>: Only emails from listed addresses are processed. All others are silently ignored and marked as read. This is the primary gate.</li>
 <li><strong>1-to-1 emails</strong> (single recipient): Always processed. No mention keyword needed.</li>
-<li><strong>Multi-party threads</strong> (multiple To/Cc recipients): The agent only responds when <code>@Truss</code> appears in the message body.</li>
+<li><strong>Multi-party threads</strong> (multiple To/Cc recipients): The agent only responds when <code>@Mewbo</code> appears in the message body.</li>
 </ul>
 <h2 id="session-model">Session model</h2>
-<p>Email threads map to Truss sessions via the <code>References</code> and <code>In-Reply-To</code> headers:</p>
+<p>Email threads map to Mewbo sessions via the <code>References</code> and <code>In-Reply-To</code> headers:</p>
 <ul>
 <li><strong>New email</strong> (no <code>In-Reply-To</code>): Creates a new session. Tag: <code>email:thread:&lt;sender&gt;:&lt;Message-ID&gt;</code>.</li>
 <li><strong>Reply</strong> (has <code>In-Reply-To</code> / <code>References</code>): Resolves the existing session via the thread root's <code>Message-ID</code>.</li>
@@ -1481,9 +1481,9 @@
 <span class="w">  </span><span class="nt">&quot;smtp_host&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;smtp.example.com&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;smtp_port&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">587</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;smtp_starttls&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;truss@example.com&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;username&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mewbo@example.com&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;password&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;app-password-here&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;from_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Truss &lt;truss@example.com&gt;&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;from_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Mewbo &lt;mewbo@example.com&gt;&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;mailbox&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;INBOX&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;poll_interval_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;allowed_senders&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;alice@example.com&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;bob@example.com&quot;</span><span class="p">]</span>

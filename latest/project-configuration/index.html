@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Project Setup - Truss docs</title>
+<title>Project Setup - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/project-configuration/">
+<link rel="canonical" href="https://docs.mewbo.com/main/project-configuration/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/project-configuration/">
+<meta property="og:url" content="https://docs.mewbo.com/main/project-configuration/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/project-configuration.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/project-configuration.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1422,16 +1422,16 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>When you start a session, Truss looks for a <code>CLAUDE.md</code> in your project, walks up the directory tree to the git root collecting any parent <code>CLAUDE.md</code> files, and injects them into the assistant's context. Deeper nested <code>CLAUDE.md</code> files (inside sub-packages) are indexed but not injected. The assistant reads them on demand with <code>read_file</code> when work reaches that directory.</p>
+    <p>When you start a session, Mewbo looks for a <code>CLAUDE.md</code> in your project, walks up the directory tree to the git root collecting any parent <code>CLAUDE.md</code> files, and injects them into the assistant's context. Deeper nested <code>CLAUDE.md</code> files (inside sub-packages) are indexed but not injected. The assistant reads them on demand with <code>read_file</code> when work reaches that directory.</p>
 <p>The same mechanism handles MCP tool configuration, skills, and local overrides.</p>
 <div class="admonition tip">
 <p class="admonition-title">Drop-in compatible with common agent conventions</p>
-<p>Truss reads both the <a href="https://docs.claude.com/en/docs/claude-code/memory">Claude Code</a> <code>CLAUDE.md</code> format and the open <a href="https://agents.md"><code>AGENTS.md</code></a> convention used by Codex, Aider, and other agent frameworks. MCP servers follow the <a href="https://modelcontextprotocol.io">Model Context Protocol</a> and accept both <code>servers</code> (Truss) and <code>mcpServers</code> (Claude Code / VS Code) keys. Skills follow the <a href="https://docs.claude.com/en/api/agent-skills">Agent Skills</a> standard. If you already use any of these tools, your existing project files work in Truss without modification.</p>
+<p>Mewbo reads both the <a href="https://docs.claude.com/en/docs/claude-code/memory">Claude Code</a> <code>CLAUDE.md</code> format and the open <a href="https://agents.md"><code>AGENTS.md</code></a> convention used by Codex, Aider, and other agent frameworks. MCP servers follow the <a href="https://modelcontextprotocol.io">Model Context Protocol</a> and accept both <code>servers</code> (Mewbo) and <code>mcpServers</code> (Claude Code / VS Code) keys. Skills follow the <a href="https://docs.claude.com/en/api/agent-skills">Agent Skills</a> standard. If you already use any of these tools, your existing project files work in Mewbo without modification.</p>
 </div>
 <hr />
 <h2 id="instruction-file-loading">Instruction file loading</h2>
 <h3 id="upward-pass-content-injected-at-startup">Upward pass: content injected at startup</h3>
-<p>At session start, Truss walks up from your current working directory to the git root (or the filesystem root if you are not in a repo) and loads every instruction file it finds along the way. The full text of each file is concatenated and injected into the system prompt before the first LLM call. Each source is separated by a heading, so the assistant can tell where a rule came from.</p>
+<p>At session start, Mewbo walks up from your current working directory to the git root (or the filesystem root if you are not in a repo) and loads every instruction file it finds along the way. The full text of each file is concatenated and injected into the system prompt before the first LLM call. Each source is separated by a heading, so the assistant can tell where a rule came from.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1465,26 +1465,26 @@
 </table></div>
 <p>Lower priority means lower precedence. Higher-priority content wins on conflict. If both <code>CLAUDE.md</code> and <code>AGENTS.md</code> exist at the same path, <code>CLAUDE.md</code> takes precedence and <code>AGENTS.md</code> is treated as a fallback.</p>
 <h3 id="downward-pass-context-map-for-on-demand-loading">Downward pass: context map for on-demand loading</h3>
-<p>Truss also scans <em>down</em> from your working directory to a maximum depth of 5, looking for <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/CLAUDE.md</code> in subdirectories. Critically, the content of these files is <strong>not</strong> injected. Only the file paths are collected and listed in the system prompt, like so:</p>
+<p>Mewbo also scans <em>down</em> from your working directory to a maximum depth of 5, looking for <code>CLAUDE.md</code>, <code>AGENTS.md</code>, and <code>.claude/CLAUDE.md</code> in subdirectories. Critically, the content of these files is <strong>not</strong> injected. Only the file paths are collected and listed in the system prompt, like so:</p>
 <div class="codehilite"><pre><span></span><code># Sub-package instruction files
 
 The following instruction files exist in subdirectories.
 Read them when working on the relevant package.
 
-- packages/truss_core/CLAUDE.md
-- apps/truss_console/CLAUDE.md
-- apps/truss_api/AGENTS.md
+- packages/mewbo_core/CLAUDE.md
+- apps/mewbo_console/CLAUDE.md
+- apps/mewbo_api/AGENTS.md
 </code></pre></div>
 <p>When the assistant begins work in one of those directories, it reads the appropriate file with <code>read_file</code> before proceeding. This keeps large monorepos manageable: only the directly applicable instructions are in the active context, and nested package instructions are fetched on demand.</p>
 <p><strong>Pruned directories</strong> (never walked): <code>node_modules</code>, <code>__pycache__</code>, <code>.venv</code>, <code>venv</code>, and all dotfile directories (<code>.git</code>, <code>.claude</code>, etc.).</p>
 <h3 id="noload-marker">Noload marker</h3>
-<p>Add <code>&lt;!-- truss:noload --&gt;</code> as the very first line of any instruction file to exclude it from both passes. The loader checks the first line before reading the rest of the file.</p>
+<p>Add <code>&lt;!-- mewbo:noload --&gt;</code> as the very first line of any instruction file to exclude it from both passes. The loader checks the first line before reading the rest of the file.</p>
 <p>Use this for shim files that redirect to another <code>CLAUDE.md</code> (so you do not get duplicate injection):</p>
-<div class="codehilite"><pre><span></span><code>&lt;!-- truss:noload --&gt;
+<div class="codehilite"><pre><span></span><code>&lt;!-- mewbo:noload --&gt;
 See ../CLAUDE.md. This file exists only for tool compatibility.
 </code></pre></div>
 <h3 id="git-context">Git context</h3>
-<p>Truss can include git branch and status in the session context, so the assistant knows what branch you are on and what has changed since the last commit. Individual integrations (the CLI, specific skills) opt in to this. It is not always injected.</p>
+<p>Mewbo can include git branch and status in the session context, so the assistant knows what branch you are on and what has changed since the last commit. Individual integrations (the CLI, specific skills) opt in to this. It is not always injected.</p>
 <hr />
 <h2 id="project-level-mcp-configuration">Project-level MCP configuration</h2>
 <h3 id="config-merge-order">Config merge order</h3>
@@ -1505,7 +1505,7 @@ See ../CLAUDE.md. This file exists only for tool compatibility.
 </tr>
 <tr>
 <td>2</td>
-<td>Global: <code>configs/mcp.json</code> or <code>$TRUSS_HOME/mcp.json</code></td>
+<td>Global: <code>configs/mcp.json</code> or <code>$MEWBO_HOME/mcp.json</code></td>
 <td>Mid</td>
 </tr>
 <tr>
@@ -1521,7 +1521,7 @@ See ../CLAUDE.md. This file exists only for tool compatibility.
 </tbody>
 </table></div>
 <p>The practical rule: <strong>your CWD <code>.mcp.json</code> wins over the global one</strong>, and subtree <code>.mcp.json</code> files deeper in the tree are merged in too. A project <code>.mcp.json</code> that adds a single server key leaves all global server definitions intact.</p>
-<p>Truss re-runs this merge whenever the MCP pool reconnects, so edits to any <code>.mcp.json</code> in the hierarchy are picked up automatically. Unchanged servers keep their existing connections; changed or new servers reconnect; removed servers disconnect.</p>
+<p>Mewbo re-runs this merge whenever the MCP pool reconnects, so edits to any <code>.mcp.json</code> in the hierarchy are picked up automatically. Unchanged servers keep their existing connections; changed or new servers reconnect; removed servers disconnect.</p>
 <h3 id="config-normalization">Config normalization</h3>
 <p>All <code>.mcp.json</code> files are normalized before merging, so you can mix schemas freely:</p>
 <div class="table-wrapper"><table>

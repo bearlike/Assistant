@@ -2,84 +2,84 @@
 
 This page is generated from inline docstrings via mkdocstrings. The sections below are grouped by package or client.
 
-## packages/truss_core (core runtime)
-::: truss_core.orchestrator
+## packages/mewbo_core (core runtime)
+::: mewbo_core.orchestrator
 
-::: truss_core.task_master
+::: mewbo_core.task_master
 
-::: truss_core.tool_use_loop
+::: mewbo_core.tool_use_loop
 
-::: truss_core.agent_context
+::: mewbo_core.agent_context
 
-::: truss_core.hypervisor
+::: mewbo_core.hypervisor
 
-::: truss_core.spawn_agent
+::: mewbo_core.spawn_agent
 
-::: truss_core.planning
+::: mewbo_core.planning
 
-::: truss_core.session_runtime
+::: mewbo_core.session_runtime
 
-::: truss_core.session_store
+::: mewbo_core.session_store
 
-::: truss_core.context
+::: mewbo_core.context
 
-::: truss_core.compaction
+::: mewbo_core.compaction
 
-::: truss_core.token_budget
+::: mewbo_core.token_budget
 
-::: truss_core.tool_registry
+::: mewbo_core.tool_registry
 
-::: truss_core.classes
+::: mewbo_core.classes
 
-::: truss_core.types
+::: mewbo_core.types
 
-::: truss_core.config
+::: mewbo_core.config
 
-::: truss_core.components
+::: mewbo_core.components
 
-::: truss_core.permissions
+::: mewbo_core.permissions
 
-::: truss_core.hooks
+::: mewbo_core.hooks
 
-::: truss_core.common
+::: mewbo_core.common
 
-::: truss_core.errors
+::: mewbo_core.errors
 
-::: truss_core.notifications
+::: mewbo_core.notifications
 
-::: truss_core.share_store
+::: mewbo_core.share_store
 
-::: truss_core.llm
+::: mewbo_core.llm
 
-::: truss_core.plugins
+::: mewbo_core.plugins
 
-::: truss_core.agent_registry
+::: mewbo_core.agent_registry
 
-## packages/truss_tools (tool integrations)
-::: truss_tools.integration.mcp
+## packages/mewbo_tools (tool integrations)
+::: mewbo_tools.integration.mcp
 
-::: truss_tools.integration.homeassistant
+::: mewbo_tools.integration.homeassistant
 
-::: truss_tools.integration.lsp
+::: mewbo_tools.integration.lsp
 
-::: truss_tools.integration.lsp.manager
+::: mewbo_tools.integration.lsp.manager
 
-::: truss_tools.integration.lsp.servers
+::: mewbo_tools.integration.lsp.servers
 
 ## Clients (apps/)
-- API entry point: `apps/truss_api/src/truss_api/backend.py`
-- Console: `apps/truss_console/` (React + Vite, connects via REST API)
-- CLI entry point: `apps/truss_cli/src/truss_cli/cli_master.py`
+- API entry point: `apps/mewbo_api/src/mewbo_api/backend.py`
+- Console: `apps/mewbo_console/` (React + Vite, connects via REST API)
+- CLI entry point: `apps/mewbo_cli/src/mewbo_cli/cli_master.py`
 
-## Home Assistant integration (truss_ha_conversation)
-::: truss_ha_conversation.api
+## Home Assistant integration (mewbo_ha_conversation)
+::: mewbo_ha_conversation.api
 
-::: truss_ha_conversation.config_flow
+::: mewbo_ha_conversation.config_flow
 
-::: truss_ha_conversation.const
+::: mewbo_ha_conversation.const
 
-::: truss_ha_conversation.coordinator
+::: mewbo_ha_conversation.coordinator
 
-::: truss_ha_conversation.exceptions
+::: mewbo_ha_conversation.exceptions
 
-::: truss_ha_conversation.helpers
+::: mewbo_ha_conversation.helpers

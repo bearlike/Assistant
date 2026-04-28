@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Docker Compose - Truss docs</title>
+<title>Docker Compose - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/deployment-docker/">
+<link rel="canonical" href="https://docs.mewbo.com/main/deployment-docker/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/deployment-docker/">
+<meta property="og:url" content="https://docs.mewbo.com/main/deployment-docker/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/deployment-docker.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/deployment-docker.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1422,7 +1422,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>The recommended way to run Truss in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single <code>docker compose up</code> starts the full stack. It includes the API, console, MongoDB, and the nginx proxy for the Web IDE feature.</p>
+    <p>The recommended way to run Mewbo in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single <code>docker compose up</code> starts the full stack. It includes the API, console, MongoDB, and the nginx proxy for the Web IDE feature.</p>
 <h2 id="quick-start">Quick Start</h2>
 <p><strong>Step 1. Copy the environment template:</strong></p>
 <div class="codehilite"><pre><span></span><code>cp<span class="w"> </span>docker.example.env<span class="w"> </span>docker.env
@@ -1517,13 +1517,13 @@ HOST_UID=1000                            # output of `id -u`
 <tr>
 <td><code>MONGO_INITDB_ROOT_USERNAME</code></td>
 <td>No</td>
-<td><code>truss</code></td>
+<td><code>mewbo</code></td>
 <td>MongoDB root username.</td>
 </tr>
 <tr>
 <td><code>MONGO_INITDB_ROOT_PASSWORD</code></td>
 <td>No</td>
-<td><code>truss</code></td>
+<td><code>mewbo</code></td>
 <td>MongoDB root password. Change this in production.</td>
 </tr>
 </tbody>
@@ -1543,13 +1543,13 @@ HOST_UID=1000                            # output of `id -u`
 <tbody>
 <tr>
 <td><code>api</code></td>
-<td><code>ghcr.io/bearlike/truss-api</code></td>
+<td><code>ghcr.io/bearlike/mewbo-api</code></td>
 <td><code>5125</code></td>
 <td>Gunicorn + Flask REST API. Runs as <code>HOST_UID:HOST_GID</code>.</td>
 </tr>
 <tr>
 <td><code>console</code></td>
-<td><code>ghcr.io/bearlike/truss-console</code></td>
+<td><code>ghcr.io/bearlike/mewbo-console</code></td>
 <td><code>3001</code></td>
 <td>nginx serving the React SPA. Proxies <code>/api/</code> to the API.</td>
 </tr>
@@ -1567,7 +1567,7 @@ HOST_UID=1000                            # output of `id -u`
 </tr>
 </tbody>
 </table></div>
-<p>Both <code>api</code> and <code>console</code> use <strong>host networking</strong> (<code>network_mode: host</code>), so they share <code>127.0.0.1</code> with the host. The <code>ide-proxy</code> runs on the <code>truss-ide</code> bridge network and is bound to loopback by default.</p>
+<p>Both <code>api</code> and <code>console</code> use <strong>host networking</strong> (<code>network_mode: host</code>), so they share <code>127.0.0.1</code> with the host. The <code>ide-proxy</code> runs on the <code>mewbo-ide</code> bridge network and is bound to loopback by default.</p>
 <h2 id="named-volumes">Named Volumes</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1590,7 +1590,7 @@ HOST_UID=1000                            # output of `id -u`
 </tr>
 <tr>
 <td><code>plans-data</code></td>
-<td><code>/tmp/truss/plans</code></td>
+<td><code>/tmp/mewbo/plans</code></td>
 <td>Plan-mode scratch files (survive restarts).</td>
 </tr>
 </tbody>
@@ -1650,15 +1650,15 @@ HOST_UID=1000                            # output of `id -u`
 </thead>
 <tbody>
 <tr>
-<td><code>ghcr.io/bearlike/truss-api</code></td>
+<td><code>ghcr.io/bearlike/mewbo-api</code></td>
 <td>REST API (Gunicorn + Flask).</td>
 </tr>
 <tr>
-<td><code>ghcr.io/bearlike/truss-console</code></td>
+<td><code>ghcr.io/bearlike/mewbo-console</code></td>
 <td>Web console (nginx + React SPA).</td>
 </tr>
 <tr>
-<td><code>ghcr.io/bearlike/truss-base</code></td>
+<td><code>ghcr.io/bearlike/mewbo-base</code></td>
 <td>Base image with Python, Node, and core packages. Used as build arg for the API image.</td>
 </tr>
 </tbody>

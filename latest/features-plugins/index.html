@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Plugins & Marketplace - Truss docs</title>
+<title>Plugins & Marketplace - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/features-plugins/">
+<link rel="canonical" href="https://docs.mewbo.com/main/features-plugins/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/features-plugins/">
+<meta property="og:url" content="https://docs.mewbo.com/main/features-plugins/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/features-plugins.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/features-plugins.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1423,13 +1423,13 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <div style="display: flex; justify-content: center;">
-  <img src="../truss-console-05-plugins.png" alt="The Plugins page in the Truss console showing four installed plugins and a marketplace listing with install buttons" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../mewbo-console-05-plugins.png" alt="The Plugins page in the Mewbo console showing four installed plugins and a marketplace listing with install buttons" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-<p>Plugins extend Truss with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory. They activate automatically at session start without a restart. Plugins are first-class citizens. A plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.</p>
+<p>Plugins extend Mewbo with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory. They activate automatically at session start without a restart. Plugins are first-class citizens. A plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.</p>
 <div class="admonition tip">
 <p class="admonition-title">Drop-in compatible with Claude Code plugins</p>
-<p>Truss reads the exact same <a href="https://docs.claude.com/en/docs/claude-code/plugins">Claude Code plugin</a> manifest, directory layout (<code>.claude-plugin/plugin.json</code>, <code>agents/</code>, <code>skills/</code>, <code>hooks/hooks.json</code>, <code>.mcp.json</code>), and marketplace format. The default marketplace is the <a href="https://github.com/anthropics/claude-plugins-official">official Claude plugins marketplace</a>. Any private marketplace that follows the Claude Code marketplace schema works too. Point <code>plugins.marketplaces</code> at the repo and it loads without translation. Plugins authored for Claude Code work in Truss unchanged.</p>
+<p>Mewbo reads the exact same <a href="https://docs.claude.com/en/docs/claude-code/plugins">Claude Code plugin</a> manifest, directory layout (<code>.claude-plugin/plugin.json</code>, <code>agents/</code>, <code>skills/</code>, <code>hooks/hooks.json</code>, <code>.mcp.json</code>), and marketplace format. The default marketplace is the <a href="https://github.com/anthropics/claude-plugins-official">official Claude plugins marketplace</a>. Any private marketplace that follows the Claude Code marketplace schema works too. Point <code>plugins.marketplaces</code> at the repo and it loads without translation. Plugins authored for Claude Code work in Mewbo unchanged.</p>
 </div>
 <p>For setup and installation, see <a href="../getting-started/">Getting Started</a>.</p>
 <hr />
@@ -1555,7 +1555,7 @@
 <td>The current session's id</td>
 </tr>
 <tr>
-<td><code>${TRUSS_WIDGET_ROOT}</code></td>
+<td><code>${MEWBO_WIDGET_ROOT}</code></td>
 <td>Widget output root (widget-builder only); <code>:-</code> default syntax supported</td>
 </tr>
 </tbody>
@@ -1638,7 +1638,7 @@
 <td><code>plugins.install_path</code></td>
 <td>string</td>
 <td><code>""</code></td>
-<td>Override for the plugin cache directory; defaults to <code>$TRUSS_HOME/plugins/</code></td>
+<td>Override for the plugin cache directory; defaults to <code>$MEWBO_HOME/plugins/</code></td>
 </tr>
 </tbody>
 </table></div>
@@ -1653,14 +1653,14 @@
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>When <code>marketplaces</code> lists repos that are not yet cloned locally, Truss shallow-clones them the first time you browse or install. Subsequent runs use the local cache; a fast-forward <code>git pull</code> keeps it up to date.</p>
+<p>When <code>marketplaces</code> lists repos that are not yet cloned locally, Mewbo shallow-clones them the first time you browse or install. Subsequent runs use the local cache; a fast-forward <code>git pull</code> keeps it up to date.</p>
 <p>Plugin skills never override personal (<code>~/.claude/skills/</code>) or project-local (<code>.claude/skills/</code>) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name.</p>
 <hr />
 <h2 id="capability-gating">Capability gating</h2>
 <p>A plugin can declare that its agents, skills, and session tools only make sense on sessions that advertise a specific capability — for instance, the widget-builder bundle only makes sense when the client has an stlite runtime.</p>
 <p>Capabilities flow top-down:</p>
 <ol>
-<li>The <strong>client</strong> announces its capabilities on every request. The web console sends <code>X-Truss-Capabilities: stlite</code> by default. Other clients (CLI, webhook adapters) send nothing unless configured to.</li>
+<li>The <strong>client</strong> announces its capabilities on every request. The web console sends <code>X-Mewbo-Capabilities: stlite</code> by default. Other clients (CLI, webhook adapters) send nothing unless configured to.</li>
 <li>The <strong>API</strong> writes the advertised list onto the session's context event.</li>
 <li>The <strong>orchestrator</strong> resolves <code>session_capabilities</code> once per session and passes the tuple to <code>ToolUseLoop</code>.</li>
 <li>The <strong>registries</strong> apply <code>filter_by_capabilities</code> before rendering the agent and skill catalogs. An entry whose <code>requires-capabilities</code> is not a subset of the session's set is invisible — no tool schema, no catalog line, no accidental invocation.</li>
@@ -1687,7 +1687,7 @@
 <span class="w">  </span><span class="nt">&quot;session_tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
 <span class="w">      </span><span class="nt">&quot;tool_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;submit_widget&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;truss_core.builtin_plugins.widget_builder.submit_widget&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;module&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mewbo_core.builtin_plugins.widget_builder.submit_widget&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;class&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;SubmitWidgetTool&quot;</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">]</span>
@@ -1729,7 +1729,7 @@
 <p>This keeps core widget-agnostic: the full contract for a capability bundle is <strong>(a)</strong> a plugin manifest and <strong>(b)</strong> a Python class that satisfies the protocol.</p>
 <hr />
 <h2 id="built-in-plugins">Built-in plugins</h2>
-<p>Some plugins ship inside the core package at <code>packages/truss_core/src/truss_core/builtin_plugins/</code>. They are discovered through the same plugin pipeline as user and marketplace plugins — byte-for-byte normal plugins, indistinguishable except for their location on the scan path. No <code>installed_plugins.json</code> entry is needed.</p>
+<p>Some plugins ship inside the core package at <code>packages/mewbo_core/src/mewbo_core/builtin_plugins/</code>. They are discovered through the same plugin pipeline as user and marketplace plugins — byte-for-byte normal plugins, indistinguishable except for their location on the scan path. No <code>installed_plugins.json</code> entry is needed.</p>
 <p>Currently bundled:</p>
 <div class="table-wrapper"><table>
 <thead>
@@ -1751,7 +1751,7 @@
 <hr />
 <h2 id="writing-a-local-plugin">Writing a local plugin</h2>
 <p>To develop a plugin locally before publishing it to a marketplace, place the plugin directory anywhere on disk and point <code>plugins.registry_paths</code> at a custom <code>installed_plugins.json</code> that references it. Alternatively, use the CLI install flow with a <code>./relative-path</code> source in a local <code>marketplace.json</code>.</p>
-<p>The minimum viable plugin is a directory containing only <code>.claude-plugin/plugin.json</code>. Everything else (<code>skills/</code>, <code>agents/</code>, <code>hooks/</code>, <code>.mcp.json</code>, <code>session_tools</code>) is optional and discovered automatically. The bundled <a href="../features-widgets/">widget-builder</a> is a complete working example — see <code>packages/truss_core/src/truss_core/builtin_plugins/widget_builder/</code>.</p>
+<p>The minimum viable plugin is a directory containing only <code>.claude-plugin/plugin.json</code>. Everything else (<code>skills/</code>, <code>agents/</code>, <code>hooks/</code>, <code>.mcp.json</code>, <code>session_tools</code>) is optional and discovered automatically. The bundled <a href="../features-widgets/">widget-builder</a> is a complete working example — see <code>packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/</code>.</p>
 <hr />
 <div class="admonition note">
 <p class="admonition-title">How it works internally</p>

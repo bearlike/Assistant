@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Plan Mode - Truss docs</title>
+<title>Plan Mode - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/features-plan-mode/">
+<link rel="canonical" href="https://docs.mewbo.com/main/features-plan-mode/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/features-plan-mode/">
+<meta property="og:url" content="https://docs.mewbo.com/main/features-plan-mode/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/features-plan-mode.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/features-plan-mode.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1423,14 +1423,14 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <div style="display: flex; justify-content: center;">
-  <img src="../truss-console-03-plan-approval.jpg" alt="A plan in the Truss console showing a rejected draft and a revised plan awaiting approval" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../mewbo-console-03-plan-approval.jpg" alt="A plan in the Mewbo console showing a rejected draft and a revised plan awaiting approval" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-<p>By default Truss runs in <strong>act mode</strong>: the model calls tools as soon as it decides to, and each call executes immediately. That is usually what you want for quick, low-risk work. For anything destructive, complex, or unfamiliar, switch to <strong>plan mode</strong>. In plan mode the assistant explores your workspace with read-only tools, drafts a step-by-step plan to a session-scoped file you can inspect, and then pauses for your approval before a single write or shell command runs. It gives you a checkpoint between "I want this done" and "the agent is changing my files."</p>
+<p>By default Mewbo runs in <strong>act mode</strong>: the model calls tools as soon as it decides to, and each call executes immediately. That is usually what you want for quick, low-risk work. For anything destructive, complex, or unfamiliar, switch to <strong>plan mode</strong>. In plan mode the assistant explores your workspace with read-only tools, drafts a step-by-step plan to a session-scoped file you can inspect, and then pauses for your approval before a single write or shell command runs. It gives you a checkpoint between "I want this done" and "the agent is changing my files."</p>
 <p><strong>Quick example.</strong> Switch the CLI to plan mode:</p>
 <div class="codehilite"><pre><span></span><code>/mode plan
 </code></pre></div>
-<p>Then send your request. Truss drafts the plan and waits for you to type <code>/approve</code> (or click the Approve button in the console) before it starts executing.</p>
+<p>Then send your request. Mewbo drafts the plan and waits for you to type <code>/approve</code> (or click the Approve button in the console) before it starts executing.</p>
 <hr />
 <h2 id="switching-modes">Switching modes</h2>
 <p>You can change mode from the CLI, the web console, or the REST API. The mode is per-session state and resets to <code>act</code> when you start a new session.</p>
@@ -1455,13 +1455,13 @@
 <ol>
 <li><strong>Exploration.</strong> The model reads files, lists directories, and runs read-only shell commands to build up an understanding of the task. Write tools are blocked during this phase, so nothing on disk changes.</li>
 <li><strong>Proposal.</strong> The model drafts the plan to a session-scoped scratch file (you can open it from the console or read it from the session directory) and then signals that it is ready for review. The CLI and the console show you the plan and wait.</li>
-<li><strong>Decision.</strong> You either approve or reject the plan. On approval, Truss switches to act mode and carries it out. On rejection you can add free-text feedback. The model receives that feedback as context and produces a revised plan.</li>
+<li><strong>Decision.</strong> You either approve or reject the plan. On approval, Mewbo switches to act mode and carries it out. On rejection you can add free-text feedback. The model receives that feedback as context and produces a revised plan.</li>
 </ol>
 <pre class="mermaid"><code>flowchart LR
     A[You send request&lt;br/&gt;in plan mode] --&gt; B[Model explores&lt;br/&gt;read-only]
     B --&gt; C[Model drafts&lt;br/&gt;plan file]
     C --&gt; D{Your decision}
-    D --&gt;|Approve| E[Truss executes&lt;br/&gt;in act mode]
+    D --&gt;|Approve| E[Mewbo executes&lt;br/&gt;in act mode]
     D --&gt;|Reject + feedback| B</code></pre>
 <p>Approval is <strong>episodic</strong>: your approve/reject decision is recorded in the session transcript and persists across restarts. If you quit the process between the plan draft and the execution step, the session resumes cleanly the next time you pick it up. Revisions are tracked too, so when you reject with feedback and the model comes back with a second draft, you can tell it apart from the first.</p>
 <hr />
@@ -1473,7 +1473,7 @@
 <h2 id="recovery-retry-and-continue">Recovery: /retry and /continue</h2>
 <p>Both commands recover from a failed or stalled session without starting fresh. They are available in the CLI and as per-message buttons in the web console.</p>
 <h3 id="retry">/retry</h3>
-<p><code>/retry</code> replays the last user turn from a clean slate. Truss removes the failed exchange from the transcript and re-submits your original query. The model does not see the failure.</p>
+<p><code>/retry</code> replays the last user turn from a clean slate. Mewbo removes the failed exchange from the transcript and re-submits your original query. The model does not see the failure.</p>
 <div class="codehilite"><pre><span></span><code>/retry
 </code></pre></div>
 <p>Use <code>/retry</code> when the model made the wrong tool calls or hit a transient error and a clean re-run is likely to succeed.</p>

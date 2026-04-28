@@ -3,7 +3,7 @@
 
 <head>
     <script>
-        const base_url = "https://docs.trusswork.co/main"; /* for search plugin notably */
+        const base_url = "https://docs.mewbo.com/main"; /* for search plugin notably */
     </script>
     <script>
     const darkTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,7 +41,7 @@
 
 
 
-<title>Nextcloud Talk - Truss docs</title>
+<title>Nextcloud Talk - Mewbo docs</title>
 
 
 
@@ -51,7 +51,7 @@
 
 
 
-<link rel="canonical" href="https://docs.trusswork.co/main/clients-nextcloud-talk/">
+<link rel="canonical" href="https://docs.mewbo.com/main/clients-nextcloud-talk/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
@@ -62,7 +62,7 @@
 
 
 
-<meta property="og:url" content="https://docs.trusswork.co/main/clients-nextcloud-talk/">
+<meta property="og:url" content="https://docs.mewbo.com/main/clients-nextcloud-talk/">
 
 
 
@@ -152,7 +152,7 @@
             </button>
             <a data-slot="button"
                 class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-5 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 hidden h-8 lg:flex"
-                href="https://docs.trusswork.co/main">
+                href="https://docs.mewbo.com/main">
                 <span class="size-8 flex flex-row justify-center items-center">
                     
 
@@ -162,7 +162,7 @@
                 </span>
 
                 
-                <h1 class="pr-2">Truss</h1>
+                <h1 class="pr-2">Mewbo</h1>
                 
             </a>
             
@@ -1374,7 +1374,7 @@
         <div class="flex items-center gap-2 pt-1.5">
           
 <button
-    onclick="fetch(`https://docs.trusswork.co/clients-nextcloud-talk.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`https://docs.mewbo.com/clients-nextcloud-talk.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -1423,13 +1423,13 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <div style="display: flex; justify-content: center;">
-  <img src="../truss-nctalk-01.png" alt="Truss replying to an @Truss mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../mewbo-nctalk-01.png" alt="Mewbo replying to an @Mewbo mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-<p>The Nextcloud Talk integration allows users to interact with Truss directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Truss session visible in the web console and Langfuse traces.</p>
+<p>The Nextcloud Talk integration allows users to interact with Mewbo directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Mewbo session visible in the web console and Langfuse traces.</p>
 <h2 id="how-it-works">How it works</h2>
 <ol>
-<li>A Nextcloud Talk bot is registered on the server pointing to the Truss API webhook endpoint.</li>
+<li>A Nextcloud Talk bot is registered on the server pointing to the Mewbo API webhook endpoint.</li>
 <li>When a user @mentions the bot, Nextcloud POSTs an ActivityStreams 2.0 webhook to <code>POST /api/webhooks/nextcloud-talk</code>.</li>
 <li>The adapter verifies the HMAC-SHA256 signature, parses the message, and creates or continues a session.</li>
 <li>Non-mentioned messages are silently ignored. The bot only responds when triggered.</li>
@@ -1470,34 +1470,34 @@
 </tbody>
 </table></div>
 <p>Examples:
-<div class="codehilite"><pre><span></span><code>@Truss /help
-@Truss /usage
-@Truss /new
-@Truss /switch-project personal-assistant
+<div class="codehilite"><pre><span></span><code>@Mewbo /help
+@Mewbo /usage
+@Mewbo /new
+@Mewbo /switch-project personal-assistant
 </code></pre></div></p>
 <p>The <code>/switch-project</code> command sets the working directory for subsequent LLM runs. If the project name is invalid or omitted, it lists available projects.</p>
 <h2 id="prerequisites">Prerequisites</h2>
 <ul>
 <li>Nextcloud 27.1+ with Talk 17.1+ (for bots-v1 capability)</li>
 <li>Nextcloud 32+ with Talk 22+ (for thread support via <code>threadId</code>)</li>
-<li>The Truss API server running and reachable from the Nextcloud instance</li>
+<li>The Mewbo API server running and reachable from the Nextcloud instance</li>
 </ul>
 <h2 id="setup">Setup</h2>
 <h3 id="1-register-the-bot-in-nextcloud">1. Register the bot in Nextcloud</h3>
 <p>On the Nextcloud server (requires admin shell access):</p>
-<div class="codehilite"><pre><span></span><code>occ<span class="w"> </span>talk:bot:install<span class="w"> </span><span class="s2">&quot;Truss&quot;</span><span class="w"> </span><span class="se">\</span>
+<div class="codehilite"><pre><span></span><code>occ<span class="w"> </span>talk:bot:install<span class="w"> </span><span class="s2">&quot;Mewbo&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span><span class="s2">&quot;&lt;shared-secret-at-least-40-chars&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span><span class="s2">&quot;https://&lt;truss-api-host&gt;/api/webhooks/nextcloud-talk&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">&quot;https://&lt;mewbo-api-host&gt;/api/webhooks/nextcloud-talk&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--feature<span class="w"> </span>webhook<span class="w"> </span>--feature<span class="w"> </span>response<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span><span class="s2">&quot;AI assistant with a conversation state machine and agent hypervisor&quot;</span>
 </code></pre></div>
-<p>Note the shared secret. It must match the <code>bot_secret</code> in the Truss config.</p>
+<p>Note the shared secret. It must match the <code>bot_secret</code> in the Mewbo config.</p>
 <h3 id="2-enable-the-bot-in-conversations">2. Enable the bot in conversations</h3>
 <p>Either via the admin CLI:</p>
 <div class="codehilite"><pre><span></span><code>occ<span class="w"> </span>talk:bot:setup<span class="w"> </span>&lt;bot-id&gt;<span class="w"> </span>&lt;conversation-token&gt;
 </code></pre></div>
 <p>Or via the Nextcloud Talk web UI (moderator role required): open the conversation settings and enable the bot under "Bots".</p>
-<h3 id="3-configure-truss">3. Configure Truss</h3>
+<h3 id="3-configure-mewbo">3. Configure Mewbo</h3>
 <p>Add the channel config to <code>configs/app.json</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;channels&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -1506,7 +1506,7 @@
 <span class="w">      </span><span class="nt">&quot;bot_secret&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;shared-secret-from-step-1&gt;&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;nextcloud_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://cloud.example.com&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;allowed_backends&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;https://cloud.example.com&quot;</span><span class="p">],</span>
-<span class="w">      </span><span class="nt">&quot;trigger_keyword&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;@Truss&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;trigger_keyword&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;@Mewbo&quot;</span><span class="p">,</span>
 <span class="w">      </span><span class="nt">&quot;nextcloud_host_header&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">}</span>
@@ -1538,7 +1538,7 @@
 </tr>
 <tr>
 <td><code>trigger_keyword</code></td>
-<td>Literal keyword that must appear in a message to trigger the bot (default: <code>@Truss</code>)</td>
+<td>Literal keyword that must appear in a message to trigger the bot (default: <code>@Mewbo</code>)</td>
 </tr>
 <tr>
 <td><code>nextcloud_host_header</code></td>
@@ -1547,7 +1547,7 @@
 </tbody>
 </table></div>
 <h3 id="4-restart-the-api-server">4. Restart the API server</h3>
-<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>truss-api
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
 <span class="c1"># or: docker compose restart api</span>
 </code></pre></div>
 <p>The startup logs should show:</p>
@@ -1556,7 +1556,7 @@ Channel webhook routes registered (platforms: [&#39;nextcloud-talk&#39;])
 </code></pre></div>
 <h2 id="usage">Usage</h2>
 <p>In any Nextcloud Talk conversation where the bot is enabled:</p>
-<div class="codehilite"><pre><span></span><code>@Truss help me refactor the auth module
+<div class="codehilite"><pre><span></span><code>@Mewbo help me refactor the auth module
 </code></pre></div>
 <p>The bot responds with the orchestration result. Subsequent @mentions in the same room continue the conversation with full context. Use <code>/new</code> to reset.</p>
 <h2 id="limitations">Limitations</h2>
@@ -2764,10 +2764,10 @@ Channel webhook routes registered (platforms: [&#39;nextcloud-talk&#39;])
             2. Enable the bot in conversations
         </a>
         
-        <a href="#3-configure-truss"
+        <a href="#3-configure-mewbo"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#3-configure-truss');">
-            3. Configure Truss
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#3-configure-mewbo');">
+            3. Configure Mewbo
         </a>
         
         <a href="#4-restart-the-api-server"

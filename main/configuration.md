@@ -1,7 +1,7 @@
 <!-- AUTO-GENERATED from configs/app.schema.json. Do not edit manually. -->
 # Configuration Reference
 
-Truss is configured via `configs/app.json`. This reference is auto-generated
+Mewbo is configured via `configs/app.json`. This reference is auto-generated
 from the JSON Schema at [`configs/app.schema.json`](https://github.com/bearlike/Assistant/blob/main/configs/app.schema.json).
 
 Copy `configs/app.example.json` to `configs/app.json` to get started.
@@ -20,11 +20,11 @@ Runtime environment settings.
 | `log_style` | string | `""` | Log output style for the core engine (empty for default). |
 | `cli_log_style` | string | `dark` | Rich console log theme for the CLI (dark or light). |
 | `preflight_enabled` | boolean | `false` | Run connectivity checks for LLM, Langfuse, and Home Assistant on startup. |
-| `cache_dir` | string | `""` | Directory for tool caches. Defaults to $TRUSS_HOME/cache. ⚠️ |
-| `session_dir` | string | `""` | Directory for session transcripts. Defaults to $TRUSS_HOME/sessions. ⚠️ |
-| `config_dir` | string | `""` | Root configuration directory. Defaults to $TRUSS_HOME. ⚠️ |
+| `cache_dir` | string | `""` | Directory for tool caches. Defaults to $MEWBO_HOME/cache. ⚠️ |
+| `session_dir` | string | `""` | Directory for session transcripts. Defaults to $MEWBO_HOME/sessions. ⚠️ |
+| `config_dir` | string | `""` | Root configuration directory. Defaults to $MEWBO_HOME. ⚠️ |
 | `result_export_dir` | string | `""` | Directory for large tool result exports. Empty to disable. |
-| `projects_home` | string | `""` | Directory for virtual project folders. Defaults to $TRUSS_HOME/projects. ⚠️ |
+| `projects_home` | string | `""` | Directory for virtual project folders. Defaults to $MEWBO_HOME/projects. ⚠️ |
 
 ## StorageConfig
 
@@ -234,7 +234,7 @@ Plugin system configuration.
 | `enabled` | boolean | `true` | Enable the plugin system. |
 | `enabled_plugins` | list[string] |  | Plugin names to enable. Empty = all installed plugins. Format: 'plugin-name' or 'plugin-name@marketplace'. |
 | `marketplaces` | list[string] |  | GitHub repos containing marketplace.json plugin indexes. |
-| `install_path` | string | `""` | Override install path for Truss-managed plugins. Defaults to $TRUSS_HOME/plugins/ (via resolve_truss_home). |
+| `install_path` | string | `""` | Override install path for Mewbo-managed plugins. Defaults to $MEWBO_HOME/plugins/ (via resolve_mewbo_home). |
 
 ## Channels
 
