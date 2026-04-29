@@ -240,6 +240,21 @@ article h3,
   overflow-wrap: break-word;
 }
 
+/* Page header: flex justify-between row on desktop (title left, nav buttons
+   right). On mobile the button group (~110 px) steals too much horizontal
+   space and the title wraps even at reduced font-size. Stack to column so
+   the h1 always gets the full content width; push the button group to the
+   right edge of its own row via align-self. */
+@media (max-width: 639px) {
+  article #page-header {
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  article #page-header > div:last-child {
+    align-self: flex-end;
+  }
+}
+
 /* Sidebar group label: short fixed label that should not wrap in the narrow
    sidebar column. */
 .mewbo-sidebar-group-label {
