@@ -48,7 +48,7 @@ docs = [
   # speculation, ToC rail, dual-mode search modal, full SEO. Pinned to a
   # specific commit so docs builds are reproducible. Bump by changing
   # the URL to point at a newer commit-<sha> or v* release.
-  "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/commit-a04e77f/mkdocs_shadcn_mewbo-1.0.0%2Ba04e77f-py3-none-any.whl",
+  "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/commit-2c2601a/mkdocs_shadcn_mewbo-1.0.0%2B2c2601a-py3-none-any.whl",
   "mkdocstrings[python]",
   "pymdown-extensions>=10.20.1",
 ]
