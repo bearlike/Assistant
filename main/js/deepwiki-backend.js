@@ -19,10 +19,18 @@
   var SDK_BASE         = 'https://esm.sh/@modelcontextprotocol/sdk@' + SDK_VERSION;
   var DEEPWIKI_MCP_URL = 'https://mcp.deepwiki.com/mcp';
   var DEEPWIKI_ORIGIN  = 'https://deepwiki.com';
-  var REPO             = 'bearlike/Assistant';
-  var QUESTION_PREFIX  =
-    "I'm a new user; give product-first, well-grounded answers. " +
-    'Mewbo / Truss / Meeseeks / Assistant all refer to the same product.\n\n';
+
+  // Theme injects window.MEWBO_AI_CONFIG from `theme.ai.*` in mkdocs.yml.
+  // Defaults are intentionally generic — products supply their own prefix
+  // via `theme.ai.question_prefix` for internal aliases or tone constraints.
+  // REPO has NO default: if the script loads without injection (which the
+  // theme prevents via the `theme.ai.deepwiki_repo` gate, but a stray
+  // include could bypass), askAI throws cleanly instead of silently hitting
+  // somebody else's repo.
+  var CFG = (window.MEWBO_AI_CONFIG || {});
+  var REPO            = CFG.deepwiki_repo || null;
+  var QUESTION_PREFIX = CFG.question_prefix ||
+    "Give product-first, well-grounded answers.\n\n";
 
   // Cache the connected client so the SDK and handshake only run once per page.
   var clientPromise = null;
@@ -54,6 +62,11 @@
   }
 
   async function askAI(query) {
+    if (!REPO) {
+      throw new Error(
+        'Ask AI is not configured. Set `theme.ai.deepwiki_repo` in mkdocs.yml.'
+      );
+    }
     var client = await getClient();
     var result = await client.callTool({
       name: 'ask_question',

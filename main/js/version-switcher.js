@@ -1,10 +1,15 @@
 (() => {
+  // Theme injects window.MEWBO_VERSIONS_ROOT from `theme.versions_root` in
+  // mkdocs.yml when the docs are served from a subpath (e.g. `/Assistant`
+  // on GitHub Pages). Empty/unset = served at the domain root.
+  const VERSIONS_ROOT = (window.MEWBO_VERSIONS_ROOT || '').replace(/^\/+|\/+$/g, '');
+
   function getPathInfo() {
     const parts = window.location.pathname.split('/').filter(Boolean);
     let root = '';
     let versionIndex = 0;
-    if (parts[0] === 'Assistant') {
-      root = '/Assistant';
+    if (VERSIONS_ROOT && parts[0] === VERSIONS_ROOT) {
+      root = '/' + VERSIONS_ROOT;
       versionIndex = 1;
     }
     const version = parts[versionIndex] || 'latest';

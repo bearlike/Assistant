@@ -86,10 +86,23 @@
 
     <link href="../css/base.css" rel="stylesheet">
     <link href="../css/geist.css" rel="stylesheet">
+    <link href="../css/mewbo.css" rel="stylesheet">
+
+    
+    <script>
+        
+        window.MEWBO_AI_CONFIG = {
+            deepwiki_repo: "bearlike/Assistant",
+            question_prefix: "I\u0027m a new user; give product-first, well-grounded answers.\n"
+        };
+        
+        
+        window.MEWBO_VERSIONS_ROOT = "Assistant";
+        window.MEWBO_REPO = "bearlike/Assistant";
+    </script>
 
     
     <link href="../assets/_mkdocstrings.css" rel="stylesheet">
-    <link href="../stylesheets/extra.css" rel="stylesheet">
 
     
 
@@ -161,10 +174,12 @@
                     <span>Search for anything…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
+                
                 <button id="mewbo-nav-ask-ai" class="mewbo-nav-ask-ai-btn" type="button" aria-label="Ask AI">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594zM20 2v4m2-2h-4"/><circle cx="4" cy="20" r="2"/></g></svg>
                     Ask AI
                 </button>
+                
             </div>
 
             
@@ -194,7 +209,10 @@
         </div>
     </div>
 </header>
-<!-- Unified Search + Ask AI modal -->
+
+
+
+
 <dialog id="mewbo-modal" data-active="ask-ai" aria-label="Search and Ask AI">
     <div class="mewbo-modal__inner">
 
@@ -220,6 +238,7 @@
                 />
             </div>
 
+            
             <!-- Ask AI mode: label -->
             <div class="mewbo-header__label" data-mode="ask-ai">Ask AI</div>
 
@@ -234,12 +253,14 @@
                     Ask AI
                 </button>
             </div>
+            
 
         </div>
 
         <!-- Search panel -->
         <div id="mewbo-search-panel" role="tabpanel">
 
+            
             <!-- Ask AI handoff row -->
             <div id="mewbo-ask-ai-shortcut" role="button" tabindex="0" aria-label="Ask AI about your query">
                 <span class="mewbo-shortcut__glyph" aria-hidden="true">
@@ -249,6 +270,7 @@
                 <span id="mewbo-shortcut-query" class="mewbo-shortcut__query"></span>
                 <span class="mewbo-shortcut__cta">Start conversation ↵</span>
             </div>
+            
 
             <!-- Scope filter chips (populated by ask-ai.js when results exist) -->
             <div id="mewbo-search-filters" class="mewbo-search-filters" aria-label="Filter results by section"></div>
@@ -258,6 +280,7 @@
 
         </div>
 
+        
         <!-- Ask AI panel -->
         <div id="mewbo-ask-ai-panel" role="tabpanel">
 
@@ -277,10 +300,15 @@
 
                     <div class="mewbo-examples__label">EXAMPLE QUESTIONS</div>
                     <div class="mewbo-examples">
+                        
                         <button class="mewbo-example-pill" data-question="How do I install and configure Mewbo?" type="button">How do I install and configure Mewbo?</button>
+                        
                         <button class="mewbo-example-pill" data-question="How does the agent hypervisor work?" type="button">How does the agent hypervisor work?</button>
+                        
                         <button class="mewbo-example-pill" data-question="How do I add MCP tools?" type="button">How do I add MCP tools?</button>
+                        
                         <button class="mewbo-example-pill" data-question="How do I connect Home Assistant?" type="button">How do I connect Home Assistant?</button>
+                        
                     </div>
                 </div>
 
@@ -320,15 +348,18 @@
             </div>
 
         </div>
+        
 
     </div>
 </dialog>
+
 
 <!-- Floating Ask AI button -->
 <button id="mewbo-fab" type="button" aria-label="Ask AI">
     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594zM20 2v4m2-2h-4"/><circle cx="4" cy="20" r="2"/></g></svg>
     Ask AI
 </button>
+
 
 <script>
     // Override theme's onSearchBarClick so Ctrl K / Cmd K open our modal
@@ -2605,71 +2636,167 @@
                 </div>
             </div>
         </main>
-        <footer view-transition-name="footer"
-    class="group-has-[.section-soft]/body:bg-surface/40 3xl:fixed:bg-transparent dark:bg-transparent">
-    <div class="container-wrapper px-4 xl:px-6">
-        <div class="flex h-(--footer-height) items-center justify-between">
-            <div class="text-muted-foreground w-full text-center text-xs leading-loose sm:text-sm">
-                
-                <a href="https://github.com/asiffer/mkdocs-shadcn">shadcn theme</a> provided by
-                <a href="https://github.com/asiffer">@asiffer</a>
-            </div>
-        </div>
+        
+
+
+
+
+
+
+
+
+  
+    
+  
+
+  
+    
+  
+
+  
+    
+    
+    
+      
+    
+  
+
+  
+    
+    
+    
+      
+    
+  
+
+  
+    
+    
+      
+        
+          
+        
+      
+        
+          
+        
+      
+        
+          
+        
+      
+        
+          
+        
+      
+    
+    
+  
+
+  
+    
+    
+    
+      
+    
+  
+
+  
+    
+    
+    
+      
+    
+  
+
+  
+    
+  
+
+
+
+
+
+
+
+  
+
+
+
+<footer class="mewbo-footer" view-transition-name="footer">
+  <div class="mewbo-footer__container">
+
+    
+    <div class="mewbo-footer__col mewbo-footer__col--intro">
+      <a class="mewbo-footer__logo" href="https://docs.mewbo.com/main" aria-label="Mewbo home">
+        <span class="mewbo-footer__glyph">
+
+<img class="size-5" src="../logos/logo-transparent.svg" alt="icon">
+
+</span>
+        <span class="mewbo-footer__name">Mewbo</span>
+      </a>
+      
+      <p class="mewbo-footer__tagline">Documentation for Mewbo — an AI assistant modeled as a conversation state machine with a hierarchical agent hypervisor. Accessible via CLI, web console, REST API, and Home Assistant.</p>
+      
     </div>
+
+    
+    
+    <div class="mewbo-footer__col mewbo-footer__col--social">
+      <h4 class="mewbo-footer__col-heading">Connect</h4>
+      <div class="mewbo-footer__social" role="list" aria-label="Social media">
+        
+        <a class="mewbo-footer__social-btn" href="https://github.com/bearlike/Assistant" target="_blank" rel="noreferrer"
+           role="listitem" aria-label="Github" title="Github">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12c0 5.303 3.438 9.8 8.205 11.385c.6.113.82-.258.82-.577c0-.285-.01-1.04-.015-2.04c-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729c1.205.084 1.838 1.236 1.838 1.236c1.07 1.835 2.809 1.305 3.495.998c.108-.776.417-1.305.76-1.605c-2.665-.3-5.466-1.332-5.466-5.93c0-1.31.465-2.38 1.235-3.22c-.135-.303-.54-1.523.105-3.176c0 0 1.005-.322 3.3 1.23c.96-.267 1.98-.399 3-.405c1.02.006 2.04.138 3 .405c2.28-1.552 3.285-1.23 3.285-1.23c.645 1.653.24 2.873.12 3.176c.765.84 1.23 1.91 1.23 3.22c0 4.61-2.805 5.625-5.475 5.92c.42.36.81 1.096.81 2.22c0 1.606-.015 2.896-.015 3.286c0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+        </a>
+        
+      </div>
+    </div>
+    
+
+    
+    
+    <nav class="mewbo-footer__col" aria-label="Documentation links">
+      <h4 class="mewbo-footer__col-heading">Documentation</h4>
+      <ul class="mewbo-footer__col-links">
+        
+        <li><a href="/main/">Home</a></li>
+        
+        <li><a href="/main/getting-started/">Get Started</a></li>
+        
+        <li><a href="/main/llm-setup/">Configure</a></li>
+        
+        <li><a href="/main/clients-cli/">Use</a></li>
+        
+        <li><a href="/main/deployment-docker/">Deploy</a></li>
+        
+        <li><a href="/main/core-orchestration/">Develop</a></li>
+        
+        <li><a href="/main/troubleshooting/">Troubleshooting</a></li>
+        
+      </ul>
+    </nav>
+    
+
+    
+    
+
+  </div>
+
+  
+  <div class="mewbo-footer__baseline">
+    <span class="mewbo-footer__copyright">© 2026 Mewbo</span>
+    
+    <span class="mewbo-footer__attribution">
+      Built with
+      <a href="https://github.com/mewbo-com/mkdocs-shadcn" target="_blank" rel="noreferrer">mkdocs-shadcn-mewbo</a>
+    </span>
+    
+  </div>
 </footer>
     </div>
-     
-
-<script src="../javascripts/pygments-theme.js"></script>
-
-     
-
-<script src="../javascripts/search-enhance.js"></script>
-
-     
-
-<script src="https://cdn.jsdelivr.net/npm/marked@14.1.4/lib/marked.umd.min.js"></script>
-
-     
-
-<script src="../javascripts/deepwiki-backend.js"></script>
-
-     
-
-<script src="../javascripts/ask-ai.js"></script>
-
-     
-
-<script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-
-     
-
-<script src="../javascripts/mermaid-init-v2.js"></script>
-
-     
-
-<script src="../javascripts/version-switcher.js"></script>
-
-     
-
-<script src="../javascripts/copy-page.js"></script>
-
-     
-
-<script src="../javascripts/build-info.js"></script>
-
-     
-
-<script src="../javascripts/webmcp.js"></script>
-
-     
-
-<script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
-
-     
-
-<script src="../javascripts/icon-inject.js"></script>
-
      
 
 <script src="../search/main.js"></script>
@@ -2680,6 +2807,28 @@
     <script src="../js/copy-button.js"></script>
     <script src="../js/sidebar.js"></script>
     <script src="../js/slider.js"></script>
+
+    
+    <script src="../js/pygments-theme.js"></script>
+    <script src="../js/search-enhance.js"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/marked@14.1.4/lib/marked.umd.min.js"></script>
+    <script src="../js/deepwiki-backend.js"></script>
+    <script src="../js/ask-ai.js"></script>
+    
+    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
+    <script src="../js/mermaid-init-v2.js"></script>
+    
+    <script src="../js/version-switcher.js"></script>
+    
+    <script src="../js/copy-page.js"></script>
+    
+    <script src="../js/build-info.js"></script>
+    
+    <script src="../js/webmcp.js"></script>
+    <script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
+    <script src="../js/icon-inject.js"></script>
+
     <script>updatePygmentsStylesheet();</script>
     
     <script>fetchStargazers("https://github.com/bearlike/Assistant");</script>

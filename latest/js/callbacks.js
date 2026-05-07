@@ -114,27 +114,21 @@ const clipboardIcon = () => {
 	svgElement.setAttribute("stroke-width", "2");
 	svgElement.setAttribute("stroke-linecap", "round");
 	svgElement.setAttribute("stroke-linejoin", "round");
-	svgElement.setAttribute(
-		"class",
-		"lucide lucide-clipboard-icon lucide-clipboard",
-	);
 
-	const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-	rect.setAttribute("width", "8");
-	rect.setAttribute("height", "4");
-	rect.setAttribute("x", "8");
-	rect.setAttribute("y", "2");
-	rect.setAttribute("rx", "1");
-	rect.setAttribute("ry", "1");
-	svgElement.appendChild(rect);
-
-	const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-	path.setAttribute(
+	const path0 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+	path0.setAttribute(
 		"d",
-		"M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2",
+		"M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666",
 	);
-	svgElement.appendChild(path);
 
+	const path1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+	path1.setAttribute(
+		"d",
+		"M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1",
+	);
+
+	svgElement.appendChild(path0);
+	svgElement.appendChild(path1);
 	return svgElement;
 };
 
