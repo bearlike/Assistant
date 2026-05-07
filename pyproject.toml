@@ -43,7 +43,20 @@ docs = [
   "mike",
   "mkdocs",
   "mkdocs-callouts>=1.16.0",
-  "mkdocs-shadcn>=0.9.9",
+  # Brand-fork of mkdocs-shadcn — same `theme: shadcn` entrypoint plus the
+  # Mewbo brand chrome, Ask AI panel, sidebar nav-icons, prefetch
+  # speculation, ToC rail, dual-mode search modal, full SEO.
+  #
+  # The URL below is permanent — it points at the moving `latest-master`
+  # release, which the fork's release.yaml workflow republishes on every
+  # push to master. uv.lock pins the exact wheel content hash, so docs
+  # builds stay reproducible until the lock is refreshed:
+  #
+  #   uv lock --upgrade-package mkdocs-shadcn-mewbo
+  #
+  # For a strictly-pinned build (no auto-tracking), swap this URL for the
+  # commit-<sha> release URL surfaced in the corresponding workflow run.
+  "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.0.0-py3-none-any.whl",
   "mkdocstrings[python]",
   "pymdown-extensions>=10.20.1",
 ]

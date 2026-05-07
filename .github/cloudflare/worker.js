@@ -1,94 +1,135 @@
 /**
- * Cloudflare Worker for docs.mewbo.com
+ * Cloudflare Worker for docs sites built with mkdocs-shadcn-mewbo.
  *
- * Deploy: from repo root, `cd .github/cloudflare && npx wrangler deploy`
- *         (route docs.mewbo.com/* is configured in wrangler.toml; the
- *         CNAME for docs must be orange-cloud proxied for it to fire)
+ * Sits in front of the docs origin (GitHub Pages, R2, S3, etc.) and:
+ *   - Serves three /.well-known/ endpoints inline so AI agents can
+ *     discover the product's API catalog, MCP server, and Agent Skills:
+ *       * /.well-known/api-catalog              (RFC 9727 linkset)
+ *       * /.well-known/mcp/server-card.json     (SEP-1649)
+ *       * /.well-known/agent-skills/index.json  (Agent Skills v0.2.0)
+ *   - Injects RFC 8288 `Link:` headers on every HTML response pointing
+ *     agents at those endpoints + the human reference docs page.
  *
- * Handles:
- *   - /.well-known/api-catalog               (RFC 9727, application/linkset+json)
- *   - /.well-known/mcp/server-card.json      (SEP-1649)
- *   - /.well-known/agent-skills/index.json   (Agent Skills Discovery v0.2.0)
- *   - All other requests                     (pass-through + RFC 8288 Link headers)
+ * All product-specific values come from `env` (wrangler.toml [vars]).
+ * The worker.js itself is product-neutral — copy it verbatim into your
+ * repo and configure via vars.
+ *
+ * Required vars:
+ *   SITE_URL                — absolute docs origin (e.g. "https://docs.mewbo.com")
+ *   API_URL                 — absolute API origin (e.g. "https://api.mewbo.com")
+ *
+ * Optional vars:
+ *   MCP_SERVER_NAME         — defaults to "Docs"
+ *   MCP_SERVER_VERSION      — defaults to "1.0.0"
+ *   MCP_SERVER_URL          — defaults to `${API_URL}/mcp`
+ *   API_OPENAPI_URL         — defaults to `${API_URL}/swagger.json`
+ *   API_HEALTH_URL          — defaults to `${API_URL}/healthz`
+ *   REFERENCE_PATH          — defaults to "/reference/" (relative to SITE_URL)
+ *   SKILLS_INDEX_JSON       — JSON-encoded Agent Skills index; defaults to
+ *                             an empty list with the v0.2.0 schema.
+ *
+ * Deploy:
+ *   cd <your-repo>/.github/cloudflare && wrangler deploy
  */
 
-const SITE = "https://docs.mewbo.com";
-const API  = "https://api.mewbo.com";       // TODO: update if API base differs
+const REL_API_CATALOG = "api-catalog";
+const REL_SERVICE_DOC = "service-doc";
+const REL_MCP_SERVER_CARD =
+  "https://modelcontextprotocol.io/ns/server-card";
+const SKILLS_SCHEMA = "https://agentskills.io/schema/v0.2.0/index.json";
 
-// RFC 8288 Link headers injected on every HTML response
-const LINK_HEADERS = [
-  `</.well-known/api-catalog>; rel="api-catalog"`,
-  `</reference/>; rel="service-doc"`,
-  `</.well-known/mcp/server-card.json>; rel="https://modelcontextprotocol.io/ns/server-card"`,
-];
+function buildWellKnown(env) {
+  const SITE = env.SITE_URL;
+  const API = env.API_URL;
+  const MCP_NAME = env.MCP_SERVER_NAME ?? "Docs";
+  const MCP_VERSION = env.MCP_SERVER_VERSION ?? "1.0.0";
+  const MCP_URL = env.MCP_SERVER_URL ?? `${API}/mcp`;
+  const OPENAPI = env.API_OPENAPI_URL ?? `${API}/swagger.json`;
+  const HEALTH = env.API_HEALTH_URL ?? `${API}/healthz`;
+  const REFPATH = env.REFERENCE_PATH ?? "/reference/";
 
-// Static well-known responses (inline — avoids GitHub Pages MIME-type issues)
-const WELL_KNOWN = {
-  "/.well-known/api-catalog": {
-    type: "application/linkset+json",
-    body: JSON.stringify({
-      linkset: [
-        {
-          anchor: API + "/",
-          "service-doc":  [{ href: SITE + "/reference/" }],
-          "service-desc": [{ href: API  + "/swagger.json" }],   // TODO: adjust OpenAPI spec URL
-          status:         [{ href: API  + "/healthz" }],         // TODO: adjust health endpoint
-        },
-      ],
-    }),
-  },
+  let skillsIndex;
+  try {
+    skillsIndex = env.SKILLS_INDEX_JSON
+      ? JSON.parse(env.SKILLS_INDEX_JSON)
+      : { $schema: SKILLS_SCHEMA, skills: [] };
+  } catch (_) {
+    skillsIndex = { $schema: SKILLS_SCHEMA, skills: [] };
+  }
 
-  "/.well-known/mcp/server-card.json": {
-    type: "application/json",
-    // TODO: fill in once Mewbo exposes a public MCP server endpoint.
-    // Remove this entry entirely if Mewbo is MCP-client-only.
-    body: JSON.stringify({
-      serverInfo: { name: "Mewbo", version: "1.0.0" },
-      transport:  { type: "streamable-http", url: API + "/mcp" },
-      capabilities: { tools: {}, resources: {}, prompts: {} },
-    }),
-  },
+  return {
+    "/.well-known/api-catalog": {
+      type: "application/linkset+json",
+      body: JSON.stringify({
+        linkset: [
+          {
+            anchor: API + "/",
+            "service-doc": [{ href: SITE + REFPATH }],
+            "service-desc": [{ href: OPENAPI }],
+            status: [{ href: HEALTH }],
+          },
+        ],
+      }),
+    },
+    "/.well-known/mcp/server-card.json": {
+      type: "application/json",
+      body: JSON.stringify({
+        serverInfo: { name: MCP_NAME, version: MCP_VERSION },
+        transport: { type: "streamable-http", url: MCP_URL },
+        capabilities: { tools: {}, resources: {}, prompts: {} },
+      }),
+    },
+    "/.well-known/agent-skills/index.json": {
+      type: "application/json",
+      body: JSON.stringify(skillsIndex),
+    },
+  };
+}
 
-  "/.well-known/agent-skills/index.json": {
-    type: "application/json",
-    // TODO: add entries as Mewbo publishes agent skills
-    body: JSON.stringify({
-      $schema: "https://agentskills.io/schema/v0.2.0/index.json",
-      skills: [],
-    }),
-  },
-};
+function buildLinkHeaders(env) {
+  const REFPATH = env.REFERENCE_PATH ?? "/reference/";
+  return [
+    `</.well-known/api-catalog>; rel="${REL_API_CATALOG}"`,
+    `<${REFPATH}>; rel="${REL_SERVICE_DOC}"`,
+    `</.well-known/mcp/server-card.json>; rel="${REL_MCP_SERVER_CARD}"`,
+  ];
+}
 
 export default {
-  async fetch(request) {
-    const url = new URL(request.url);
-    const entry = WELL_KNOWN[url.pathname];
+  async fetch(request, env) {
+    if (!env.SITE_URL || !env.API_URL) {
+      return new Response(
+        "mewbo-docs worker: SITE_URL and API_URL must be set in wrangler.toml [vars].",
+        { status: 500 }
+      );
+    }
 
-    // Serve well-known files directly with correct MIME types
+    const url = new URL(request.url);
+    const wellKnown = buildWellKnown(env);
+    const entry = wellKnown[url.pathname];
+
     if (entry) {
       return new Response(entry.body, {
         headers: {
-          "Content-Type":              entry.type,
-          "Cache-Control":             "public, max-age=3600",
+          "Content-Type": entry.type,
+          "Cache-Control": "public, max-age=3600",
           "Access-Control-Allow-Origin": "*",
         },
       });
     }
 
-    // Pass through to GitHub Pages origin, appending Link headers
+    // Pass-through to origin; append Link headers on HTML responses only.
     const response = await fetch(request);
-    const headers  = new Headers(response.headers);
-
-    // Only inject Link headers on HTML responses (skip assets)
+    const headers = new Headers(response.headers);
     const ct = headers.get("Content-Type") || "";
     if (ct.includes("text/html")) {
-      for (const link of LINK_HEADERS) {
+      for (const link of buildLinkHeaders(env)) {
         headers.append("Link", link);
       }
     }
 
     return new Response(response.body, {
-      status:     response.status,
+      status: response.status,
       statusText: response.statusText,
       headers,
     });

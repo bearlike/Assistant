@@ -2502,7 +2502,7 @@ docs = [
     { name = "mike" },
     { name = "mkdocs" },
     { name = "mkdocs-callouts" },
-    { name = "mkdocs-shadcn" },
+    { name = "mkdocs-shadcn-mewbo" },
     { name = "mkdocstrings", extra = ["python"] },
     { name = "pymdown-extensions" },
 ]
@@ -2539,7 +2539,7 @@ docs = [
     { name = "mike" },
     { name = "mkdocs" },
     { name = "mkdocs-callouts", specifier = ">=1.16.0" },
-    { name = "mkdocs-shadcn", specifier = ">=0.9.9" },
+    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.0.0-py3-none-any.whl" },
     { name = "mkdocstrings", extras = ["python"] },
     { name = "pymdown-extensions", specifier = ">=10.20.1" },
 ]
@@ -2638,18 +2638,25 @@ wheels = [
 ]
 
 [[package]]
-name = "mkdocs-shadcn"
-version = "0.10.4"
-source = { registry = "https://pypi.org/simple" }
+name = "mkdocs-shadcn-mewbo"
+version = "1.0.0"
+source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.0.0-py3-none-any.whl" }
 dependencies = [
     { name = "bottle" },
     { name = "gitpython" },
     { name = "mkdocs" },
     { name = "pymdown-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/24/b0/7a818b2d580ab0b8813de62bab8ba4af8274af874e974de29b0bcc759cc9/mkdocs_shadcn-0.10.4.tar.gz", hash = "sha256:5400b69d21335738707b4ef48f5409144656e06556a787785e6a7cd1639d98f9", size = 3065419, upload-time = "2026-04-12T13:32:30.865Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b3/49/83f9afaf3c8b1cd0c8b43c04322127b4e0b158a7afa8d09c9ef7288196a1/mkdocs_shadcn-0.10.4-py3-none-any.whl", hash = "sha256:529d5bacd5f82660e258a619d4c999ab08223b005aa37f29dfc6b95b10e7eb04", size = 1417261, upload-time = "2026-04-12T13:32:28.358Z" },
+    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.0.0-py3-none-any.whl", hash = "sha256:048b2d6ea256cfa868aa2530375576f9d0083bf3dd6b1231bae103ac40109d5c" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bottle", specifier = ">=0.13.2" },
+    { name = "gitpython", specifier = ">=3.1.45" },
+    { name = "mkdocs", specifier = ">=1.6.1" },
+    { name = "pymdown-extensions", specifier = ">=10.14.3" },
 ]
 
 [[package]]
