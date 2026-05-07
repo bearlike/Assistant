@@ -1,9 +1,0 @@
-<dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
-    <div class="ms-mobile-nav__panel">
-        <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
-            onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
-            {{ "lucide:x" | iconify(height="18px") | safe }}
-        </button>
-        {% include "templates/sidebar.html" %}
-    </div>
-</dialog>

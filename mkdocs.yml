@@ -6,12 +6,70 @@ site_url: https://docs.mewbo.com/
 
 theme:
   name: shadcn
-  custom_dir: overrides
   favicon: logos/favicon.ico
   icon: logos/logo-transparent.svg
   pygments_style:
     light: shadcn-light
     dark: github-dark
+
+  # Mewbo brand-fork (mkdocs-shadcn-mewbo) configuration ────────────────
+  ai:
+    deepwiki_repo: bearlike/Assistant
+    question_prefix: |
+      I'm a new user; give product-first, well-grounded answers.
+    examples:
+      - "How do I install and configure Mewbo?"
+      - "How does the agent hypervisor work?"
+      - "How do I add MCP tools?"
+      - "How do I connect Home Assistant?"
+  versions_root: Assistant
+  show_version_switcher: true
+  show_build_info: true
+  nav_icons:
+    Home: lucide:house
+    "Get Started": lucide:rocket
+    Troubleshooting: lucide:life-buoy
+
+    Configure: lucide:sliders-horizontal
+    "LLM Setup": lucide:brain
+    "Project Setup": lucide:folder-cog
+    "Configuration Reference": lucide:file-json
+
+    Use: lucide:monitor-play
+    CLI: lucide:terminal
+    "Web Console + API": lucide:layout-dashboard
+    "Home Assistant": lucide:house-plug
+    "Nextcloud Talk": lucide:message-circle
+    Email: lucide:mail
+
+    Capabilities: lucide:sparkles
+    "Workspace & Execution": lucide:hammer
+    "Built-in Tools": lucide:wrench
+    "Web IDE": lucide:code-xml
+    Widgets: lucide:panel-left
+    "Code Intelligence": lucide:zap
+    "External Tools (MCP)": lucide:plug
+    "Composition & Delegation": lucide:users
+    "Sub-agents": lucide:git-branch
+    Skills: lucide:graduation-cap
+    "Plugins & Marketplace": lucide:puzzle
+    "Control & Safety": lucide:shield
+    "Plan Mode": lucide:clipboard-list
+    "Permissions & Hooks": lucide:lock
+    "Session & Context": lucide:clock
+    "Token Usage": lucide:coins
+    Compaction: lucide:archive
+
+    Deploy: lucide:package
+    "Docker Compose": lucide:container
+    "Storage Backends": lucide:database
+    "Production Setup": lucide:server
+
+    Develop: lucide:code
+    "Architecture Overview": lucide:blocks
+    "Session Runtime": lucide:cpu
+    "Building a Client": lucide:hammer
+    "API Reference": lucide:book-open-text
 
 hooks:
   - docs/hooks/schema_to_md.py
@@ -62,23 +120,11 @@ extra:
   version:
     provider: mike
 
-extra_css:
-  - stylesheets/extra.css
-
-extra_javascript:
-  - javascripts/pygments-theme.js
-  - javascripts/search-enhance.js
-  - https://cdn.jsdelivr.net/npm/marked@14.1.4/lib/marked.umd.min.js
-  - javascripts/deepwiki-backend.js
-  - javascripts/ask-ai.js
-  - https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js
-  - javascripts/mermaid-init-v2.js
-  - javascripts/version-switcher.js
-  - javascripts/copy-page.js
-  - javascripts/build-info.js
-  - javascripts/webmcp.js
-  - https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js
-  - javascripts/icon-inject.js
+# Theme now ships everything that used to live in extra_css/extra_javascript
+# and overrides/. If you ever need to override theme behavior again, you can
+# add `theme.custom_dir: overrides`, but the brand chrome / Ask AI / nav
+# icons / version switcher / SEO / speculation prefetch / build-info badge
+# are all already provided.
 
 nav:
   - Home: index.md
