@@ -43,7 +43,12 @@ docs = [
   "mike",
   "mkdocs",
   "mkdocs-callouts>=1.16.0",
-  "mkdocs-shadcn>=0.9.9",
+  # Brand-fork of mkdocs-shadcn — same `theme: shadcn` entrypoint plus the
+  # Mewbo brand chrome, Ask AI panel, sidebar nav-icons, prefetch
+  # speculation, ToC rail, dual-mode search modal, full SEO. Pinned to a
+  # specific commit so docs builds are reproducible. Bump by changing
+  # the URL to point at a newer commit-<sha> or v* release.
+  "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/commit-a04e77f/mkdocs_shadcn_mewbo-1.0.0%2Ba04e77f-py3-none-any.whl",
   "mkdocstrings[python]",
   "pymdown-extensions>=10.20.1",
 ]
