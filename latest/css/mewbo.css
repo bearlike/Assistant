@@ -1666,3 +1666,221 @@ article a,
   .mewbo-toggle__btn { font-size: 0.7rem; }
   .mewbo-greeting__text { font-size: 0.875rem; }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Brand footer — THREE HORIZONTAL COLUMNS, side by side.
+
+   Layout, left → right:
+     1. Intro     — logo + name + tagline
+     2. Connect   — bordered social-icon button cluster
+     3. Docs      — auto-derived link list from top-level `nav:`
+   (Per-product theme.footer.sections entries become additional columns
+   appended after Docs.)
+
+   Below the columns sits a thin baseline strip with copyright + a
+   small attribution link.
+
+   The mkdocs-shadcn theme exposes a body-class CSS var `--footer-height`
+   for sticky-position math elsewhere (TOC rail, sidebar). The override
+   below beats Tailwind's inline arbitrary-property setter on <body> via
+   the `.theme-default` class selector specificity.
+   ───────────────────────────────────────────────────────────────────────── */
+
+body.theme-default { --footer-height: 320px; }
+@media (min-width: 1280px) {
+  body.theme-default { --footer-height: 360px; }
+}
+
+.mewbo-footer {
+  margin-top: 4rem;
+  border-top: 1px solid var(--border);
+  background: var(--background);
+}
+
+/* ── Container: horizontal grid of columns ──────────────────────────── */
+
+.mewbo-footer__container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 2rem 2.5rem;
+  align-items: start;
+  max-width: 90rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .mewbo-footer__container { padding: 3rem 2rem; }
+}
+
+/* ── Generic column shell (intro / connect / docs / extras share this) ── */
+
+.mewbo-footer__col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  min-width: 0;
+}
+
+.mewbo-footer__col-heading {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--foreground);
+  margin: 0;
+  line-height: 1;
+}
+
+/* ── Column 1: Intro ─────────────────────────────────────────────────── */
+
+.mewbo-footer__col--intro {
+  gap: 0.625rem;
+}
+
+.mewbo-footer__logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+  color: var(--foreground);
+  width: max-content;
+}
+.mewbo-footer__logo:hover { color: var(--primary); }
+
+.mewbo-footer__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem; height: 1.5rem;
+  flex-shrink: 0;
+}
+.mewbo-footer__glyph svg,
+.mewbo-footer__glyph img {
+  width: 100%; height: 100%;
+}
+
+.mewbo-footer__name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+.mewbo-footer__tagline {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  margin: 0;
+  max-width: 36ch;
+}
+
+/* ── Column 2: Connect (bordered social buttons) ─────────────────────── */
+
+.mewbo-footer__social {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.mewbo-footer__social-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.125rem; height: 2.125rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--muted-foreground);
+  transition:
+    color 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.12s ease;
+}
+.mewbo-footer__social-btn:hover {
+  color: var(--foreground);
+  background: var(--accent);
+  border-color: color-mix(in srgb, var(--foreground) 35%, var(--border));
+  transform: translateY(-1px);
+}
+.mewbo-footer__social-btn:active { transform: translateY(0); }
+.mewbo-footer__social-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.mewbo-footer__social-btn svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* ── Columns 3+: Docs / extras (link lists under a heading) ──────────── */
+
+.mewbo-footer__col-links {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mewbo-footer__col-links a {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  text-decoration: none;
+  transition: color 0.12s ease;
+  display: inline-block;
+}
+.mewbo-footer__col-links a:hover { color: var(--foreground); }
+
+/* ── Baseline strip ──────────────────────────────────────────────────── */
+
+.mewbo-footer__baseline {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  max-width: 90rem;
+  margin: 0 auto;
+  padding: 1rem 1.5rem;
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+}
+
+@media (min-width: 768px) {
+  .mewbo-footer__baseline { padding: 1.25rem 2rem; }
+}
+
+.mewbo-footer__copyright { font-variant-numeric: tabular-nums; }
+
+.mewbo-footer__attribution a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.mewbo-footer__attribution a:hover {
+  color: var(--foreground);
+  border-bottom-color: var(--foreground);
+}
+
+/* ── Mobile: collapse to single column ──────────────────────────────── */
+
+@media (max-width: 640px) {
+  .mewbo-footer__container {
+    grid-template-columns: 1fr;
+    gap: 1.75rem;
+    padding: 2rem 1.25rem;
+  }
+  .mewbo-footer__baseline {
+    padding: 1rem 1.25rem;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  body.theme-default { --footer-height: 540px; }
+}

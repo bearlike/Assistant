@@ -1,22 +1,30 @@
 (() => {
+  // Theme injects these from main.html: MEWBO_REPO is parsed from
+  // `config.repo_url` (mkdocs standard, products already set it), and
+  // MEWBO_DOCS_PATH defaults to 'docs' (mkdocs's `docs_dir` basename).
+  // MEWBO_VERSIONS_ROOT is shared with version-switcher.js for the
+  // GitHub-Pages-subpath case (e.g. /Assistant/<version>/...).
+  const REPO          = window.MEWBO_REPO || '';
+  const DOCS_PATH     = (window.MEWBO_DOCS_PATH || 'docs').replace(/^\/+|\/+$/g, '');
+  const VERSIONS_ROOT = (window.MEWBO_VERSIONS_ROOT || '').replace(/^\/+|\/+$/g, '');
+
   function getPathInfo() {
     const parts = window.location.pathname.split('/').filter(Boolean);
-    let root = '';
     let versionIndex = 0;
-    if (parts[0] === 'Assistant') {
-      root = '/Assistant';
+    if (VERSIONS_ROOT && parts[0] === VERSIONS_ROOT) {
       versionIndex = 1;
     }
     const version = parts[versionIndex] || 'latest';
     const pageParts = parts.slice(versionIndex + 1);
-    return { root, version, pageParts };
+    return { version, pageParts };
   }
 
   function buildMarkdownUrl() {
+    if (!REPO) return null;
     const { version, pageParts } = getPathInfo();
     const ref = version === 'latest' || version === 'main' ? 'main' : version;
     const pagePath = pageParts.length ? `${pageParts.join('/')}.md` : 'index.md';
-    return `https://raw.githubusercontent.com/bearlike/Assistant/${ref}/docs/${pagePath}`;
+    return `https://raw.githubusercontent.com/${REPO}/${ref}/${DOCS_PATH}/${pagePath}`;
   }
 
   async function writeClipboard(text) {
@@ -46,6 +54,10 @@
       event.stopPropagation();
       try {
         const url = buildMarkdownUrl();
+        if (!url) {
+          console.warn('Copy page disabled: set `repo_url` in mkdocs.yml so the theme can derive the GitHub raw URL.');
+          return;
+        }
         const response = await fetch(url, { cache: 'no-store' });
         if (!response.ok) {
           console.warn('Copy page markdown failed:', response.status, url);
