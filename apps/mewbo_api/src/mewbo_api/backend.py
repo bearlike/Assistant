@@ -46,7 +46,7 @@ from mewbo_core.session_runtime import SessionRuntime, parse_core_command
 from mewbo_core.session_store import SessionStoreBase, create_session_store
 from mewbo_core.share_store import ShareStore
 from mewbo_core.tool_registry import ToolSpec, load_registry
-from mewbo_core.worktree import WorktreeManager
+from mewbo_core.worktree import WorktreeBranchInUseError, WorktreeManager
 from pydantic import ValidationError
 from werkzeug.utils import secure_filename
 
@@ -881,6 +881,11 @@ class VirtualProjectBranches(Resource):
         return {
             "branches": WorktreeManager.list_branches(target.path),
             "current_branch": WorktreeManager.current_branch(target.path),
+            # Branches that ``git worktree add`` will refuse — the UI uses
+            # this to disable "use existing branch" entries already checked
+            # out by the parent repo or another worktree (the original RCA
+            # of the "already checked out" 500-class error).
+            "branches_in_use": sorted(WorktreeManager.branches_in_use(target.path)),
             "git_repo": True,
         }, 200
 
@@ -974,6 +979,12 @@ class VirtualProjectWorktrees(Resource):
             return auth_error
         payload = request.get_json(silent=True) or {}
         branch = str(payload.get("branch", "")).strip()
+        # Optional ``base`` — when provided, the backend creates a fresh
+        # branch from <base> via ``git worktree add -b <branch> <path> <base>``.
+        # When absent, ``branch`` must already exist locally / as a remote
+        # tracking ref. This mirrors the Claude Code worktree workflow.
+        base_raw = payload.get("base")
+        base = str(base_raw).strip() if base_raw else None
         if not branch:
             return {"message": "Invalid input: 'branch' is required"}, 400
         target, err = _resolve_repo_or_404(project_id, promote=True)
@@ -988,10 +999,17 @@ class VirtualProjectWorktrees(Resource):
                 )
             }, 400
         try:
-            wt = project_store.create_worktree(target.project_id, branch)
+            wt = project_store.create_worktree(
+                target.project_id, branch, base=base
+            )
         except ValueError as exc:
             return {"message": str(exc)}, 400
         except FileExistsError as exc:
+            return {"message": str(exc)}, 409
+        except WorktreeBranchInUseError as exc:
+            # Surface the actionable "already checked out" case as a 409 so
+            # the UI can render it as a constraint violation rather than a
+            # generic 400 — the user just needs to pick a different branch.
             return {"message": str(exc)}, 409
         except RuntimeError as exc:
             return {"message": str(exc)}, 400

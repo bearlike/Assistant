@@ -14,7 +14,7 @@ import {
   SessionUsage,
   ShareRecord
 } from '../types';
-import { AgentSummary, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
+import { AgentSummary, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
 import { createRealClient } from './realClient';
 
 // Runtime config injected by nginx (docker), falls back to Vite build-time env.
@@ -230,8 +230,11 @@ export async function listWorktrees(projectId: string) {
   return realClient.listWorktrees(projectId);
 }
 
-export async function createWorktree(projectId: string, branch: string) {
-  return realClient.createWorktree(projectId, branch);
+export async function createWorktree(
+  projectId: string,
+  input: CreateWorktreeInput,
+) {
+  return realClient.createWorktree(projectId, input);
 }
 
 export async function deleteWorktree(
