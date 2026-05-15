@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { version as appVersion } from '../../package.json';
 import {
   ArrowLeft,
   Archive,
@@ -17,6 +18,7 @@ import {
   Clock,
   Square,
   FolderOpen,
+  ListChecks,
   Search } from
 'lucide-react';
 import { NotificationItem, SessionSummary, SessionUsage } from '../types';
@@ -77,6 +79,16 @@ export interface NavBarProps {
   onPluginsClick?: () => void;
   onProjectsClick?: () => void;
   onSearchClick?: () => void;
+  /**
+   * Which landing-page section is active. Controls the cross-section
+   * link strip rendered between the logo and the right-side actions in
+   * `home` mode. `null` (or omitted) hides the strip — used on detail
+   * routes and on sub-pages (e.g. `/wiki/p/...`, `/settings`) where the
+   * header is already content-dense.
+   */
+  landingNav?: 'tasks' | 'wiki' | 'search' | null;
+  onTasksClick?: () => void;
+  onWikiClick?: () => void;
   langfuseUrl?: string | null;
   sessionTokenTotals?: SessionUsage | null;
 }
@@ -112,6 +124,9 @@ export function NavBar({
   onPluginsClick,
   onProjectsClick,
   onSearchClick,
+  landingNav = null,
+  onTasksClick,
+  onWikiClick,
   langfuseUrl,
   sessionTokenTotals
 }: NavBarProps) {
@@ -389,24 +404,57 @@ export function NavBar({
 
   const VersionBadge = () =>
   <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold leading-none bg-[hsl(var(--primary))]/15 text-[hsl(var(--primary))] border border-[hsl(var(--primary))]/20">
-      v0.0.10
+      v{appVersion}
     </span>;
 
   return (
     <header className="sticky top-0 z-50 w-full h-14 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--card))]/95 backdrop-blur flex items-center justify-between px-4">
       {mode === 'home' ?
       <>
-          <button
-            type="button"
-            onClick={onBack}
-            aria-label="Go to home"
-            className="flex items-center gap-2 rounded px-1 -mx-1 py-0.5 hover:opacity-70 transition-opacity">
-            <img src="/logo-transparent.svg" alt="Mewbo" className="w-5 h-5" />
-            <span className="font-semibold text-sm text-[hsl(var(--foreground))]">
-              Mewbo
-            </span>
-            <VersionBadge />
-          </button>
+          <div className="flex items-center gap-3 md:gap-4 min-w-0">
+            <button
+              type="button"
+              onClick={onBack}
+              aria-label="Go to home"
+              className="flex items-center gap-2 rounded px-1 -mx-1 py-0.5 hover:opacity-70 transition-opacity shrink-0">
+              <img src="/logo-transparent.svg" alt="Mewbo" className="w-5 h-5" />
+              <span className="font-semibold text-sm text-[hsl(var(--foreground))]">
+                Mewbo
+              </span>
+              <VersionBadge />
+            </button>
+
+            {landingNav &&
+              <nav
+                aria-label="Sections"
+                className="flex items-center gap-1 pl-1 md:pl-2 border-l border-[hsl(var(--border))]">
+                <Button
+                  variant={landingNav === 'tasks' ? 'neutral' : 'ghost'}
+                  size="sm"
+                  onClick={onTasksClick}
+                  aria-current={landingNav === 'tasks' ? 'page' : undefined}
+                  leadingIcon={<ListChecks className="w-3.5 h-3.5" />}>
+                  <span className="hidden sm:inline">Tasks</span>
+                </Button>
+                <Button
+                  variant={landingNav === 'wiki' ? 'neutral' : 'ghost'}
+                  size="sm"
+                  onClick={onWikiClick}
+                  aria-current={landingNav === 'wiki' ? 'page' : undefined}
+                  leadingIcon={<BookOpen className="w-3.5 h-3.5" />}>
+                  <span className="hidden sm:inline">Wiki</span>
+                </Button>
+                <Button
+                  variant={landingNav === 'search' ? 'neutral' : 'ghost'}
+                  size="sm"
+                  onClick={onSearchClick}
+                  aria-current={landingNav === 'search' ? 'page' : undefined}
+                  leadingIcon={<Search className="w-3.5 h-3.5" />}>
+                  <span className="hidden sm:inline">Search</span>
+                </Button>
+              </nav>
+            }
+          </div>
 
           <div className="flex items-center gap-1.5">
             <NotificationButton />

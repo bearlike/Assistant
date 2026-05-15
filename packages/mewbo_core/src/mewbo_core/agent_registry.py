@@ -285,10 +285,14 @@ class AgentRegistry:
         return "\n".join(lines)
 
 
+#: Alias kept for backwards compatibility and test convenience.
+parse_agent_def = parse_agent_file
+
 __all__ = [
     "AgentDef",
     "AgentRegistry",
     "CC_TOOL_MAP",
     "map_cc_tool_names",
+    "parse_agent_def",
     "parse_agent_file",
 ]

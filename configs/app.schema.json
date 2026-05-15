@@ -967,6 +967,52 @@
       "title": "Channels",
       "type": "object"
     },
+    "wiki": {
+      "type": "object",
+      "description": "Optional DeepWiki-style auto-generated documentation backend. Requires the 'wiki' extras (mewbo-api[wiki]).",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean", "description": "Master switch. When false, /v1/wiki/* routes do not mount."},
+        "clone_dir": {"type": "string", "description": "Optional override for the directory under which indexing jobs clone repos. Falls back to a tmpdir under MEWBO_HOME."},
+        "indexing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "default_depth": {"type": "string", "enum": ["comprehensive", "concise"]},
+            "default_language": {"type": "string"},
+            "max_files": {"type": "integer", "minimum": 1},
+            "max_file_size_kb": {"type": "integer", "minimum": 1},
+            "planner_model": {"type": "string"},
+            "page_model": {"type": "string"},
+            "max_parallel_pages": {"type": "integer", "minimum": 1, "maximum": 32}
+          }
+        },
+        "embedding": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "model": {"type": "string"},
+            "batch_size": {"type": "integer", "minimum": 1, "maximum": 1024},
+            "dimensions": {"type": "integer", "minimum": 16}
+          }
+        },
+        "qa": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "default_model": {"type": "string"},
+            "retrieval_k": {"type": "integer", "minimum": 1, "maximum": 50},
+            "answer_ttl_days": {"type": "integer", "minimum": 0}
+          }
+        },
+        "grounder_paths": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Repo-relative paths to look up an opt-in wiki structure grounder (in order). Defaults to .mewbo/wiki.json then .devin/wiki.json."
+        }
+      }
+    },
     "projects": {
       "additionalProperties": {
         "$ref": "#/$defs/ProjectConfig"

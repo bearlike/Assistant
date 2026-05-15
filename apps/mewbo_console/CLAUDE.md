@@ -1,6 +1,9 @@
 <!-- mewbo:noload -->
 # Mewbo Console — Frontend Engineering Guide
 
+**Subsystem docs (read the deepest one that applies):**
+- `src/components/wiki/CLAUDE.md` — MewboWiki FE: atomic `IndexingProgress` class, KnowledgeGraphRenderer, full-log timeline pinning, SSE consumer pattern. The colocated `README.md` has the depth reference (file map, endpoint table, Mermaid invariants, Q&A streaming contract).
+
 ## What this is
 A lean React + Vite + Tailwind web console that wraps the Mewbo API. Not a general-purpose SPA — it's an instrument for watching an agent work. Two principles run in parallel: **library-first** for engineering and **minimal-and-purposeful** for design (sections below). Neither overrides the other.
 
@@ -193,6 +196,9 @@ Plugin discovery and management page. Displays installed plugins and marketplace
 
 ### Web IDE (`components/IdeLoader.tsx`, `hooks/useWebIdeEnabled.ts`)
 "Open in Web IDE" launches per-session code-server containers via the API. `useWebIdeEnabled()` checks whether the feature is available. IDE loader shows a floral background animation during container startup.
+
+### MewboWiki — `/wiki/*` section (`components/wiki/`)
+Self-contained DeepWiki-style namespace: project gallery, configure wizard, indexing loader, wiki page, Q&A streaming view. All screens are wired against a mock client at `components/wiki/api/client.ts` — backend swap is one file. **Full design + integration notes live in [`components/wiki/README.md`](src/components/wiki/README.md)** — read it before editing anything under `components/wiki/`. The Gitea handoff issue describing the API contract verbatim is `bearlike/Assistant#5`. Key invariants colocated there: stable diagram ids for mermaid (avoid scroll-spy flicker), `mermaid-renderer.ts` singleton cache, `useIndexingStream`/`useQaStream` AsyncIterable contract honouring `AbortSignal`, mock data isolated to `components/wiki/mocks/`, model picker reusing `ModelBrandIcon` + `formatModelName` (no bespoke brand glyphs), platform tiles via `simple-icons` (CC0).
 
 ## Stlite widget rendering — Streamlit inside the React shell
 

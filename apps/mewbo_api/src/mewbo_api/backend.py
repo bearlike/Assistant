@@ -584,6 +584,11 @@ from mewbo_api.channels.routes import init_channels  # noqa: E402
 
 init_channels(app, runtime, _hook_manager, _config)
 
+# Wiki backend (opt-in via mewbo-api[wiki] extras).
+from mewbo_api.wiki import init_wiki  # noqa: E402
+
+init_wiki(app, runtime)
+
 
 @ns.route("/models")
 class Models(Resource):
