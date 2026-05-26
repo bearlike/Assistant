@@ -27,6 +27,7 @@ services:
       dockerfile: docker/Dockerfile.api
       args:
         BASE_IMAGE: ghcr.io/bearlike/mewbo-base:latest
+        WIKI_EXTRAS: "1"
     network_mode: host
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     # Supplementary group so the api process can reach /var/run/docker.sock
@@ -48,6 +49,8 @@ services:
       # files across restarts. Survives ``docker compose down``; cleared
       # only by ``docker compose down -v`` or ``docker volume rm``.
       - plans-data:/tmp/mewbo/plans
+      # Wiki indexing: git clones survive restarts; wiped only by `docker compose down -v`.
+      - wiki-clones:/tmp/mewbo/wiki/clones
       # Web IDE: Docker SDK needs write access to the socket to create
       # code-server sibling containers. Deadline files bind-mounted into
       # each IDE container live under /tmp/mewbo-ide.
@@ -58,6 +61,7 @@ services:
     environment:
       - MEWBO_HOME=/app/data
       - MEWBO_IDE_STATE_DIR=/tmp/mewbo-ide
+      - MEWBO_WIKI_CLONE_ROOT=/tmp/mewbo/wiki/clones
       # CLAUDE_PLUGIN_ROOT is set at runtime from plugins.install_path in app.json
       # (or $MEWBO_HOME/plugins/ by default). Override here or in docker.env
       # to pin an explicit path.
@@ -96,3 +100,4 @@ volumes:
   api-data:
   mongo-data:
   plans-data:
+  wiki-clones:

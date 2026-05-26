@@ -20,6 +20,7 @@ Design rules (KISS):
 from __future__ import annotations
 
 import re
+import secrets
 import subprocess
 from pathlib import Path
 
@@ -31,7 +32,38 @@ logger = get_logger(name="core.worktree")
 WORKTREES_DIR = ".mewbo/worktrees"
 """Subdirectory of the parent repo that holds all managed worktrees."""
 
+MEWBO_BRANCH_PREFIX = "mewbo/"
+"""Prefix for branches auto-created by Mewbo for managed worktrees.
+
+Branches with this prefix are owned by Mewbo and may be deleted automatically
+when their backing worktree is removed. Anything outside this prefix is
+treated as user-owned and left alone.
+"""
+
 _INVALID_SLUG_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+class WorktreeBranchInUseError(RuntimeError):
+    """Raised when ``git worktree add`` rejects a branch already checked out.
+
+    Surfaces a more actionable message than the raw git stderr, but remains
+    a ``RuntimeError`` subclass so existing ``except RuntimeError`` callers
+    keep working unchanged (LSP-friendly, KISS).
+    """
+
+    def __init__(self, branch: str, existing_path: str | None = None) -> None:  # noqa: D107
+        loc = f" at '{existing_path}'" if existing_path else ""
+        super().__init__(
+            f"Branch '{branch}' is already checked out{loc}. "
+            "Pick a different branch, or check out another branch in the parent repo first."
+        )
+        self.branch = branch
+        self.existing_path = existing_path
+
+
+_BRANCH_IN_USE_RE = re.compile(
+    r"'([^']+)' is already checked out at '([^']+)'", re.IGNORECASE
+)
 
 
 def slugify_branch(branch: str) -> str:
@@ -44,6 +76,28 @@ def slugify_branch(branch: str) -> str:
     if not s:
         raise ValueError(f"Branch name '{branch}' has no slug-safe characters")
     return s
+
+
+def is_mewbo_branch(branch: str) -> bool:
+    """Return True iff *branch* was auto-created by Mewbo.
+
+    Used by cleanup logic to decide whether a branch is safe to ``-D`` after
+    its worktree is removed. Anything outside :data:`MEWBO_BRANCH_PREFIX` is
+    considered user-owned.
+    """
+    return branch.startswith(MEWBO_BRANCH_PREFIX)
+
+
+def generate_worktree_branch_name(base: str) -> str:
+    """Return a fresh ``mewbo/<base-slug>-<short-id>`` branch name.
+
+    The 6-char hex suffix makes the name unique without a git roundtrip.
+    The base is slugified so e.g. ``feature/auth`` yields
+    ``mewbo/feature-auth-ab12cd``.
+    """
+    suffix = secrets.token_hex(3)  # 6 hex chars, ~16M space — plenty for UI defaults.
+    base_slug = slugify_branch(base) if base else "branch"
+    return f"{MEWBO_BRANCH_PREFIX}{base_slug}-{suffix}"
 
 
 def _git(repo: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -178,15 +232,22 @@ class WorktreeManager:
         return out
 
     @staticmethod
-    def create(repo_path: str, branch: str) -> str:
+    def create(repo_path: str, branch: str, *, base: str | None = None) -> str:
         """Create a worktree for *branch* under ``<repo>/.mewbo/worktrees/<slug>``.
 
-        The branch must already exist (locally or as a remote-tracking ref).
-        Idempotent in the sense that re-creating an existing worktree raises;
-        callers should check ``worktree_path().exists()`` first if they need
-        soft handling.
+        Two modes:
 
-        Returns the absolute path of the new worktree.
+        * ``base is None`` — *branch* must already exist (locally or as a
+          remote-tracking ref). Runs ``git worktree add <path> <branch>``.
+        * ``base`` provided — *branch* must NOT exist yet. Runs
+          ``git worktree add -b <branch> <path> <base>`` which creates the
+          new branch from *base* and checks it out into the worktree
+          atomically.
+
+        Returns the absolute path of the new worktree. Raises
+        :class:`WorktreeBranchInUseError` when *branch* is already checked
+        out somewhere; raises :class:`FileExistsError` when the target
+        directory already exists.
         """
         repo = Path(repo_path).resolve()
         if not (repo / ".git").exists():
@@ -204,14 +265,51 @@ class WorktreeManager:
 
         _ensure_gitignore_entry(repo, f"{WORKTREES_DIR}/")
 
+        if base:
+            git_args = ["worktree", "add", "-b", branch, str(target), base]
+        else:
+            git_args = ["worktree", "add", str(target), branch]
+
         try:
-            _git(str(repo), "worktree", "add", str(target), branch)
+            _git(str(repo), *git_args)
         except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            match = _BRANCH_IN_USE_RE.search(stderr)
+            if match:
+                raise WorktreeBranchInUseError(
+                    branch=match.group(1),
+                    existing_path=match.group(2),
+                ) from exc
             raise RuntimeError(
-                f"git worktree add failed for branch '{branch}': {exc.stderr.strip()}"
+                f"git worktree add failed for branch '{branch}': {stderr}"
             ) from exc
-        logger.info("Created worktree at %s for branch %s", target, branch)
+        logger.info(
+            "Created worktree at %s for branch %s%s",
+            target,
+            branch,
+            f" (from {base})" if base else "",
+        )
         return str(target)
+
+    @staticmethod
+    def branches_in_use(repo_path: str) -> set[str]:
+        """Return the set of branch names that cannot back a new worktree.
+
+        A branch is "in use" when it is the active checkout of the parent repo
+        or any existing worktree. ``git worktree add`` will refuse such names
+        unless ``--force`` is passed (which we don't).
+
+        Detached HEADs and worktrees with no branch contribute nothing.
+        """
+        in_use: set[str] = set()
+        current = WorktreeManager.current_branch(repo_path)
+        if current:
+            in_use.add(current)
+        for wt in WorktreeManager.list_worktrees(repo_path):
+            br = wt.get("branch", "")
+            if br:
+                in_use.add(br)
+        return in_use
 
     @staticmethod
     def is_clean(worktree_path: str) -> bool:
@@ -299,3 +397,23 @@ class WorktreeManager:
             _git(repo_path, "worktree", "prune")
         except subprocess.CalledProcessError:
             logger.debug("worktree prune failed (non-fatal) in %s", repo_path)
+
+    @staticmethod
+    def delete_branch(repo_path: str, branch: str) -> bool:
+        """Best-effort delete of a local branch with ``git branch -D``.
+
+        Returns ``True`` on success, ``False`` if git refused (e.g. branch
+        still checked out somewhere, or doesn't exist). Never raises — branch
+        cleanup is auxiliary and should not fail worktree removal.
+        """
+        result = _git(repo_path, "branch", "-D", branch, check=False)
+        if result.returncode == 0:
+            logger.info("Deleted branch %s in %s", branch, repo_path)
+            return True
+        logger.debug(
+            "git branch -D %s failed in %s: %s",
+            branch,
+            repo_path,
+            (result.stderr or "").strip(),
+        )
+        return False

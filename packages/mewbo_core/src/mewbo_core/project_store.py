@@ -16,7 +16,7 @@ import jinja2
 
 from mewbo_core.common import get_logger
 from mewbo_core.config import get_config
-from mewbo_core.worktree import WorktreeManager, slugify_branch
+from mewbo_core.worktree import WorktreeManager, is_mewbo_branch, slugify_branch
 
 logging = get_logger(name="core.project_store")
 
@@ -111,11 +111,23 @@ class ProjectStoreBase(abc.ABC):
             if p.is_worktree and p.parent_project_id == parent_project_id
         ]
 
-    def create_worktree(self, parent_project_id: str, branch: str) -> VirtualProject:
+    def create_worktree(
+        self,
+        parent_project_id: str,
+        branch: str,
+        *,
+        base: str | None = None,
+    ) -> VirtualProject:
         """Create a worktree-backed VirtualProject for *branch* under *parent*.
+
+        When *base* is provided, *branch* is created from *base* atomically
+        via ``git worktree add -b``. When *base* is ``None``, *branch* must
+        already exist locally or as a remote-tracking ref.
 
         Idempotent: if the deterministic worktree project_id already exists,
         returns the existing record (after verifying its path still exists).
+        Idempotency is keyed on *branch* only — passing a different *base*
+        for the same existing record is silently ignored.
         """
         parent = self.get_project(parent_project_id)
         if parent is None:
@@ -129,7 +141,7 @@ class ProjectStoreBase(abc.ABC):
             # Stale record — drop and recreate.
             self.delete_project(wt_id)
 
-        path = WorktreeManager.create(parent.path, branch)
+        path = WorktreeManager.create(parent.path, branch, base=base)
         return self._persist_worktree(
             project_id=wt_id,
             parent_project_id=parent_project_id,
@@ -140,13 +152,28 @@ class ProjectStoreBase(abc.ABC):
     def delete_worktree(self, project_id: str, *, force: bool = False) -> None:
         """Remove the git worktree and the persisted record.
 
+        Mewbo-owned branches (those starting with ``mewbo/``) are also
+        ``git branch -D``'d after the worktree is gone, so the parent repo
+        doesn't accumulate stale session branches over time. User-owned
+        branches are left alone — the user might want them elsewhere.
+
         Raises ``RuntimeError`` if the worktree is dirty and ``force`` is False.
         """
         proj = self.get_project(project_id)
         if proj is None or not proj.is_worktree:
             raise KeyError(f"Worktree {project_id} not found")
+        # Capture parent + branch BEFORE removal — proj is a snapshot, but the
+        # underlying record is about to be deleted from the store.
+        parent = (
+            self.get_project(proj.parent_project_id)
+            if proj.parent_project_id
+            else None
+        )
         WorktreeManager.remove(proj.path, force=force)
         self.delete_project(project_id)
+        # Best-effort branch cleanup for mewbo-owned branches only.
+        if parent is not None and proj.branch and is_mewbo_branch(proj.branch):
+            WorktreeManager.delete_branch(parent.path, proj.branch)
 
     @abc.abstractmethod
     def _persist_worktree(

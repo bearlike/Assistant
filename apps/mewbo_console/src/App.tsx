@@ -14,6 +14,7 @@ const PluginsView = lazy(() => import('./components/PluginsView'));
 const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })));
 const IdeLoader = lazy(() => import('./components/IdeLoader'));
 const AgenticSearchView = lazy(() => import('./components/agentic_search/AgenticSearchView'));
+const WikiApp = lazy(() => import('./components/wiki/WikiApp'));
 import {
   createShare,
   exportSession,
@@ -110,11 +111,14 @@ function SessionDetailRoute({
 }
 
 export function App() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const [isSettings] = useRoute('/settings');
   const [isPlugins] = useRoute('/plugins');
   const [isProjects] = useRoute('/projects');
   const [isSearch] = useRoute('/search');
+  const [isWikiRoot] = useRoute('/wiki');
+  const [isWikiSub] = useRoute('/wiki/*');
+  const isWiki = isWikiRoot || isWikiSub;
   const [isSessionRoute, sessionParams] = useRoute<{ id: string }>('/s/:id');
   const [isIdeLoader, ideLoaderParams] = useRoute<{ sessionId: string }>('/ide-loader/:sessionId');
 
@@ -156,6 +160,8 @@ export function App() {
       } else {
         document.documentElement.classList.remove('light');
       }
+      // Notify wiki Mermaid blocks (and any other theme-aware paint) to re-render.
+      window.dispatchEvent(new CustomEvent('wiki:theme-change', { detail: next }));
       return next;
     });
   }, []);
@@ -238,6 +244,14 @@ export function App() {
     setActionError(null);
     setLocation('/search');
   }, [setLocation]);
+  const handleTasksClick = useCallback(() => {
+    setActionError(null);
+    setLocation('/');
+  }, [setLocation]);
+  const handleWikiClick = useCallback(() => {
+    setActionError(null);
+    setLocation('/wiki');
+  }, [setLocation]);
   const handleShareSession = useCallback(async (sessionId: string) => {
     try {
       const record = await createShare(sessionId);
@@ -273,22 +287,24 @@ export function App() {
   }, []);
   useEffect(() => {
     if (isSettings) {
-      document.title = 'Mewbo | Settings';
+      document.title = 'Settings | Mewbo';
     } else if (isPlugins) {
-      document.title = 'Mewbo | Plugins';
+      document.title = 'Plugins | Mewbo';
     } else if (isProjects) {
-      document.title = 'Mewbo | Projects';
+      document.title = 'Projects | Mewbo';
     } else if (isSearch) {
-      document.title = 'Mewbo | Search';
+      document.title = 'Agentic Search | Mewbo';
+    } else if (isWiki) {
+      // WikiApp manages its own title; leave the default here.
     } else if (isIdeLoader) {
-      document.title = 'Mewbo | Opening Web IDE';
+      document.title = 'Opening Web IDE | Mewbo';
     } else if (isSessionRoute) {
       const title = activeSession?.title?.trim();
       document.title = title ? `${title} | Mewbo` : 'Session | Mewbo';
     } else {
-      document.title = 'Mewbo';
+      document.title = 'Home | Mewbo';
     }
-  }, [isSettings, isPlugins, isProjects, isSearch, isIdeLoader, isSessionRoute, activeSession]);
+  }, [isSettings, isPlugins, isProjects, isSearch, isWiki, isIdeLoader, isSessionRoute, activeSession]);
 
   // The IDE loader is a standalone full-screen page with no chrome — render
   // it outside the AppLayout so it can't be mistaken for a session view.
@@ -302,6 +318,18 @@ export function App() {
   }
 
   const layoutMode: 'home' | 'detail' = isSessionRoute ? 'detail' : 'home';
+  // Section nav (Tasks/Wiki/Search) renders only on the default landing pages.
+  // `/`, `/wiki`, and `/search` exactly — sub-pages (`/wiki/p/...`, `/settings`,
+  // etc.) and session pages keep the lean header to avoid crowding.
+  const landingNav: 'tasks' | 'wiki' | 'search' | null = isSessionRoute
+    ? null
+    : isWikiRoot
+      ? 'wiki'
+      : isSearch
+        ? 'search'
+        : location === '/'
+          ? 'tasks'
+          : null;
 
   return (
     <>
@@ -325,6 +353,9 @@ export function App() {
       onPluginsClick={handlePluginsClick}
       onProjectsClick={handleProjectsClick}
       onSearchClick={handleSearchClick}
+      landingNav={landingNav}
+      onTasksClick={handleTasksClick}
+      onWikiClick={handleWikiClick}
       langfuseUrl={langfuseBaseUrl && activeSessionId ? `${langfuseBaseUrl}/${activeSessionId}` : null}
       sessionTokenTotals={sessionTokenTotals}>
       <Switch>
@@ -346,6 +377,11 @@ export function App() {
         <Route path="/search">
           <Suspense fallback={<SuspenseFallback />}>
             <AgenticSearchView />
+          </Suspense>
+        </Route>
+        <Route path="/wiki/*?">
+          <Suspense fallback={<SuspenseFallback />}>
+            <WikiApp />
           </Suspense>
         </Route>
         <Route path="/s/:id">

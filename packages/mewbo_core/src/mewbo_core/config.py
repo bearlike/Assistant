@@ -1313,6 +1313,90 @@ def _plugins_config_default() -> PluginsConfig:
     return PluginsConfig.model_validate({})
 
 
+class WikiEmbeddingConfig(BaseModel):
+    """Embedding settings for the wiki indexer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        True,
+        description=(
+            "When false, ``wiki_build_graph`` skips embedding generation and "
+            "retrieval falls back to BM25 + graph traversal only."
+        ),
+        examples=[True, False],
+    )
+    model: str = Field(
+        "openai/text-embedding-3-small",
+        description=(
+            "Embedding model ID routed through the LLM proxy. Must support "
+            "the OpenAI ``/v1/embeddings`` shape (LiteLLM normalises Gemini "
+            "and others to this shape). Pin a fast model here to speed up "
+            "indexing — embedding is per-node and runs synchronously."
+        ),
+        examples=["openai/gemini-embedding-001", "openai/text-embedding-3-large"],
+    )
+    # No ``dimensions`` knob — the Embedder reads ``len(vector)`` off the
+    # actual response, which is always accurate. LangChain's
+    # ``OpenAIEmbeddings`` only sends a ``dimensions`` parameter when the
+    # caller wants truncation (OpenAI v3 family only); we don't expose
+    # that here to keep the surface small.
+    batch_size: int = Field(
+        64,
+        description="Batch size when embedding nodes in chunks.",
+        examples=[32, 64, 128],
+        gt=0,
+    )
+
+
+class WikiConfig(BaseModel):
+    """Operator-facing knobs for the wiki subsystem."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_model: str = Field(
+        "",
+        description=(
+            "Model the wiki picker pre-selects for indexing (the wizard). "
+            "Overrides ``llm.default_model`` for the wizard. Empty string "
+            "means: fall back to ``llm.default_model``."
+        ),
+        examples=["openai/gpt-5.4-mini"],
+    )
+    default_qa_model: str = Field(
+        "",
+        description=(
+            "Model the Q&A composer pre-selects. Typically smaller/faster "
+            "than ``default_model`` because Q&A is a tight read-only loop "
+            "where latency matters more than depth. Empty string means: "
+            "fall back to ``default_model``, then to ``llm.default_model``."
+        ),
+        examples=["openai/gpt-5.4-nano"],
+    )
+    default_depth: Literal["", "comprehensive", "concise"] = Field(
+        "",
+        description=(
+            "Indexing depth the wizard pre-selects. Empty string means: use "
+            "the wizard's own default (``comprehensive``)."
+        ),
+    )
+    default_language: str = Field(
+        "",
+        description=(
+            "Language code the wizard pre-selects (e.g. ``en``, ``es``). "
+            "Empty string means: use the wizard's own default."
+        ),
+    )
+    embedding: WikiEmbeddingConfig = Field(
+        default_factory=lambda: WikiEmbeddingConfig.model_validate({}),
+        description="Embedding settings for the wiki indexer.",
+    )
+
+
+def _wiki_config_default() -> WikiConfig:
+    return WikiConfig.model_validate({})
+
+
 class AppConfig(BaseModel):
     """Typed configuration for the Mewbo runtime."""
 
@@ -1370,6 +1454,10 @@ class AppConfig(BaseModel):
     )
     agent: AgentConfig = Field(
         default_factory=_agent_config_default, description="Sub-agent hypervisor settings."
+    )
+    wiki: WikiConfig = Field(
+        default_factory=_wiki_config_default,
+        description="Wiki subsystem defaults and embedding behavior.",
     )
     hooks: HooksConfig = Field(
         default_factory=_hooks_config_default,

@@ -197,3 +197,7 @@ apps/mewbo_console/data/
 # their own branch and must not be tracked by the parent repo.
 .claude/worktrees/
 .mewbo/worktrees/
+
+# Wrangler local dev state (KV/D1/R2 emulation, build tmp) — regenerated
+# on every `wrangler dev` / `wrangler deploy`; may contain dev tokens.
+.wrangler/

@@ -73,7 +73,7 @@ my-plugin/
 
 ### Path substitution
 
-Inside any plugin-owned file — `.mcp.json`, `hooks/hooks.json`, `agents/*.md` bodies, `skills/*/SKILL.md` bodies — you can reference the plugin's own installation directory with `${CLAUDE_PLUGIN_ROOT}`. It is substituted when the plugin is discovered. In agent bodies, additional placeholders are resolved at spawn time:
+Inside any plugin-owned file (`.mcp.json`, `hooks/hooks.json`, `agents/*.md` bodies, `skills/*/SKILL.md` bodies) you can reference the plugin's own installation directory with `${CLAUDE_PLUGIN_ROOT}`. It is substituted when the plugin is discovered. In agent bodies, additional placeholders are resolved at spawn time:
 
 | Placeholder | Resolves to |
 |---|---|
@@ -81,7 +81,7 @@ Inside any plugin-owned file — `.mcp.json`, `hooks/hooks.json`, `agents/*.md` 
 | `${SESSION_ID}` | The current session's id |
 | `${MEWBO_WIDGET_ROOT}` | Widget output root (widget-builder only); `:-` default syntax supported |
 
-Substitution is a single linear `replace` pass — no template engine — so a body with no placeholders is byte-identical after substitution.
+Substitution is a single linear `replace` pass (no template engine), so a body with no placeholders is byte-identical after substitution.
 
 ---
 
@@ -143,14 +143,14 @@ Plugin skills never override personal (`~/.claude/skills/`) or project-local (`.
 
 ## Capability gating
 
-A plugin can declare that its agents, skills, and session tools only make sense on sessions that advertise a specific capability — for instance, the widget-builder bundle only makes sense when the client has an stlite runtime.
+A plugin can declare that its agents, skills, and session tools only make sense on sessions that advertise a specific capability. For instance, the widget-builder bundle only makes sense when the client has an stlite runtime.
 
 Capabilities flow top-down:
 
 1. The **client** announces its capabilities on every request. The web console sends `X-Mewbo-Capabilities: stlite` by default. Other clients (CLI, webhook adapters) send nothing unless configured to.
 2. The **API** writes the advertised list onto the session's context event.
 3. The **orchestrator** resolves `session_capabilities` once per session and passes the tuple to `ToolUseLoop`.
-4. The **registries** apply `filter_by_capabilities` before rendering the agent and skill catalogs. An entry whose `requires-capabilities` is not a subset of the session's set is invisible — no tool schema, no catalog line, no accidental invocation.
+4. The **registries** apply `filter_by_capabilities` before rendering the agent and skill catalogs. An entry whose `requires-capabilities` is not a subset of the session's set is invisible: no tool schema, no catalog line, no accidental invocation.
 
 Declare capabilities at the bundle level in `plugin.json`:
 
@@ -178,7 +178,7 @@ Empty `requires-capabilities` is the default and means "always visible".
 
 ## Session tools
 
-A **session tool** is a per-agent stateful tool — a tool whose lifecycle is coupled to a specific agent instance rather than the global `ToolRegistry`. The core `exit_plan_mode` tool is a session tool; the widget-builder's `submit_widget` is a session tool.
+A **session tool** is a per-agent stateful tool: its lifecycle is coupled to a specific agent instance rather than the global `ToolRegistry`. The core `exit_plan_mode` tool is a session tool; the widget-builder's `submit_widget` is a session tool.
 
 Plugins contribute session tools through the `session_tools` array in `plugin.json`:
 
@@ -203,7 +203,7 @@ The class must implement the `SessionTool` protocol:
 | `async handle(action_step)` | coroutine | Called when the LLM invokes the tool; returns a `MockSpeaker` with the tool result |
 | `should_terminate_run()` | `bool` | Returns `True` to signal the `ToolUseLoop` to exit cleanly after this step |
 
-At session start, the core instantiates a `SessionToolRegistry`, imports each listed `module` + `class`, and registers a factory. When an agent spawns with a `session_tools`-contributed tool in its `allowed_tools`, the loop instantiates one per-agent instance and wires it alongside the built-in session tools. Dispatch, schema injection, and termination all go through the same path — no widget-specific branch exists in core.
+At session start, the core instantiates a `SessionToolRegistry`, imports each listed `module` + `class`, and registers a factory. When an agent spawns with a `session_tools`-contributed tool in its `allowed_tools`, the loop instantiates one per-agent instance and wires it alongside the built-in session tools. Dispatch, schema injection, and termination all go through the same path. No widget-specific branch exists in core.
 
 This keeps core widget-agnostic: the full contract for a capability bundle is **(a)** a plugin manifest and **(b)** a Python class that satisfies the protocol.
 
@@ -211,7 +211,7 @@ This keeps core widget-agnostic: the full contract for a capability bundle is **
 
 ## Built-in plugins
 
-Some plugins ship inside the core package at `packages/mewbo_core/src/mewbo_core/builtin_plugins/`. They are discovered through the same plugin pipeline as user and marketplace plugins — byte-for-byte normal plugins, indistinguishable except for their location on the scan path. No `installed_plugins.json` entry is needed.
+Some plugins ship inside the core package at `packages/mewbo_core/src/mewbo_core/builtin_plugins/`. They are discovered through the same plugin pipeline as user and marketplace plugins, byte-for-byte normal plugins indistinguishable except for their location on the scan path. No `installed_plugins.json` entry is needed.
 
 Currently bundled:
 
@@ -227,7 +227,7 @@ The built-in path is resolved via `importlib.resources`, so it survives editable
 
 To develop a plugin locally before publishing it to a marketplace, place the plugin directory anywhere on disk and point `plugins.registry_paths` at a custom `installed_plugins.json` that references it. Alternatively, use the CLI install flow with a `./relative-path` source in a local `marketplace.json`.
 
-The minimum viable plugin is a directory containing only `.claude-plugin/plugin.json`. Everything else (`skills/`, `agents/`, `hooks/`, `.mcp.json`, `session_tools`) is optional and discovered automatically. The bundled [widget-builder](features-widgets.md) is a complete working example — see `packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/`.
+The minimum viable plugin is a directory containing only `.claude-plugin/plugin.json`. Everything else (`skills/`, `agents/`, `hooks/`, `.mcp.json`, `session_tools`) is optional and discovered automatically. The bundled [widget-builder](features-widgets.md) is a complete working example. See `packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/`.
 
 ---
 

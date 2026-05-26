@@ -14,12 +14,12 @@ import {
   SessionUsage,
   ShareRecord
 } from '../types';
-import { AgentSummary, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
+import { AgentSummary, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
 import { createRealClient } from './realClient';
+import { readRuntimeConfig } from '../runtimeConfig';
 
 // Runtime config injected by nginx (docker), falls back to Vite build-time env.
-const _rc = (window as unknown as Record<string, unknown>).__MEWBO_CONFIG__ as
-  Record<string, string> | undefined;
+const _rc = readRuntimeConfig();
 
 const USE_PROXY = parseBool(_rc?.VITE_API_USE_PROXY ?? import.meta.env.VITE_API_USE_PROXY);
 export const API_BASE =
@@ -230,8 +230,11 @@ export async function listWorktrees(projectId: string) {
   return realClient.listWorktrees(projectId);
 }
 
-export async function createWorktree(projectId: string, branch: string) {
-  return realClient.createWorktree(projectId, branch);
+export async function createWorktree(
+  projectId: string,
+  input: CreateWorktreeInput,
+) {
+  return realClient.createWorktree(projectId, input);
 }
 
 export async function deleteWorktree(

@@ -6,6 +6,22 @@ At the start of every conversation and every non-trivial task, call `ask_questio
 
 This applies to subagents too — include the directive in their prompts. There are multiple CLAUDE.md files in this monorepo. You must deliberately read the appropriate CLAUDE.md file required for the task. 
 
+## Where the per-subsystem CLAUDE.md files live
+
+Nested folders document the non-trivial engineering decisions specific to their scope. Read the deepest one that applies before editing files there.
+
+| Scope | File |
+|---|---|
+| Engine: tool-use loop, hypervisor, hooks, plugins, built-in tools | `packages/mewbo_core/CLAUDE.md` |
+| Integrations: MCP pool, file edit, LSP, Aider, vendored | `packages/mewbo_tools/CLAUDE.md` |
+| HTTP API server (routes, channels, hooks, Web IDE) | `apps/mewbo_api/CLAUDE.md` |
+| MewboWiki — API side (indexing pipeline, embedder, SSE, capability gating) | `apps/mewbo_api/src/mewbo_api/wiki/CLAUDE.md` |
+| Web console (React, shadcn, TanStack Query, wouter) | `apps/mewbo_console/CLAUDE.md` |
+| MewboWiki — Console side (atomic progress class, KG renderer, log pinning) | `apps/mewbo_console/src/components/wiki/CLAUDE.md` |
+| CLI (Rich/Textual display, agent panel) | `apps/mewbo_cli/CLAUDE.md` |
+| Home Assistant conversation agent | `mewbo_ha_conversation/CLAUDE.md` |
+| Test patterns + fixtures | `tests/CLAUDE.md` |
+
 ## What Mewbo is
 
 An AI assistant modeled as a conversation state machine with a hierarchical agent hypervisor. Core engine: a single async `ToolUseLoop` bound to an LLM via native `bind_tools`. Child sessions are admitted via `spawn_agent`, tracked by `AgentHypervisor`, and resolved through structured concurrency into one of four terminal states (`completed`, `failed`, `cancelled`, `rejected`). Interfaces: CLI, web console, REST API, Home Assistant, Nextcloud Talk — all share the core engine.
@@ -131,7 +147,8 @@ These are *rules*, not explanations. For background, query the wiki.
 - **Fork from message**: `SessionRuntime.resolve_session(fork_from=..., fork_at_ts=...)` creates a new session with only events up to the given timestamp, enabling edit-and-regenerate from any point in the conversation.
 - **Plugins**: `PluginsConfig` in `config.py` defines `registry_paths` and `marketplaces`. `plugins.py` handles discovery, install, uninstall, and marketplace reading. Plugins contribute agent definitions (via `agent_registry.py`), skills, hooks (format-translated to `HooksConfig`), and MCP tools. `load_all_plugin_components()` is called during session init in the orchestrator. CLI: `/plugins`. API: `GET/POST /api/plugins`, `GET/POST /api/plugins/marketplace`, `DELETE /api/plugins/<name>`. Console: `PluginsView`.
 - **Web IDE**: opt-in per-session code-server containers managed by `IdeManager` / `IdeStore` in the API. Config: `agent.web_ide` (`WebIdeConfig`). Requires MongoDB. API: `POST/DELETE /api/sessions/{id}/ide`, `POST /api/sessions/{id}/ide/extend`. Console shows an "Open in Web IDE" button when enabled.
-- **Proxy model prefix**: `LLMConfig.proxy_model_prefix` (default `"openai"`) is prepended to model names when routing through a proxy. Read by `build_chat_model()` in `llm.py`.
+- **Proxy model prefix**: `LLMConfig.proxy_model_prefix` (default `"openai"`) is prepended to model names when routing through a proxy. Read by `build_chat_model()` in `llm.py`. The wiki's embedder follows the same rule — bare model names get an `openai/` prefix so LiteLLM routes through the proxy instead of a provider SDK.
+- **MewboWiki**: DeepWiki-style auto-generated wikis. Six-phase pipeline `clone → scan → graph → plan → pages → finalize` driven by `emit_phase(ctx, name)` which writes the SSE event AND persists `phase` + `phase_started_at` on the `IndexingJob` snapshot — single source of truth for both the SSE-driven indexing page and the snapshot-polling landing card. Capability-gated: session must advertise `client_capabilities: ["wiki"]` for the `wiki-indexer` / `wiki-page-writer` / `wiki-qa` AgentDefs to appear in `spawn_agent` lookups. Embeddings route through `litellm.embedding` (NOT `langchain-openai` — version conflict with `openai==2.24.0` that litellm pins). FE has a `progress.ts:IndexingProgress` atomic class used by both screens — never compute progress fractions locally. See `apps/mewbo_api/src/mewbo_api/wiki/CLAUDE.md` and `apps/mewbo_console/src/components/wiki/CLAUDE.md` for the full non-obvious-decision list.
 - **LSP**: `lsp_tool` (backed by pygls/lsprotocol, gracefully absent when not installed). Operations: `diagnostics`, `definition`, `references`, `hover`. Servers auto-discovered via `shutil.which`; spawned lazily per-session; passive diagnostics injected as a `_append_lsp_feedback` hook in `ToolUseLoop` after every file edit. Config: `agent.lsp.enabled` (default `true`) + `agent.lsp.servers` (per-server overrides or custom server definitions). Built-ins: pyright (Python), typescript-language-server (TS/JS), gopls (Go), rust-analyzer (Rust). Per-session shutdown via `shutdown_lsp_managers()`.
 
 ## Running, testing, linting
