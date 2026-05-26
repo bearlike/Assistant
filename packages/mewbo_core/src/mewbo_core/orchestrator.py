@@ -163,6 +163,7 @@ class Orchestrator:
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
         allowed_tools: list[str] | None = None,
+        strict_tool_scope: bool = False,
         skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
@@ -190,6 +191,7 @@ class Orchestrator:
                     mode=mode,
                     should_cancel=should_cancel,
                     allowed_tools=allowed_tools,
+                    strict_tool_scope=strict_tool_scope,
                     skill_instructions=skill_instructions,
                     message_queue=message_queue,
                     interrupt_step=interrupt_step,
@@ -206,6 +208,7 @@ class Orchestrator:
         mode: str | None,
         should_cancel: Callable[[], bool] | None,
         allowed_tools: list[str] | None = None,
+        strict_tool_scope: bool = False,
         skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
@@ -303,9 +306,19 @@ class Orchestrator:
             # re-bound after plan approval without reconstructing specs.
             tool_specs = self._tool_registry.list_specs()
             if allowed_tools:
-                # allowed_tools from frontend scopes MCP tools; built-in tools must stay.
-                builtin_ids = [s.tool_id for s in tool_specs if s.kind != "mcp"]
-                tool_specs = filter_specs(tool_specs, allowed=allowed_tools + builtin_ids)
+                if strict_tool_scope:
+                    # Strict mode: ``allowed_tools`` is authoritative —
+                    # nothing outside it survives, not even built-ins.
+                    # Used by wiki-qa so the agent doesn't waste round
+                    # trips trying ``aider_shell_tool`` / ``spawn_agent``
+                    # / etc. Caller is responsible for including any core
+                    # tool it actually needs in ``allowed_tools``.
+                    tool_specs = filter_specs(tool_specs, allowed=allowed_tools)
+                else:
+                    # Permissive mode (FE default): ``allowed_tools`` only
+                    # scopes MCP tools; built-in tools always stay.
+                    builtin_ids = [s.tool_id for s in tool_specs if s.kind != "mcp"]
+                    tool_specs = filter_specs(tool_specs, allowed=allowed_tools + builtin_ids)
 
             # Resolve session capabilities once so every downstream lookup
             # (slash-command skill activation, sub-agent catalog, activate_skill
@@ -357,7 +370,11 @@ class Orchestrator:
                 skill_registry=self._skill_registry,
                 agent_registry=self._agent_registry,
                 session_tool_registry=self._session_tool_registry,
-                allowed_tools=None,
+                # Forward the caller's allowlist so plugin session tools
+                # (e.g. wiki_clone_repo for the wiki indexer) get built for
+                # root agents that need them. ``None`` still means "no
+                # plugin session tools" for plain user sessions.
+                allowed_tools=allowed_tools,
                 cwd=self._cwd,
                 session_id=session_id,
                 session_capabilities=session_caps,

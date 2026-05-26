@@ -17,7 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { ProjectSummary, SkillSummary } from '../api/client';
-import { WorktreeSummary } from '../types';
+import { CreateWorktreeInput, WorktreeSummary } from '../types';
 import { getProviderIcon } from '../utils/modelIcon';
 import { isUnsupportedModel } from '../utils/modelSupport';
 import { ModelBrandIcon } from './ModelBrandIcon';
@@ -79,6 +79,12 @@ type ConfigMenuProps = {
   gitRepo?: boolean;
   branches?: string[];
   currentBranch?: string | null;
+  /**
+   * Branches already checked out by the parent repo or another worktree —
+   * ``git worktree add`` will refuse them. Surfaced so the "reuse existing
+   * branch" path can disable them up-front instead of failing on POST.
+   */
+  branchesInUse?: string[];
   worktrees?: WorktreeSummary[];
   activeBranch?: string | null;
   activeWorktree?: string | null;
@@ -90,7 +96,12 @@ type ConfigMenuProps = {
   gitReadOnly?: boolean;
   onSelectBranch?: (branch: string | null) => void;
   onSelectWorktree?: (worktreeId: string | null) => void;
-  onCreateWorktree?: (branch: string) => void;
+  /**
+   * Create a worktree. The structured payload makes the two modes
+   * explicit: ``{branch}`` reuses an existing branch; ``{branch, base}``
+   * creates a fresh branch from <base> via ``git worktree add -b``.
+   */
+  onCreateWorktree?: (input: CreateWorktreeInput) => void;
   onDeleteWorktree?: (worktreeId: string) => void;
   onRefreshGit?: () => void;
   // Popover control
@@ -199,6 +210,7 @@ export function ConfigMenu({
   gitRepo = false,
   branches = [],
   currentBranch = null,
+  branchesInUse = [],
   worktrees = [],
   activeBranch = null,
   activeWorktree = null,
@@ -276,10 +288,6 @@ export function ConfigMenu({
     if (activeWorktreeEntry) return activeWorktreeEntry.branch;
     return 'Parent repo';
   })();
-  const branchesWithoutWorktrees = branches.filter(
-    (b) => !worktrees.some((w) => w.branch === b),
-  );
-
   // Project groupings
   const configProjects = projects.filter((p) => p.source !== 'managed');
   const managedProjects = projects.filter((p) => p.source === 'managed');
@@ -684,32 +692,16 @@ export function ConfigMenu({
                       })}
                     </CommandGroup>
                   )}
-                  {!gitReadOnly && branchesWithoutWorktrees.length > 0 && onCreateWorktree && (
-                    <CommandGroup heading="Create from branch" className={COMMAND_GROUP_CLS}>
-                      {branchesWithoutWorktrees.map((branch) => (
-                        <CommandItem
-                          key={`__create__${branch}`}
-                          value={`__create__ ${branch}`}
-                          onSelect={() => {
-                            if (gitMutating) return;
-                            onCreateWorktree(branch);
-                          }}
-                          disabled={gitMutating}
-                          className={`${COMMAND_ITEM_TWO_LINE_CLS}`}
-                        >
-                          <span className="flex items-center gap-2 truncate">
-                            {gitMutating ? (
-                              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                            ) : (
-                              <Plus className="w-3 h-3 shrink-0" />
-                            )}
-                            <span className="font-mono truncate">{branch}</span>
-                          </span>
-                          <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
-                            Create a managed worktree for this branch
-                          </span>
-                        </CommandItem>
-                      ))}
+                  {!gitReadOnly && onCreateWorktree && branches.length > 0 && (
+                    <CommandGroup heading="Create new worktree" className={COMMAND_GROUP_CLS}>
+                      <NewWorktreeForm
+                        branches={branches}
+                        currentBranch={currentBranch}
+                        branchesInUse={branchesInUse}
+                        existingWorktreeBranches={worktrees.map((w) => w.branch)}
+                        busy={gitMutating}
+                        onSubmit={onCreateWorktree}
+                      />
                     </CommandGroup>
                   )}
                 </CommandList>
@@ -886,5 +878,248 @@ function CategoryRow({
         {value}
       </span>
     </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// NewWorktreeForm — explicit "create from base" flow.
+//
+// Two visible inputs:
+//   1. Base branch — any existing branch (including ones currently checked
+//      out elsewhere; that's exactly the case ``-b`` was designed for).
+//   2. New branch name — pre-filled with ``mewbo/<base-slug>-<short-id>`` so
+//      the result is always unique and obviously session-owned. Editable so
+//      the user keeps full control and can pick a non-mewbo name (e.g. when
+//      they intend the branch to outlive the worktree).
+//
+// A "use existing branch" toggle exposes the legacy single-branch flow for
+// the rarer case where the user has already manually created a free branch
+// they want a worktree on. KISS: same form, just disables the "new name"
+// field and submits without ``base``.
+// ---------------------------------------------------------------------------
+
+const MEWBO_BRANCH_PREFIX = 'mewbo/';
+
+/** Slugify a branch name into a directory-safe token. Mirrors the Python
+ * ``slugify_branch`` helper closely enough for default-name generation. */
+function slugifyBranchClient(branch: string): string {
+  return branch
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[-._]+|[-._]+$/g, '')
+    || 'branch';
+}
+
+/** Browser-compatible 6-hex token. ``crypto.randomUUID`` is widely
+ * available; we slice it for compactness. Falls back to ``Math.random`` so
+ * tests and ancient environments don't crash. */
+function shortId(): string {
+  const c = (globalThis as unknown as { crypto?: Crypto }).crypto;
+  if (c?.getRandomValues) {
+    const bytes = new Uint8Array(3);
+    c.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+}
+
+function defaultMewboBranchName(base: string): string {
+  return `${MEWBO_BRANCH_PREFIX}${slugifyBranchClient(base)}-${shortId()}`;
+}
+
+type NewWorktreeFormProps = {
+  branches: string[];
+  currentBranch: string | null;
+  branchesInUse: string[];
+  /** Branches that already back a managed worktree — disabled in "reuse" mode. */
+  existingWorktreeBranches: string[];
+  busy: boolean;
+  onSubmit: (input: CreateWorktreeInput) => void;
+};
+
+function NewWorktreeForm({
+  branches,
+  currentBranch,
+  branchesInUse,
+  existingWorktreeBranches,
+  busy,
+  onSubmit,
+}: NewWorktreeFormProps) {
+  // Mode toggle. Default = "new" (the recommended workflow).
+  const [mode, setMode] = useState<'new' | 'existing'>('new');
+
+  // Base branch (used in both modes — in "existing" mode it IS the branch).
+  const initialBase = currentBranch ?? branches[0] ?? '';
+  const [base, setBase] = useState<string>(initialBase);
+
+  // Name of the branch to create (only used in "new" mode).
+  const [newBranch, setNewBranch] = useState<string>(() =>
+    initialBase ? defaultMewboBranchName(initialBase) : '',
+  );
+
+  // Re-prefill the new-branch name whenever the base changes — the user
+  // can still override afterwards. We don't overwrite if they've already
+  // edited away from a mewbo/ default (heuristic: starts with the prefix).
+  useEffect(() => {
+    setNewBranch((cur) => {
+      if (!base) return cur;
+      if (!cur || cur.startsWith(MEWBO_BRANCH_PREFIX)) {
+        return defaultMewboBranchName(base);
+      }
+      return cur;
+    });
+  }, [base]);
+
+  const inUse = new Set(branchesInUse);
+  const existingWtSet = new Set(existingWorktreeBranches);
+
+  const canSubmit = (() => {
+    if (busy) return false;
+    if (!base) return false;
+    if (mode === 'new') {
+      const trimmed = newBranch.trim();
+      if (!trimmed) return false;
+      // The new branch must not already exist (git would refuse) — cheap
+      // local check against the visible branch list.
+      if (branches.includes(trimmed)) return false;
+      return true;
+    }
+    // "existing" mode: the chosen branch must be free (not currently
+    // checked out anywhere) and not already a managed worktree branch.
+    if (inUse.has(base)) return false;
+    if (existingWtSet.has(base)) return false;
+    return true;
+  })();
+
+  const submit = () => {
+    if (!canSubmit) return;
+    if (mode === 'new') {
+      onSubmit({ branch: newBranch.trim(), base });
+    } else {
+      onSubmit({ branch: base });
+    }
+  };
+
+  // Tailwind shorthand reused for both inputs.
+  const inputCls =
+    'w-full text-xs rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1 font-mono';
+
+  return (
+    <div className="px-3 py-2 flex flex-col gap-2 text-xs">
+      {/* Mode toggle: explicit + transparent, no surprise behaviour. */}
+      <div className="flex items-center gap-1 text-[10px] text-[hsl(var(--muted-foreground))]">
+        <button
+          type="button"
+          onClick={() => setMode('new')}
+          className={`px-2 py-0.5 rounded ${
+            mode === 'new'
+              ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))] font-medium'
+              : 'hover:bg-[hsl(var(--accent))]'
+          }`}
+        >
+          New branch from base
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode('existing')}
+          className={`px-2 py-0.5 rounded ${
+            mode === 'existing'
+              ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))] font-medium'
+              : 'hover:bg-[hsl(var(--accent))]'
+          }`}
+        >
+          Use existing branch
+        </button>
+      </div>
+
+      {/* Base branch picker — in "existing" mode this IS the branch. */}
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+          {mode === 'new' ? 'Base branch' : 'Branch'}
+        </span>
+        <select
+          value={base}
+          onChange={(e) => setBase(e.target.value)}
+          disabled={busy || branches.length === 0}
+          className={inputCls}
+        >
+          {branches.map((b) => {
+            // In "existing" mode disable branches that can't back a worktree.
+            const disabled =
+              mode === 'existing' && (inUse.has(b) || existingWtSet.has(b));
+            const suffix = inUse.has(b)
+              ? ' (in use)'
+              : existingWtSet.has(b)
+                ? ' (worktree exists)'
+                : b === currentBranch
+                  ? ' (current)'
+                  : '';
+            return (
+              <option key={b} value={b} disabled={disabled}>
+                {b}
+                {suffix}
+              </option>
+            );
+          })}
+        </select>
+      </label>
+
+      {/* New branch name — only visible in "new" mode. */}
+      {mode === 'new' && (
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+            New branch name
+          </span>
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              value={newBranch}
+              onChange={(e) => setNewBranch(e.target.value)}
+              placeholder="mewbo/feature-x-ab12cd"
+              disabled={busy}
+              className={inputCls}
+            />
+            <button
+              type="button"
+              onClick={() => setNewBranch(defaultMewboBranchName(base))}
+              disabled={busy || !base}
+              title="Generate a fresh mewbo/<base>-<id> name"
+              className="shrink-0 px-1.5 py-1 rounded hover:bg-[hsl(var(--accent))] text-[hsl(var(--muted-foreground))]"
+            >
+              <RefreshCw className="w-3 h-3" />
+            </button>
+          </div>
+          {newBranch && branches.includes(newBranch.trim()) && (
+            <span className="text-[10px] text-amber-400">
+              Branch already exists — pick a different name or switch to
+              &ldquo;Use existing branch&rdquo;.
+            </span>
+          )}
+        </label>
+      )}
+
+      {/* Transparency: spell out what the click is going to do. */}
+      <p className="text-[10px] text-[hsl(var(--muted-foreground))] leading-snug">
+        {mode === 'new' && base && newBranch.trim()
+          ? `Will run: git worktree add -b ${newBranch.trim()} <path> ${base}`
+          : mode === 'existing' && base
+            ? `Will run: git worktree add <path> ${base}`
+            : 'Pick a base branch to continue.'}
+      </p>
+
+      <button
+        type="button"
+        onClick={submit}
+        disabled={!canSubmit}
+        className="self-start inline-flex items-center gap-1.5 px-2 py-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--accent))] text-[hsl(var(--foreground))] disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 className="w-3 h-3 animate-spin" />
+        ) : (
+          <Plus className="w-3 h-3" />
+        )}
+        Create worktree
+      </button>
+    </div>
   );
 }

@@ -6,7 +6,7 @@ import {
   Check,
   Plus,
 } from 'lucide-react';
-import { CommandSpec, QueryMode, SessionContext } from '../types';
+import { CommandSpec, CreateWorktreeInput, QueryMode, SessionContext } from '../types';
 import { useMcpTools } from '../hooks/useMcpTools';
 import { useSkills } from '../hooks/useSkills';
 import { useProjects } from '../hooks/useProjects';
@@ -424,9 +424,14 @@ export function InputBar({
   }, []);
 
   const handleCreateWorktreeFromMenu = useCallback(
-    async (branch: string) => {
+    async (input: CreateWorktreeInput) => {
       try {
-        const wt = await projectGit.createWorktreeFor(branch);
+        // Pass through the structured payload so the caller's choice of
+        // mode (new branch from base vs. reuse existing) reaches the API
+        // unchanged. The composer auto-pins to the freshly created
+        // worktree on success — that's the implicit "select what I just
+        // made" behaviour users expect from a one-click create.
+        const wt = await projectGit.createWorktreeFor(input);
         if (wt.project_id) {
           setActiveBranch(wt.branch);
           setActiveWorktree(wt.project_id);
@@ -632,7 +637,7 @@ export function InputBar({
       gitReadOnly={mode === 'detail'}
       onSelectBranch={handleSelectBranch}
       onSelectWorktree={handleSelectWorktree}
-      onCreateWorktree={(branch) => void handleCreateWorktreeFromMenu(branch)}
+      onCreateWorktree={(input) => void handleCreateWorktreeFromMenu(input)}
       onDeleteWorktree={(id) => void handleDeleteWorktreeFromMenu(id)}
       onRefreshGit={projectGit.refresh}
       isOpen={isConfigOpen}

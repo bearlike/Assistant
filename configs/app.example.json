@@ -129,5 +129,30 @@
       "allowed_recipients": ["mewbo@example.com"]
     }
   },
+  "wiki": {
+    "enabled": false,
+    "clone_dir": "",
+    "indexing": {
+      "default_depth": "comprehensive",
+      "default_language": "en",
+      "max_files": 10000,
+      "max_file_size_kb": 512,
+      "planner_model": "",
+      "page_model": "",
+      "max_parallel_pages": 5
+    },
+    "embedding": {
+      "enabled": true,
+      "model": "openai/text-embedding-3-small",
+      "batch_size": 64,
+      "dimensions": 1536
+    },
+    "qa": {
+      "default_model": "",
+      "retrieval_k": 6,
+      "answer_ttl_days": 30
+    },
+    "grounder_paths": [".mewbo/wiki.json", ".devin/wiki.json"]
+  },
   "projects": {}
 }

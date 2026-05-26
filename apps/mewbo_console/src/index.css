@@ -104,6 +104,16 @@
     --elev-1: 0 1px 0 0 hsl(0 0% 100% / 0.025) inset, 0 1px 2px 0 rgba(0,0,0,0.18), 0 4px 12px -6px rgba(0,0,0,0.35);
     --elev-2: 0 1px 0 0 hsl(0 0% 100% / 0.03) inset, 0 2px 4px -1px rgba(0,0,0,0.20), 0 10px 24px -8px rgba(0,0,0,0.45);
     --elev-3: 0 1px 0 0 hsl(0 0% 100% / 0.04) inset, 0 4px 8px -2px rgba(0,0,0,0.22), 0 18px 40px -12px rgba(0,0,0,0.55);
+
+    /* ── Knowledge-graph node palette (dark) ── Neo4j-Bloom inspired discs.
+       Saturation high enough that a white glyph reads in both themes. */
+    --graph-file: 213 75% 60%;          /* blue — file container */
+    --graph-module: 263 55% 65%;        /* violet — module/import target */
+    --graph-class: 142 60% 50%;         /* green — class definition */
+    --graph-function: 35 85% 58%;       /* amber — top-level function */
+    --graph-method: 195 70% 55%;        /* cyan — bound method */
+    --graph-interface: 320 65% 62%;     /* magenta — interface/trait */
+    --graph-edge-soft: 48 5% 57%;       /* default edge tint (matches --muted-foreground) */
   }
 
   .light {
@@ -199,6 +209,16 @@
     --elev-1: 0 1px 2px 0 rgba(15, 15, 12, 0.04), 0 2px 6px -2px rgba(15, 15, 12, 0.06);
     --elev-2: 0 2px 4px -1px rgba(15, 15, 12, 0.05), 0 8px 18px -6px rgba(15, 15, 12, 0.10);
     --elev-3: 0 4px 8px -2px rgba(15, 15, 12, 0.06), 0 16px 32px -10px rgba(15, 15, 12, 0.14);
+
+    /* ── Knowledge-graph node palette (light) ── Slightly darker discs so
+       the white glyph still reads on a near-white canvas. */
+    --graph-file: 213 75% 50%;
+    --graph-module: 263 55% 55%;
+    --graph-class: 142 60% 40%;
+    --graph-function: 28 85% 48%;
+    --graph-method: 195 70% 45%;
+    --graph-interface: 320 65% 50%;
+    --graph-edge-soft: 45 3% 52%;       /* default edge tint (matches --muted-foreground) */
   }
 }
 
@@ -758,3 +778,24 @@
   opacity: 1;
 }
 
+
+/* ── Wiki-specific keyframes ──────────────────────────────────────────
+   Animations consumed by /wiki components. Honoured by reduced-motion. */
+@keyframes wiki-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes wiki-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes wiki-caret {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+@keyframes wiki-pop {
+  from { transform: scale(0.85); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [class*="animate-[wiki-"] { animation: none !important; }
+}

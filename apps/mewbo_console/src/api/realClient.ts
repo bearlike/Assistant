@@ -12,7 +12,7 @@ import {
   SessionUsage,
   ShareRecord
 } from "../types";
-import { AgentSummary, ApiClient, ApiConfig, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
+import { AgentSummary, ApiClient, ApiConfig, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
 
 function withBase(baseUrl: string, path: string) {
   if (!baseUrl) {
@@ -556,7 +556,15 @@ export function createRealClient(config: ApiConfig): ApiClient {
       return payload.worktrees ?? [];
     },
 
-    async createWorktree(projectId: string, branch: string): Promise<WorktreeSummary> {
+    async createWorktree(
+      projectId: string,
+      input: CreateWorktreeInput,
+    ): Promise<WorktreeSummary> {
+      // ``base`` is optional. When set, the backend creates a fresh branch
+      // from <base> via ``git worktree add -b``; when omitted, ``branch``
+      // must already exist in the repo.
+      const body: Record<string, unknown> = { branch: input.branch };
+      if (input.base) body.base = input.base;
       const response = await fetch(
         withBase(
           baseUrl,
@@ -565,7 +573,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
         {
           method: "POST",
           headers: headers(apiKey),
-          body: JSON.stringify({ branch })
+          body: JSON.stringify(body)
         }
       );
       return handleJson<WorktreeSummary>(response);

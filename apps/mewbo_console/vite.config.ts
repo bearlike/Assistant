@@ -136,10 +136,23 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, './src')
       }
     },
+    // Vite's dep optimizer runs esbuild directly, which doesn't know about
+    // the `vitePluginStliteReact` alias for `.whl` imports. Exclude the
+    // stlite entry that pulls those wheels so esbuild never tries to walk
+    // them; the runtime `import('@stlite/react/vite-utils')` lands later
+    // through Vite's own resolver and the alias resolves correctly there.
+    optimizeDeps: {
+      exclude: ['@stlite/react/vite-utils']
+    },
     server: {
       allowedHosts,
       proxy: {
         "/api": {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: false
+        },
+        "/v1/wiki": {
           target: apiTarget,
           changeOrigin: true,
           secure: false
