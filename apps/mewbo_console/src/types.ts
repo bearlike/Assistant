@@ -67,8 +67,24 @@ export type WorktreeSummary = {
 export type ProjectBranches = {
   branches: string[];
   current_branch?: string | null;
+  /**
+   * Branches that ``git worktree add`` will refuse — already checked out
+   * by the parent repo or another worktree. The UI uses this to disable
+   * "reuse existing branch" entries that would 409.
+   */
+  branches_in_use?: string[];
   git_repo: boolean;
   reason?: string;
+};
+
+/**
+ * Payload for ``createWorktree``. When ``base`` is set the backend creates
+ * a fresh branch from ``base`` (``git worktree add -b``); otherwise
+ * ``branch`` must already exist.
+ */
+export type CreateWorktreeInput = {
+  branch: string;
+  base?: string | null;
 };
 
 export type SessionContext = {

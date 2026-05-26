@@ -2,6 +2,9 @@
 
 Scope: this file applies to the `apps/mewbo_api/` package. It captures runtime behavior, hidden dependencies, and testing notes so changes stay safe and predictable.
 
+**Subsystem docs (read the deepest one that applies):**
+- `apps/mewbo_api/src/mewbo_api/wiki/CLAUDE.md` — MewboWiki BE: phase model, snapshot-vs-stream parity, capability gating, embedder→litellm decision, SSE proxy primer, clone-token cache, prune_pages, KG endpoint.
+
 ## Runtime flow (what actually happens)
 - Entry point: `apps/mewbo_api/src/mewbo_api/backend.py` (HTTP API framework).
 - Session endpoints:

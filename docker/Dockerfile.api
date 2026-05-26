@@ -50,6 +50,7 @@ COPY docker/entrypoint-api.sh /app/docker/entrypoint-api.sh
 RUN chmod +x /app/docker/entrypoint-api.sh
 
 # 4. Install with BuildKit cache mount (pip wheels survive rebuilds)
+ARG WIKI_EXTRAS=0
 RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
@@ -57,13 +58,18 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         -e packages/mewbo_tools \
         -e apps/mewbo_api \
         gunicorn
+# Wiki extras: tree-sitter, rank-bm25, numpy — only baked in when WIKI_EXTRAS=1.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "$WIKI_EXTRAS" = "1" ]; then \
+        uv pip install --system -e "apps/mewbo_api[wiki]"; \
+    fi
 
 # Pre-create plan-mode scratch directory with correct ownership.
 # Named volumes copy permissions from the image on first mount, so
 # ``plans-data:/tmp/mewbo/plans`` inherits mewbo ownership
 # instead of root:root. The entrypoint also fixes ownership at
 # runtime for volumes that already exist (see entrypoint-api.sh).
-RUN mkdir -p /tmp/mewbo/plans && chown -R 1000:1000 /tmp/mewbo
+RUN mkdir -p /tmp/mewbo/plans /tmp/mewbo/wiki/clones && chown -R 1000:1000 /tmp/mewbo
 
 ENV MASTER_API_TOKEN='msk-strong-password' \
     API_PORT=5125 \

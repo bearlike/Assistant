@@ -3,6 +3,7 @@ import {
   AttachmentRecord,
   CommandResult,
   CommandSpec,
+  CreateWorktreeInput,
   EventRecord,
   NotificationItem,
   ProjectBranches,
@@ -16,7 +17,12 @@ import {
   WorktreeSummary
 } from "../types";
 
-export type { ProjectBranches, VirtualProject, WorktreeSummary };
+export type {
+  CreateWorktreeInput,
+  ProjectBranches,
+  VirtualProject,
+  WorktreeSummary,
+};
 
 export type ProjectSource = "config" | "managed";
 
@@ -155,7 +161,10 @@ export type ApiClient = {
   deleteVirtualProject: (id: string) => Promise<void>;
   listProjectBranches: (projectId: string) => Promise<ProjectBranches>;
   listWorktrees: (projectId: string) => Promise<WorktreeSummary[]>;
-  createWorktree: (projectId: string, branch: string) => Promise<WorktreeSummary>;
+  createWorktree: (
+    projectId: string,
+    input: CreateWorktreeInput,
+  ) => Promise<WorktreeSummary>;
   deleteWorktree: (projectId: string, worktreeId: string, force?: boolean) => Promise<void>;
   fetchCommands: () => Promise<CommandSpec[]>;
   executeCommand: (

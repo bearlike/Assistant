@@ -47,6 +47,24 @@ USER root
 RUN ln -sfn "$(ls -d $NVM_DIR/versions/node/*/ | head -1 | sed 's:/$::')" /opt/node
 ENV PATH=/opt/node/bin:$PATH
 
+# ---------- Playwright CLI + full Chromium ----------
+# @playwright/cli (binary: ``playwright-cli``) — agent-oriented browser
+# automation, surfaced via the ``playwright-cli`` skill. We install the *full*
+# Chromium build (the default browser) so sites render with full fidelity —
+# JavaScript execution, web fonts, the real Chrome engine in new-headless mode
+# — not the stripped headless shell. ``--no-shell`` drops the redundant
+# lightweight shell binary (Playwright falls back to full Chromium for headless
+# launches when the shell is absent), keeping the image as lean as a full
+# browser allows; ``--with-deps`` pulls the Debian libraries Chromium needs.
+# Browsers land in a world-readable system path so the non-root runtime user
+# (mewbo, UID 1000) can launch them; PLAYWRIGHT_BROWSERS_PATH is an ENV so it
+# persists into derived images (Dockerfile.api) for install-time and runtime.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npm install -g @playwright/cli@latest \
+    && playwright-cli install-browser --with-deps --no-shell \
+    && chmod -R a+rX /ms-playwright \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
 # ---------- Python: uv + Mewbo core packages ----------
 RUN pip install --no-cache-dir uv
 

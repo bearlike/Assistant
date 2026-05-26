@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import { EventRecord } from "../types";
+import { readRuntimeConfig } from "../runtimeConfig";
 
-const _rc = (window as unknown as Record<string, unknown>).__MEWBO_CONFIG__ as
-  Record<string, string> | undefined;
+const _rc = readRuntimeConfig();
 
 const _useProxy = (_rc?.VITE_API_USE_PROXY ?? import.meta.env.VITE_API_USE_PROXY) || "";
 const API_BASE =
