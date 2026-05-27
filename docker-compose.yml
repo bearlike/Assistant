@@ -67,6 +67,43 @@ services:
       # to pin an explicit path.
       - CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT:-}
 
+  mewbo-mcp:
+    image: ghcr.io/bearlike/mewbo-mcp:latest
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+      args:
+        BASE_IMAGE: ghcr.io/bearlike/mewbo-base:latest
+    network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    # MASTER_API_TOKEN is read from docker.env (same file the api service uses)
+    # and must match the api service's value — it is the break-glass token the
+    # MCP server accepts and the API validates.
+    env_file: docker.env
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    depends_on:
+      - api
+      - mongo
+    volumes:
+      - ./configs:/app/configs:ro
+      # SHARED KEY STORE: mewbo-mcp must reach the same KeyStore as the api
+      # so that keys issued by POST /api/keys are valid here too. Mount the
+      # same api-data volume (contains api_keys.json for the file driver) AND
+      # pass the same MEWBO_MONGODB_URI so the Mongo driver resolves the same
+      # api_keys collection. Without this, the MCP server cannot validate any
+      # key except the master token.
+      - api-data:/app/data
+    environment:
+      - MEWBO_HOME=/app/data
+      # Point at the api service. Both services run with network_mode: host
+      # so localhost resolves correctly; use the gunicorn port (API_PORT=5125).
+      - MEWBO_API_URL=http://localhost:5125
+      - MEWBO_MCP_HOST=0.0.0.0
+      - MEWBO_MCP_PORT=5127
+    restart: unless-stopped
+
   console:
     image: ghcr.io/bearlike/mewbo-console:latest
     pull_policy: always

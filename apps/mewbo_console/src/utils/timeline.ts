@@ -1,3 +1,9 @@
+// DRY note: the turn-reconstruction + token-usage logic in this file
+// (buildTimeline, computeTurnTokenUsage) is also ported to Python for the MCP
+// server at apps/mewbo_mcp/src/mewbo_mcp/timeline.py. The two implementations
+// MUST stay behaviorally in sync; a parity test
+// (apps/mewbo_mcp/tests/test_timeline.py) checks shared fixtures. When you
+// change turn-boundary or token-usage logic here, update the Python port too.
 import { DiffFile, EventRecord, TimelineEntry, TurnMeta, TurnTokenUsage, WidgetReadyPayload } from "../types";
 import { extractUnifiedDiffs, mergeDiffFiles } from "./diff";
 import { parseStructuredResult } from "./logs";

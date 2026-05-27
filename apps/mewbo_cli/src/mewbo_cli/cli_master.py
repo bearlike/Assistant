@@ -401,7 +401,12 @@ def run_cli(args: argparse.Namespace) -> int:
     store = create_session_store(root_dir=args.session_dir)
     runtime = SessionRuntime(session_store=store)
     session_id = _resolve_session_id(runtime, args.session, args.tag, args.fork)
-    fallback_models = tuple(args.fallback_models.split(",")) if args.fallback_models else None
+    if getattr(args, "no_fallback", False):
+        fallback_models: tuple[str, ...] | None = ()
+    elif args.fallback_models:
+        fallback_models = tuple(m.strip() for m in args.fallback_models.split(",") if m.strip())
+    else:
+        fallback_models = None
     state = CliState(
         session_id=session_id,
         show_plan=args.show_plan,
@@ -717,6 +722,11 @@ def _run_query(
         )
         _print_usage_footer(console, store, state.session_id, state.model_name)
 
+    # Replay LLM resilience notices (retry / fallback / no-progress halt)
+    # from the run just completed — the core emits these to the transcript
+    # rather than through hooks, so the live display never showed them.
+    _print_resilience_events(console, store, state.session_id)
+
     # Surface recovery hint when the run ended in a recoverable failure so
     # users can type ``/retry`` or ``/continue`` at the next prompt.
     _maybe_print_recovery_hint(console, store, state.session_id)
@@ -779,6 +789,59 @@ def _fmt_tokens(n: int) -> str:
     return str(n)
 
 
+def _model_basename(model: object) -> str:
+    """Drop the provider prefix from a model id: ``openai/gpt-4`` → ``gpt-4``."""
+    return str(model).rsplit("/", 1)[-1]
+
+
+def _print_resilience_events(console: Console, store: SessionStoreBase, session_id: str) -> None:
+    """Surface LLM retry / fallback / no-progress-halt events from the last run.
+
+    The core emits these to the transcript (not via hooks), so we replay
+    them after the run completes. Scoped to events after the last ``user``
+    event so a multi-turn session never re-prints prior turns' notices.
+    """
+    transcript = store.load_transcript(session_id)
+    last_user_ts = ""
+    for event in transcript:
+        if event.get("type") == "user":
+            last_user_ts = str(event.get("ts", ""))
+
+    for event in transcript:
+        if str(event.get("ts", "")) < last_user_ts:
+            continue
+        etype = event.get("type")
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        line: Text | None = None
+        if etype == "llm_retry":
+            model = _model_basename(payload.get("model", "model"))
+            delay = payload.get("delay", 0) or 0
+            line = Text(
+                f"↻ Retrying {model} after {payload.get('error_type', 'error')} "
+                f"({payload.get('attempt', '?')}/{payload.get('max_attempts', '?')}, "
+                f"{float(delay):.0f}s)",
+                style="dim yellow",
+            )
+        elif etype == "llm_fallback":
+            from_model = _model_basename(payload.get("from_model", "?"))
+            to_model = _model_basename(payload.get("to_model", "?"))
+            line = Text(
+                f"⤳ Falling back: {from_model} → {to_model} "
+                f"({payload.get('reason', 'error')})",
+                style="dim yellow",
+            )
+        elif etype == "recovery" and payload.get("action") == "halt_no_progress":
+            line = Text(
+                f"⊘ Halted: repeated '{payload.get('tool', 'tool')}' with no "
+                "progress — /retry or /continue to recover",
+                style="dim red",
+            )
+        if line is not None:
+            console.print(line)
+
+
 def _maybe_print_recovery_hint(console: Console, store: SessionStoreBase, session_id: str) -> None:
     """Inspect the last completion event; print ``/retry`` / ``/continue`` hint."""
     transcript = store.load_transcript(session_id)
@@ -819,9 +882,7 @@ def _maybe_warn_missing_configs(
         missing.append(str(config_path))
     if mcp_path and not mcp_path.exists():
         missing.append(str(mcp_path))
-    if not missing:
-        pass
-    else:
+    if missing:
         console.print(
             "Config files missing: "
             + ", ".join(missing)
@@ -877,7 +938,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", help="Override model name")
     parser.add_argument(
         "--fallback-models",
+        "--fallback-model",
+        dest="fallback_models",
         help="Comma-separated fallback model IDs (e.g. gpt-5.4,gemini-2.5-pro)",
+    )
+    parser.add_argument(
+        "--no-fallback",
+        action="store_true",
+        help="Disable model fallback for this run (ignores --fallback-models)",
     )
     parser.add_argument("--max-iters", type=int, default=3)
     parser.add_argument("--show-plan", action="store_true", default=True)

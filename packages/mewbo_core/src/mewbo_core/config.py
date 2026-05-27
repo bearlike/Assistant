@@ -25,6 +25,22 @@ from pydantic import (
     model_validator,
 )
 
+# Single source of truth for the retry/fallback defaults (defined where the
+# behaviour lives); the RetryConfig fields below reference these.
+from mewbo_core.llm_resilience import (
+    DEFAULT_BACKOFF_BASE,
+    DEFAULT_BACKOFF_CAP,
+    DEFAULT_BUDGET_CAPACITY,
+    DEFAULT_CB_COOLDOWN,
+    DEFAULT_CB_THRESHOLD,
+    DEFAULT_DOOM_LOOP_THRESHOLD,
+    DEFAULT_FALLBACK_RETRIES,
+    DEFAULT_PRIMARY_RETRIES,
+    DEFAULT_RETRY_AFTER_CAP,
+    DEFAULT_TIMEOUT,
+    DEFAULT_TURN_DEADLINE,
+)
+
 _APP_CONFIG_PATH_OVERRIDE: Path | None = None
 _MCP_CONFIG_PATH_OVERRIDE: Path | None = None
 _MCP_CONFIG_DISABLED = False
@@ -98,7 +114,15 @@ def _coerce_list(value: Any) -> list[str]:
 class RuntimeConfig(BaseModel):
     """Runtime environment settings."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={
+            "title": "Runtime",
+            "x-group": "server",
+            "x-order": 3,
+            "x-advanced": True,
+        },
+    )
 
     envmode: str = Field("dev", description="Environment mode (e.g. dev, prod).", examples=["dev"])
     log_level: str = Field(
@@ -181,10 +205,41 @@ class RuntimeConfig(BaseModel):
         return _coerce_bool(value, default=False)
 
 
+class FallbackConfig(BaseModel):
+    """Opt-in cross-model fallback policy.
+
+    Disabled by default so a run never fans out to a different model — with
+    different cost, latency, output style and prompt-cache behaviour — without
+    an explicit opt-in. When disabled, an error that is hopeless on the current
+    model (e.g. quota exhausted) halts cleanly for one-click recovery instead.
+    """
+
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Fallback"},
+    )
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Enable automatic fallback to other models when the primary is "
+            "exhausted or hits a hopeless-here error. Off by default."
+        ),
+    )
+    models: list[str] = Field(
+        default_factory=list,
+        description="Ordered fallback model IDs, tried after the primary is exhausted.",
+        examples=[["gpt-5.4", "gemini-2.5-pro"]],
+    )
+
+
 class LLMConfig(BaseModel):
     """LLM provider connection and model selection."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Language Model", "x-group": "models", "x-order": 1},
+    )
 
     api_base: str = Field(
         "",
@@ -200,7 +255,7 @@ class LLMConfig(BaseModel):
         "",
         description=("API key for the LLM provider (e.g. Anthropic, OpenAI) or proxy master key."),
         examples=["sk-ant-xxxxxxxx"],
-        json_schema_extra={"x-protected": True},
+        json_schema_extra={"x-secret": True},
     )
     default_model: str = Field(
         "gpt-5.2",
@@ -243,11 +298,15 @@ class LLMConfig(BaseModel):
     fallback_models: list[str] = Field(
         default_factory=list,
         description=(
-            "Ordered list of fallback model IDs. On retryable LLM failure, "
-            "the system tries each in order after exhausting retries on "
-            "the primary model. Empty = no fallback."
+            "Legacy ordered list of fallback model IDs. Prefer 'fallback' "
+            "(typed, explicit opt-in). A non-empty value here is still honored "
+            "for backward compatibility (treated as fallback enabled)."
         ),
         examples=[["gpt-5.4", "gemini-2.5-pro"]],
+    )
+    fallback: FallbackConfig = Field(
+        default_factory=lambda: FallbackConfig.model_validate({}),
+        description="Opt-in cross-model fallback policy (see FallbackConfig).",
     )
     proxy_model_prefix: str = Field(
         "openai",
@@ -259,6 +318,7 @@ class LLMConfig(BaseModel):
             "Only relevant when api_base is configured."
         ),
         examples=["openai", "azure", "vertex_ai"],
+        json_schema_extra={"x-advanced": True},
     )
     reasoning_effort: str = Field(
         "",
@@ -279,6 +339,7 @@ class LLMConfig(BaseModel):
             "Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; "
             "only set this to override or extend."
         ),
+        json_schema_extra={"x-advanced": True},
     )
 
     @field_validator("reasoning_effort", mode="before")
@@ -382,7 +443,10 @@ class LLMConfig(BaseModel):
 class ContextConfig(BaseModel):
     """Context window selection and event filtering."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Context", "x-group": "models", "x-order": 3},
+    )
 
     recent_event_limit: int = Field(
         8,
@@ -436,7 +500,10 @@ class ContextConfig(BaseModel):
 class TokenBudgetConfig(BaseModel):
     """Token budget and auto-compaction thresholds."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Token Budget", "x-group": "models", "x-order": 2},
+    )
 
     default_context_window: int = Field(
         128000,
@@ -507,7 +574,10 @@ class CompactionConfig(BaseModel):
     ``<analysis>/<summary>`` response structure downstream parsers expect.
     """
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Compaction", "x-group": "models", "x-order": 4},
+    )
 
     caveman_mode: bool = Field(
         False,
@@ -530,7 +600,10 @@ class CompactionConfig(BaseModel):
 class ReflectionConfig(BaseModel):
     """Post-execution reflection pass settings."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Reflection", "x-group": "models", "x-order": 5},
+    )
 
     enabled: bool = Field(
         True, description="Enable a reflection LLM pass after tool execution to verify results."
@@ -552,7 +625,10 @@ class ReflectionConfig(BaseModel):
 class LangfuseConfig(BaseModel):
     """Langfuse LLM observability integration."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Langfuse", "x-group": "integrations", "x-order": 2},
+    )
 
     enabled: bool = Field(False, description="Enable Langfuse tracing for all LLM calls.")
     host: str = Field(
@@ -569,13 +645,13 @@ class LangfuseConfig(BaseModel):
         "",
         description="Langfuse project public key.",
         examples=["pk-lf-xxxxxxxxxxxxxxxx"],
-        json_schema_extra={"x-protected": True},
+        json_schema_extra={"x-secret": True},
     )
     secret_key: str = Field(
         "",
         description="Langfuse project secret key.",
         examples=["sk-lf-xxxxxxxxxxxxxxxx"],
-        json_schema_extra={"x-protected": True},
+        json_schema_extra={"x-secret": True},
     )
 
     @field_validator("enabled", mode="before")
@@ -610,7 +686,10 @@ class LangfuseConfig(BaseModel):
 class HomeAssistantConfig(BaseModel):
     """Home Assistant smart-home integration."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Home Assistant", "x-group": "integrations", "x-order": 1},
+    )
 
     enabled: bool = Field(
         False,
@@ -625,7 +704,7 @@ class HomeAssistantConfig(BaseModel):
         "",
         description="Long-lived access token for Home Assistant authentication.",
         examples=["ha_token_here"],
-        json_schema_extra={"x-protected": True},
+        json_schema_extra={"x-secret": True},
     )
 
     @field_validator("enabled", mode="before")
@@ -653,7 +732,10 @@ class HomeAssistantConfig(BaseModel):
 class PermissionsConfig(BaseModel):
     """Tool execution permission policy."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Permissions", "x-group": "agent", "x-order": 2},
+    )
 
     policy_path: str = Field(
         "",
@@ -684,7 +766,10 @@ class PermissionsConfig(BaseModel):
 class CLIConfig(BaseModel):
     """Terminal CLI display and interaction settings."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "CLI", "x-group": "interface", "x-order": 1},
+    )
 
     disable_textual: bool = Field(
         False,
@@ -718,7 +803,10 @@ class CLIConfig(BaseModel):
 class ChatConfig(BaseModel):
     """Legacy config section kept for backward compatibility with app.json files."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Chat", "x-group": "interface", "x-order": 2},
+    )
 
     port: int = Field(
         8501,
@@ -744,6 +832,10 @@ class ChatConfig(BaseModel):
 class APIConfig(BaseModel):
     """REST API authentication."""
 
+    model_config = ConfigDict(
+        json_schema_extra={"title": "API Server", "x-group": "server", "x-order": 1},
+    )
+
     master_token: str = Field(
         "msk-strong-password",
         description=(
@@ -758,7 +850,9 @@ class APIConfig(BaseModel):
 class HookEntry(BaseModel):
     """A single hook configuration entry."""
 
-    type: str = Field(
+    model_config = ConfigDict(json_schema_extra={"title": "Hook"})
+
+    type: Literal["command", "http"] = Field(
         "command", description="Hook type: 'command' (shell) or 'http' (POST to URL)."
     )
     command: str = Field("", description="Shell command to execute (type=command).")
@@ -786,6 +880,10 @@ class HookEntry(BaseModel):
 class HooksConfig(BaseModel):
     """External shell hooks fired during the session lifecycle."""
 
+    model_config = ConfigDict(
+        json_schema_extra={"title": "Hooks", "x-group": "integrations", "x-order": 3},
+    )
+
     pre_tool_use: list[HookEntry] = Field(
         default_factory=list, description="Hooks executed before each tool invocation."
     )
@@ -803,7 +901,10 @@ class HooksConfig(BaseModel):
 class PluginsConfig(BaseModel):
     """Plugin system configuration."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Plugins", "x-group": "agent", "x-order": 3},
+    )
 
     enabled: bool = Field(True, description="Enable the plugin system.")
     enabled_plugins: list[str] = Field(
@@ -815,7 +916,19 @@ class PluginsConfig(BaseModel):
     )
     marketplaces: list[str] = Field(
         default_factory=lambda: ["anthropics/claude-plugins-official"],
-        description="GitHub repos containing marketplace.json plugin indexes.",
+        description=(
+            "Marketplace catalogs holding a marketplace.json plugin index, on any "
+            "git host. Each entry is a full git URL "
+            "(https/ssh/git, or scp-style git@host:owner/repo), a 'host/owner/repo' "
+            "shorthand, or a bare 'owner/repo' (cloned from marketplace_default_host)."
+        ),
+    )
+    marketplace_default_host: str = Field(
+        "github.com",
+        description=(
+            "Default git host for bare 'owner/repo' marketplace entries. Full URLs "
+            "and 'host/owner/repo' entries ignore this."
+        ),
     )
     install_path: str = Field(
         "",
@@ -842,6 +955,12 @@ class PluginsConfig(BaseModel):
         if raw:
             return str(Path(raw).expanduser().resolve())
         return ""
+
+    @field_validator("marketplace_default_host", mode="before")
+    @classmethod
+    def _normalize_default_host(cls, value: Any) -> str:
+        raw = str(value).strip() if value else ""
+        return raw or "github.com"
 
     def resolve_install_dir(self) -> Path:
         """Uses install_path if set, otherwise resolve_mewbo_home() / 'plugins'."""
@@ -875,24 +994,28 @@ class PluginsConfig(BaseModel):
         if own_base.is_dir():
             dirs.extend(sorted(d for d in own_base.iterdir() if d.is_dir()))
 
-        # 3. If nothing found and we have marketplace repos configured, sync them
-        if sync and not dirs and self.marketplaces:
-            from mewbo_core.plugins import sync_marketplaces
+        # 3. Ensure every configured catalog is cloned (skip ones already present).
+        if sync and self.marketplaces:
+            from mewbo_core.plugins import marketplace_dir_name, sync_marketplaces
 
-            synced = sync_marketplaces(self.marketplaces, self.resolve_install_dir())
-            dirs.extend(synced)
-        elif sync and self.marketplaces:
-            # Even with existing dirs, ensure all configured repos are cloned
             existing_names = {d.name for d in dirs}
-            missing = [
-                r
-                for r in self.marketplaces
-                if (r.split("/")[-1] if "/" in r else r) not in existing_names
-            ]
+            missing = []
+            for entry in self.marketplaces:
+                canonical = marketplace_dir_name(
+                    entry, default_host=self.marketplace_default_host
+                )
+                # Legacy pre-host-agnostic leaf name (and Claude Code's own
+                # leaf-named cache) — reuse those clones instead of re-cloning
+                # the same catalog under the new canonical name.
+                legacy_leaf = entry.rstrip("/").split("/")[-1]
+                if canonical not in existing_names and legacy_leaf not in existing_names:
+                    missing.append(entry)
             if missing:
-                from mewbo_core.plugins import sync_marketplaces
-
-                synced = sync_marketplaces(missing, self.resolve_install_dir())
+                synced = sync_marketplaces(
+                    missing,
+                    self.resolve_install_dir(),
+                    default_host=self.marketplace_default_host,
+                )
                 dirs.extend(synced)
 
         return dirs
@@ -901,7 +1024,10 @@ class PluginsConfig(BaseModel):
 class ProjectConfig(BaseModel):
     """A project directory exposed to the REST API for session scoping."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Project"},
+    )
 
     path: str = Field("", description="Absolute path to the project root. Tilde (~) is expanded.")
     description: str = Field("", description="Short human-readable description of the project.")
@@ -922,7 +1048,7 @@ def _projects_config_default() -> dict[str, ProjectConfig]:
 class WebIdeConfig(BaseModel):
     """Config for the per-session code-server "Open in Web IDE" feature."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Web IDE"})
 
     enabled: bool = False
     image: str = "codercom/code-server:latest"
@@ -938,7 +1064,7 @@ class WebIdeConfig(BaseModel):
 class LSPConfig(BaseModel):
     """Language Server Protocol integration settings."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "LSP"})
 
     enabled: bool = Field(True, description="Enable native LSP tool.")
     servers: dict[str, dict[str, Any]] = Field(
@@ -963,7 +1089,7 @@ class ToolSearchConfig(BaseModel):
     on sessions with many MCP servers connected.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Tool Search"})
 
     mode: Literal["off", "on"] = Field(
         "off",
@@ -975,10 +1101,74 @@ class ToolSearchConfig(BaseModel):
     )
 
 
+class RetryConfig(BaseModel):
+    """Automatic LLM-call retry / fallback resilience knobs.
+
+    Same-model retry hardening (full-jitter backoff, circuit breaker, retry
+    budget, wall-clock deadline, doom-loop halt) is always on; cross-model
+    fallback is opt-in via ``llm.fallback``. Defaults are calibrated from
+    production agent loops, not the tighter vendor-SDK defaults.
+    """
+
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Retry"},
+    )
+
+    backoff_base: float = Field(
+        DEFAULT_BACKOFF_BASE,
+        description="Base seconds for full-jitter backoff: random(0, min(cap, base*2^(n-1))).",
+    )
+    backoff_cap: float = Field(DEFAULT_BACKOFF_CAP, description="Maximum backoff delay in seconds.")
+    retry_after_cap: float = Field(
+        DEFAULT_RETRY_AFTER_CAP,
+        description="Upper bound applied to a server Retry-After before sleeping on it.",
+    )
+    turn_deadline: float = Field(
+        DEFAULT_TURN_DEADLINE,
+        description=(
+            "Wall-clock seconds budget for one logical LLM call across all "
+            "retries and fallbacks. Checked before each attempt. 0 disables."
+        ),
+    )
+    fallback_retries: int = Field(
+        DEFAULT_FALLBACK_RETRIES,
+        description="Attempts per fallback model after the primary is exhausted.",
+    )
+    circuit_breaker_threshold: int = Field(
+        DEFAULT_CB_THRESHOLD,
+        description=(
+            "Consecutive per-model failures before that model is cooled down "
+            "and skipped (when an alternative exists). 0 disables."
+        ),
+    )
+    circuit_breaker_cooldown: float = Field(
+        DEFAULT_CB_COOLDOWN,
+        description="Seconds a model is skipped after tripping the circuit breaker.",
+    )
+    budget_capacity: float = Field(
+        DEFAULT_BUDGET_CAPACITY,
+        description=(
+            "Token-bucket retry budget. Retries stop once the bucket drops to "
+            "half capacity, so a sustained outage fails fast instead of storming."
+        ),
+    )
+    doom_loop_threshold: int = Field(
+        DEFAULT_DOOM_LOOP_THRESHOLD,
+        description=(
+            "Halt cleanly when the model repeats the same tool + identical input "
+            "this many times in a row (no progress). 0 disables."
+        ),
+    )
+
+
 class AgentConfig(BaseModel):
     """Sub-agent hypervisor settings."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Agent", "x-group": "agent", "x-order": 1},
+    )
 
     enabled: bool = Field(True, description="Enable the sub-agent spawning system.")
     max_depth: int = Field(
@@ -1002,6 +1192,7 @@ class AgentConfig(BaseModel):
     )
     max_iters: int = Field(
         30,
+        deprecated=True,
         description=(
             "Deprecated. The tool-use loop now runs until natural completion "
             "(model returns text without tool calls). This field is retained "
@@ -1010,6 +1201,7 @@ class AgentConfig(BaseModel):
     )
     sub_agent_max_steps: int = Field(
         10,
+        deprecated=True,
         description=(
             "Deprecated. Sub-agents now run until natural completion. "
             "This field is retained for API backward compatibility but "
@@ -1018,21 +1210,26 @@ class AgentConfig(BaseModel):
         ),
     )
     llm_call_timeout: float = Field(
-        60.0,
+        DEFAULT_TIMEOUT,
         description=(
             "Ceiling in seconds for a single model.ainvoke() call. "
-            "Covers extended-thinking models. On timeout, the call is "
+            "Covers extended-thinking models (raised from 60s — bare timeouts "
+            "were the largest single failure class). On timeout, the call is "
             "retried up to llm_call_retries times before cascading to "
             "fallback models."
         ),
     )
     llm_call_retries: int = Field(
-        2,
+        DEFAULT_PRIMARY_RETRIES,
         description=(
-            "Maximum retry attempts for the primary model before "
-            "cascading to fallback_models. Each fallback model gets "
-            "one attempt."
+            "Maximum attempts for the primary model before cascading to "
+            "fallback models. Each fallback model gets retry.fallback_retries "
+            "attempts. Backoff/budget/circuit-breaker live under agent.retry."
         ),
+    )
+    retry: RetryConfig = Field(
+        default_factory=lambda: RetryConfig.model_validate({}),
+        description="Automatic LLM-call retry / fallback resilience knobs.",
     )
     default_denied_tools: list[str] = Field(
         default_factory=list,
@@ -1194,6 +1391,11 @@ class AgentConfig(BaseModel):
 class MongoDBConfig(BaseModel):
     """MongoDB connection settings."""
 
+    # validate_default=True so the env-override validators below run even when
+    # the field falls back to its default (the common `model_validate({})`
+    # path); without it the MEWBO_MONGODB_* overrides silently never applied.
+    model_config = ConfigDict(validate_default=True, json_schema_extra={"title": "MongoDB"})
+
     uri: str = Field(
         "mongodb://localhost:27017",
         description="MongoDB connection URI (includes host, port, credentials).",
@@ -1225,7 +1427,15 @@ class MongoDBConfig(BaseModel):
 class StorageConfig(BaseModel):
     """Session storage backend configuration."""
 
-    model_config = ConfigDict(validate_default=True)
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={
+            "title": "Storage",
+            "x-group": "server",
+            "x-order": 2,
+            "x-advanced": True,
+        },
+    )
 
     driver: str = Field(
         "json",
@@ -1316,7 +1526,7 @@ def _plugins_config_default() -> PluginsConfig:
 class WikiEmbeddingConfig(BaseModel):
     """Embedding settings for the wiki indexer."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Embedding"})
 
     enabled: bool = Field(
         True,
@@ -1349,10 +1559,60 @@ class WikiEmbeddingConfig(BaseModel):
     )
 
 
+class WikiMemoryConfig(BaseModel):
+    """Knobs for the multiplex memory layer (atomic insights over the graph)."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Memory"})
+
+    enabled: bool = Field(
+        True, description="Master switch for the memory layer (gates wiki_submit_insight)."
+    )
+    model: str = Field(
+        "",
+        description=(
+            "Chat model for condense + LLM dedup on the human/REST/MCP path. "
+            "Empty → falls back to default_qa_model, then default_model."
+        ),
+    )
+    max_insight_chars: int = Field(200, description="Hard cap on a memory note's length.")
+    max_anchors: int = Field(8, description="Max code anchors per note.")
+    dedup_k: int = Field(5, description="kNN candidate window for fuzzy + LLM dedup tiers.")
+    dedup_cosine: float = Field(0.6, description="Cosine floor for the LLM dedup tier.")
+    fuzzy_jaccard: float = Field(0.85, description="Jaccard floor for the fuzzy dedup tier.")
+    fusion_w_ppr: float = Field(
+        0.1, description="Additive memory-expansion weight (GAAMA 0.1·ppr + 1.0·sim)."
+    )
+    hub_degree: int = Field(50, description="Degree above which an anchor is hub-damped.")
+    expansion_hops: int = Field(1, description="Structural hops to expand from an anchor.")
+
+
+class WikiRefreshConfig(BaseModel):
+    """Thresholds for the on-demand incremental refresh."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Refresh"})
+
+    default_mode: Literal["auto", "full", "incremental"] = Field(
+        "auto", description="Default re-index strategy when none is requested."
+    )
+    closure_max_depth: int = Field(4, description="Reverse-dependency closure depth cap.")
+    drift_keep: float = Field(0.90, description="Cosine ≥ this keeps a memory anchor (no LLM).")
+    drift_invalidate: float = Field(0.75, description="Cosine < this invalidates a memory anchor.")
+    page_keep: float = Field(0.05, description="Doc staleness < this → keep.")
+    page_edit: float = Field(0.35, description="Doc staleness < this → edit.")
+    page_regen: float = Field(0.70, description="Doc staleness ≥ this → regenerate + review.")
+    new_page_min: int = Field(5, description="Uncovered public symbols to propose a new page.")
+    require_scope_confirm: bool = Field(
+        False, description="Require a human gate on the scope preview before the act phase."
+    )
+
+
 class WikiConfig(BaseModel):
     """Operator-facing knobs for the wiki subsystem."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"title": "Wiki", "x-group": "workspace", "x-order": 2},
+    )
 
     default_model: str = Field(
         "",
@@ -1391,12 +1651,44 @@ class WikiConfig(BaseModel):
         default_factory=lambda: WikiEmbeddingConfig.model_validate({}),
         description="Embedding settings for the wiki indexer.",
     )
+    memory: WikiMemoryConfig = Field(
+        default_factory=lambda: WikiMemoryConfig.model_validate({}),
+        description="Multiplex memory-layer knobs (atomic insights over the graph).",
+    )
+    refresh: WikiRefreshConfig = Field(
+        default_factory=lambda: WikiRefreshConfig.model_validate({}),
+        description="On-demand incremental-refresh thresholds.",
+    )
 
 
 def _wiki_config_default() -> WikiConfig:
     return WikiConfig.model_validate({})
 
 
+# ---------------------------------------------------------------------------
+# Curation annotation contract (drives the faceted Settings UI)
+# ---------------------------------------------------------------------------
+# Section models carry presentation/security metadata in their JSON schema via
+# ``model_config = ConfigDict(json_schema_extra=...)``. Pydantic emits these on
+# the corresponding ``$defs/<Class>`` node (a submodel field is a bare
+# ``$ref`` and drops sibling ``json_schema_extra``, so the metadata MUST live on
+# the class, not the field). The API's ``ConfigSchemaView`` reads them.
+#
+# Class-level (``$defs/<Class>``):
+#   x-group     -> facet id ("models" | "agent" | "integrations" | "interface"
+#                  | "server"). Sections without x-group fall to an "other"
+#                  facet on the frontend (e.g. ``channels``, ``projects``).
+#   x-order     -> ordering within the facet (1-based).
+#   x-advanced  -> whole section is power-user-only; hidden by default.
+#
+# Field-level (``$defs/<Class>/properties/<field>``):
+#   x-protected -> never read AND never written through the API; stripped from
+#                  the public schema and from value dumps; rejected in PATCH.
+#                  Used for host paths and the API master token.
+#   x-secret    -> write-only: settable via PATCH but never read back. Kept in
+#                  the public schema marked ``writeOnly: true``; its value is
+#                  stripped from dumps. The API reports is-set status separately.
+#   x-advanced  -> single field is power-user-only; hidden by default.
 class AppConfig(BaseModel):
     """Typed configuration for the Mewbo runtime."""
 
@@ -1470,10 +1762,12 @@ class AppConfig(BaseModel):
     channels: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
         description="Chat platform channel adapters (nextcloud-talk, slack, etc.).",
+        json_schema_extra={"x-group": "integrations", "x-order": 4},
     )
     projects: dict[str, ProjectConfig] = Field(
         default_factory=_projects_config_default,
         description="Named project directories exposed to the REST API for session scoping.",
+        json_schema_extra={"x-group": "workspace", "x-order": 1},
     )
 
     @field_validator("projects", mode="before")
@@ -1765,6 +2059,22 @@ def get_config_value(*keys: str, default: Any | None = None) -> Any:
         if current is None:
             return default
     return current
+
+
+def effective_fallback_models() -> list[str]:
+    """Resolve the active fallback model chain honoring the opt-in policy.
+
+    Precedence: when ``llm.fallback.enabled`` is set, use ``llm.fallback.models``
+    (falling back to the legacy ``llm.fallback_models`` if the typed list is
+    empty). When fallback is disabled, a non-empty legacy ``llm.fallback_models``
+    is still honored for backward compatibility; otherwise there is no fallback.
+    """
+    enabled = bool(get_config_value("llm", "fallback", "enabled", default=False))
+    typed = list(get_config_value("llm", "fallback", "models", default=[]) or [])
+    legacy = list(get_config_value("llm", "fallback_models", default=[]) or [])
+    if enabled:
+        return typed or legacy
+    return legacy
 
 
 def get_config_section(*keys: str) -> dict[str, Any]:

@@ -1,10 +1,6 @@
-name: Test Coverage
+name: Python Tests
 
 on:
-  push:
-    paths:
-      - "**/*.py"
-      - "**/pyproject.toml"
   pull_request:
   workflow_dispatch:
     inputs:
@@ -16,8 +12,14 @@ permissions:
   contents: read
   id-token: write
 
+# One run per PR; a new commit cancels the superseded run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   coverage:
+    name: pytest + coverage
     runs-on: ubuntu-22.04
     env:
       COVERAGE_FILE: .coverage

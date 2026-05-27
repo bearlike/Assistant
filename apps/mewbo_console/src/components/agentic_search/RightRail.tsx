@@ -7,15 +7,15 @@ import type {
   TraceAgent,
 } from "../../types/agenticSearch"
 import { SrcAvatar } from "./SrcAvatar"
-import { agentSnapshot } from "./utils"
+import { agentSnapshot, runProgress } from "./utils"
 
 interface RightRailProps {
   agents: TraceAgent[]
   sources: SourceCatalogEntry[]
   related: string[]
   people: RelatedPerson[]
-  elapsed: number
-  totalMs: number
+  /** Run reached a terminal state. */
+  done: boolean
   traceActive: boolean
   onShowTrace: () => void
   onAsk: (query: string) => void
@@ -26,13 +26,12 @@ export function RightRail({
   sources,
   related,
   people,
-  elapsed,
-  totalMs,
+  done,
   traceActive,
   onShowTrace,
   onAsk,
 }: RightRailProps) {
-  const progress = Math.min(1, totalMs > 0 ? elapsed / totalMs : 0)
+  const progress = runProgress(agents, done)
 
   return (
     <aside className="hidden min-[1100px]:flex flex-col gap-4 w-[270px] flex-none sticky top-4 self-start">
@@ -51,7 +50,7 @@ export function RightRail({
         </button>
         <ul className="px-3 pb-3 space-y-0.5">
           {agents.slice(0, 8).map((a) => {
-            const { done, running } = agentSnapshot(a, elapsed)
+            const { done, running } = agentSnapshot(a)
             const src = sources.find((s) => s.id === a.source_id)
             return (
               <li

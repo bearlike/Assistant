@@ -45,6 +45,9 @@
     --success: 81 100% 30%; /* _green-400 */
     --success-foreground: 0 0% 100%;
 
+    --warning: 39 100% 50%; /* _amber-400 — caution/one-time banners */
+    --warning-foreground: 0 0% 100%;
+
     --surface: 60 2% 12%; /* _gray-800 — recessed surfaces */
     --surface-deep: 0 0% 7%; /* _gray-860 — deepest layer */
 
@@ -151,6 +154,9 @@
 
     --success: 79 94% 37%; /* _green-300 */
     --success-foreground: 0 0% 100%;
+
+    --warning: 33 100% 42%; /* _amber-500 — caution/one-time banners */
+    --warning-foreground: 0 0% 100%;
 
     --surface: 48 25% 92.2%; /* #f0eee6 */
     --surface-deep: 45 28.6% 97.3%; /* #faf9f6 */

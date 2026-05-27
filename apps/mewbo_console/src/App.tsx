@@ -10,6 +10,7 @@ import { AppLayout } from './components/AppLayout';
 import { HomeView } from './components/HomeView';
 import { SessionDetailView, SessionTokenTotals } from './components/SessionDetailView';
 const SettingsView = lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
+const ApiKeysView = lazy(() => import('./components/ApiKeysView').then(m => ({ default: m.ApiKeysView })));
 const PluginsView = lazy(() => import('./components/PluginsView'));
 const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })));
 const IdeLoader = lazy(() => import('./components/IdeLoader'));
@@ -113,6 +114,7 @@ function SessionDetailRoute({
 export function App() {
   const [location, setLocation] = useLocation();
   const [isSettings] = useRoute('/settings');
+  const [isApiKeys] = useRoute('/keys');
   const [isPlugins] = useRoute('/plugins');
   const [isProjects] = useRoute('/projects');
   const [isSearch] = useRoute('/search');
@@ -144,7 +146,7 @@ export function App() {
   useEffect(() => {
     getConfig()
       .then((cfg) => {
-        const lf = cfg?.langfuse as Record<string, unknown> | undefined;
+        const lf = cfg?.config?.langfuse as Record<string, unknown> | undefined;
         if (lf?.enabled && lf?.host && lf?.project_id) {
           const host = String(lf.host).replace(/\/+$/, '');
           setLangfuseBaseUrl(`${host}/project/${lf.project_id}/sessions`);
@@ -232,6 +234,10 @@ export function App() {
     setActionError(null);
     setLocation('/settings');
   }, [setLocation]);
+  const handleApiKeysClick = useCallback(() => {
+    setActionError(null);
+    setLocation('/keys');
+  }, [setLocation]);
   const handlePluginsClick = useCallback(() => {
     setActionError(null);
     setLocation('/plugins');
@@ -288,6 +294,8 @@ export function App() {
   useEffect(() => {
     if (isSettings) {
       document.title = 'Settings | Mewbo';
+    } else if (isApiKeys) {
+      document.title = 'API Keys | Mewbo';
     } else if (isPlugins) {
       document.title = 'Plugins | Mewbo';
     } else if (isProjects) {
@@ -304,7 +312,7 @@ export function App() {
     } else {
       document.title = 'Home | Mewbo';
     }
-  }, [isSettings, isPlugins, isProjects, isSearch, isWiki, isIdeLoader, isSessionRoute, activeSession]);
+  }, [isSettings, isApiKeys, isPlugins, isProjects, isSearch, isWiki, isIdeLoader, isSessionRoute, activeSession]);
 
   // The IDE loader is a standalone full-screen page with no chrome — render
   // it outside the AppLayout so it can't be mistaken for a session view.
@@ -350,6 +358,7 @@ export function App() {
       onShareSession={handleShareSession}
       onExportSession={handleExportSession}
       onSettingsClick={handleSettingsClick}
+      onApiKeysClick={handleApiKeysClick}
       onPluginsClick={handlePluginsClick}
       onProjectsClick={handleProjectsClick}
       onSearchClick={handleSearchClick}
@@ -362,6 +371,15 @@ export function App() {
         <Route path="/settings">
           <Suspense fallback={<SuspenseFallback />}>
             <SettingsView />
+          </Suspense>
+        </Route>
+        <Route path="/keys">
+          <Suspense fallback={<SuspenseFallback />}>
+            <div className="flex-1 overflow-y-auto">
+              <div className="max-w-3xl mx-auto px-6 py-8 space-y-4">
+                <ApiKeysView />
+              </div>
+            </div>
           </Suspense>
         </Route>
         <Route path="/plugins">

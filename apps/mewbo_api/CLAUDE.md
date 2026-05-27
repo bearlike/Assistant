@@ -2,8 +2,12 @@
 
 Scope: this file applies to the `apps/mewbo_api/` package. It captures runtime behavior, hidden dependencies, and testing notes so changes stay safe and predictable.
 
+**Layering (see root CLAUDE.md → "Monorepo layering"):** this is a *thin product surface* — HTTP routes, wire contracts, transport, persistence, and channel/MCP glue. Reusable engines (graph, memory, embedding, search) belong in a capability library (`mewbo_graph`), not here; the API composes them via an extra. Don't grow domain logic inside `apps/`.
+
 **Subsystem docs (read the deepest one that applies):**
-- `apps/mewbo_api/src/mewbo_api/wiki/CLAUDE.md` — MewboWiki BE: phase model, snapshot-vs-stream parity, capability gating, embedder→litellm decision, SSE proxy primer, clone-token cache, prune_pages, KG endpoint.
+- `packages/mewbo_graph/CLAUDE.md` — the wiki/search substrate engine this app composes via the `wiki` extra (code graph, memory, embedder, retriever, SCG) + the down-only seams (store singleton, `CloneTokenCache`, `MapPhaseSink`). Read it before touching anything the api glue delegates to.
+- `apps/mewbo_api/src/mewbo_api/wiki/CLAUDE.md` — MewboWiki BE glue: phase model, snapshot-vs-stream parity, capability gating, embedder→litellm decision, SSE proxy primer, clone-token cache, prune_pages, KG endpoint.
+- `apps/mewbo_api/src/mewbo_api/agentic_search/CLAUDE.md` — Agentic Search BE: run lifecycle, event-log-as-stream, `SearchRunner` swap-seam (echo vs orchestrated), separate run store, source→`allowed_tools` scoping, SSE proxy primer.
 
 ## Runtime flow (what actually happens)
 - Entry point: `apps/mewbo_api/src/mewbo_api/backend.py` (HTTP API framework).
@@ -37,6 +41,17 @@ Scope: this file applies to the `apps/mewbo_api/` package. It captures runtime b
   - `GET /api/notifications` list notifications
   - `POST /api/notifications/dismiss` dismiss notifications
   - `POST /api/notifications/clear` clear notifications
+- Agentic Search endpoints (`init_agentic_search`; run store is separate from session transcripts):
+  - `GET /api/agentic_search/sources?project=` list the source catalog (unconfigured sources returned with `available=false`, not omitted)
+  - `GET/POST /api/agentic_search/workspaces`, `PATCH/DELETE /api/agentic_search/workspaces/<id>` workspace CRUD
+  - `GET /api/agentic_search/workspaces/<id>/runs` recent run records for a workspace
+  - `POST /api/agentic_search/runs` create + drive a run (synchronous, back-compat: returns `{run: RunPayload}` + `run_id`/`session_id`/`status`)
+  - `GET /api/agentic_search/runs/<run_id>` durable run snapshot (reload / share / deep-link)
+  - `GET /api/agentic_search/runs/<run_id>/events` SSE — the run's append-only idx-keyed event log replayed + tailed (the normalized search-event stream)
+  - `POST /api/agentic_search/runs/<run_id>/cancel` cancel a run (best-effort cancels the backing session when real)
+  - `POST /api/agentic_search/sources/<id>/map` start a map-source (SCG indexing) job for one connector (gated on `scg.enabled`, 503 when off; `descriptor` is an UNTRUSTED schema carried in the user query, never the system prompt)
+  - `GET /api/agentic_search/sources/<id>/map/events` SSE over the map-job event log (reuses `RunSseGenerator`; `?job_id=` selects a job, else newest for the source)
+  - `GET /api/agentic_search/scg` introspection — SCG node/edge/recipe/source counts + mapped source list (gated on `scg.enabled`; reads the deterministic core, never an LLM)
 - Channel webhook endpoints (HMAC auth, not API key):
   - `POST /api/webhooks/<platform>` receive inbound message from a chat platform (e.g. `nextcloud-talk`). Delegates to the appropriate `ChannelAdapter` for verification and parsing. Creates/continues sessions using existing session tags.
 - Auth: requires `X-API-KEY` header (except webhook endpoints which use platform-specific HMAC verification). Token defaults to `api.master_token` from `configs/app.json` (default: `msk-strong-password`). Also accepts `api_key` query parameter for SSE endpoints (EventSource does not support custom headers).
@@ -51,6 +66,12 @@ Scope: this file applies to the `apps/mewbo_api/` package. It captures runtime b
 - Core commands: `/compact`, `/status`, `/terminate` (shared runtime).
 - Sessions: supports `session_id`, `session_tag`, and `fork_from` (tag or id). Tags are resolved via `SessionStore`.
 - Event payloads: `action_plan` steps are `{title, description}`; tool events use `tool_id`, `operation`, `tool_input`.
+
+## Config endpoints & secret handling
+`ConfigSchemaView` (`config_view.py`) is the single atomic class governing how `/api/config*` treats sensitive fields — it consolidates four former scattered `_*_protected_*` helpers into one schema traversal, DI'd with the generated schema. Two field classes (declared via `x-*` in core `config.py`):
+- **`x-protected`** — never read, never written: stripped from `GET /config/schema` and `GET /config`; a `PATCH` touching one is 403'd. (host paths, `api.master_token`.)
+- **`x-secret`** — write-only: kept in the schema as `writeOnly`, settable via `PATCH`, but its VALUE is never returned. `GET /config` returns `{config, secrets}` where `secrets: {dot.path: bool}` reports is-set only. (`llm.api_key`, `langfuse.*`, `home_assistant.token`.)
+The console's `SecretField` is the matching write-only 3-state widget. Multi-token API auth is a separate concern — the `KeyStore` + `/api/keys` routes (see auth above), surfaced in the console's Security settings facet via the reused `ApiKeysView`.
 
 ## Hidden dependencies / assumptions
 - Uses core logging (`mewbo_core.common.get_logger`); log level controlled by `runtime.log_level`.

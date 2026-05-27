@@ -7,7 +7,7 @@ from the JSON Schema at [`configs/app.schema.json`](https://github.com/bearlike/
 Copy `configs/app.example.json` to `configs/app.json` to get started.
 See [Get Started](getting-started.md) for the full setup walkthrough.
 
-## RuntimeConfig
+## Runtime
 
 Top-level key: `runtime`
 
@@ -26,7 +26,7 @@ Runtime environment settings.
 | `result_export_dir` | string | `""` | Directory for large tool result exports. Empty to disable. |
 | `projects_home` | string | `""` | Directory for virtual project folders. Defaults to $MEWBO_HOME/projects. ⚠️ |
 
-## StorageConfig
+## Storage
 
 Top-level key: `storage`
 
@@ -35,9 +35,9 @@ Session storage backend configuration.
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `driver` | string | `json` | Storage driver: 'json' (filesystem) or 'mongodb'. |
-| `mongodb` | MongoDBConfig |  | MongoDB connection settings (used when driver is 'mongodb'). |
+| `mongodb` | MongoDB |  | MongoDB connection settings (used when driver is 'mongodb'). |
 
-## LLMConfig
+## Language Model
 
 Top-level key: `llm`
 
@@ -52,13 +52,14 @@ LLM provider connection and model selection.
 | `tool_model` | string | `""` | Model ID used by individual tools. Falls back to default_model when empty. |
 | `title_model` | string | `""` | Model ID for session-title generation. Falls back to default_model when empty. |
 | `compact_models` | list[string] |  | Priority-ordered list of models for context compaction. On failure, the next model in the list is tried. The keyword "default" resolves to the running agent's model. Example: ["anthropic/claude-haiku-4-5-20251001", "default"] |
-| `fallback_models` | list[string] |  | Ordered list of fallback model IDs. On retryable LLM failure, the system tries each in order after exhausting retries on the primary model. Empty = no fallback. |
+| `fallback_models` | list[string] |  | Legacy ordered list of fallback model IDs. Prefer 'fallback' (typed, explicit opt-in). A non-empty value here is still honored for backward compatibility (treated as fallback enabled). |
+| `fallback` | Fallback |  | Opt-in cross-model fallback policy (see FallbackConfig). |
 | `proxy_model_prefix` | string | `openai` | LiteLLM provider prefix prepended to model names when api_base is set. LiteLLM strips this prefix before forwarding the model name to the proxy, so the proxy receives the model ID it advertises in /v1/models. Leave as 'openai' for LiteLLM proxy, Bifrost, and OpenRouter. Only relevant when api_base is configured. |
 | `reasoning_effort` | string | `""` | Reasoning effort hint for supported models. One of low, medium, high, none, or empty. |
 | `reasoning_effort_models` | list[string] |  | Model name patterns that support the reasoning_effort parameter. |
 | `structured_patch_models` | list[string] |  | Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; only set this to override or extend. |
 
-## ContextConfig
+## Context
 
 Top-level key: `context`
 
@@ -71,7 +72,7 @@ Context window selection and event filtering.
 | `selection_enabled` | boolean | `true` | Enable LLM-based context event selection. When false, all recent events are used. |
 | `context_selector_model` | string | `""` | Model ID for context selection. Falls back to llm.default_model when empty. |
 
-## TokenBudgetConfig
+## Token Budget
 
 Top-level key: `token_budget`
 
@@ -83,7 +84,7 @@ Token budget and auto-compaction thresholds.
 | `auto_compact_threshold` | number | `0.8` | Fraction of the context window (0.0-1.0) that triggers automatic conversation compaction. |
 | `model_context_windows` | dict[str, integer] |  | Override only: per-model context window in tokens. Keys are model names (with or without provider prefix). The authoritative source is LiteLLM's model catalogue; populate this only to cap below the model's real max, or for models LiteLLM doesn't know yet. |
 
-## CompactionConfig
+## Compaction
 
 Top-level key: `compaction`
 
@@ -100,7 +101,7 @@ Reduces output tokens in the compaction summary without changing the
 | --- | ---- | ------- | ----------- |
 | `caveman_mode` | boolean | `false` | Enable caveman-style terse summarization prompt. Drops articles, filler, pleasantries, and hedging in the compacted summary while preserving code, file paths, URLs, and error strings verbatim. Reduces compaction output tokens without changing the response structure downstream parsers expect. |
 
-## ReflectionConfig
+## Reflection
 
 Top-level key: `reflection`
 
@@ -111,7 +112,7 @@ Post-execution reflection pass settings.
 | `enabled` | boolean | `true` | Enable a reflection LLM pass after tool execution to verify results. |
 | `model` | string | `""` | Model ID for the reflection pass. Falls back to llm.default_model when empty. |
 
-## LangfuseConfig
+## Langfuse
 
 Top-level key: `langfuse`
 
@@ -125,7 +126,7 @@ Langfuse LLM observability integration.
 | `public_key` | string | `""` | Langfuse project public key. ⚠️ |
 | `secret_key` | string | `""` | Langfuse project secret key. ⚠️ |
 
-## HomeAssistantConfig
+## Home Assistant
 
 Top-level key: `home_assistant`
 
@@ -137,7 +138,7 @@ Home Assistant smart-home integration.
 | `url` | string | `""` | Home Assistant API base URL. |
 | `token` | string | `""` | Long-lived access token for Home Assistant authentication. ⚠️ |
 
-## PermissionsConfig
+## Permissions
 
 Top-level key: `permissions`
 
@@ -148,7 +149,7 @@ Tool execution permission policy.
 | `policy_path` | string | `""` | Path to a JSON or TOML permission policy file. Empty uses built-in defaults. |
 | `approval_mode` | string | `ask` | Default approval mode: 'ask' prompts the user, 'allow' auto-approves, 'deny' blocks. |
 
-## CLIConfig
+## CLI
 
 Top-level key: `cli`
 
@@ -159,7 +160,7 @@ Terminal CLI display and interaction settings.
 | `disable_textual` | boolean | `false` | Disable the Textual TUI and fall back to plain Rich output. |
 | `approval_style` | string | `inline` | Tool-approval UI style: 'inline' (plain prompt), 'textual' (TUI dialog), or 'aider' (diff-style). |
 
-## ChatConfig
+## Chat
 
 Top-level key: `chat`
 
@@ -170,7 +171,7 @@ Legacy config section kept for backward compatibility with app.json files.
 | `port` | integer | `8501` | TCP port for the legacy chat interface. |
 | `address` | string | `127.0.0.1` | Bind address for the legacy chat interface. |
 
-## APIConfig
+## API Server
 
 Top-level key: `api`
 
@@ -180,7 +181,7 @@ REST API authentication.
 | --- | ---- | ------- | ----------- |
 | `master_token` | string | `msk-strong-password` | Bearer token required for all REST API requests. Change from the default before deploying. ⚠️ |
 
-## AgentConfig
+## Agent
 
 Top-level key: `agent`
 
@@ -193,15 +194,16 @@ Sub-agent hypervisor settings.
 | `max_concurrent` | integer | `20` | Maximum number of sub-agents allowed to run concurrently. |
 | `default_sub_model` | string | `""` | Default LLM model for sub-agents. Falls back to the root agent's model when empty. |
 | `allowed_models` | list[string] |  | Allowlist of model names sub-agents may use. Empty means all models are allowed. |
-| `llm_call_timeout` | number | `60.0` | Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models. On timeout, the call is retried up to llm_call_retries times before cascading to fallback models. |
-| `llm_call_retries` | integer | `2` | Maximum retry attempts for the primary model before cascading to fallback_models. Each fallback model gets one attempt. |
+| `llm_call_timeout` | number | `120.0` | Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models (raised from 60s — bare timeouts were the largest single failure class). On timeout, the call is retried up to llm_call_retries times before cascading to fallback models. |
+| `llm_call_retries` | integer | `3` | Maximum attempts for the primary model before cascading to fallback models. Each fallback model gets retry.fallback_retries attempts. Backoff/budget/circuit-breaker live under agent.retry. |
+| `retry` | Retry |  | Automatic LLM-call retry / fallback resilience knobs. |
 | `default_denied_tools` | list[string] |  | Tool IDs denied to all sub-agents by default (e.g. spawn_agent). |
 | `edit_tool` | string | `""` | File editing mechanism override: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement). Leave empty (default) to auto-select based on the active model via llm.structured_patch_models. |
 | `plan_mode_shell_allowlist` | list[string] |  | Shell command prefixes allowed during plan mode. Each entry matches a command at a word boundary (e.g. 'git log' matches 'git log --oneline' but not 'git logger'). Commands containing pipes, redirects, variable expansion, command substitution, or chaining (&#124;, >, <, &, ;, $, backtick) are always rejected. Set to an empty list to disable shell in plan mode entirely. |
 | `plan_mode_allow_mcp` | boolean | `true` | Allow ALL user-enabled MCP tools (tools with kind='mcp') during plan mode. Matches Claude Code's permissive default and trusts the user's mcp.json configuration. Set to false to block MCP tools in plan mode regardless of their read-only status. |
-| `web_ide` | WebIdeConfig | `null` | Optional 'Open in Web IDE' feature config (code-server containers). |
-| `lsp` | LSPConfig |  |  |
-| `tool_search` | ToolSearchConfig |  | Deferred tool loading via on-demand schema fetching. |
+| `web_ide` | Web IDE | `null` | Optional 'Open in Web IDE' feature config (code-server containers). |
+| `lsp` | LSP |  |  |
+| `tool_search` | Tool Search |  | Deferred tool loading via on-demand schema fetching. |
 
 ??? note "Deprecated fields"
 
@@ -210,7 +212,7 @@ Sub-agent hypervisor settings.
     | `max_iters` | integer | `30` | Deprecated. The tool-use loop now runs until natural completion (model returns text without tool calls). This field is retained for API backward compatibility but is not enforced. |
     | `sub_agent_max_steps` | integer | `10` | Deprecated. Sub-agents now run until natural completion. This field is retained for API backward compatibility but is not enforced. Safety is provided by session_step_budget, stall detection, and LLM timeouts. |
 
-## WikiConfig
+## Wiki
 
 Top-level key: `wiki`
 
@@ -222,9 +224,11 @@ Operator-facing knobs for the wiki subsystem.
 | `default_qa_model` | string | `""` | Model the Q&A composer pre-selects. Typically smaller/faster than ``default_model`` because Q&A is a tight read-only loop where latency matters more than depth. Empty string means: fall back to ``default_model``, then to ``llm.default_model``. |
 | `default_depth` | string | `""` | Indexing depth the wizard pre-selects. Empty string means: use the wizard's own default (``comprehensive``). |
 | `default_language` | string | `""` | Language code the wizard pre-selects (e.g. ``en``, ``es``). Empty string means: use the wizard's own default. |
-| `embedding` | WikiEmbeddingConfig |  |  |
+| `embedding` | Embedding |  |  |
+| `memory` | Memory |  | Multiplex memory-layer knobs (atomic insights over the graph). |
+| `refresh` | Refresh |  | On-demand incremental-refresh thresholds. |
 
-## HooksConfig
+## Hooks
 
 Top-level key: `hooks`
 
@@ -232,12 +236,12 @@ External shell hooks fired during the session lifecycle.
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `pre_tool_use` | list[HookEntry] |  | Hooks executed before each tool invocation. |
-| `post_tool_use` | list[HookEntry] |  | Hooks executed after each tool invocation. |
-| `on_session_start` | list[HookEntry] |  | Hooks executed when a new session begins. |
-| `on_session_end` | list[HookEntry] |  | Hooks executed when a session ends. |
+| `pre_tool_use` | list[Hook] |  | Hooks executed before each tool invocation. |
+| `post_tool_use` | list[Hook] |  | Hooks executed after each tool invocation. |
+| `on_session_start` | list[Hook] |  | Hooks executed when a new session begins. |
+| `on_session_end` | list[Hook] |  | Hooks executed when a session ends. |
 
-## PluginsConfig
+## Plugins
 
 Top-level key: `plugins`
 
@@ -247,7 +251,8 @@ Plugin system configuration.
 | --- | ---- | ------- | ----------- |
 | `enabled` | boolean | `true` | Enable the plugin system. |
 | `enabled_plugins` | list[string] |  | Plugin names to enable. Empty = all installed plugins. Format: 'plugin-name' or 'plugin-name@marketplace'. |
-| `marketplaces` | list[string] |  | GitHub repos containing marketplace.json plugin indexes. |
+| `marketplaces` | list[string] |  | Marketplace catalogs holding a marketplace.json plugin index, on any git host. Each entry is a full git URL (https/ssh/git, or scp-style git@host:owner/repo), a 'host/owner/repo' shorthand, or a bare 'owner/repo' (cloned from marketplace_default_host). |
+| `marketplace_default_host` | string | `github.com` | Default git host for bare 'owner/repo' marketplace entries. Full URLs and 'host/owner/repo' entries ignore this. |
 | `install_path` | string | `""` | Override install path for Mewbo-managed plugins. Defaults to $MEWBO_HOME/plugins/ (via resolve_mewbo_home). |
 
 ## Channels

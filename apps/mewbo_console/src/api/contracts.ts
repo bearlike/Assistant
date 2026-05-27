@@ -150,8 +150,8 @@ export type ApiClient = {
     total_output_tokens: number;
   }>;
   getConfigSchema: () => Promise<Record<string, unknown>>;
-  getConfig: () => Promise<Record<string, unknown>>;
-  patchConfig: (patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  getConfig: () => Promise<ConfigState>;
+  patchConfig: (patch: Record<string, unknown>) => Promise<ConfigState>;
   listPlugins: () => Promise<PluginSummary[]>;
   listMarketplacePlugins: () => Promise<MarketplacePlugin[]>;
   installPlugin: (name: string, marketplace: string) => Promise<void>;
@@ -172,6 +172,9 @@ export type ApiClient = {
     name: string,
     args: string[]
   ) => Promise<CommandResult>;
+  listApiKeys: () => Promise<ApiKeySummary[]>;
+  createApiKey: (label: string) => Promise<ApiKeyCreated>;
+  revokeApiKey: (id: string) => Promise<ApiKeyRevoked>;
 };
 
 export type PluginSummary = {
@@ -195,9 +198,44 @@ export type MarketplacePlugin = {
   installed: boolean;
 };
 
+/**
+ * Shape of GET/PATCH /api/config — the (secret-stripped) config tree plus a
+ * `secrets` map of dot-path → "has a stored value" flag.
+ */
+export type ConfigState = {
+  config: Record<string, unknown>;
+  secrets: Record<string, boolean>;
+};
+
 export type ApiConfig = {
   baseUrl?: string;
   apiKey?: string;
 };
 
 export type ApiMode = "auto" | "mock" | "live";
+
+// ---------------------------------------------------------------------------
+// API Keys
+// ---------------------------------------------------------------------------
+
+/** Metadata returned by GET /api/keys (no secrets). */
+export type ApiKeySummary = {
+  id: string;
+  label: string;
+  created_at: string;
+  revoked_at: string | null;
+};
+
+/** Response from POST /api/keys — plaintext key shown exactly once. */
+export type ApiKeyCreated = {
+  id: string;
+  label: string;
+  key: string;
+  created_at: string;
+};
+
+/** Response from DELETE /api/keys/<id>. */
+export type ApiKeyRevoked = {
+  id: string;
+  revoked: boolean;
+};

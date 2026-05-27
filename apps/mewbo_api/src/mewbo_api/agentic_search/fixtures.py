@@ -14,20 +14,23 @@ from __future__ import annotations
 from copy import deepcopy
 
 # -- MCP source catalog ----------------------------------------------------
-# A "source" is one MCP-style connector. Static for the mock; in the real
-# system this would be derived from the user's installed MCPs.
+# A "source" is one MCP-style connector. Static demo data for the mock /
+# fixtures-backed console; the real per-source tool ids come from the Source
+# Capability Graph (see ``catalog.py``). ``tools`` here is the illustrative
+# pre-mapping fallback, used only while demo seeding is enabled — it lives
+# beside the source it describes (one definition) rather than in the resolver.
 
 SOURCE_CATALOG: list[dict] = [
-    {"id": "notion", "name": "Notion", "color": "#ffffff", "bg": "#191919", "glyph": "N", "desc": "Pages, wikis and databases."},
-    {"id": "slack", "name": "Slack", "color": "#ffffff", "bg": "#611f69", "glyph": "#", "desc": "Channels, threads and DMs."},
-    {"id": "drive", "name": "Google Drive", "color": "#ffffff", "bg": "#1a73e8", "glyph": "D", "desc": "Docs, sheets and slides."},
-    {"id": "github", "name": "GitHub", "color": "#ffffff", "bg": "#1a1e22", "glyph": "G", "desc": "Issues, PRs and code."},
-    {"id": "linear", "name": "Linear", "color": "#ffffff", "bg": "#5e6ad2", "glyph": "L", "desc": "Projects, issues and cycles."},
-    {"id": "jira", "name": "Jira", "color": "#ffffff", "bg": "#2684ff", "glyph": "J", "desc": "Tickets and epics."},
-    {"id": "gmail", "name": "Gmail", "color": "#ffffff", "bg": "#d14836", "glyph": "M", "desc": "Threads and attachments."},
-    {"id": "web", "name": "Web search", "color": "#ffffff", "bg": "#C15F3C", "glyph": "W", "desc": "Public web via Brave + Exa."},
-    {"id": "filesystem", "name": "Local filesystem", "color": "#ffffff", "bg": "#3a3a38", "glyph": "F", "desc": "Indexed repo / workspace files."},
-    {"id": "figma", "name": "Figma", "color": "#ffffff", "bg": "#0acf83", "glyph": "F", "desc": "Designs, comments, components."},
+    {"id": "notion", "name": "Notion", "color": "#ffffff", "bg": "#191919", "glyph": "N", "desc": "Pages, wikis and databases.", "tools": ["notion_search", "notion_fetch"]},
+    {"id": "slack", "name": "Slack", "color": "#ffffff", "bg": "#611f69", "glyph": "#", "desc": "Channels, threads and DMs.", "tools": ["slack_search", "slack_history"]},
+    {"id": "drive", "name": "Google Drive", "color": "#ffffff", "bg": "#1a73e8", "glyph": "D", "desc": "Docs, sheets and slides.", "tools": ["gdrive_search", "gdrive_fetch"]},
+    {"id": "github", "name": "GitHub", "color": "#ffffff", "bg": "#1a1e22", "glyph": "G", "desc": "Issues, PRs and code.", "tools": ["github_search", "github_read"]},
+    {"id": "linear", "name": "Linear", "color": "#ffffff", "bg": "#5e6ad2", "glyph": "L", "desc": "Projects, issues and cycles.", "tools": ["linear_search"]},
+    {"id": "jira", "name": "Jira", "color": "#ffffff", "bg": "#2684ff", "glyph": "J", "desc": "Tickets and epics.", "tools": ["jira_search"]},
+    {"id": "gmail", "name": "Gmail", "color": "#ffffff", "bg": "#d14836", "glyph": "M", "desc": "Threads and attachments.", "tools": ["gmail_search"]},
+    {"id": "web", "name": "Web search", "color": "#ffffff", "bg": "#C15F3C", "glyph": "W", "desc": "Public web via Brave + Exa.", "tools": ["web_search", "web_fetch"]},
+    {"id": "filesystem", "name": "Local filesystem", "color": "#ffffff", "bg": "#3a3a38", "glyph": "F", "desc": "Indexed repo / workspace files.", "tools": ["grep", "glob", "read_file"]},
+    {"id": "figma", "name": "Figma", "color": "#ffffff", "bg": "#0acf83", "glyph": "F", "desc": "Designs, comments, components.", "tools": ["figma_search"]},
 ]
 
 

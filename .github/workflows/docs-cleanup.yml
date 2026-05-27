@@ -1,5 +1,7 @@
 name: Docs Cleanup
 
+# GitHub Pages (mike) version cleanup. Both jobs are guarded to github.com; on
+# the internal mirror they no-op (preview cleanup lives in docs.yml).
 on:
   pull_request:
     types: [closed]
@@ -11,6 +13,7 @@ permissions:
 jobs:
   cleanup-pr-version:
     if: |
+      github.server_url == 'https://github.com' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
@@ -44,7 +47,7 @@ jobs:
           PATH=".venv/bin:$PATH" .venv/bin/mike delete --push "$VERSION" || true
 
   bulk-delete-pr-versions:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.server_url == 'https://github.com' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

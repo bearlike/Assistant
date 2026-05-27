@@ -33,6 +33,21 @@ Scope: this file applies to the `apps/mewbo_cli/` package only. It covers the te
 - Response: `:speech_balloon: Response`, border `bold green`.
 - Tool result cards dim unless they are the current focus; outputs are collapsed unless verbose and JSON renders formatted.
 
+### LLM resilience notices (post-run replay)
+The core emits `llm_retry` / `llm_fallback` / `recovery` (`halt_no_progress`)
+events to the **transcript**, not via hooks, so the live agent panel never
+sees them. `_print_resilience_events` (in `cli_master.py`) replays them after
+each run as concise dim lines, scoped to events after the last `user` event so
+multi-turn sessions don't re-print prior turns:
+- `llm_retry` → `↻ Retrying {model} after {error_type} ({attempt}/{max}, {delay}s)` (dim yellow).
+- `llm_fallback` → `⤳ Falling back: {from} → {to} ({reason})` (dim yellow).
+- `recovery` halt → `⊘ Halted: repeated '{tool}' with no progress — /retry or /continue to recover` (dim red).
+
+Fallback is opt-in per run via flags (parsed in `run_cli`): `--fallback-models`
+(comma-split) with singular alias `--fallback-model`, and `--no-fallback`
+(sets the chain to `()` — an explicit empty tuple that overrides the
+`llm.fallback.*` config default, distinct from `None` which uses the default).
+
 If you change any of these, update this file.
 
 ## Dialogs / Prompts (Interactive Toolkit)

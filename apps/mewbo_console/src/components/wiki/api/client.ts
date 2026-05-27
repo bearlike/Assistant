@@ -11,6 +11,7 @@
  */
 
 import { readRuntimeConfig } from "../../../runtimeConfig";
+import { sseStream as genericSseStream } from "../../../api/sse";
 
 import type {
   IndexingEvent,
@@ -83,74 +84,25 @@ async function http<T>(
   return (await resp.json()) as T;
 }
 
-/** Parse a `fetch` response as an SSE stream, yielding typed events. */
-async function* parseSseStream<T>(resp: Response, signal?: AbortSignal): AsyncGenerator<T> {
-  if (!resp.body) throw makeError("internal", "SSE response has no body");
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  try {
-    while (true) {
-      if (signal?.aborted) break;
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buf.indexOf("\n\n")) >= 0) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        let type = "message";
-        let data = "";
-        for (const line of frame.split("\n")) {
-          if (line.startsWith("event:")) type = line.slice(6).trim();
-          else if (line.startsWith("data:")) data += line.slice(5).trim();
-        }
-        if (type === "heartbeat") continue;
-        if (!data) continue;
-        try {
-          const payload = JSON.parse(data) as Record<string, unknown>;
-          yield { type, ...payload } as unknown as T;
-        } catch {
-          // Malformed frame — skip silently
-        }
-      }
-    }
-  } finally {
-    reader.cancel();
-  }
-}
-
-async function* sseStream<T>(
+/**
+ * Open an SSE stream via the shared `api/sse.ts` transport, mapping transport
+ * errors back into the typed `WikiError` shape the wiki UI expects.
+ */
+function sseStream<T>(
   path: string,
   opts: { method?: "GET" | "POST"; body?: unknown; signal?: AbortSignal } = {},
 ): AsyncGenerator<T> {
-  const { method = "GET", body, signal } = opts;
-  const sep = path.includes("?") ? "&" : "?";
-  const url = API_BASE + path + sep + "api_key=" + encodeURIComponent(getApiKey());
-  const resp = await fetch(url, {
-    method,
-    headers: {
-      Accept: "text/event-stream",
-      ...(body != null ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body == null ? undefined : JSON.stringify(body),
-    signal,
+  return genericSseStream<T>(path, {
+    ...opts,
+    base: API_BASE,
+    apiKey: getApiKey(),
+    onError: (_resp, p) =>
+      makeError(
+        (p?.code as WikiError["code"]) ?? "internal",
+        (p?.message as string) ?? "SSE failed",
+        p?.hint as string | undefined,
+      ),
   });
-  if (!resp.ok) {
-    let payload: unknown = null;
-    try {
-      payload = await resp.json();
-    } catch {
-      /* non-JSON */
-    }
-    const p = payload as Record<string, unknown> | null;
-    throw makeError(
-      (p?.code as WikiError["code"]) ?? "internal",
-      (p?.message as string) ?? `SSE failed: HTTP ${resp.status}`,
-      p?.hint as string | undefined,
-    );
-  }
-  yield* parseSseStream<T>(resp, signal);
 }
 
 // ── Static defaults (kept locally; no backend round-trip needed) ──────────

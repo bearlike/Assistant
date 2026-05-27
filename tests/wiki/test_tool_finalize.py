@@ -6,8 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import Frontmatter, IndexingJob, WikiPage
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import Frontmatter, IndexingJob, WikiPage
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -79,8 +79,8 @@ def _seed_submission(
 
 def test_finalize_persists_project_and_emits_complete(tmp_path: Path) -> None:
     """Submit 3 pages → finalize → project exists, status=complete, complete event emitted."""
-    import mewbo_core.builtin_plugins.wiki.finalize as mod
-    from mewbo_core.builtin_plugins.wiki.finalize import WikiFinalizeTool
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
 
     store = _store(tmp_path)
     job = _job("job-fin1", "org/repo")
@@ -128,8 +128,8 @@ def test_finalize_persists_project_and_emits_complete(tmp_path: Path) -> None:
 
 def test_finalize_rejects_unknown_landing_page(tmp_path: Path) -> None:
     """landingPageId that doesn't exist in pages list → validation error."""
-    import mewbo_core.builtin_plugins.wiki.finalize as mod
-    from mewbo_core.builtin_plugins.wiki.finalize import WikiFinalizeTool
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
 
     store = _store(tmp_path)
     job = _job("job-fin2", "org/repo")
@@ -164,8 +164,8 @@ def test_finalize_propagates_branch_commit_and_maintainer_edited(
     tmp_path: Path, monkeypatch
 ) -> None:
     """clone-written branch+commit_sha land on Project; grounder presence flips badge."""
-    import mewbo_core.builtin_plugins.wiki.finalize as mod
-    from mewbo_core.builtin_plugins.wiki.finalize import WikiFinalizeTool
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
 
     # Anchor the clone-dir resolver at tmp_path so we can drop a grounder file.
     clone_root = tmp_path / "clones"
@@ -201,8 +201,8 @@ def test_finalize_without_grounder_or_snapshot_keeps_defaults(
     tmp_path: Path, monkeypatch
 ) -> None:
     """No grounder + no clone-supplied branch → maintainer_edited=False, fields None."""
-    import mewbo_core.builtin_plugins.wiki.finalize as mod
-    from mewbo_core.builtin_plugins.wiki.finalize import WikiFinalizeTool
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
 
     monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
 
@@ -231,8 +231,8 @@ def test_finalize_without_grounder_or_snapshot_keeps_defaults(
 
 def test_finalize_uses_submission_platform_and_repo_url(tmp_path: Path) -> None:
     """Saved submission's `platform` wins over URL-host detection (DRY: wizard already chose it)."""
-    import mewbo_core.builtin_plugins.wiki.finalize as mod
-    from mewbo_core.builtin_plugins.wiki.finalize import WikiFinalizeTool
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
 
     store = _store(tmp_path)
     job = _job("job-fin7", "bearlike/Grove")
@@ -274,7 +274,7 @@ def test_finalize_uses_submission_platform_and_repo_url(tmp_path: Path) -> None:
 
 def test_finalize_fetch_description_short_circuits_without_repo_url(tmp_path: Path) -> None:
     """No repo_url → no fetch, no error, desc stays empty."""
-    from mewbo_core.builtin_plugins.wiki.finalize import _fetch_description
+    from mewbo_graph.plugins.wiki.finalize import _fetch_description
 
     desc = _fetch_description(repo_url="", platform="github", token=None, slug="o/r")
     assert desc == ""
@@ -282,9 +282,9 @@ def test_finalize_fetch_description_short_circuits_without_repo_url(tmp_path: Pa
 
 def test_finalize_overwrites_existing_project(tmp_path: Path) -> None:
     """Pre-seed a project for the slug → finalize → project replaced, no duplicate, no error."""
-    import mewbo_core.builtin_plugins.wiki.finalize as mod
-    from mewbo_api.wiki.types import Project
-    from mewbo_core.builtin_plugins.wiki.finalize import WikiFinalizeTool
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
+    from mewbo_graph.wiki.types import Project
 
     store = _store(tmp_path)
     job = _job("job-fin4", "org/repo")
@@ -329,8 +329,8 @@ def test_finalize_overwrites_existing_project(tmp_path: Path) -> None:
 
 def test_finalize_prunes_stale_pages_outside_committed_plan(tmp_path: Path) -> None:
     """Re-index drops pages from prior runs that aren't in the new plan."""
-    import mewbo_core.builtin_plugins.wiki.finalize as mod
-    from mewbo_core.builtin_plugins.wiki.finalize import WikiFinalizeTool
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
 
     store = _store(tmp_path)
     job = _job("job-prune", "org/repo")
@@ -368,9 +368,9 @@ def test_finalize_prunes_stale_pages_outside_committed_plan(tmp_path: Path) -> N
 
 def test_finalize_keeps_existing_desc_when_refresh_lacks_token(tmp_path: Path) -> None:
     """Token-less refresh: keep prior description rather than overwrite with ""."""
-    import mewbo_core.builtin_plugins.wiki.finalize as mod
-    from mewbo_api.wiki.types import Project
-    from mewbo_core.builtin_plugins.wiki.finalize import WikiFinalizeTool
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
+    from mewbo_graph.wiki.types import Project
 
     store = _store(tmp_path)
     job = _job("job-keep", "org/repo")

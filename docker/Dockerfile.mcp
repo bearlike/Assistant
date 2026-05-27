@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+
+# Dockerfile.mcp — Mewbo MCP server
+# Mirrors Dockerfile.api: same base, same workspace copy, different package
+# installed and a simple CMD instead of the gunicorn entrypoint.
+ARG BASE_IMAGE="ghcr.io/bearlike/mewbo-base:latest"
+FROM $BASE_IMAGE
+
+ARG VERSION="0.0.13"
+
+LABEL org.opencontainers.image.title="Mewbo MCP" \
+      org.opencontainers.image.description="Standalone MCP server exposing Mewbo to external agents" \
+      org.opencontainers.image.source="https://github.com/bearlike/Assistant" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.vendor="Krishnakanth Alagiri" \
+      org.opencontainers.image.licenses="MIT"
+
+USER root
+WORKDIR /app
+
+# 1. Copy only dependency metadata first (layer caching — survives source changes)
+COPY pyproject.toml uv.lock ./
+COPY packages/mewbo_core/pyproject.toml packages/mewbo_core/pyproject.toml
+COPY apps/mewbo_mcp/pyproject.toml apps/mewbo_mcp/pyproject.toml
+
+# 2. Copy source
+COPY packages/ packages/
+COPY apps/mewbo_mcp/ apps/mewbo_mcp/
+COPY configs/ configs/
+
+# 3. Install with BuildKit cache mount (pip wheels survive rebuilds)
+RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
+        -e packages/mewbo_core \
+        -e apps/mewbo_mcp
+
+ENV MASTER_API_TOKEN='msk-strong-password' \
+    MEWBO_MCP_HOST='127.0.0.1' \
+    MEWBO_MCP_PORT='5127' \
+    MEWBO_API_URL='http://localhost:5125'
+
+USER mewbo
+CMD ["mewbo-mcp"]

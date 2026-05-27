@@ -3,8 +3,12 @@
 // the auth-header / base-URL logic.
 
 import { API_BASE, API_KEY } from "./client"
+import { sseStream } from "./sse"
 import type {
   RunPayload,
+  RunRecord,
+  RunStatus,
+  SearchEvent,
   SourceCatalogEntry,
   Workspace,
   WorkspaceInput,
@@ -89,14 +93,52 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
 export interface RunInput {
   workspace_id: string
   query: string
+  project?: string
+  model?: string
 }
 
-export async function runSearch(input: RunInput): Promise<RunPayload> {
+/** Result of starting a run — the synchronous `POST /runs` envelope. */
+export interface StartRunResult {
+  run: RunPayload
+  run_id: string
+  session_id: string
+  status: RunStatus
+}
+
+/**
+ * Start a run. `POST /runs` returns the finished payload synchronously
+ * (back-compat) along with `run_id` / `session_id`, which the live stream and
+ * reload paths key off.
+ */
+export async function startRun(input: RunInput): Promise<StartRunResult> {
   const res = await fetch(withBase("/api/agentic_search/runs"), {
     method: "POST",
     headers: jsonHeaders(),
     body: JSON.stringify(input),
   })
-  const payload = await readJson<{ run: RunPayload }>(res)
+  return readJson<StartRunResult>(res)
+}
+
+/** Fetch a durable run snapshot (reload / deep-link rehydration). */
+export async function getRun(runId: string): Promise<RunRecord> {
+  const res = await fetch(
+    withBase(`/api/agentic_search/runs/${encodeURIComponent(runId)}`),
+    { headers: jsonHeaders() }
+  )
+  const payload = await readJson<{ run: RunRecord }>(res)
   return payload.run
+}
+
+/**
+ * Stream a run's normalized event log over SSE. Replays from idx 0 then tails
+ * until a terminal event. Honors `signal` for clean unmount cancellation.
+ */
+export function streamRun(
+  runId: string,
+  options: { signal?: AbortSignal } = {}
+): AsyncGenerator<SearchEvent> {
+  return sseStream<SearchEvent>(
+    `/api/agentic_search/runs/${encodeURIComponent(runId)}/events`,
+    { base: API_BASE, apiKey: API_KEY, signal: options.signal }
+  )
 }

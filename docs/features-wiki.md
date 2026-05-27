@@ -37,7 +37,9 @@ clone → scan → graph → plan → pages → finalize
 5. **Pages:** sub-agents write each page in parallel, grounded in the scanned source.
 6. **Finalize:** dedupe, attach the repository description, and publish.
 
-The landing-page card and the indexing screen read the same progress signal, so they never disagree about which phase a run is in. When a repository changes, **Re-index this wiki** replays the pipeline and refreshes every page.
+The landing-page card and the indexing screen read the same progress signal, so they never disagree about which phase a run is in. As it writes, the indexer also **deposits a few durable notes** into the memory layer (described below) — short, anchored facts about each subsystem — so the wiki starts out already knowing the non-obvious things about the codebase.
+
+When a repository changes, **Re-index this wiki** refreshes it **on demand**. It compares what actually changed since the last run and recomputes only the affected scope — the handful of pages, notes, and graph nodes the edit touched — rather than rebuilding everything. A small change stays a small, fast update; a stale note is retired, not silently kept.
 
 > [!NOTE] Ground the output with repo notes
 > If the repository contains a `.mewbo/wiki.json` file, the indexer adopts its page plan and folds its notes into the page-writing prompts. It's the simplest way to steer which pages get written and to inject facts the code alone won't reveal.
@@ -60,12 +62,17 @@ What you see here is the *structural* layer of the graph. Question answering run
 
 Most documentation tools chop a repository into text and search it like prose. Mewbo builds a graph instead. As shown above, indexing lifts each file's AST into a **code property graph**: files, classes, functions, methods, and interfaces as nodes; their call, import, and definition edges as the wiring. This captures how the repository actually fits together.
 
-An LLM pass then attaches a second layer over the same nodes: semantic links between the parts of a codebase that belong together even when no syntax connects them. Structure and meaning live as separate dimensions over one shared graph: a **multiplex code memory graph** that remembers both how the code is wired and what it means. It's what carries the wiki from single-file lookups to repository scale.
+A second layer then sits over the same nodes: a memory of **atomic notes** — one fact each, kept deliberately short — every one *anchored* to the exact symbols it describes. "This function is the only writer of that state." "These three files implement the same protocol." "Embedding failure falls back to keyword search." Each note pins to the code it's about, so structure and meaning live as separate dimensions over one shared graph: a **multiplex code memory graph** that remembers both how the code is wired and what it means. It's what carries the wiki from single-file lookups to repository scale.
 
-That memory is what makes answers fast and authoritative. A question doesn't pull a handful of look-alike snippets; it traverses the graph across **multiple hops** (a symbol, to its callers, to the module that owns them, to the note that explains why), assembling a connected, repository-scale context before the model writes a word. Keyword and semantic search seed the entry points; the memory graph expands them into the full picture.
+That memory is what makes answers fast and authoritative. A question doesn't pull a handful of look-alike snippets; it traverses the graph across **multiple hops** (a symbol, to its callers, to the module that owns them, to the note that explains why), assembling a connected, repository-scale context before the model writes a word. Keyword and semantic search seed the entry points; the memory graph expands them into the full picture. Because every note is anchored, a stale answer can't hide: when the code under a note changes, the next on-demand refresh re-checks the note and retires it if it no longer holds.
+
+The memory **grows as the wiki is used**. The indexer seeds it while writing the pages, Ask MewboWiki adds a note when a question turns up a durable fact, and you — or an agent — can **submit your own insights**: a one-line fact the code alone won't reveal, which Mewbo condenses, anchors to the right symbols, de-duplicates against what's already there, and merges. Every future answer is built on the accumulated set.
 
 > [!NOTE] Why multi-hop matters
 > A flat search answers a cross-module question with three disconnected results. Traversing the memory graph follows real relationships in the code instead, so the answer holds together and every hop stays grounded. Semantic embeddings are an optional accelerator. Without them, keyword retrieval still seeds the graph and the wiki keeps working.
+
+> [!TIP] Contribute an insight
+> Agents on your fleet can teach the wiki as they work — over the [MCP server](clients-mcp.md)'s `submit_insight` tool or the REST endpoint. Each insight is validated, condensed to an atomic note, anchored to the code it's about, and safely merged, so the knowledge compounds instead of drifting into duplicates.
 
 ---
 

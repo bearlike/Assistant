@@ -1,0 +1,55 @@
+[project]
+name = "mewbo-graph"
+version = "0.0.13"
+description = "Optional knowledge-graph substrate for Mewbo — tree-sitter code graph, multiplex atomic-note memory, embedder, hybrid retriever, and the Source Capability Graph (SCG) reachability engine. Powers MewboWiki and Mewbo Search; depends only on mewbo-core."
+readme = "../../README.md"
+requires-python = ">=3.10,<4.0"
+authors = [
+  { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },
+]
+license = { text = "MIT" }
+
+# Down-only: the substrate depends on the lean core SDK and pydantic, never
+# on mewbo-tools or any app. Heavy/optional capabilities live behind extras
+# (below) + in-code import-guards, so a bare install is dependency-light.
+dependencies = [
+  "mewbo-core>=0.0.10",
+  "pydantic>=2.7.0,<3.0.0",
+]
+
+[project.optional-dependencies]
+# Tree-sitter code-graph extraction (the `code` graph + KG view). Absent →
+# graph build is skipped and retrieval degrades to BM25-only, never a crash
+# (import-guarded at the call site).
+treesitter = [
+  "tree-sitter>=0.21",
+  "tree-sitter-language-pack>=0.3",
+]
+# Hybrid dense+sparse retrieval. Embeddings ride litellm (already a
+# mewbo-core dependency) against the LiteLLM proxy — no extra embedding
+# client. See src/mewbo_graph/wiki/embedder.py.
+retrieval = [
+  "rank-bm25>=0.2.2",
+  "numpy>=1.26",
+]
+# Everything the wiki + search products need at full strength.
+full = [
+  "mewbo-graph[treesitter,retrieval]",
+]
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mewbo_graph"]
+# Ship the non-Python assets the substrate carries: tree-sitter query files
+# and the bundled plugin suites (tool modules + AgentDef markdown + manifests).
+include = [
+  "src/mewbo_graph/wiki/graph_queries/**",
+  "src/mewbo_graph/plugins/**",
+]
+# Contributor docs are not runtime assets; keep them out of the published wheel.
+exclude = [
+  "**/CLAUDE.md",
+]

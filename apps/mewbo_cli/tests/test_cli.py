@@ -18,6 +18,7 @@ from mewbo_cli.cli_master import (
     _format_steps,
     _parse_command,
     _parse_verbosity,
+    _print_resilience_events,
     _resolve_session_id,
     _resolve_cli_version,
     _run_query,
@@ -25,6 +26,7 @@ from mewbo_cli.cli_master import (
     _verbosity_to_level,
     _bootstrap_cli_logging_env,
     _format_model,
+    build_parser,
     render_header,
     HeaderContext,
 )
@@ -731,3 +733,145 @@ def test_run_cli_interactive_quit(monkeypatch, tmp_path):
         lambda *args, **kwargs: DummySession(),
     )
     assert run_cli(args) == 0
+
+
+def test_print_resilience_events_renders(tmp_path):
+    """Retry / fallback / no-progress-halt events render as concise lines."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+    store.append_event(
+        session_id,
+        {
+            "type": "llm_retry",
+            "payload": {
+                "model": "openai/gpt-5.4",
+                "attempt": 1,
+                "max_attempts": 3,
+                "error_type": "RateLimit",
+                "delay": 2.0,
+                "retryable": True,
+            },
+        },
+    )
+    store.append_event(
+        session_id,
+        {
+            "type": "llm_fallback",
+            "payload": {
+                "from_model": "openai/gpt-5.4",
+                "to_model": "google/gemini-2.5-pro",
+                "reason": "rate_limit",
+                "previous_error_type": "RateLimit",
+            },
+        },
+    )
+    store.append_event(
+        session_id,
+        {
+            "type": "recovery",
+            "payload": {"action": "halt_no_progress", "tool": "read_file", "step": 4},
+        },
+    )
+
+    console = Console(record=True, width=120)
+    _print_resilience_events(console, store, session_id)
+
+    output = console.export_text()
+    assert "Retrying gpt-5.4 after RateLimit (1/3, 2s)" in output
+    assert "Falling back: gpt-5.4 → gemini-2.5-pro (rate_limit)" in output
+    assert "Halted: repeated 'read_file' with no progress" in output
+
+
+def test_print_resilience_events_scoped_to_last_run(tmp_path):
+    """Events from a prior turn are not re-printed for the current run."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    # Prior turn — should be ignored.
+    store.append_event(session_id, {"type": "user", "payload": {"text": "first"}})
+    store.append_event(
+        session_id,
+        {
+            "type": "llm_fallback",
+            "payload": {"from_model": "a", "to_model": "b", "reason": "old"},
+        },
+    )
+    store.append_event(session_id, {"type": "completion", "payload": {"done_reason": "completed"}})
+    # Current turn — only this one should render.
+    store.append_event(session_id, {"type": "user", "payload": {"text": "second"}})
+    store.append_event(
+        session_id,
+        {
+            "type": "llm_fallback",
+            "payload": {"from_model": "c", "to_model": "d", "reason": "new"},
+        },
+    )
+
+    console = Console(record=True, width=120)
+    _print_resilience_events(console, store, session_id)
+
+    output = console.export_text()
+    assert "(new)" in output
+    assert "(old)" not in output
+
+
+def test_run_query_renders_resilience_events(monkeypatch, tmp_path):
+    """Full _run_query flow surfaces resilience events emitted to the transcript."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = store.create_session()
+    state = CliState(session_id=session_id, show_plan=False)
+    tool_registry = ToolRegistry()
+    console = Console(record=True, width=120)
+
+    def fake_orchestrate(*_args, **_kwargs):
+        # The real core appends a "user" event and emits resilience events to
+        # the transcript; mirror that so _print_resilience_events can replay.
+        store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+        store.append_event(
+            session_id,
+            {
+                "type": "llm_retry",
+                "payload": {
+                    "model": "openai/gpt-5.4",
+                    "attempt": 2,
+                    "max_attempts": 3,
+                    "error_type": "Timeout",
+                    "delay": 1.0,
+                },
+            },
+        )
+        task_queue = TaskQueue(action_steps=[])
+        task_queue.task_result = "final response"
+        return task_queue
+
+    monkeypatch.setattr("mewbo_core.session_runtime.orchestrate_session", fake_orchestrate)
+
+    _run_query(
+        console,
+        store,
+        runtime,
+        state,
+        tool_registry,
+        "hi",
+        types.SimpleNamespace(max_iters=1, verbose=0),
+        prompt_func=lambda _: "y",
+    )
+
+    output = console.export_text()
+    assert "Retrying gpt-5.4 after Timeout (2/3, 1s)" in output
+    assert "final response" in output
+
+
+def test_parser_fallback_flags():
+    """`--no-fallback`, `--fallback-model` (singular), and the plural alias parse."""
+    parser = build_parser()
+
+    args = parser.parse_args(["--no-fallback"])
+    assert args.no_fallback is True
+
+    args = parser.parse_args(["--fallback-model", "gpt-5.4"])
+    assert args.fallback_models == "gpt-5.4"
+
+    args = parser.parse_args(["--fallback-models", "gpt-5.4,gemini-2.5-pro"])
+    assert args.fallback_models == "gpt-5.4,gemini-2.5-pro"

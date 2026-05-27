@@ -11,6 +11,7 @@ import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 from typing import NamedTuple
@@ -137,6 +138,11 @@ def get_logger(name: str | None = None):
     if not name:
         name = __name__
     return loguru_logger.bind(name=name)
+
+
+def utc_now_iso() -> str:
+    """Return an ISO-8601 UTC timestamp string (the shared storage timestamp)."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 def num_tokens_from_string(string: str, encoding_name: str = "cl100k_base") -> int:

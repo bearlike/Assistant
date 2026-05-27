@@ -122,7 +122,9 @@ def _render_class_section(
             type_str = _type_label(prop, defs)
             default_str = _default_label(prop)
             desc = prop.get("description", "").strip()
-            if prop.get("x-protected"):
+            # ⚠️ marks fields the REST API never reads back: x-protected
+            # (never read, never written) and x-secret (write-only).
+            if prop.get("x-protected") or prop.get("x-secret"):
                 desc = f"{desc} ⚠️" if desc else "⚠️"
             lines.append(
                 f"| `{key}` | {_escape_pipe(type_str)} | {default_str} | {_escape_pipe(desc)} |"

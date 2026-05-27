@@ -21,14 +21,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The wiki + search substrate now lives in the optional `mewbo-graph`
+# library (Gitea #25). This extra forwards to it so the public name and the
+# Docker `WIKI_EXTRAS` toggle are unchanged — `mewbo-api[wiki]` still pulls
+# tree-sitter + rank-bm25 + numpy, now transitively via mewbo-graph's own
+# extras. Base `mewbo-api` installs graph-less; every graph import in the
+# api is guarded so the server still boots without this extra.
+# Embeddings ride litellm against the LiteLLM proxy (no extra client) —
+# see packages/mewbo_graph/src/mewbo_graph/wiki/embedder.py.
 wiki = [
-    "tree-sitter>=0.21",
-    "tree-sitter-language-pack>=0.3",
-    "rank-bm25>=0.2.2",
-    "numpy>=1.26",
-    # Embeddings route through litellm.embedding against the LiteLLM
-    # proxy — same client the rest of the project uses for chat — so no
-    # extra dep here. See apps/mewbo_api/src/mewbo_api/wiki/embedder.py.
+    "mewbo-graph[treesitter,retrieval]>=0.0.13",
 ]
 
 [project.scripts]

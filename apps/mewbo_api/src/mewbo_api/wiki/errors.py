@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 from flask import jsonify
-
-from .types import WikiError
+from mewbo_graph.wiki.types import WikiError
 
 WIKI_CODE_STATUS: dict[str, int] = {
     "not_found": 404,

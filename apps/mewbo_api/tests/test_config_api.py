@@ -35,8 +35,8 @@ def test_config_schema_requires_auth():
     assert resp.status_code == 401
 
 
-def test_config_schema_strips_protected(monkeypatch):
-    """GET /api/config/schema omits x-protected fields."""
+def test_config_schema_strips_protected_keeps_secrets(monkeypatch):
+    """GET /api/config/schema removes x-protected but keeps x-secret (writeOnly)."""
     path = _setup_temp_config(monkeypatch)
     try:
         client = backend.app.test_client()
@@ -46,19 +46,18 @@ def test_config_schema_strips_protected(monkeypatch):
         )
         assert resp.status_code == 200
         schema = resp.get_json()
-        # APIConfig should not have master_token
-        api_def = schema.get("$defs", {}).get("APIConfig", {})
-        api_props = api_def.get("properties", {})
+        # APIConfig.master_token is x-protected -> removed entirely.
+        api_props = schema["$defs"]["APIConfig"]["properties"]
         assert "master_token" not in api_props
-        # LLMConfig should not have api_key
-        llm_def = schema.get("$defs", {}).get("LLMConfig", {})
-        llm_props = llm_def.get("properties", {})
-        assert "api_key" not in llm_props
-        # LangfuseConfig should not have secret_key or public_key
-        lf_def = schema.get("$defs", {}).get("LangfuseConfig", {})
-        lf_props = lf_def.get("properties", {})
-        assert "secret_key" not in lf_props
-        assert "public_key" not in lf_props
+        # LLMConfig.api_key is now x-secret -> present but writeOnly so the
+        # console can SET it (never read it back).
+        llm_props = schema["$defs"]["LLMConfig"]["properties"]
+        assert "api_key" in llm_props
+        assert llm_props["api_key"].get("writeOnly") is True
+        # Langfuse keys are x-secret -> present + writeOnly.
+        lf_props = schema["$defs"]["LangfuseConfig"]["properties"]
+        assert lf_props["secret_key"].get("writeOnly") is True
+        assert lf_props["public_key"].get("writeOnly") is True
     finally:
         _teardown(path)
 
@@ -66,9 +65,12 @@ def test_config_schema_strips_protected(monkeypatch):
 # ---------- GET /api/config ----------
 
 
-def test_config_get_omits_protected(monkeypatch):
-    """GET /api/config omits protected field values."""
-    path = _setup_temp_config(monkeypatch, {"api": {"master_token": "secret"}})
+def test_config_get_omits_protected_and_secrets(monkeypatch):
+    """GET /api/config strips protected + secret values and reports secret status."""
+    path = _setup_temp_config(
+        monkeypatch,
+        {"api": {"master_token": "secret"}, "llm": {"api_key": "sk-set"}},
+    )
     try:
         client = backend.app.test_client()
         resp = client.get(
@@ -76,13 +78,18 @@ def test_config_get_omits_protected(monkeypatch):
             headers={"X-API-Key": "test-token"},
         )
         assert resp.status_code == 200
-        data = resp.get_json()["config"]
-        # master_token should be stripped
+        body = resp.get_json()
+        data = body["config"]
+        # Protected master_token is stripped from values.
         assert "master_token" not in data.get("api", {})
-        # api_key should be stripped
+        # Secret api_key value is stripped (write-only, never read back).
         assert "api_key" not in data.get("llm", {})
-        # Non-protected fields should still be present
+        # Non-protected fields remain.
         assert "default_model" in data.get("llm", {})
+        # The secrets map reports is-set status; api_key was set above.
+        secrets = body["secrets"]
+        assert secrets["llm.api_key"] is True
+        assert secrets["home_assistant.token"] is False
     finally:
         _teardown(path)
 
@@ -102,6 +109,30 @@ def test_config_patch_rejects_protected(monkeypatch):
         )
         assert resp.status_code == 403
         assert "protected" in resp.get_json()["message"].lower()
+    finally:
+        _teardown(path)
+
+
+def test_config_patch_allows_secret(monkeypatch):
+    """PATCH /api/config may SET an x-secret field; it persists but is not read back."""
+    path = _setup_temp_config(monkeypatch)
+    try:
+        client = backend.app.test_client()
+        resp = client.patch(
+            "/api/config",
+            headers={"X-API-Key": "test-token"},
+            json={"llm": {"api_key": "sk-new-secret"}},
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # Secret value is not echoed back in the config dump...
+        assert "api_key" not in body["config"].get("llm", {})
+        # ...but the secrets map reports it as now-set.
+        assert body["secrets"]["llm.api_key"] is True
+        # And it actually persisted to disk.
+        with open(path) as f:
+            on_disk = json.load(f)
+        assert on_disk["llm"]["api_key"] == "sk-new-secret"
     finally:
         _teardown(path)
 

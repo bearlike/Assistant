@@ -8,8 +8,10 @@ interface AnswerCardProps {
   answer: RunAnswer
   results: SearchResult[]
   sources: SourceCatalogEntry[]
-  elapsed: number
-  totalMs: number
+  /** Final cited synthesis has landed (`answer_ready`). */
+  ready: boolean
+  /** Real elapsed ms since run start — display only. */
+  elapsedMs: number
   onCiteClick: (resultId: string) => void
   onAsk: () => void
 }
@@ -18,15 +20,15 @@ export function AnswerCard({
   answer,
   results,
   sources,
-  elapsed,
-  totalMs,
+  ready,
+  elapsedMs,
   onCiteClick,
   onAsk,
 }: AnswerCardProps) {
-  const ready = elapsed > totalMs * 0.55
-  const visibleBullets = ready
-    ? Math.min(answer.bullets.length, Math.floor((elapsed - totalMs * 0.55) / 280))
-    : 0
+  // The tldr streams in via `answer_delta` even before `ready`; bullets are
+  // only meaningful once the final cited block lands (`answer_ready`).
+  const streaming = answer.tldr.length > 0 && !ready
+  const visibleBullets = ready ? answer.bullets.length : 0
 
   return (
     <section
@@ -44,7 +46,7 @@ export function AnswerCard({
           <span className="text-sm font-semibold">Synthesis</span>
           <span className="text-xs font-mono text-[hsl(var(--muted-foreground))]">
             {ready
-              ? `${answer.sources_count} sources · ${(elapsed / 1000).toFixed(1)}s`
+              ? `${answer.sources_count} sources · ${(elapsedMs / 1000).toFixed(1)}s`
               : "synthesising…"}
           </span>
         </div>
@@ -61,12 +63,18 @@ export function AnswerCard({
         </div>
       </header>
 
-      {!ready ? (
+      {!ready && !streaming ? (
         <div className="space-y-2">
           <SkeletonLine width="90%" />
           <SkeletonLine width="70%" />
           <SkeletonLine width="60%" />
         </div>
+      ) : !ready && streaming ? (
+        // Typewriter: tldr tokens arriving via `answer_delta`, bullets pending.
+        <p className="text-[15px] leading-relaxed max-w-[64ch] text-[hsl(var(--foreground))] [text-wrap:pretty]">
+          {answer.tldr}
+          <span className="ml-1 inline-block animate-pulse text-[hsl(var(--primary))]">▌</span>
+        </p>
       ) : (
         <>
           <p className="text-[15px] leading-relaxed max-w-[64ch] text-[hsl(var(--foreground))] [text-wrap:pretty]">

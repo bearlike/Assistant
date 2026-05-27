@@ -6,8 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import IndexingJob
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import IndexingJob
 
 # ── Fixture path ────────────────────────────────────────────────────────────
 
@@ -52,8 +52,8 @@ def _run_scan(
     session_id: str = "sess-scan1",
 ) -> tuple:
     """Set up store + tool, run scan, return (result, store, job_id)."""
-    import mewbo_core.builtin_plugins.wiki.scan as scan_mod
-    from mewbo_core.builtin_plugins.wiki.scan import WikiScanTreeTool
+    import mewbo_graph.plugins.wiki.scan as scan_mod
+    from mewbo_graph.plugins.wiki.scan import WikiScanTreeTool
 
     store = _store(tmp_path)
     job = _job(job_id)
@@ -65,7 +65,7 @@ def _run_scan(
 
     # _clone_dir_for lives in _ctx and is called by resolve_job_ctx — patch it there.
     with patch.object(scan_mod, "_resolve_runtime", return_value=runtime), \
-         patch("mewbo_core.builtin_plugins.wiki._ctx._clone_dir_for", return_value=clone_dir):
+         patch("mewbo_graph.plugins.wiki._ctx._clone_dir_for", return_value=clone_dir):
         result = asyncio.run(tool.handle(_make_action_step(tool_input)))
 
     return result, store, job_id

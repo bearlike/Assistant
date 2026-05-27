@@ -7,6 +7,7 @@ They are skipped when git is not available on PATH.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -392,6 +393,31 @@ def test_create_raises_branch_in_use_when_branch_already_checked_out(
     err = excinfo.value
     assert err.branch == "main"
     assert err.existing_path  # git tells us where it's checked out
+
+
+def test_create_branch_in_use_independent_of_git_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for issue #27: the structured pre-check — NOT git's
+    translatable stderr — is what raises ``WorktreeBranchInUseError``.
+
+    Git reworded this message (``already checked out at`` →
+    ``already used by worktree at``) in 2.54, silently downgrading the
+    exception to a bare ``RuntimeError`` on CI. Neutralise the stderr regex so
+    it can never match (simulating that rewording, or a non-English git
+    locale); ``create`` must STILL raise the structured error for an
+    already-checked-out branch, proving it no longer depends on the wording.
+    """
+    import mewbo_core.worktree as worktree_mod
+
+    # A pattern that can never match any stderr — as if git reworded again.
+    monkeypatch.setattr(worktree_mod, "_BRANCH_IN_USE_RE", re.compile(r"(?!)"))
+
+    repo = _make_repo(tmp_path)
+    with pytest.raises(WorktreeBranchInUseError) as excinfo:
+        WorktreeManager.create(str(repo), "main")
+    assert excinfo.value.branch == "main"
+    assert excinfo.value.existing_path  # located from the structured worktree list
 
 
 # ---------------------------------------------------------------------------

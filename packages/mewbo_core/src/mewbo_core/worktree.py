@@ -61,8 +61,14 @@ class WorktreeBranchInUseError(RuntimeError):
         self.existing_path = existing_path
 
 
+# Fallback only. The source of truth for "branch already checked out" is the
+# structured pre-check in ``create()`` (issue #27); this regex is a safety net
+# for any residual race. Both git wordings are matched so the net also survives
+# a newer git — git's i18n can still translate the message, which is precisely
+# why the structured pre-check, not this regex, is authoritative.
 _BRANCH_IN_USE_RE = re.compile(
-    r"'([^']+)' is already checked out at '([^']+)'", re.IGNORECASE
+    r"'([^']+)' is already (?:checked out|used by worktree) at '([^']+)'",
+    re.IGNORECASE,
 )
 
 
@@ -232,6 +238,21 @@ class WorktreeManager:
         return out
 
     @staticmethod
+    def _checkout_path(repo_path: str, branch: str) -> str | None:
+        """Path where *branch* is currently checked out, or ``None`` if free.
+
+        Reads the structured ``git worktree list`` output — which always
+        includes the parent repo's own checkout — instead of parsing git's
+        version- and locale-dependent stderr. This is the source of truth for
+        the "branch already checked out" condition (issue #27); the
+        :data:`_BRANCH_IN_USE_RE` stderr match is only a fallback.
+        """
+        for wt in WorktreeManager.list_worktrees(repo_path):
+            if wt.get("branch", "") == branch:
+                return wt.get("path") or repo_path
+        return None
+
+    @staticmethod
     def create(repo_path: str, branch: str, *, base: str | None = None) -> str:
         """Create a worktree for *branch* under ``<repo>/.mewbo/worktrees/<slug>``.
 
@@ -268,6 +289,13 @@ class WorktreeManager:
         if base:
             git_args = ["worktree", "add", "-b", branch, str(target), base]
         else:
+            # Existing-branch checkout: refuse a branch already checked out
+            # elsewhere from structured worktree state, not git's translatable
+            # stderr (issue #27). ``-b`` (base given) mints a *new* branch, so
+            # this guard applies only to the existing-branch path.
+            existing = WorktreeManager._checkout_path(str(repo), branch)
+            if existing is not None:
+                raise WorktreeBranchInUseError(branch=branch, existing_path=existing)
             git_args = ["worktree", "add", str(target), branch]
 
         try:

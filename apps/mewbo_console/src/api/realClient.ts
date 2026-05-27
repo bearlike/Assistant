@@ -12,7 +12,7 @@ import {
   SessionUsage,
   ShareRecord
 } from "../types";
-import { AgentSummary, ApiClient, ApiConfig, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
+import { AgentSummary, ApiClient, ApiConfig, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
 
 function withBase(baseUrl: string, path: string) {
   if (!baseUrl) {
@@ -453,22 +453,22 @@ export function createRealClient(config: ApiConfig): ApiClient {
       return handleJson<Record<string, unknown>>(response);
     },
 
-    async getConfig(): Promise<Record<string, unknown>> {
+    async getConfig(): Promise<ConfigState> {
       const response = await fetch(withBase(baseUrl, "/api/config"), {
         headers: headers(apiKey)
       });
-      const payload = await handleJson<{ config: Record<string, unknown> }>(response);
-      return payload.config;
+      const data = await handleJson<Partial<ConfigState>>(response);
+      return { config: data.config ?? {}, secrets: data.secrets ?? {} };
     },
 
-    async patchConfig(patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+    async patchConfig(patch: Record<string, unknown>): Promise<ConfigState> {
       const response = await fetch(withBase(baseUrl, "/api/config"), {
         method: "PATCH",
         headers: headers(apiKey),
         body: JSON.stringify(patch)
       });
-      const payload = await handleJson<{ config: Record<string, unknown> }>(response);
-      return payload.config;
+      const data = await handleJson<Partial<ConfigState>>(response);
+      return { config: data.config ?? {}, secrets: data.secrets ?? {} };
     },
 
     async listPlugins(): Promise<PluginSummary[]> {
@@ -615,6 +615,31 @@ export function createRealClient(config: ApiConfig): ApiClient {
         },
       );
       return handleJson<CommandResult>(response);
+    },
+
+    async listApiKeys(): Promise<ApiKeySummary[]> {
+      const response = await fetch(withBase(baseUrl, "/api/keys"), {
+        headers: headers(apiKey),
+      });
+      const payload = await handleJson<{ keys: ApiKeySummary[] }>(response);
+      return payload.keys ?? [];
+    },
+
+    async createApiKey(label: string): Promise<ApiKeyCreated> {
+      const response = await fetch(withBase(baseUrl, "/api/keys"), {
+        method: "POST",
+        headers: headers(apiKey),
+        body: JSON.stringify({ label }),
+      });
+      return handleJson<ApiKeyCreated>(response);
+    },
+
+    async revokeApiKey(id: string): Promise<ApiKeyRevoked> {
+      const response = await fetch(
+        withBase(baseUrl, `/api/keys/${encodeURIComponent(id)}`),
+        { method: "DELETE", headers: headers(apiKey) }
+      );
+      return handleJson<ApiKeyRevoked>(response);
     },
   };
 }

@@ -6,6 +6,11 @@ connection pool, LSP, Aider bridge, vendored third-party glue. Root
 `CLAUDE.md` lists the entry-point files; this file documents the
 non-obvious decisions.
 
+**Layering (see root CLAUDE.md → "Monorepo layering"):** tools deps
+`mewbo_core` only and imports strictly down — never an app or a capability
+library. Reusable domain engines (graph/memory/embedding) are NOT tools;
+they belong in a capability library (`mewbo_graph`).
+
 ## What lives here vs `mewbo_core`
 
 `mewbo_core` owns the orchestration engine and the "core skills" that

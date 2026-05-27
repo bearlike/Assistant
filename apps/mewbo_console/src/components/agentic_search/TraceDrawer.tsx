@@ -9,15 +9,15 @@ import {
 import { cn } from "@/lib/utils"
 
 import type { TraceAgent } from "../../types/agenticSearch"
-import { agentSnapshot } from "./utils"
+import { agentSnapshot, runProgress } from "./utils"
 
 interface TraceDrawerProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   agents: TraceAgent[]
   query: string
-  elapsed: number
-  totalMs: number
+  /** Real elapsed ms since run start — display only. */
+  elapsedMs: number
   done: boolean
 }
 
@@ -26,11 +26,10 @@ export function TraceDrawer({
   onOpenChange,
   agents,
   query,
-  elapsed,
-  totalMs,
+  elapsedMs,
   done,
 }: TraceDrawerProps) {
-  const progress = Math.min(1, totalMs > 0 ? elapsed / totalMs : 0)
+  const progress = runProgress(agents, done)
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -62,11 +61,11 @@ export function TraceDrawer({
             </div>
           </div>
           {agents.map((agent) => (
-            <AgentBlock key={agent.id} agent={agent} elapsed={elapsed} />
+            <AgentBlock key={agent.id} agent={agent} />
           ))}
         </div>
         <footer className="flex items-center justify-between px-5 py-3 border-t border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] font-mono">
-          <span>elapsed {(elapsed / 1000).toFixed(1)}s</span>
+          <span>elapsed {(elapsedMs / 1000).toFixed(1)}s</span>
           <span>{done ? "aggregated · ranked" : "streaming…"}</span>
         </footer>
       </SheetContent>
@@ -74,8 +73,8 @@ export function TraceDrawer({
   )
 }
 
-function AgentBlock({ agent, elapsed }: { agent: TraceAgent; elapsed: number }) {
-  const { visibleLines: visible, done, running } = agentSnapshot(agent, elapsed)
+function AgentBlock({ agent }: { agent: TraceAgent }) {
+  const { visibleLines: visible, done, running } = agentSnapshot(agent)
   const slotColor = `hsl(var(--agent-${agent.slot}))`
   return (
     <div

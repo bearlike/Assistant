@@ -4,10 +4,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import GraphEdge, GraphNode, IndexingJob
-from mewbo_core.builtin_plugins.wiki import query_graph as query_graph_mod
-from mewbo_core.builtin_plugins.wiki.query_graph import WikiQueryGraphTool
+from mewbo_graph.plugins.wiki import query_graph as query_graph_mod
+from mewbo_graph.plugins.wiki.query_graph import WikiQueryGraphTool
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import GraphEdge, GraphNode, IndexingJob
 
 
 @pytest.fixture

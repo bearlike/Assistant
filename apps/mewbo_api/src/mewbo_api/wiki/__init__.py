@@ -14,15 +14,20 @@ logging = get_logger(name="api.wiki")
 def init_wiki(app, runtime) -> bool:
     """Mount /v1/wiki/* on the Flask app. Returns False if wiki extras are absent."""
     try:
-        from .store import create_wiki_store
+        from mewbo_graph.wiki.store import create_wiki_store, set_wiki_store
     except ImportError as exc:
         logging.info("wiki extras not installed (%s); skipping /v1/wiki/* routes", exc)
         return False
     try:
-        runtime.wiki_store = create_wiki_store()
+        store = create_wiki_store()
     except Exception as exc:
         logging.warning("wiki store init failed: %s; skipping routes", exc)
         return False
+    # Pin the process-wide singleton so the relocated wiki SessionTools resolve
+    # the SAME store instance (down-only) instead of reaching up into the API
+    # runtime; keep ``runtime.wiki_store`` for the API routes that read it.
+    set_wiki_store(store)
+    runtime.wiki_store = store
     from .routes import register
 
     register(app, runtime)

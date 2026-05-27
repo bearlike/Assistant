@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from mewbo_api.wiki.types import (
+from mewbo_graph.wiki.types import (
     Frontmatter,
     IndexingJob,
     NavEntry,
@@ -64,7 +64,7 @@ def _qa(answer_id: str = "ans-001") -> QaAnswer:
 
 
 def _store(tmp_path: Path):
-    from mewbo_api.wiki.store import JsonWikiStore
+    from mewbo_graph.wiki.store import JsonWikiStore
 
     return JsonWikiStore(root_dir=tmp_path)
 
@@ -212,7 +212,7 @@ def test_job_events_append_load(tmp_path: Path) -> None:
     assert tail[0]["type"] == "scanning"
 
     # persist check — re-instantiate store on same tmp_path
-    from mewbo_api.wiki.store import JsonWikiStore
+    from mewbo_graph.wiki.store import JsonWikiStore
 
     store2 = JsonWikiStore(root_dir=tmp_path)
     persisted = store2.load_job_events("job-ev")
@@ -282,8 +282,8 @@ def test_qa_save_load(tmp_path: Path) -> None:
 
 
 def test_factory_returns_json_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    import mewbo_api.wiki.store as store_mod
-    from mewbo_api.wiki.store import JsonWikiStore, create_wiki_store
+    import mewbo_graph.wiki.store as store_mod
+    from mewbo_graph.wiki.store import JsonWikiStore, create_wiki_store
 
     monkeypatch.setattr(store_mod, "get_config_value", lambda *a, **kw: "json")
     result = create_wiki_store()
@@ -294,7 +294,7 @@ def test_factory_returns_json_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_upsert_and_query_nodes(tmp_path: Path) -> None:
-    from mewbo_api.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import GraphNode
 
     store = _store(tmp_path)
     nodes = [
@@ -323,7 +323,7 @@ def test_upsert_and_query_nodes(tmp_path: Path) -> None:
 
 
 def test_upsert_nodes_overwrites_existing(tmp_path: Path) -> None:
-    from mewbo_api.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import GraphNode
 
     store = _store(tmp_path)
     n = GraphNode(slug="x/y", node_id="n1", type="File", name="a.py",
@@ -338,7 +338,7 @@ def test_upsert_nodes_overwrites_existing(tmp_path: Path) -> None:
 
 
 def test_upsert_and_neighbors_via_edges(tmp_path: Path) -> None:
-    from mewbo_api.wiki.types import GraphEdge, GraphNode
+    from mewbo_graph.wiki.types import GraphEdge, GraphNode
 
     store = _store(tmp_path)
     store.upsert_nodes("x/y", [
@@ -359,7 +359,7 @@ def test_upsert_and_neighbors_via_edges(tmp_path: Path) -> None:
 
 
 def test_vector_search_returns_top_k_by_cosine(tmp_path: Path) -> None:
-    from mewbo_api.wiki.types import Embedding
+    from mewbo_graph.wiki.types import Embedding
 
     store = _store(tmp_path)
     items = [
@@ -382,7 +382,7 @@ def test_vector_search_empty_pool_returns_empty(tmp_path: Path) -> None:
 
 
 def test_graph_isolated_by_slug(tmp_path: Path) -> None:
-    from mewbo_api.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import GraphNode
 
     store = _store(tmp_path)
     store.upsert_nodes("a/b", [GraphNode(slug="a/b", node_id="x", type="File",
@@ -414,7 +414,7 @@ def test_attach_job_session(tmp_path: Path) -> None:
     assert store.get_job_session("job-sess") == "session-xyz-456"
 
     # persist — re-instantiate on same tmp_path
-    from mewbo_api.wiki.store import JsonWikiStore
+    from mewbo_graph.wiki.store import JsonWikiStore
 
     store2 = JsonWikiStore(root_dir=tmp_path)
     assert store2.get_job_session("job-sess") == "session-xyz-456"

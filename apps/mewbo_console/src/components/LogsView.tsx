@@ -12,6 +12,9 @@ import {
   RotateCcw,
   Play,
   Layers,
+  RefreshCw,
+  Shuffle,
+  Ban,
 } from 'lucide-react';
 import { SummaryBlock } from './SummaryBlock';
 import { MarkdownContent } from './MessageBubble';
@@ -428,6 +431,80 @@ function renderCompaction(log: LogEntry) {
   );
 }
 
+/** Short, slash-trimmed model label for inline resilience copy. */
+function shortModelLabel(id?: string): string {
+  if (!id) return 'model';
+  const slash = id.lastIndexOf('/');
+  return slash >= 0 ? id.slice(slash + 1) : id;
+}
+
+function renderLlmRetry(log: LogEntry) {
+  const model = shortModelLabel(log.model);
+  const errorType = log.retryErrorType || 'error';
+  const attempt = log.retryAttempt;
+  const max = log.retryMaxAttempts;
+  const counter = attempt != null && max != null ? ` (${attempt}/${max})` : '';
+  const title = `Retrying ${model} after ${errorType}${counter}`;
+  return (
+    <LogEventCard
+      key={log.id}
+      icon={<RefreshCw className="w-4 h-4 text-amber-500" />}
+      title={<span className="flex items-center gap-2">{title}<ModelLabel modelId={log.model} className={MODEL_TAG_CLASS} /></span>}
+      badge={log.retryDelay != null ? <Badge color="amber">{`${log.retryDelay.toFixed(1)}s delay`}</Badge> : undefined}
+      timestamp={log.timestamp}
+      accent="amber"
+      depth={log.depth}
+    >
+      {log.error && (
+        <p className="text-xs text-[hsl(var(--muted-foreground))] font-mono leading-relaxed">{log.error}</p>
+      )}
+    </LogEventCard>
+  );
+}
+
+function renderLlmFallback(log: LogEntry) {
+  const from = shortModelLabel(log.fallbackFromModel);
+  const to = shortModelLabel(log.fallbackToModel);
+  const reason = log.fallbackReason || 'switching model';
+  return (
+    <LogEventCard
+      key={log.id}
+      icon={<Shuffle className="w-4 h-4 text-blue-500" />}
+      title={<span className="flex items-center gap-2 font-mono">{from} → {to}<ModelLabel modelId={log.fallbackToModel} className={MODEL_TAG_CLASS} /></span>}
+      badge={<Badge color="blue">Fallback</Badge>}
+      timestamp={log.timestamp}
+      accent="blue"
+      depth={log.depth}
+    >
+      <p className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed">
+        {reason}
+        {log.fallbackPreviousErrorType ? ` · previous error: ${log.fallbackPreviousErrorType}` : ''}
+      </p>
+    </LogEventCard>
+  );
+}
+
+function renderRecoveryHalt(log: LogEntry) {
+  const tool = log.recoveryTool || 'a tool';
+  return (
+    <LogEventCard
+      key={log.id}
+      icon={<Ban className="w-4 h-4 text-red-500" />}
+      title="Halted — no progress (doom loop)"
+      badge={<Badge color="red">Halted</Badge>}
+      timestamp={log.timestamp}
+      accent="red"
+      depth={log.depth}
+      defaultExpanded
+    >
+      <p className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed">
+        The model repeated <span className="font-mono text-[hsl(var(--foreground))]">{tool}</span> with identical
+        input and made no progress, so the run was stopped to avoid an infinite loop.
+      </p>
+    </LogEventCard>
+  );
+}
+
 function renderAgentMessage(log: LogEntry) {
   const colorIdx = agentColorIndex(log.agentId || 'root');
   const agentColor = AGENT_COLOR_CLASSES[colorIdx];
@@ -646,6 +723,9 @@ export function LogsView({
           if (log.type === 'root_steer') return renderRootSteer(log);
           if (log.type === 'spawn_submit') return renderSpawnSubmit(log);
           if (log.type === 'compact') return renderCompaction(log);
+          if (log.type === 'llm_retry') return renderLlmRetry(log);
+          if (log.type === 'llm_fallback') return renderLlmFallback(log);
+          if (log.type === 'recovery_halt') return renderRecoveryHalt(log);
           if (log.type === 'system') return renderReflection(log);
 
           // Fallback for unknown types

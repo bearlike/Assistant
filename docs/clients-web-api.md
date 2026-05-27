@@ -1,8 +1,13 @@
 # Console + API
 
-<div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;">
-  <img src="../mewbo-console-01-front.png" alt="Mewbo Console landing page" style="width: 100%; max-width: 520px; height: auto;" />
-  <img src="../mewbo-console-02-tasks.png" alt="Mewbo Console tasks page" style="width: 100%; max-width: 520px; height: auto;" />
+<div class="swiper ms-shots">
+<div class="swiper-wrapper">
+<div class="swiper-slide"><figure><img loading="lazy" src="../mewbo-console-01-front.png" alt="Mewbo Console landing page" /><figcaption>The console home, listing recent sessions</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="../mewbo-console-02-tasks.png" alt="Mewbo Console tasks page" /><figcaption>Inside a task, step by step</figcaption></figure></div>
+</div>
+<div class="swiper-pagination"></div>
+<div class="swiper-button-prev"></div>
+<div class="swiper-button-next"></div>
 </div>
 
 The REST API is the programmable surface for Mewbo. You send it queries, start and resume sessions, and poll events for progress. The web console is a browser-based client that sits on top of that API. It is built for asynchronous delegation: you submit a task, the console streams the event timeline, and you follow execution traces, tool outputs, and sub-agent activity as the session runs. The API handles orchestration. The console gives you session management, an event timeline, and rich visualization of tool output.

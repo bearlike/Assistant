@@ -4,9 +4,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from mewbo_api.wiki.retriever import HybridRetriever
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import (
+from mewbo_graph.wiki.retriever import HybridRetriever
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import (
     Embedding,
     Frontmatter,
     GraphEdge,

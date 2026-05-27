@@ -5,13 +5,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from mewbo_api.wiki.types import IndexingJob, QaAnswer
+from mewbo_graph.wiki.types import IndexingJob, QaAnswer
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
 def _store(tmp_path: Path):
-    from mewbo_api.wiki.store import JsonWikiStore
+    from mewbo_graph.wiki.store import JsonWikiStore
 
     return JsonWikiStore(root_dir=tmp_path)
 
@@ -48,7 +48,7 @@ def _qa(answer_id: str = "ans-ctx", slug: str = "org/repo") -> QaAnswer:
 
 def test_resolve_job_ctx_returns_full_context(tmp_path: Path) -> None:
     """A registered job + session yields a WikiJobCtx with all fields populated."""
-    from mewbo_core.builtin_plugins.wiki._ctx import WikiJobCtx, resolve_job_ctx
+    from mewbo_graph.plugins.wiki._ctx import WikiJobCtx, resolve_job_ctx
 
     store = _store(tmp_path)
     job = _job("job-ctx-1", slug="org/myrepo")
@@ -68,7 +68,7 @@ def test_resolve_job_ctx_returns_full_context(tmp_path: Path) -> None:
 
 def test_resolve_job_ctx_returns_none_for_unknown_session(tmp_path: Path) -> None:
     """Unknown session → resolve_job_ctx returns None (no crash)."""
-    from mewbo_core.builtin_plugins.wiki._ctx import resolve_job_ctx
+    from mewbo_graph.plugins.wiki._ctx import resolve_job_ctx
 
     store = _store(tmp_path)
     ctx = resolve_job_ctx("sess-nonexistent", _runtime(store))
@@ -77,7 +77,7 @@ def test_resolve_job_ctx_returns_none_for_unknown_session(tmp_path: Path) -> Non
 
 def test_resolve_job_ctx_returns_none_when_no_store(tmp_path: Path) -> None:
     """Missing wiki_store on runtime → returns None gracefully."""
-    from mewbo_core.builtin_plugins.wiki._ctx import resolve_job_ctx
+    from mewbo_graph.plugins.wiki._ctx import resolve_job_ctx
 
     runtime = SimpleNamespace()  # no wiki_store attribute
     ctx = resolve_job_ctx("sess-any", runtime)
@@ -89,7 +89,7 @@ def test_resolve_job_ctx_returns_none_when_no_store(tmp_path: Path) -> None:
 
 def test_resolve_qa_ctx_returns_full_context(tmp_path: Path) -> None:
     """A registered QA answer + session yields a WikiQaCtx with all fields."""
-    from mewbo_core.builtin_plugins.wiki._ctx import WikiQaCtx, resolve_qa_ctx
+    from mewbo_graph.plugins.wiki._ctx import WikiQaCtx, resolve_qa_ctx
 
     store = _store(tmp_path)
     answer = _qa("ans-ctx-1", slug="org/myrepo")
@@ -107,7 +107,7 @@ def test_resolve_qa_ctx_returns_full_context(tmp_path: Path) -> None:
 
 def test_resolve_qa_ctx_returns_none_for_unknown_session(tmp_path: Path) -> None:
     """Unknown session → resolve_qa_ctx returns None (no crash)."""
-    from mewbo_core.builtin_plugins.wiki._ctx import resolve_qa_ctx
+    from mewbo_graph.plugins.wiki._ctx import resolve_qa_ctx
 
     store = _store(tmp_path)
     ctx = resolve_qa_ctx("sess-nonexistent", _runtime(store))
@@ -116,7 +116,7 @@ def test_resolve_qa_ctx_returns_none_for_unknown_session(tmp_path: Path) -> None
 
 def test_resolve_qa_ctx_returns_none_when_no_store(tmp_path: Path) -> None:
     """Missing wiki_store on runtime → returns None gracefully."""
-    from mewbo_core.builtin_plugins.wiki._ctx import resolve_qa_ctx
+    from mewbo_graph.plugins.wiki._ctx import resolve_qa_ctx
 
     runtime = SimpleNamespace()
     ctx = resolve_qa_ctx("sess-any", runtime)
@@ -128,7 +128,7 @@ def test_resolve_qa_ctx_returns_none_when_no_store(tmp_path: Path) -> None:
 
 def test_clone_dir_uses_job_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """clone_dir is derived from MEWBO_WIKI_CLONE_ROOT env var + job_id."""
-    from mewbo_core.builtin_plugins.wiki._ctx import resolve_job_ctx
+    from mewbo_graph.plugins.wiki._ctx import resolve_job_ctx
 
     store = _store(tmp_path)
     store.create_job(_job("job-cdir", slug="org/r"))

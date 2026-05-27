@@ -6,6 +6,15 @@ suite (including the wiki tools). The root `CLAUDE.md` covers the
 architectural invariants; this file captures the engineering decisions
 that aren't obvious from the code in this package.
 
+**Layering (see root CLAUDE.md → "Monorepo layering"):** core is the lean
+base of the dependency DAG — it imports DOWN from nothing and must never
+import an app or a capability library; keep heavy/optional deps behind a
+`mewbo-core[...]` extra. (Gitea #25 relocated the `wiki`/`scg` plugin suites +
+their substrate to `mewbo_graph`; core's `builtin_plugins/` now holds only
+zero-app-import suites like `widget_builder`. A library above core contributes
+its plugins via `plugins.register_builtin_root` — a push, so core never imports
+up to find them.)
+
 ## What this package is
 
 The single source of LLM-driven orchestration for every Mewbo
@@ -31,23 +40,37 @@ package:
 - `compact.py:run_compaction()` is the only compaction path. Both
   FULL and PARTIAL modes share the same `<analysis>`/`<summary>`
   prompt structure.
+- `llm_resilience.py` models retry/fallback as atomic objects: `RetryStrategy`
+  (per-run; holds the retry budget + circuit breaker + knobs, `from_config()`,
+  injected `invoke`/`emit`/`compact`; its methods incl. `classify`/`backoff`
+  describe the behaviour over that state) and `DoomLoopGuard` (no-progress
+  detection). `tool_use_loop` is a thin driver — don't reinline retries into
+  the loop. See the root CLAUDE.md "LLM call resilience" invariant for the
+  decision model and the append-after-success idempotency rule. A cross-model
+  fallback emits a separate `llm_fallback` event carrying `to_model`;
+  `token_budget` reads the successful model from THAT event (not `llm_retry`), so
+  `models_used` captures fallbacks — rename the event/field in lockstep with that
+  reader or fallback models silently vanish from usage.
 - `session_runtime.py:SessionRuntime` is the only place a session is
   created, resumed, forked, or archived. Channels, the API, and the
   CLI all go through it — no parallel session implementations.
 
 ## Built-in plugins
 
-`builtin_plugins/` ships canonical implementations of the assistant's
-"core skills" — wiki indexing, web fetch, shell, file edit, etc. They
-follow the same SessionTool contract as user-provided plugins and use
-the same `filter_specs()` tool-scope rules. Adding a new built-in
-plugin = drop a module here + add the entries to
-`tool_registry.AUTO_MANIFEST`.
+`builtin_plugins/` ships the **zero-app-import** first-party suites that
+belong in the core wheel (e.g. `widget_builder`). They follow the same
+SessionTool contract as user-provided plugins and use the same
+`filter_specs()` tool-scope rules. Discovery is a filesystem scan of each
+suite's `.claude-plugin/plugin.json` (no hardcoded manifest), so adding a
+suite = drop a directory here with a `plugin.json`.
 
-The wiki tools have their own subsystem doc:
-`apps/mewbo_api/src/mewbo_api/wiki/CLAUDE.md` (lives next to the API
-wiki module because most of the wiki integration glue lives there).
-Read it before touching anything in `builtin_plugins/wiki/`.
+Plugins whose tools wrap a heavier substrate ship **with that substrate**, not
+here — the `wiki`/`scg` suites live in `mewbo_graph.plugins.{wiki,scg}` so they
+import the engine down instead of up into an app (Gitea #25). A library
+registers its plugin root with `plugins.register_builtin_root`;
+`load_all_plugin_components()` discovers core's own root plus every registered
+one. Their subsystem docs live with the engine — see
+`packages/mewbo_graph/CLAUDE.md` and the wiki/scg docs it points to.
 
 ## LLM client — LiteLLM is canonical
 
@@ -144,6 +167,34 @@ callers that can't `await`. It owns the event loop lifecycle and
 guarantees cleanup of background tasks via
 `await_lifecycle_managers(timeout)`. Don't introduce a parallel
 sync/async bridge — extend this one if you need new behavior.
+
+## Config curation annotations (faceted Settings UI)
+
+`config.py` section models carry presentation/security metadata in their JSON
+schema for the console's Settings UI. The non-obvious trap: a submodel field
+serializes to a bare `$ref` and Pydantic **drops sibling `json_schema_extra`**,
+so facet metadata (`x-group`, `x-order`, `x-advanced`) MUST sit on the section
+**class** (`model_config = ConfigDict(json_schema_extra=...)`) where it lands on
+`$defs/<Class>` — not on the field, where it silently vanishes. Field-level
+flags (`x-secret` write-only, `x-protected` never-exposed, `x-advanced`) go on
+the scalar `Field(...)` and survive. Full contract: the comment block above
+`AppConfig`. The API's `ConfigSchemaView` reads these; the console's
+`SettingsModel` mirrors them.
+
+Two corollaries that bit during the Settings UI refinement (#30):
+- **The `$ref`-drop trap has an exception: collection fields.** A `dict[str, X]`
+  or `list[...]` field is NOT a bare `$ref` — it serializes inline
+  (`{type: object, additionalProperties: …}`), so field-level `json_schema_extra`
+  **survives** on it. That's how `projects`/`channels` carry their `x-group` from
+  the *field* with no wrapper class. Only a single-submodel field needs the
+  class-level workaround.
+- **`title=` (in the class `json_schema_extra`) humanizes the section/subsection
+  heading** and flows live to the console (the FE `prettify` is only a fallback);
+  **`deprecated=True` on a `Field`** hides that knob in the console. After
+  changing any curation metadata, regenerate the committed
+  `configs/app.schema.json` + `docs/configuration.md` via
+  `scripts/ci/generate_config_schema.py` (the docs side is an MkDocs
+  `on_pre_build` hook in `docs/hooks/schema_to_md.py`).
 
 ## Testing
 

@@ -96,6 +96,13 @@ export type SessionContext = {
   model?: string;
   mode?: QueryMode;
   attachments?: AttachmentPayload[];
+  /**
+   * Opt-in cross-model fallback chain. When present and non-empty the run
+   * tries each model in order after the primary fails (same-model retries
+   * exhausted / fatal switch). Omitted or empty = no fallback (safe default).
+   * Mirrors the backend ``context.fallback_models`` contract.
+   */
+  fallback_models?: string[];
 };
 
 export type ShareRecord = {
@@ -182,6 +189,8 @@ export type TurnTokenUsage = {
 // Output tokens are always cumulative (additive).
 export type SessionUsage = {
   root_model: string;
+  /** Distinct model IDs actually used in the session, in first-seen order. Empty [] for legacy sessions. */
+  models_used: string[];
   root_max_input_tokens: number;
   root_last_input_tokens: number;
   root_utilization: number;
@@ -286,7 +295,7 @@ export type AgentTreeNode = {
 
 export type LogEntry = {
   id: string;
-  type: "shell" | "diff" | "file_read" | "system" | "plan" | "permission" | "agent" | "agent_result" | "completion" | "agent_message" | "user_steer" | "compact" | "check_agents" | "root_steer" | "spawn_submit";
+  type: "shell" | "diff" | "file_read" | "system" | "plan" | "permission" | "agent" | "agent_result" | "completion" | "agent_message" | "user_steer" | "compact" | "check_agents" | "root_steer" | "spawn_submit" | "llm_retry" | "llm_fallback" | "recovery_halt";
   content: string;
   title?: string;
   timestamp?: string;
@@ -372,6 +381,19 @@ export type LogEntry = {
   spawnExtras?: ReadonlyArray<readonly [string, string]>;
   spawnMessage?: string;
   spawnDurationMs?: number;
+  // LLM resilience fields (llm_retry / llm_fallback / recovery halt).
+  // ``model`` (same-model retry target) is reused from the agent fields
+  // above; these carry the retry/fallback specifics.
+  retryAttempt?: number;
+  retryMaxAttempts?: number;
+  retryErrorType?: string;
+  retryDelay?: number;
+  fallbackFromModel?: string;
+  fallbackToModel?: string;
+  fallbackReason?: string;
+  fallbackPreviousErrorType?: string;
+  recoveryAction?: string;
+  recoveryTool?: string;
 };
 
 export type PlanStep = {

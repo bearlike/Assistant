@@ -17,6 +17,7 @@ from mewbo_core.classes import AbstractTool, ActionStep
 from mewbo_core.common import MockSpeaker, get_logger, get_mock_speaker, ha_render_system_prompt
 from mewbo_core.config import get_config_value
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic.json_schema import SkipJsonSchema
 from typing_extensions import NotRequired
 
 logging = get_logger(name="tools.integration.homeassistant")
@@ -104,36 +105,43 @@ def cache_monitor(func: Callable[Concatenate[SelfT, P], R]) -> Callable[Concaten
         Returns:
             Updated HomeAssistantCache payload.
         """
-        for idx, entity in enumerate(self.cache["entities"]):
+        # Build fresh lists rather than mutating the list being iterated:
+        # the previous in-place .remove()/.pop(idx) under enumerate() skipped
+        # adjacent entities (classic mutate-during-iteration bug).
+        kept_entities: list[dict[str, Any]] = []
+        for entity in list(self.cache["entities"]):
             if "context" in entity:
-                self.cache["entities"][idx].pop("context")
-                self.cache["entities"][idx].pop("last_changed")
-                self.cache["entities"][idx].pop("last_reported")
-                self.cache["entities"][idx].pop("last_updated")
+                entity.pop("context", None)
+                entity.pop("last_changed", None)
+                entity.pop("last_reported", None)
+                entity.pop("last_updated", None)
 
             if "attributes" in entity:
-                self.cache["entities"][idx]["attributes"].pop("icon", None)
-                self.cache["entities"][idx]["attributes"].pop("monitor_cert_days_remaining", None)
-                self.cache["entities"][idx]["attributes"].pop("monitor_cert_is_valid", None)
-                self.cache["entities"][idx]["attributes"].pop("monitor_hostname", None)
-                self.cache["entities"][idx]["attributes"].pop("monitor_port", None)
+                for attr in (
+                    "icon",
+                    "monitor_cert_days_remaining",
+                    "monitor_cert_is_valid",
+                    "monitor_hostname",
+                    "monitor_port",
+                ):
+                    entity["attributes"].pop(attr, None)
 
-            if any(entity["entity_id"].startswith(prefix) for prefix in forbidden_prefixes):
-                self.cache["entities"].remove(entity)
+            entity_id = entity["entity_id"]
+            if any(entity_id.startswith(prefix) for prefix in forbidden_prefixes):
+                continue
+            if any(substring in entity_id for substring in forbidden_substrings):
+                continue
 
-            if any(substring in entity["entity_id"] for substring in forbidden_substrings):
-                self.cache["entities"].remove(entity)
+            if entity_id.startswith("scene."):
+                entity.pop("state", None)
 
-            if entity["entity_id"].startswith("scene."):
-                self.cache["entities"][idx].pop("state", None)
-
-            if entity["entity_id"].startswith("sensor.") or entity["entity_id"].startswith(
-                "binary_sensor."
-            ):
+            if entity_id.startswith("sensor.") or entity_id.startswith("binary_sensor."):
                 self.cache["sensors"].append(entity)
-                self.cache["entities"].pop(idx)
+                continue
 
-        self.cache["entities"] = sort_by_entity_id(self.cache["entities"])
+            kept_entities.append(entity)
+
+        self.cache["entities"] = sort_by_entity_id(kept_entities)
         self.cache["sensors"] = sort_by_entity_id(self.cache["sensors"])
         return self.cache
 
@@ -216,7 +224,11 @@ def cache_monitor(func: Callable[Concatenate[SelfT, P], R]) -> Callable[Concaten
 class HomeAssistantCall(BaseModel):
     """Structured Home Assistant service call extracted from the model output."""
 
-    cache: CacheHolder | None = Field(alias="_ha_cache", default=None)
+    # SkipJsonSchema: ``cache`` is injected at runtime for validation only, not
+    # filled by the LLM. CacheHolder is a Protocol (no JSON schema), so without
+    # this PydanticOutputParser(pydantic_object=HomeAssistantCall) raises
+    # PydanticInvalidForJsonSchema and breaks the entire `set` action path.
+    cache: SkipJsonSchema[CacheHolder | None] = Field(alias="_ha_cache", default=None)
     domain: str = Field(
         description=("The category of the service to call, such as 'light', 'switch', or 'scene'.")
     )

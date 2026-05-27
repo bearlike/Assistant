@@ -28,3 +28,21 @@ export function useElapsed(startTs?: string, active?: boolean): string | undefin
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
+
+/**
+ * Elapsed wall-clock in milliseconds since `startMs`. Ticks ~4×/s while
+ * `active` so sub-second readouts (e.g. "3.2s · streaming") animate, then
+ * freezes once `active` is false. Returns 0 when no start time is set.
+ *
+ * Pure UI animation clock — not server polling. Stops cleanly on unmount.
+ */
+export function useElapsedMs(startMs: number | null, active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active || startMs == null) return;
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [active, startMs]);
+  if (startMs == null) return 0;
+  return Math.max(0, now - startMs);
+}

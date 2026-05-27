@@ -450,6 +450,112 @@ def test_build_usage_numbers_clamps_tokens_until_compact_at_zero():
     assert u["tokens_until_compact"] == 0
 
 
+# -- models_used: first-seen distinct models across event types -------------
+
+
+def _context_event(model: str) -> dict:
+    """Build a context event carrying a model field."""
+    return {"type": "context", "payload": {"model": model}}
+
+
+def _sub_agent_event(model: str) -> dict:
+    """Build a sub_agent event carrying a model field."""
+    return {"type": "sub_agent", "payload": {"model": model}}
+
+
+def _llm_fallback_event(to_model: str) -> dict:
+    """Build an llm_fallback event carrying a to_model field."""
+    return {"type": "llm_fallback", "payload": {"to_model": to_model}}
+
+
+def test_build_usage_numbers_models_used_single_context_event():
+    """A single context event gives exactly that model in models_used."""
+    set_config_override(
+        {"token_budget": {"model_context_windows": {"m": 100_000}}},
+        replace=True,
+    )
+    events = [_context_event("anthropic/claude-sonnet-4-6")]
+    u = build_usage_numbers(events, "m")
+    assert u["models_used"] == ["anthropic/claude-sonnet-4-6"]
+
+
+def test_build_usage_numbers_models_used_multi_model_first_seen_order():
+    """context, sub_agent, and llm_fallback events all contribute; order is first-seen."""
+    set_config_override(
+        {"token_budget": {"model_context_windows": {"m": 100_000}}},
+        replace=True,
+    )
+    events = [
+        _context_event("modelA"),
+        _context_event("modelB"),
+        _sub_agent_event("modelC"),
+        _llm_fallback_event("modelD"),
+        # modelA again — must not duplicate.
+        _context_event("modelA"),
+    ]
+    u = build_usage_numbers(events, "m")
+    assert u["models_used"] == ["modelA", "modelB", "modelC", "modelD"]
+
+
+def test_build_usage_numbers_models_used_legacy_no_model_events():
+    """Transcripts with no context/sub_agent/llm_fallback model fields yield an empty list."""
+    set_config_override(
+        {"token_budget": {"model_context_windows": {"m": 100_000}}},
+        replace=True,
+    )
+    events = [
+        _llm_end(depth=0, in_tok=1000, out_tok=100),
+        {"type": "user", "payload": {"text": "hello"}},
+    ]
+    u = build_usage_numbers(events, "m")
+    assert u["models_used"] == []
+
+
+def test_build_usage_numbers_models_used_deduplication():
+    """Duplicate model ids appearing in multiple events appear only once."""
+    set_config_override(
+        {"token_budget": {"model_context_windows": {"m": 100_000}}},
+        replace=True,
+    )
+    events = [
+        _context_event("modelX"),
+        _sub_agent_event("modelX"),
+        _llm_fallback_event("modelX"),
+        _context_event("modelY"),
+        _sub_agent_event("modelY"),
+    ]
+    u = build_usage_numbers(events, "m")
+    assert u["models_used"] == ["modelX", "modelY"]
+
+
+def test_build_usage_numbers_models_used_empty_string_ignored():
+    """Empty-string model values must not appear in models_used."""
+    set_config_override(
+        {"token_budget": {"model_context_windows": {"m": 100_000}}},
+        replace=True,
+    )
+    events = [
+        {"type": "context", "payload": {"model": ""}},
+        {"type": "sub_agent", "payload": {"model": ""}},
+        {"type": "llm_fallback", "payload": {"to_model": ""}},
+        _context_event("real-model"),
+    ]
+    u = build_usage_numbers(events, "m")
+    assert u["models_used"] == ["real-model"]
+
+
+def test_build_usage_numbers_models_used_root_model_not_injected():
+    """The config-default root_model must NOT appear in models_used unless an event says so."""
+    set_config_override(
+        {"token_budget": {"model_context_windows": {"injected": 100_000}}},
+        replace=True,
+    )
+    # No context/sub_agent/llm_retry events — purely llm_call_end traffic.
+    events = [_llm_end(depth=0, in_tok=1000, out_tok=100)]
+    u = build_usage_numbers(events, "injected")
+    assert u["models_used"] == []
+
+
 # -- LiteLLM failure path ---------------------------------------------------
 
 

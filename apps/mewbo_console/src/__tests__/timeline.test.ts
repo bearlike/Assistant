@@ -537,3 +537,75 @@ describe("turnHasWidget", () => {
     expect(turnHasWidget(timeline, "turn-2")).toBe(false);
   });
 });
+
+describe("LLM resilience events — retry / fallback / halt in buildLogs", () => {
+  test("llm_retry maps to a retry log entry with attempt counter fields", () => {
+    const logs = buildLogs([
+      ev("2026-06-05T10:00:00Z", "llm_retry", {
+        model: "openai/gpt-4o-mini",
+        attempt: 2,
+        max_attempts: 3,
+        error_type: "rate_limit",
+        delay: 1.5,
+        error: "429 Too Many Requests",
+        agent_id: "root",
+        depth: 0,
+      }),
+    ]);
+    const retries = logs.filter((l) => l.type === "llm_retry");
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatchObject({
+      model: "openai/gpt-4o-mini",
+      retryAttempt: 2,
+      retryMaxAttempts: 3,
+      retryErrorType: "rate_limit",
+      retryDelay: 1.5,
+      error: "429 Too Many Requests",
+      timestamp: "2026-06-05T10:00:00Z",
+    });
+  });
+
+  test("llm_fallback maps from_model/to_model into a fallback log entry", () => {
+    const logs = buildLogs([
+      ev("2026-06-05T10:00:05Z", "llm_fallback", {
+        from_model: "openai/gpt-4o-mini",
+        to_model: "anthropic/claude-3-5-sonnet",
+        reason: "rate_limit",
+        previous_error_type: "RateLimitError",
+        depth: 0,
+      }),
+    ]);
+    const fallbacks = logs.filter((l) => l.type === "llm_fallback");
+    expect(fallbacks).toHaveLength(1);
+    expect(fallbacks[0]).toMatchObject({
+      fallbackFromModel: "openai/gpt-4o-mini",
+      fallbackToModel: "anthropic/claude-3-5-sonnet",
+      fallbackReason: "rate_limit",
+      fallbackPreviousErrorType: "RateLimitError",
+    });
+  });
+
+  test("recovery halt_no_progress maps to a recovery_halt log entry", () => {
+    const logs = buildLogs([
+      ev("2026-06-05T10:00:10Z", "recovery", {
+        action: "halt_no_progress",
+        tool: "read_file",
+        agent_id: "root",
+        depth: 0,
+      }),
+    ]);
+    const halts = logs.filter((l) => l.type === "recovery_halt");
+    expect(halts).toHaveLength(1);
+    expect(halts[0]).toMatchObject({
+      recoveryAction: "halt_no_progress",
+      recoveryTool: "read_file",
+    });
+  });
+
+  test("recovery events with other actions are ignored", () => {
+    const logs = buildLogs([
+      ev("2026-06-05T10:00:10Z", "recovery", { action: "something_else" }),
+    ]);
+    expect(logs.filter((l) => l.type === "recovery_halt")).toHaveLength(0);
+  });
+});

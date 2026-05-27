@@ -329,6 +329,7 @@ class SessionRuntime:
         session_id: str,
         user_query: str,
         model_name: str | None = None,
+        fallback_models: tuple[str, ...] | None = None,
         max_iters: int = 3,
         initial_plan: Plan | None = None,
         tool_registry=None,
@@ -345,7 +346,11 @@ class SessionRuntime:
         source_platform: str | None = None,
         invocation_id: str | None = None,
     ) -> bool:
-        """Start an asynchronous orchestration run for the session."""
+        """Start an asynchronous orchestration run for the session.
+
+        ``fallback_models`` (when provided) opts this run into cross-model
+        fallback; ``None`` defers to the resolved config policy.
+        """
         msg_queue: queue.Queue[str] = queue.Queue()
         interrupt_event = threading.Event()
 
@@ -354,6 +359,7 @@ class SessionRuntime:
                 user_query=user_query,
                 session_id=session_id,
                 model_name=model_name,
+                fallback_models=fallback_models,
                 max_iters=max_iters,
                 initial_plan=initial_plan,
                 tool_registry=tool_registry,

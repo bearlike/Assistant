@@ -13,10 +13,9 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from mewbo_core.common import get_logger
+from mewbo_core.common import get_logger, utc_now_iso as _utc_now
 from mewbo_core.config import get_config_value
 from mewbo_core.types import Event, EventRecord
 
@@ -24,11 +23,6 @@ if TYPE_CHECKING:
     from mewbo_core.compact import CompactionMode, CompactionResult
 
 logging = get_logger(name="core.session_store")
-
-
-def _utc_now() -> str:
-    """Return an ISO-8601 UTC timestamp string."""
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

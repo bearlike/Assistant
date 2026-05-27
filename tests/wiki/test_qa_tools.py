@@ -5,23 +5,23 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import (
-    Embedding,
-    GraphNode,
-    QaAnswer,
-    WikiPage,
-)
-from mewbo_core.builtin_plugins.wiki import (
+from mewbo_graph.plugins.wiki import (
     code_search as code_search_mod,
     emit_block as emit_block_mod,
     read_page as read_page_mod,
     search_pages as search_pages_mod,
 )
-from mewbo_core.builtin_plugins.wiki.code_search import WikiCodeSearchTool
-from mewbo_core.builtin_plugins.wiki.emit_block import WikiEmitBlockTool
-from mewbo_core.builtin_plugins.wiki.read_page import WikiReadPageTool
-from mewbo_core.builtin_plugins.wiki.search_pages import WikiSearchPagesTool
+from mewbo_graph.plugins.wiki.code_search import WikiCodeSearchTool
+from mewbo_graph.plugins.wiki.emit_block import WikiEmitBlockTool
+from mewbo_graph.plugins.wiki.read_page import WikiReadPageTool
+from mewbo_graph.plugins.wiki.search_pages import WikiSearchPagesTool
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import (
+    Embedding,
+    GraphNode,
+    QaAnswer,
+    WikiPage,
+)
 
 
 @pytest.fixture

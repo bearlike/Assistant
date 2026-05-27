@@ -14,7 +14,7 @@ import {
   SessionUsage,
   ShareRecord
 } from '../types';
-import { AgentSummary, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
+import { AgentSummary, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, SkillSummary, ToolSummary } from './contracts';
 import { createRealClient } from './realClient';
 import { readRuntimeConfig } from '../runtimeConfig';
 
@@ -186,11 +186,11 @@ export async function getConfigSchema(): Promise<Record<string, unknown>> {
   return realClient.getConfigSchema();
 }
 
-export async function getConfig(): Promise<Record<string, unknown>> {
+export async function getConfig(): Promise<ConfigState> {
   return realClient.getConfig();
 }
 
-export async function patchConfig(patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function patchConfig(patch: Record<string, unknown>): Promise<ConfigState> {
   return realClient.patchConfig(patch);
 }
 
@@ -269,4 +269,16 @@ export async function executeCommand(
   return realClient.executeCommand(sessionId, name, args);
 }
 
-export type { AgentSummary, MarketplacePlugin, PluginSummary, ProjectSummary, SkillSummary, ToolSummary };
+export async function listApiKeys(): Promise<ApiKeySummary[]> {
+  return realClient.listApiKeys();
+}
+
+export async function createApiKey(label: string): Promise<ApiKeyCreated> {
+  return realClient.createApiKey(label);
+}
+
+export async function revokeApiKey(id: string): Promise<ApiKeyRevoked> {
+  return realClient.revokeApiKey(id);
+}
+
+export type { AgentSummary, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, MarketplacePlugin, PluginSummary, ProjectSummary, SkillSummary, ToolSummary };

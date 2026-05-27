@@ -8,9 +8,6 @@ theme:
   name: shadcn
   favicon: logos/favicon.ico
   icon: logos/logo-transparent.svg
-  pygments_style:
-    light: shadcn-light
-    dark: github-dark
 
   # Mewbo brand-fork (mkdocs-shadcn-mewbo) configuration ────────────────
   ai:
@@ -25,6 +22,15 @@ theme:
   versions_root: Assistant
   show_version_switcher: true
   show_build_info: true
+  # Hero product-tour carousel: the theme emits Swiper (CDN) + its SRI-hashed
+  # init and styles `.ms-shots`; the landing page only writes the
+  # `.swiper.ms-shots` markup (no local CSS/JS, no extra_css/extra_javascript).
+  carousel: true
+  # Footer "Connect" column: GitHub is auto-filled from repo_url; the email
+  # button is appended right after it (the theme ships an email→lucide:mail alias).
+  footer:
+    social:
+      email: mailto:hello@mewbo.com
   nav_icons:
     Home: lucide:house
     "Get Started": lucide:rocket
@@ -38,6 +44,7 @@ theme:
     Use: lucide:monitor-play
     CLI: lucide:terminal
     "Web Console + API": lucide:layout-dashboard
+    "MCP Server": lucide:plug-zap
     "Home Assistant": lucide:house-plug
     "Nextcloud Talk": lucide:message-circle
     Email: lucide:mail
@@ -110,6 +117,7 @@ plugins:
             - .
             - packages/mewbo_core/src
             - packages/mewbo_tools/src
+            - packages/mewbo_graph/src
             - apps/mewbo_api/src
             - apps/mewbo_cli/src
           options:
@@ -123,21 +131,12 @@ extra:
   version:
     provider: mike
 
-# Hero product-tour carousel: Swiper (pinned major, jsDelivr CDN) + two small
-# local assets. Standard mkdocs keys, theme-agnostic. No Python plugin / build step.
-extra_css:
-  - https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css
-  - assets/carousel.css
-
-extra_javascript:
-  - https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js
-  - assets/carousel.js
-
-# Theme now ships everything that used to live in extra_css/extra_javascript
-# and overrides/. If you ever need to override theme behavior again, you can
-# add `theme.custom_dir: overrides`, but the brand chrome / Ask AI / nav
-# icons / version switcher / SEO / speculation prefetch / build-info badge
-# are all already provided.
+# Theme ships everything that used to live in extra_css/extra_javascript and
+# overrides/ — including the hero product-tour carousel (theme.carousel above
+# emits Swiper + its init and styles `.ms-shots`). If you ever need to override
+# theme behavior again, you can add `theme.custom_dir: overrides`, but the brand
+# chrome / Ask AI / nav icons / version switcher / SEO / speculation prefetch /
+# build-info badge are all already provided.
 
 nav:
   - Home: index.md
@@ -149,6 +148,7 @@ nav:
   - Use:
       - CLI: clients-cli.md
       - Web Console + API: clients-web-api.md
+      - MCP Server: clients-mcp.md
       - Home Assistant: clients-home-assistant.md
       - Nextcloud Talk: clients-nextcloud-talk.md
       - Email: clients-email.md

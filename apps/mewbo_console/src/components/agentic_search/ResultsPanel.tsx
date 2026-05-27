@@ -25,7 +25,7 @@ import { RightRail } from "./RightRail"
 import { SearchBar } from "./SearchBar"
 import { SrcAvatar } from "./SrcAvatar"
 import { TraceDrawer } from "./TraceDrawer"
-import { agentSnapshot } from "./utils"
+import { agentSnapshot, runProgress } from "./utils"
 
 const KINDS: { id: "all" | ResultKind; name: string; Icon: typeof Sparkles }[] = [
   { id: "all", name: "All", Icon: Sparkles },
@@ -43,7 +43,12 @@ interface ResultsPanelProps {
   sources: SourceCatalogEntry[]
   query: string
   run: RunPayload
-  elapsed: number
+  /** Real elapsed ms since run start (display + status line). */
+  elapsedMs: number
+  /** Run reached a terminal state (drives "complete" vs "streaming"). */
+  done: boolean
+  /** Final cited synthesis has landed (`answer_ready`). */
+  answerReady: boolean
   isLoading: boolean
   onRun: (query: string) => void
   onPickWorkspace: (workspace: Workspace) => void
@@ -57,7 +62,9 @@ export function ResultsPanel({
   sources,
   query,
   run,
-  elapsed,
+  elapsedMs,
+  done,
+  answerReady,
   isLoading,
   onRun,
   onPickWorkspace,
@@ -70,12 +77,12 @@ export function ResultsPanel({
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [highlightId, setHighlightId] = useState<string | null>(null)
 
-  const totalMs = run.total_ms
-  const allResults = run.results
-  const visibleResults = allResults.filter((r) => r.finish_delay_ms <= elapsed)
-  const pendingCount = allResults.length - visibleResults.length
-  const skeletons = Math.min(2, pendingCount)
-  const done = elapsed > totalMs
+  // Every result in `run.results` has already arrived over SSE — visibility is
+  // the full set, no fake `elapsed`-based reveal. While agents are still
+  // running we show a couple of skeleton cards as a streaming affordance.
+  const visibleResults = run.results
+  const runningAgents = run.trace.filter((a) => agentSnapshot(a).running).length
+  const skeletons = done ? 0 : Math.min(2, Math.max(runningAgents, run.trace.length === 0 ? 1 : 0))
 
   const kindCounts = useMemo(() => {
     const c: Record<string, number> = { all: visibleResults.length }
@@ -127,11 +134,11 @@ export function ResultsPanel({
               <span aria-hidden>·</span>
               <span>
                 <b className="text-[hsl(var(--foreground))] font-medium">{visibleResults.length}</b>
-                {!done && pendingCount > 0 ? ` of ~${allResults.length}` : ""} results
+                {" "}results
               </span>
               <span aria-hidden>·</span>
               <span>
-                {(elapsed / 1000).toFixed(1)}s {done ? "· complete" : "· streaming"}
+                {(elapsedMs / 1000).toFixed(1)}s {done ? "· complete" : "· streaming"}
               </span>
               <button
                 type="button"
@@ -159,8 +166,6 @@ export function ResultsPanel({
               <ProgressStrip
                 agents={run.trace}
                 sources={sources}
-                elapsed={elapsed}
-                totalMs={totalMs}
                 visibleResults={visibleResults}
               />
             </div>
@@ -174,10 +179,10 @@ export function ResultsPanel({
           <div className="mb-6">
             <AnswerCard
               answer={run.answer}
-              results={allResults}
+              results={visibleResults}
               sources={sources}
-              elapsed={elapsed}
-              totalMs={totalMs}
+              ready={answerReady}
+              elapsedMs={elapsedMs}
               onCiteClick={handleCite}
               onAsk={() => {
                 const el = document.querySelector<HTMLInputElement>(
@@ -246,8 +251,7 @@ export function ResultsPanel({
           sources={sources}
           related={run.related_questions}
           people={run.related_people}
-          elapsed={elapsed}
-          totalMs={totalMs}
+          done={done}
           traceActive={!done}
           onShowTrace={() => setTraceOpen(true)}
           onAsk={(q) => submit(q)}
@@ -259,8 +263,7 @@ export function ResultsPanel({
         onOpenChange={setTraceOpen}
         agents={run.trace}
         query={run.query}
-        elapsed={elapsed}
-        totalMs={totalMs}
+        elapsedMs={elapsedMs}
         done={done}
       />
     </main>
@@ -270,13 +273,13 @@ export function ResultsPanel({
 interface ProgressStripProps {
   agents: RunPayload["trace"]
   sources: SourceCatalogEntry[]
-  elapsed: number
-  totalMs: number
   visibleResults: RunPayload["results"]
 }
 
-function ProgressStrip({ agents, sources, elapsed, totalMs, visibleResults }: ProgressStripProps) {
-  const progress = Math.min(1, totalMs > 0 ? elapsed / totalMs : 0)
+function ProgressStrip({ agents, sources, visibleResults }: ProgressStripProps) {
+  // Real progress: fraction of spawned agents that have finished. This strip
+  // only mounts mid-run (`!done`), so the bar is always in its streaming state.
+  const progress = runProgress(agents, false)
   return (
     <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 shadow-[var(--elev-1)]">
       <div className="h-0.5 w-full bg-[hsl(var(--muted))] relative rounded-full overflow-hidden mb-2.5">
@@ -287,7 +290,7 @@ function ProgressStrip({ agents, sources, elapsed, totalMs, visibleResults }: Pr
       </div>
       <div className="flex flex-wrap gap-1.5">
         {agents.map((a) => {
-          const { state } = agentSnapshot(a, elapsed)
+          const { state } = agentSnapshot(a)
           const count = visibleResults.filter((r) => r.source === a.source_id).length
           const src = sources.find((s) => s.id === a.source_id)
           return (
