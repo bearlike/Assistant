@@ -1,10 +1,6 @@
 name: Console CI
 
 on:
-  push:
-    paths:
-      - "apps/mewbo_console/**"
-      - ".github/workflows/console.yml"
   pull_request:
     paths:
       - "apps/mewbo_console/**"
@@ -13,12 +9,18 @@ on:
 permissions:
   contents: read
 
+# One run per PR; a new commit cancels the superseded run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     working-directory: apps/mewbo_console
 
 jobs:
   lint:
+    name: eslint + tsc
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout

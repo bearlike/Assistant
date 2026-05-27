@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import mongomock
 import pytest
-from mewbo_api.wiki.types import (
+from mewbo_graph.wiki.types import (
     Frontmatter,
     IndexingJob,
     NavEntry,
@@ -66,7 +66,7 @@ def _qa(answer_id: str = "ans-001") -> QaAnswer:
 
 def _store():
     """Return a MongoWikiStore backed by an in-memory mongomock client."""
-    from mewbo_api.wiki.store import MongoWikiStore
+    from mewbo_graph.wiki.store import MongoWikiStore
 
     return MongoWikiStore(client=mongomock.MongoClient(), database="test_wiki")
 
@@ -193,7 +193,7 @@ def test_job_crud_mongo() -> None:
 
 def test_job_events_append_load_mongo() -> None:
     client = mongomock.MongoClient()
-    from mewbo_api.wiki.store import MongoWikiStore
+    from mewbo_graph.wiki.store import MongoWikiStore
 
     store = MongoWikiStore(client=client, database="test_wiki")
     store.create_job(_job("job-ev"))
@@ -285,8 +285,8 @@ def test_qa_save_load_mongo() -> None:
 
 
 def test_factory_returns_mongo_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    import mewbo_api.wiki.store as store_mod
-    from mewbo_api.wiki.store import MongoWikiStore, create_wiki_store
+    import mewbo_graph.wiki.store as store_mod
+    from mewbo_graph.wiki.store import MongoWikiStore, create_wiki_store
 
     def _cfg(*keys: str, default: str = "") -> str:
         # Return "mongodb" for storage.driver; provide uri/database for the rest
@@ -310,7 +310,7 @@ def test_factory_returns_mongo_when_configured(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_upsert_and_query_nodes_mongo() -> None:
-    from mewbo_api.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import GraphNode
 
     store = _store()
     nodes = [
@@ -339,7 +339,7 @@ def test_upsert_and_query_nodes_mongo() -> None:
 
 
 def test_upsert_nodes_overwrites_existing_mongo() -> None:
-    from mewbo_api.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import GraphNode
 
     store = _store()
     n = GraphNode(slug="x/y", node_id="n1", type="File", name="a.py",
@@ -354,7 +354,7 @@ def test_upsert_nodes_overwrites_existing_mongo() -> None:
 
 
 def test_upsert_and_neighbors_via_edges_mongo() -> None:
-    from mewbo_api.wiki.types import GraphEdge, GraphNode
+    from mewbo_graph.wiki.types import GraphEdge, GraphNode
 
     store = _store()
     store.upsert_nodes("x/y", [
@@ -374,7 +374,7 @@ def test_upsert_and_neighbors_via_edges_mongo() -> None:
 
 
 def test_vector_search_returns_top_k_by_cosine_mongo() -> None:
-    from mewbo_api.wiki.types import Embedding
+    from mewbo_graph.wiki.types import Embedding
 
     store = _store()
     items = [
@@ -397,7 +397,7 @@ def test_vector_search_empty_pool_returns_empty_mongo() -> None:
 
 
 def test_graph_isolated_by_slug_mongo() -> None:
-    from mewbo_api.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import GraphNode
 
     store = _store()
     store.upsert_nodes("a/b", [GraphNode(slug="a/b", node_id="x", type="File",
@@ -430,7 +430,7 @@ def test_attach_get_job_session_mongo() -> None:
 
     # persist — re-instantiate sharing the same client/db
     client = mongomock.MongoClient()
-    from mewbo_api.wiki.store import MongoWikiStore
+    from mewbo_graph.wiki.store import MongoWikiStore
 
     store2 = MongoWikiStore(client=client, database="test_wiki2")
     store2.create_job(_job("job-sess"))

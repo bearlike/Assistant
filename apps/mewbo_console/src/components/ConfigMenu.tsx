@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   Blocks,
   ChevronDown,
   ChevronUp,
@@ -8,12 +9,14 @@ import {
   FolderOpen,
   GitBranch,
   GitFork,
+  Layers,
   Loader2,
   Plus,
   RefreshCw,
   RotateCcw,
   Sliders,
   Trash2,
+  X,
   Zap,
 } from 'lucide-react';
 import { ProjectSummary, SkillSummary } from '../api/client';
@@ -31,6 +34,7 @@ import {
   CommandList,
 } from './ui/command';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { Switch } from './ui/switch';
 
 export type McpStatus = 'active' | 'disabled' | 'error';
 
@@ -75,6 +79,13 @@ type ConfigMenuProps = {
   onSelectSkill: (name: string | null) => void;
   onSelectModel: (name: string | null) => void;
   onResetAll: () => void;
+  // Cross-model fallback (opt-in). ``fallbackModels`` is an ordered list; the
+  // run tries each after the primary fails. Empty + enabled is inert until the
+  // user picks at least one, mirroring the backend's "omit/empty = no fallback".
+  fallbackEnabled: boolean;
+  fallbackModels: string[];
+  onToggleFallbackEnabled: (enabled: boolean) => void;
+  onToggleFallbackModel: (model: string) => void;
   // Branch / worktree (optional — if ``gitRepo`` is false the tabs hide)
   gitRepo?: boolean;
   branches?: string[];
@@ -114,7 +125,7 @@ type ConfigMenuProps = {
   disabled?: boolean;
 };
 
-type Tab = 'root' | 'project' | 'branch' | 'worktree' | 'model' | 'skills' | 'mcps';
+type Tab = 'root' | 'project' | 'branch' | 'worktree' | 'model' | 'fallback' | 'skills' | 'mcps';
 
 const DOT_CLASSES: Record<McpStatus, string> = {
   active: 'fill-emerald-500 text-emerald-500',
@@ -207,6 +218,10 @@ export function ConfigMenu({
   onSelectSkill,
   onSelectModel,
   onResetAll,
+  fallbackEnabled,
+  fallbackModels,
+  onToggleFallbackEnabled,
+  onToggleFallbackModel,
   gitRepo = false,
   branches = [],
   currentBranch = null,
@@ -248,6 +263,14 @@ export function ConfigMenu({
   const activeMcpCount = mcpOptions.filter((m) => m.active).length;
   const modelIsNonDefault = activeModel !== null && activeModel !== defaultModel;
   const effectiveModelId = activeModel ?? defaultModel;
+  // Fallback counts as "active" only when enabled AND at least one model is
+  // chosen — an empty enabled chain is inert (matches the submit-time guard).
+  const fallbackActive = fallbackEnabled && fallbackModels.length > 0;
+  const fallbackLabel = fallbackActive
+    ? `${fallbackModels.length} model${fallbackModels.length === 1 ? '' : 's'}`
+    : fallbackEnabled
+      ? 'No models'
+      : 'Off';
   const branchIsNonDefault =
     showGitTabs &&
     activeBranch !== null &&
@@ -256,6 +279,7 @@ export function ConfigMenu({
   const totalActive =
     (activeProject ? 1 : 0) +
     (modelIsNonDefault ? 1 : 0) +
+    (fallbackActive ? 1 : 0) +
     (activeSkill ? 1 : 0) +
     activeMcpCount +
     (branchIsNonDefault ? 1 : 0) +
@@ -350,7 +374,7 @@ export function ConfigMenu({
       >
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="flex flex-col flex-1 min-h-0">
           <TabsList
-            className={`grid ${showGitTabs ? 'grid-cols-7' : 'grid-cols-5'} m-2 mb-0 h-8`}
+            className={`grid ${showGitTabs ? 'grid-cols-8' : 'grid-cols-6'} m-2 mb-0 h-8`}
           >
             <TabsTrigger value="root" className="text-[10px] px-1">Root</TabsTrigger>
             <TabsTrigger value="project" className="text-[10px] px-1">Project</TabsTrigger>
@@ -361,6 +385,7 @@ export function ConfigMenu({
               <TabsTrigger value="worktree" className="text-[10px] px-1">Worktree</TabsTrigger>
             )}
             <TabsTrigger value="model" className="text-[10px] px-1">Model</TabsTrigger>
+            <TabsTrigger value="fallback" className="text-[10px] px-1">Fallback</TabsTrigger>
             <TabsTrigger value="skills" className="text-[10px] px-1">Skills</TabsTrigger>
             <TabsTrigger value="mcps" className="text-[10px] px-1">MCPs</TabsTrigger>
           </TabsList>
@@ -413,6 +438,13 @@ export function ConfigMenu({
                 value={modelLabel}
                 emphasized={modelIsNonDefault}
                 onClick={() => setTab('model')}
+              />
+              <CategoryRow
+                icon={<Layers className={`w-3.5 h-3.5 ${fallbackActive ? 'text-teal-500' : 'opacity-50'}`} />}
+                label="Fallback"
+                value={fallbackLabel}
+                emphasized={fallbackActive}
+                onClick={() => setTab('fallback')}
               />
               <CategoryRow
                 icon={<Zap className={`w-3.5 h-3.5 ${activeSkill ? 'text-amber-500' : 'opacity-50'}`} />}
@@ -747,6 +779,103 @@ export function ConfigMenu({
                           </span>
                         )}
                         <span>{shortModel(model)}</span>
+                      </span>
+                      {model.includes('/') && (
+                        <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
+                          {model}
+                        </span>
+                      )}
+                    </CommandItem>
+                  );
+                })}
+              </CommandList>
+            </Command>
+          </TabsContent>
+
+          {/* Fallback tab — opt-in cross-model retry chain. */}
+          <TabsContent value="fallback" className="m-0 flex-1 min-h-0 flex flex-col">
+            {/* Toggle + warning are pinned; the model list scrolls below. */}
+            <div className="px-3 pt-2 pb-1.5 border-b border-[hsl(var(--border))] space-y-2">
+              <label className="flex items-center justify-between gap-2 cursor-pointer">
+                <span className="text-xs font-medium text-[hsl(var(--foreground))]">
+                  Enable model fallback
+                </span>
+                <Switch
+                  checked={fallbackEnabled}
+                  onCheckedChange={onToggleFallbackEnabled}
+                  aria-label="Enable model fallback"
+                />
+              </label>
+              <div className="flex items-start gap-1.5 text-[10px] leading-snug text-[hsl(var(--muted-foreground))]">
+                <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5 text-amber-500" />
+                <span>
+                  Falling back to another model can change cost, latency, output
+                  style, and prompt-cache behaviour. Models are tried in the order
+                  shown.
+                </span>
+              </div>
+            </div>
+            {/* Selected chain — ordered, with remove buttons. */}
+            {fallbackEnabled && fallbackModels.length > 0 && (
+              <div className="px-3 py-1.5 border-b border-[hsl(var(--border))] flex flex-col gap-1">
+                {fallbackModels.map((model, i) => (
+                  <div
+                    key={model}
+                    className="flex items-center gap-1.5 text-xs text-[hsl(var(--foreground))]"
+                  >
+                    <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] w-4 shrink-0">
+                      {i + 1}.
+                    </span>
+                    <ModelBrandIcon modelId={model} size={12} />
+                    <span className="truncate flex-1">{shortModel(model)}</span>
+                    <button
+                      type="button"
+                      onClick={() => onToggleFallbackModel(model)}
+                      aria-label={`Remove ${shortModel(model)} from fallback chain`}
+                      className="p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Command className="flex-1 min-h-0">
+              <div className="flex items-center justify-between pr-2">
+                <CommandInput placeholder="Add fallback models..." className={COMMAND_INPUT_CLS} />
+                <RefreshIcon onRefresh={onRefreshModels} label="Refresh models" />
+              </div>
+              <ErrorBanner error={modelsError} />
+              <CommandList className="max-h-[200px]">
+                <CommandEmpty className={COMMAND_EMPTY_CLS}>
+                  {modelsLoading ? 'Loading...' : 'No matches.'}
+                </CommandEmpty>
+                {orderedModels.map((model) => {
+                  const unsupported = isUnsupportedModel(model);
+                  const selectedIndex = fallbackModels.indexOf(model);
+                  const isSelected = selectedIndex >= 0;
+                  return (
+                    <CommandItem
+                      key={model}
+                      value={model}
+                      disabled={!fallbackEnabled || unsupported}
+                      onSelect={() => onToggleFallbackModel(model)}
+                      title={unsupported ? 'Not supported for chat or agents' : undefined}
+                      className={`${COMMAND_ITEM_TWO_LINE_CLS} ${unsupported ? 'text-[hsl(var(--muted-foreground))]' : ''} ${isSelected ? 'font-medium' : ''}`}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <ModelBrandIcon modelId={model} size={14} />
+                        {unsupported && (
+                          <span role="img" aria-label="Not supported for chat" className="text-amber-500">
+                            ⚠️
+                          </span>
+                        )}
+                        <span>{shortModel(model)}</span>
+                        {isSelected && (
+                          <span className="text-[10px] text-teal-500 font-mono">
+                            #{selectedIndex + 1}
+                          </span>
+                        )}
                       </span>
                       {model.includes('/') && (
                         <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">

@@ -5,8 +5,8 @@ import json
 
 import pytest
 from mewbo_api.wiki.events import WikiSseGenerator
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import IndexingJob
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import IndexingJob
 
 
 def _event_types(frames):

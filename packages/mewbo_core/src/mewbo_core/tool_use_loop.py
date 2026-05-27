@@ -45,6 +45,12 @@ from mewbo_core.exit_plan_mode import (
 from mewbo_core.hooks import HookManager
 from mewbo_core.hypervisor import AgentHandle
 from mewbo_core.llm import build_chat_model, specs_to_langchain_tools
+from mewbo_core.llm_resilience import (
+    DoomLoopGuard,
+    LlmResilienceExhausted,
+    RetryStrategy,
+    repair_tool_pairing,
+)
 from mewbo_core.permissions import PermissionDecision, PermissionPolicy
 from mewbo_core.session_tools import (
     DEFAULT_SESSION_TOOL_MODES,
@@ -60,69 +66,8 @@ from mewbo_core.types import Event
 
 logging = get_logger(name="core.tool_use_loop")
 
-# ---------------------------------------------------------------------------
-# LLM error classification  (Ref: Codex ContextWindowExceeded skip,
-# Claude Code error-classified retry, OpenCode per-provider retry)
-# ---------------------------------------------------------------------------
-
-
-def _classify_llm_error(exc: Exception) -> tuple[bool, float]:
-    """Classify an LLM error. Returns ``(should_retry, delay_seconds)``.
-
-    Non-retryable errors (context overflow, auth, bad request) fail
-    immediately. Rate-limit errors respect the server's Retry-After header.
-    Transient errors get a minimal flat delay.
-    """
-    if isinstance(exc, asyncio.TimeoutError):
-        return True, 0.5
-    try:
-        import litellm.exceptions as litellm_exc  # noqa: I001 — lazy to avoid heavy import at module level
-    except ImportError:
-        return True, 0.5  # litellm unavailable — default retryable
-    if isinstance(exc, litellm_exc.ContextWindowExceededError):
-        return False, 0
-    if isinstance(
-        exc,
-        litellm_exc.AuthenticationError | litellm_exc.PermissionDeniedError,
-    ):
-        return False, 0
-    if isinstance(exc, litellm_exc.BadRequestError):
-        return False, 0
-    if isinstance(exc, litellm_exc.RateLimitError):
-        return True, min(_extract_retry_after(exc) or 2.0, 30.0)
-    if isinstance(exc, litellm_exc.Timeout):
-        return True, 0.5
-    if isinstance(
-        exc,
-        litellm_exc.InternalServerError | litellm_exc.ServiceUnavailableError,
-    ):
-        return True, 1.0
-    if isinstance(exc, litellm_exc.APIConnectionError):
-        return True, 0.5
-    return True, 0.5  # unknown — retryable, minimal delay
-
-
-def _extract_retry_after(exc: Exception) -> float | None:
-    """Extract Retry-After seconds from a ``RateLimitError``'s httpx response."""
-    response = getattr(exc, "response", None)
-    if response is not None:
-        val = getattr(response, "headers", {}).get("retry-after")
-        if val:
-            try:
-                return float(val)
-            except (ValueError, TypeError):
-                pass
-    return None
-
-
-def _is_context_overflow(exc: Exception) -> bool:
-    """Return True if the exception is a context window exceeded error."""
-    try:
-        import litellm.exceptions as litellm_exc
-    except ImportError:
-        return False
-    return isinstance(exc, litellm_exc.ContextWindowExceededError)
-
+# LLM error classification, backoff, retry budget, circuit breaking and
+# tool-call-pairing repair live in ``llm_resilience`` (pure + unit-tested).
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
@@ -451,9 +396,11 @@ class ToolUseLoop:
             _propagate_cm.__enter__()
 
             turns = 0
-            compacted_this_turn = False
+            # One atomic resilience strategy per run — holds the retry budget,
+            # circuit breaker and policy knobs; survives every turn.
+            retry_strategy = RetryStrategy.from_config()
+            doom_guard = DoomLoopGuard.from_config()
             while not state.done:
-                compacted_this_turn = False
                 # Check cancellation.
                 if self._ctx.should_cancel is not None and self._ctx.should_cancel():
                     state.done = True
@@ -499,20 +446,6 @@ class ToolUseLoop:
                             )
                         )
 
-                    llm_timeout = float(
-                        get_config_value(
-                            "agent",
-                            "llm_call_timeout",
-                            default=60.0,
-                        )
-                    )
-                    llm_max_retries = int(
-                        get_config_value(
-                            "agent",
-                            "llm_call_retries",
-                            default=2,
-                        )
-                    )
                     # Heartbeat events so clients (console/CLI) can distinguish
                     # "waiting on LLM" from a silent hang.
                     self._emit_event(
@@ -522,122 +455,22 @@ class ToolUseLoop:
                                 "agent_id": self._ctx.agent_id,
                                 "depth": self._ctx.depth,
                                 "step": turns,
+                                "model": self._ctx.model_name,
                             },
                         }
                     )
-                    response: AIMessage | None = None
-                    last_exc: Exception | None = None
-                    non_retryable = False
-                    models_to_try = [self._ctx.model_name, *self._ctx.fallback_models]
-                    active_model = model  # Already bound primary
-
-                    for model_idx, try_model_name in enumerate(models_to_try):
-                        is_fallback = model_idx > 0
-                        if is_fallback:
-                            if non_retryable:
-                                break  # Don't cascade non-retryable errors
-                            active_model = build_chat_model(
-                                model_name=try_model_name,
-                            ).bind_tools(tool_schemas)
-                            self._emit_event(
-                                {
-                                    "type": "llm_retry",
-                                    "payload": {
-                                        "agent_id": self._ctx.agent_id,
-                                        "depth": self._ctx.depth,
-                                        "step": turns,
-                                        "attempt": 0,
-                                        "max_attempts": 1,
-                                        "error": str(last_exc)[:200],
-                                        "fallback_to": try_model_name,
-                                    },
-                                }
-                            )
-                            logging.warning(
-                                "Falling back to %s (%s)",
-                                try_model_name,
-                                str(last_exc)[:100],
-                            )
-
-                        retries = llm_max_retries if not is_fallback else 1
-                        for attempt in range(1, retries + 1):
-                            try:
-                                response = await asyncio.wait_for(
-                                    active_model.ainvoke(messages, config=invoke_config or None),
-                                    timeout=llm_timeout,
-                                )
-                                _usage = getattr(response, "usage_metadata", None)
-                                if _usage:
-                                    _h = await self._ctx.registry.get(self._ctx.agent_id)
-                                    if _h:
-                                        _h.input_tokens += _usage.get("input_tokens", 0)
-                                        _h.output_tokens += _usage.get("output_tokens", 0)
-                                    # Authoritative signal for compaction: what
-                                    # the API just said this prompt consumed.
-                                    self._last_input_tokens = int(
-                                        _usage.get("input_tokens", 0) or 0
-                                    )
-                                break
-                            except (asyncio.TimeoutError, Exception) as exc:
-                                last_exc = exc
-                                should_retry, delay = _classify_llm_error(exc)
-                                if not should_retry:
-                                    # Reactive fallback: compact on context overflow.
-                                    _compact_info = (
-                                        await self._compact_messages(messages)
-                                        if _is_context_overflow(exc) and not compacted_this_turn
-                                        else None
-                                    )
-                                    if _compact_info:
-                                        compacted_this_turn = True
-                                        await self._ctx.registry.record_compaction(
-                                            self._ctx.agent_id,
-                                        )
-                                        self._emit_event(
-                                            {
-                                                "type": "context_compacted",
-                                                "payload": {
-                                                    **_compact_info,
-                                                    "agent_id": self._ctx.agent_id,
-                                                    "depth": self._ctx.depth,
-                                                    "mode": "reactive",
-                                                    "turn": turns,
-                                                },
-                                            }
-                                        )
-                                        continue  # Retry with compacted messages
-                                    non_retryable = True
-                                    break  # Don't cascade non-retryable errors
-                                if attempt == retries:
-                                    break  # Next model or final failure
-                                self._emit_event(
-                                    {
-                                        "type": "llm_retry",
-                                        "payload": {
-                                            "agent_id": self._ctx.agent_id,
-                                            "depth": self._ctx.depth,
-                                            "step": turns,
-                                            "attempt": attempt,
-                                            "max_attempts": retries,
-                                            "error": str(exc)[:200],
-                                            "delay": delay,
-                                            "retryable": should_retry,
-                                        },
-                                    }
-                                )
-                                logging.warning(
-                                    "LLM call attempt {}/{} failed ({}), retrying in {:.1f}s",
-                                    attempt,
-                                    retries,
-                                    str(exc)[:100],
-                                    delay,
-                                )
-                                if delay > 0:
-                                    await asyncio.sleep(delay)
-                        if response is not None:
-                            break  # Success
-
-                    if response is None:
+                    try:
+                        response, _final_model = await self._invoke_with_resilience(
+                            primary_model=model,
+                            messages=messages,
+                            tool_schemas=tool_schemas,
+                            turns=turns,
+                            invoke_config=invoke_config,
+                            strategy=retry_strategy,
+                        )
+                    except LlmResilienceExhausted as exhausted:
+                        # Clean halt: surface a true failure (never masked as
+                        # "completed") so the FE can offer one-click recovery.
                         self._emit_event(
                             {
                                 "type": "llm_call_end",
@@ -645,30 +478,31 @@ class ToolUseLoop:
                                     "agent_id": self._ctx.agent_id,
                                     "depth": self._ctx.depth,
                                     "step": turns,
+                                    "success": False,
+                                    "model": (
+                                        exhausted.models_tried[-1]
+                                        if exhausted.models_tried
+                                        else self._ctx.model_name
+                                    ),
+                                    "error_type": exhausted.last_error_type,
+                                    "reason": exhausted.reason,
                                 },
                             }
                         )
-                        # Enrich Langfuse span with structured error info.
                         if span is not None:
                             try:
                                 span.update(
                                     level="ERROR",
-                                    status_message=str(last_exc)[:500],
+                                    status_message=str(exhausted.last_error)[:500],
                                     metadata={
-                                        "errortype": type(last_exc).__name__
-                                        if last_exc
-                                        else "Unknown",
-                                        "models_tried": ",".join(models_to_try),
+                                        "errortype": exhausted.last_error_type,
+                                        "models_tried": ",".join(exhausted.models_tried),
+                                        "reason": exhausted.reason,
                                     },
                                 )
                             except Exception:
                                 pass
-                        raise RuntimeError(
-                            f"LLM call failed on all models "
-                            f"({', '.join(models_to_try)}): "
-                            f"{last_exc}"
-                        ) from last_exc
-                    assert response is not None  # guaranteed by loop or raise
+                        raise
                     _step_usage = getattr(response, "usage_metadata", None)
                     _h_ref = await self._ctx.registry.get(self._ctx.agent_id)
                     # LangChain ``UsageMetadata`` exposes provider cache and
@@ -691,6 +525,8 @@ class ToolUseLoop:
                                 "agent_id": self._ctx.agent_id,
                                 "depth": self._ctx.depth,
                                 "step": turns,
+                                "success": True,
+                                "model": _final_model,
                                 "input_tokens": (
                                     _step_usage.get("input_tokens", 0) if _step_usage else 0
                                 ),
@@ -754,6 +590,36 @@ class ToolUseLoop:
                         tool_outputs.append(content)
                         state.done = True
                         state.done_reason = "completed"
+                        break
+
+                    # The model is repeating the same tool + input with no
+                    # progress. Halt cleanly and hand back for one-click
+                    # recovery instead of executing the same call again.
+                    doom_guard.observe(response.tool_calls)
+                    if doom_guard.is_stuck():
+                        # Keep the transcript valid for resume: the AIMessage
+                        # with tool_calls was already appended, so synthesize
+                        # interrupted results for its dangling calls.
+                        repair_tool_pairing(messages)
+                        _repeated = response.tool_calls[0].get("name", "tool")
+                        last_error = (
+                            f"Halted: model repeated '{_repeated}' "
+                            f"{doom_guard.threshold}x with identical input (no progress)."
+                        )
+                        self._emit_event(
+                            {
+                                "type": "recovery",
+                                "payload": {
+                                    "action": "halt_no_progress",
+                                    "agent_id": self._ctx.agent_id,
+                                    "depth": self._ctx.depth,
+                                    "step": turns,
+                                    "tool": _repeated,
+                                },
+                            }
+                        )
+                        state.done = True
+                        state.done_reason = "halted_no_progress"
                         break
 
                     # Emit intermediate text as agent_message for trace logs.
@@ -1504,6 +1370,79 @@ class ToolUseLoop:
         return bool(raw)
 
     # ------------------------------------------------------------------
+    # LLM call resilience (retry / fallback / circuit-break / budget)
+    # ------------------------------------------------------------------
+
+    async def _capture_usage(self, response: AIMessage) -> None:
+        """Accumulate token usage + the compaction anchor from a response."""
+        usage = getattr(response, "usage_metadata", None)
+        if not usage:
+            return
+        handle = await self._ctx.registry.get(self._ctx.agent_id)
+        if handle:
+            handle.input_tokens += usage.get("input_tokens", 0)
+            handle.output_tokens += usage.get("output_tokens", 0)
+        # Authoritative signal for compaction: what the API said this consumed.
+        self._last_input_tokens = int(usage.get("input_tokens", 0) or 0)
+
+    async def _invoke_with_resilience(
+        self,
+        *,
+        primary_model: Any,
+        messages: list[BaseMessage],
+        tool_schemas: Any,
+        turns: int,
+        invoke_config: dict[str, Any] | None,
+        strategy: RetryStrategy,
+    ) -> tuple[AIMessage, str]:
+        """Drive the resilience strategy for one turn with loop-local I/O.
+
+        The model call, event emission and reactive compaction are injected so
+        the strategy stays loop-agnostic and unit-testable. ``messages.append``
+        is the caller's job and only happens after this returns, so a retry
+        never duplicates a tool call or bloats context with a partial output.
+        """
+
+        async def _invoke(model_name: str, is_fallback: bool) -> AIMessage:
+            bound = (
+                build_chat_model(model_name=model_name).bind_tools(tool_schemas)
+                if is_fallback
+                else primary_model
+            )
+            return await bound.ainvoke(messages, config=invoke_config or None)
+
+        async def _compact() -> bool:
+            info = await self._compact_messages(messages)
+            if not info:
+                return False
+            await self._ctx.registry.record_compaction(self._ctx.agent_id)
+            self._emit_event(
+                {
+                    "type": "context_compacted",
+                    "payload": {
+                        **info,
+                        "agent_id": self._ctx.agent_id,
+                        "depth": self._ctx.depth,
+                        "mode": "reactive",
+                        "turn": turns,
+                    },
+                }
+            )
+            return True
+
+        response, model_name = await strategy.run(
+            models=[self._ctx.model_name, *self._ctx.fallback_models],
+            invoke=_invoke,
+            emit=self._emit_event,
+            compact=_compact,
+            agent_id=self._ctx.agent_id,
+            depth=self._ctx.depth,
+            step=turns,
+        )
+        await self._capture_usage(response)
+        return response, model_name
+
+    # ------------------------------------------------------------------
     # Mid-loop context compaction
     # ------------------------------------------------------------------
 
@@ -1615,6 +1554,9 @@ class ToolUseLoop:
         messages.append(system_msg)
         messages.append(SystemMessage(content=f"[Compacted context]\n{summary}"))
         messages.extend(kept_tail)
+        # The recent-tail slice can orphan a tool_use/tool_result pair, which
+        # Anthropic rejects with a 400. Rebalance before the list is replayed.
+        repair_tool_pairing(messages)
         return {
             "summary": summary,
             "events_summarized": events_summarized,

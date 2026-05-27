@@ -458,25 +458,14 @@ class SpawnAgentTool:
             return MockSpeaker(content=json.dumps(asdict(result)))
 
         except AgentDepthExceeded as exc:
-            agent_error = AgentError(
-                agent_id=handle.agent_id if handle else "unknown",
-                depth=child_ctx.depth if child_ctx else 0,
-                task=task_desc[:200],
-                error=str(exc),
-            )
-            if handle:
-                await registry.mark_done(
-                    handle.agent_id,
-                    "failed",
-                    error=agent_error,
-                )
-                self._hook_manager.run_on_agent_stop(handle)
+            # child() raises this before `handle` is built or registered, so
+            # there is nothing registered to mark done — just surface the result.
             from mewbo_core.hypervisor import AgentResult
 
             result = AgentResult(
                 content=f"Depth exceeded: {exc}",
                 status="cannot_solve",
-                steps_used=handle.steps_completed if handle else 0,
+                steps_used=0,
                 warnings=[str(exc)],
             )
             return MockSpeaker(content=json.dumps(asdict(result)))
@@ -594,14 +583,13 @@ class SpawnAgentTool:
             running = await registry.collect_running(parent_id)
             if running:
                 waiters = [asyncio.create_task(h.done_event.wait()) for h in running]
-                try:
-                    _done, pending = await asyncio.wait(
-                        waiters,
-                        timeout=timeout,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                except asyncio.TimeoutError:
-                    pending = set(waiters)
+                # asyncio.wait() does not raise on timeout — it returns
+                # (done, pending) with pending non-empty when the deadline hits.
+                _done, pending = await asyncio.wait(
+                    waiters,
+                    timeout=timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
                 for t in pending:
                     t.cancel()
 

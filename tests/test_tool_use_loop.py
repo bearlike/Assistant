@@ -916,8 +916,9 @@ class TestLlmCallTimeoutCeiling:
 
         with (
             patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+            # RetryStrategy.from_config reads knobs via mewbo_core.config.
             patch(
-                "mewbo_core.tool_use_loop.get_config_value",
+                "mewbo_core.config.get_config_value",
                 side_effect=lambda *keys, default=None: (
                     0.05
                     if keys == ("agent", "llm_call_timeout")
@@ -1239,11 +1240,14 @@ class TestModelFallback:
             async def _side_effect(messages, **kw):
                 nonlocal call_count
                 call_count += 1
-                if call_count <= 2:  # primary gets 2 retries
+                if call_count <= 3:  # primary exhausts its 3 attempts
                     raise primary_error
                 return fallback_response
 
-            with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            with (
+                patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+                patch("mewbo_core.llm_resilience.RetryStrategy.backoff", return_value=0.0),
+            ):
                 mock_model = MagicMock()
                 mock_model.bind_tools.return_value.ainvoke = AsyncMock(side_effect=_side_effect)
                 mock_build.return_value = mock_model
@@ -1256,7 +1260,8 @@ class TestModelFallback:
 
             assert state.done
             assert "fallback worked" in (tq.task_result or "")
-            assert call_count == 3
+            # 3 primary attempts (default primary_retries) + 1 fallback attempt.
+            assert call_count == 4
 
         asyncio.run(_test())
 
@@ -1274,11 +1279,10 @@ class TestModelFallback:
                 hook_manager=_make_hook_manager(),
             )
 
+            # ValueError classifies as FATAL (deterministic) — no retry, no
+            # fallback, fail fast.
             bad_request = ValueError("bad request")
-            with (
-                patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
-                patch("mewbo_core.tool_use_loop._classify_llm_error", return_value=(False, 0)),
-            ):
+            with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
                 mock_model = MagicMock()
                 mock_model.bind_tools.return_value.ainvoke = AsyncMock(side_effect=bad_request)
                 mock_build.return_value = mock_model
@@ -1309,7 +1313,10 @@ class TestModelFallback:
                 hook_manager=_make_hook_manager(),
             )
 
-            with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            with (
+                patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+                patch("mewbo_core.llm_resilience.RetryStrategy.backoff", return_value=0.0),
+            ):
                 mock_model = MagicMock()
                 mock_model.bind_tools.return_value.ainvoke = AsyncMock(
                     side_effect=RuntimeError("down")

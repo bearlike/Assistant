@@ -223,7 +223,9 @@ def build_usage_numbers(
     ``tokens_until_compact``, ``compact_threshold``,
     ``root_llm_calls``, ``sub_llm_calls``, ``sub_agent_count``,
     ``total_input_tokens_billed``, ``total_output_tokens``,
-    ``compaction_count``, ``compaction_tokens_saved``.
+    ``compaction_count``, ``compaction_tokens_saved``,
+    ``models_used`` (distinct model IDs in first-seen order, collected from
+    ``context.model``, ``sub_agent.model``, and ``llm_fallback.to_model``).
     """
     root_input_billed = root_output = root_calls = 0
     root_peak_input = 0
@@ -234,12 +236,26 @@ def build_usage_numbers(
     sub_agent_ids: set[str] = set()
     compaction_count = 0
     compaction_tokens_saved = 0
+    # Order-preserving dedupe: dict keys preserve insertion order in Python 3.7+.
+    models_seen: dict[str, None] = {}
 
     for event in events:
         etype = event.get("type")
         payload = event.get("payload")
         if not isinstance(payload, dict):
             continue
+        if etype == "context":
+            model = payload.get("model")
+            if isinstance(model, str) and model:
+                models_seen[model] = None
+        elif etype == "sub_agent":
+            model = payload.get("model")
+            if isinstance(model, str) and model:
+                models_seen[model] = None
+        elif etype == "llm_fallback":
+            model = payload.get("to_model")
+            if isinstance(model, str) and model:
+                models_seen[model] = None
         if etype == "llm_call_end":
             depth = payload.get("depth", 0)
             in_tok = int(payload.get("input_tokens", 0) or 0)
@@ -324,6 +340,7 @@ def build_usage_numbers(
         "sub_agent_count": len(sub_agent_ids),
         "compaction_count": compaction_count,
         "compaction_tokens_saved": compaction_tokens_saved,
+        "models_used": list(models_seen),
     }
 
 

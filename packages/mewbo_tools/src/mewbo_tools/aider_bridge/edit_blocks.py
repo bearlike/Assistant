@@ -507,6 +507,7 @@ def find_similar_lines(search_lines, content_lines, threshold=0.6):
 
     best_ratio = 0
     best_match = None
+    best_match_i = 0
 
     for i in range(len(content_lines) - len(search_lines) + 1):
         chunk = content_lines[i : i + len(search_lines)]

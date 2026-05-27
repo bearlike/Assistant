@@ -4,7 +4,7 @@ from pathlib import Path
 from mewbo_core.agent_registry import parse_agent_def
 
 WIKI_AGENTS_DIR = Path(
-    "packages/mewbo_core/src/mewbo_core/builtin_plugins/wiki/agents"
+    "packages/mewbo_graph/src/mewbo_graph/plugins/wiki/agents"
 )
 
 
@@ -15,8 +15,8 @@ def test_wiki_indexer_agent_def_loads():
     assert agent_def.name == "wiki-indexer"
     expected_tools = {
         "wiki_clone_repo", "wiki_scan_tree", "wiki_load_grounder",
-        "wiki_commit_plan", "wiki_finalize", "spawn_agent",
-        "check_agents", "read_file", "glob", "grep", "ls",
+        "wiki_commit_plan", "wiki_finalize", "wiki_submit_insight",
+        "spawn_agent", "check_agents", "read_file", "glob", "grep", "ls",
     }
     actual_tools = set(agent_def.allowed_tools or [])
     assert expected_tools.issubset(actual_tools), \
@@ -51,7 +51,7 @@ def test_wiki_qa_agent_def_loads():
     assert agent_def is not None
     assert agent_def.name == "wiki-qa"
     expected_tools = {"wiki_search_pages", "wiki_read_page", "wiki_code_search",
-                      "wiki_query_graph", "wiki_emit_block"}
+                      "wiki_query_graph", "wiki_emit_block", "wiki_submit_insight"}
     assert expected_tools.issubset(set(agent_def.allowed_tools or []))
     for kw in ["wiki_emit_block", "wiki_search_pages", "wiki_read_page"]:
         assert kw in agent_def.body
@@ -61,7 +61,7 @@ def test_plugin_manifest_lists_both_agents():
     """plugin.json declares all wiki agents."""
     import json
     manifest = json.loads(
-        (Path("packages/mewbo_core/src/mewbo_core/builtin_plugins/wiki/.claude-plugin/plugin.json")).read_text()
+        (Path("packages/mewbo_graph/src/mewbo_graph/plugins/wiki/.claude-plugin/plugin.json")).read_text()
     )
     agent_paths = {entry.get("path", "") for entry in manifest.get("agents", [])}
     assert "agents/wiki-indexer.md" in agent_paths

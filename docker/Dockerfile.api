@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git wget \
 COPY pyproject.toml uv.lock ./
 COPY packages/mewbo_core/pyproject.toml packages/mewbo_core/pyproject.toml
 COPY packages/mewbo_tools/pyproject.toml packages/mewbo_tools/pyproject.toml
+COPY packages/mewbo_graph/pyproject.toml packages/mewbo_graph/pyproject.toml
 COPY apps/mewbo_api/pyproject.toml apps/mewbo_api/pyproject.toml
 
 # 2. Copy source
@@ -59,9 +60,16 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         -e apps/mewbo_api \
         gunicorn
 # Wiki extras: tree-sitter, rank-bm25, numpy — only baked in when WIKI_EXTRAS=1.
+# The `mewbo-api[wiki]` extra forwards to the local `mewbo-graph` capability
+# library (packages/mewbo_graph), which is NOT published to any index. uv has
+# no source for a bare `mewbo-graph>=0.0.13` requirement, so we hand it the
+# local editable explicitly — mirroring the core/tools/api installs above —
+# and let that satisfy the [wiki] extra's transitive dependency.
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ "$WIKI_EXTRAS" = "1" ]; then \
-        uv pip install --system -e "apps/mewbo_api[wiki]"; \
+        uv pip install --system \
+            -e "packages/mewbo_graph[treesitter,retrieval]" \
+            -e "apps/mewbo_api[wiki]"; \
     fi
 
 # Pre-create plan-mode scratch directory with correct ownership.

@@ -1,0 +1,44 @@
+{
+  "name": "scg",
+  "description": "Source Capability Graph — map connector reachability + route/traverse it for Agentic Search.",
+  "version": "0.1.0",
+  "author": "Mewbo",
+  "requires-capabilities": ["scg"],
+  "session_tools": [
+    {
+      "tool_id": "scg_introspect_source",
+      "module": "mewbo_graph.plugins.scg.introspect_source",
+      "class": "ScgIntrospectSourceTool"
+    },
+    {
+      "tool_id": "scg_build_structure",
+      "module": "mewbo_graph.plugins.scg.build_structure",
+      "class": "ScgBuildStructureTool"
+    },
+    {
+      "tool_id": "scg_link_entities",
+      "module": "mewbo_graph.plugins.scg.link_entities",
+      "class": "ScgLinkEntitiesTool"
+    },
+    {
+      "tool_id": "scg_finalize_map",
+      "module": "mewbo_graph.plugins.scg.finalize_map",
+      "class": "ScgFinalizeMapTool"
+    },
+    {
+      "tool_id": "scg_route",
+      "module": "mewbo_graph.plugins.scg.route",
+      "class": "ScgRouteTool"
+    },
+    {
+      "tool_id": "scg_memory",
+      "module": "mewbo_graph.plugins.scg.memory",
+      "class": "ScgMemoryTool"
+    }
+  ],
+  "agents": [
+    { "path": "agents/scg-mapper.md" },
+    { "path": "agents/scg-search.md" },
+    { "path": "agents/scg-path-probe.md" }
+  ]
+}

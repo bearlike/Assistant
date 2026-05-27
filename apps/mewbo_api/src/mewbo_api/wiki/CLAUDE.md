@@ -1,12 +1,14 @@
 # MewboWiki — API Subsystem Guidance
 
-Scope: this file applies to `apps/mewbo_api/src/mewbo_api/wiki/` and the
-wiki-related session tools under
-`packages/mewbo_core/src/mewbo_core/builtin_plugins/wiki/`. It captures
-the non-obvious engineering decisions that have piled up while building
-the DeepWiki-style indexing + Q&A pipeline. Everything that can be read
-straight from the code is left out — this file is for the parts you'd
-miss.
+Scope: this file applies to `apps/mewbo_api/src/mewbo_api/wiki/` (the thin
+HTTP/SSE + job-lifecycle glue) and the wiki SessionTools under
+`packages/mewbo_graph/src/mewbo_graph/plugins/wiki/`. The reusable substrate
+they drive — tree-sitter code graph, multiplex memory engine, embedder,
+retriever, store, and the wiki domain/wire models — was extracted to
+`mewbo_graph.wiki` (Gitea #25); see `packages/mewbo_graph/CLAUDE.md` for the
+library-level + layering decisions. This file captures the non-obvious
+engineering decisions behind the DeepWiki-style indexing + Q&A pipeline.
+Everything that can be read straight from the code is left out.
 
 ## What MewboWiki is
 
@@ -90,24 +92,24 @@ it; the token MUST NOT land in the persisted submission, the session
 transcript, or any event log — Mewbo sessions are visible in
 Langfuse/Mongo and we treat the transcript as semi-public.
 
-The pattern in `jobs.py`:
+The cache is `CloneTokenCache` in `mewbo_graph.wiki.tokens` — a zero-dependency
+atomic class both the API (writer) and the relocated clone/finalize tools
+(readers) import **down** (Gitea #25 moved it out of `jobs.py` so the relocated
+tools no longer reach up). The flow:
 
 1. The wizard submission arrives as `{ ..., token: "..." }`.
-2. `_clean_for_model` strips `token` from the dict that's
-   `model_validate`'d into the Pydantic submission — the persisted
+2. `jobs.py` strips `token` before persisting the submission — the stored
    object never contains it.
-3. The plaintext token is stored in `_CLONE_TOKENS` (a module-level
-   `dict[job_id → token]`) — in-process only, never serialised.
-4. `clone.py` reads from the cache for the actual `git clone` call.
-5. `finalize.py` reads from the cache to authenticate the
-   repo-description API fetch (private Gitea/GitHub-Enterprise instances
-   reject anon API calls).
-6. `forget_clone_token(job_id)` clears the entry at end of finalize.
+3. `WikiIndexingJob.start` stashes the plaintext via `CloneTokenCache.store`
+   (a class-level `dict[job_id → token]`) — in-process only, never serialised.
+4. `clone.py` reads it (`CloneTokenCache.peek`) for the `git clone`.
+5. `finalize.py` reads it again to authenticate the repo-description API fetch
+   (private Gitea/GHE instances reject anon API calls).
+6. `CloneTokenCache.forget(job_id)` clears the entry at end of finalize.
 
-`pop_clone_token` is **non-evicting** (uses `.get()`, not `.pop()`) so
-multiple consumers (clone, finalize, refresh) can each read it. The
-final `forget_clone_token` is the only delete. If you add a new
-consumer, put it BEFORE `forget_clone_token`.
+`peek` is **non-evicting** (`.get`, not `.pop`) so multiple consumers (clone,
+finalize, refresh) each read it; `forget` is the only delete. A new consumer
+goes BEFORE the `forget`.
 
 Never log the token. Never echo it into a tool result. Never include it
 in `submission.model_dump()` output.
@@ -209,7 +211,7 @@ different tag in `routes.py`, the session won't reattach.
 - `test_tool_finalize.py` covers prune_pages-at-finalize and
   description-keeps-existing behaviour. Mock `_fetch_description` via
   `patch.object` when you don't want real HTTP.
-- `test_embedder.py` mocks `mewbo_api.wiki.embedder.litellm.embedding`
+- `test_embedder.py` mocks `mewbo_graph.wiki.embedder.litellm.embedding`
   — do NOT mock `OpenAIEmbeddings`, that import was removed.
 - Wiki tests should NEVER spawn a real LLM or hit a real proxy.
 
@@ -218,3 +220,60 @@ different tag in `routes.py`, the session won't reattach.
 Read `apps/mewbo_console/src/components/wiki/README.md` (the FE-side
 spec) — it documents the wire shapes verbatim and is the source of
 truth for the API contract between BE and FE.
+
+## Multiplex memory + docs overlay
+
+An evolving memory + docs graph (`memory_types.py`, `memory.py`,
+`refresh.py`, `structure_provider.py`) overlaid on the tree-sitter code
+graph. Non-obvious decisions only (full spec + research refs: Gitea #13):
+
+- **One identity for all three layers**: `entity_key = file#Qualified.Name`
+  (bare `path` for a File; NO byte offsets, so anchors survive a re-index).
+  `structure_provider.entity_key_for_node` is the ONLY derivation; the
+  byte-offset `_stable_id` stays an internal handle. `StructureProvider` is a
+  Protocol (corpus-agnostic seam: PDFs/DB schemas later); keep
+  `CodeStructureProvider` stateless — a refresh mutates the graph.
+- **Atomic, content-addressed notes**: `MemoryNode.content` ≤200 chars, one
+  claim; `node_id = sha1(slug|content.strip().lower())[:16]` is *derived* and
+  overwrites any supplied value — that IS the exact-dup dedup tier. Don't add a
+  random/byte-offset id (Dense-X / Molecular-Facts: long notes decontextualize).
+- **One ingestor, three surfaces**: `InsightIngestor.from_store` backs the
+  SessionTool `wiki_submit_insight`, REST `POST .../insights`, and MCP
+  `submit_insight`. 3-tier dedup: exact node_id → fuzzy Jaccard → LLM over
+  cosine-kNN, NONE-default (uncertainty/no-LLM → NEW; Mem0). The in-session
+  tool is deterministic (no LLM); raw human text condenses on the REST/MCP
+  path. Merge keeps the *crisper* note (never concatenates) and retires the
+  superseded node. **All dedup tiers route through the single
+  `memory_vector_search` ANN seam** — upgrading that seam makes dedup sublinear.
+- **Invalidate-don't-delete** (Graphiti): validity is the single nullable
+  `MemoryEdge.invalid_at`; NO node-level flag. A memory is live iff it has ≥1
+  live ANCHORS edge.
+- **Retrieval is additive**: `MultiplexExpander` seeds notes by cosine →
+  ANCHORS → code + ≤`expansion_hops` neighbours, GAAMA `0.1·ppr + 1.0·sim`,
+  hub-damp deg>`hub_degree`. `memory_expand=False` is byte-identical to legacy.
+- **Refresh is on-demand only** (no watcher/cron). `ChangeDetector` =
+  content-hash vs `FileManifest` (mtime is unreliable). `GraphDeltaIndexer`:
+  retract → reparse → Salsa early-cutoff → reverse-dependency closure. **GOTCHA**:
+  cross-file CALLS/IMPORTS/EXTENDS targets are *synthetic* ids
+  (`_stable_id(slug,"Function",name,"<external>",0)`), so the closure matches by
+  NAME via those ids — over-approximating on purpose (false positive = safe
+  wasted work; false negative = unsafe stale index). `MemoryReconciler` drift
+  ladder per anchor: ≥`drift_keep` keep / <`drift_invalidate` invalidate / band
+  → 1 LLM call; idempotent via `anchor_checked_at`; `override`-labelled notes
+  immutable. `DocStalenessPlanner` maps each page to a `DocPageNote` and scores
+  `0.5·direct + 0.3·drift + 0.2·deleted` (drift=0 in v1 — pages aren't embedded).
+  `RefreshOrchestrator` is the plan-then-act conductor; `RefreshReport` is the
+  committed scope. **Not yet wired**: `jobs.refresh()` currently runs a *full*
+  re-index — `RefreshOrchestrator` is ready substrate (in `mewbo_graph.wiki.refresh`)
+  with no production caller. Don't re-add a `refresh(mode=...)` knob until the
+  orchestrator is actually wired (an earlier `mode` param was deleted because all
+  branches did the same full re-index); wire it and reintroduce `mode` together.
+- **Flywheel**: the indexer deposits a few atomic insights *while indexing*
+  (A-MEM notes-at-ingest), QA deposits one per answer — so memory is useful
+  from day one, not only after Q&A.
+- **REST insights returns 200 (`ok:false`), NOT 422**, on a fully-rejected
+  well-formed request — so the MCP `RestClient` facade doesn't raise.
+- **Config**: `wiki.memory.*` / `wiki.refresh.*` (typed `WikiMemoryConfig` /
+  `WikiRefreshConfig` in `config.py`); layer gated on `wiki.memory.enabled`.
+  `vector_search` / `memory_vector_search` is the documented scale seam (IVF /
+  Matryoshka / quantization land behind it) — keep the signature stable.

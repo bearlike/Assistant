@@ -12,7 +12,12 @@ from mewbo_core.agent_context import AgentContext
 from mewbo_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
 from mewbo_core.common import discover_project_instructions, get_logger, session_log_context
 from mewbo_core.components import langfuse_session_context
-from mewbo_core.config import PluginsConfig, get_config, get_config_value
+from mewbo_core.config import (
+    PluginsConfig,
+    effective_fallback_models,
+    get_config,
+    get_config_value,
+)
 from mewbo_core.context import ContextBuilder
 from mewbo_core.exit_plan_mode import ensure_plan_dir, plan_file_for
 from mewbo_core.hooks import HookManager, default_hook_manager
@@ -85,7 +90,7 @@ class Orchestrator:
         self._fallback_models = (
             fallback_models
             if fallback_models is not None
-            else tuple(get_config_value("llm", "fallback_models", default=[]) or [])
+            else tuple(effective_fallback_models())
         )
         self._session_store = session_store or create_session_store()
         self._permission_policy = permission_policy or load_permission_policy()

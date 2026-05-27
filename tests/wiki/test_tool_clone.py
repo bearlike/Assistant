@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import IndexingJob
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import IndexingJob
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -67,8 +67,8 @@ def _git_success_side_effect(clone_dir: Path):
 
 def test_clone_success_emits_queued_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Successful clone: queued event emitted, totalCount set on job + event."""
-    import mewbo_core.builtin_plugins.wiki.clone as clone_mod
-    from mewbo_core.builtin_plugins.wiki.clone import WikiCloneRepoTool
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
 
     monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
 
@@ -112,8 +112,8 @@ def test_clone_success_emits_queued_event(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_clone_failure_emits_error_event(tmp_path: Path) -> None:
     """Non-zero git exit → error event with code=repo_access + stderr in message."""
-    import mewbo_core.builtin_plugins.wiki.clone as clone_mod
-    from mewbo_core.builtin_plugins.wiki.clone import WikiCloneRepoTool
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
 
     store = _store(tmp_path)
     job = _job("job-f1", "org/bad-repo")
@@ -151,8 +151,8 @@ def test_token_rewrites_url_and_is_not_persisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Token is injected into clone URL but never written to any file."""
-    import mewbo_core.builtin_plugins.wiki.clone as clone_mod
-    from mewbo_core.builtin_plugins.wiki.clone import WikiCloneRepoTool
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
 
     monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
 
@@ -199,8 +199,8 @@ def test_token_rewrites_url_and_is_not_persisted(
 
 def test_clone_dir_is_used_as_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """subprocess.run is called with ctx.clone_dir as the final argument."""
-    import mewbo_core.builtin_plugins.wiki.clone as clone_mod
-    from mewbo_core.builtin_plugins.wiki.clone import WikiCloneRepoTool
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
 
     monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
 
@@ -235,8 +235,8 @@ def test_clone_dir_is_used_as_target(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 def test_unknown_session_returns_internal_error(tmp_path: Path) -> None:
     """If no wiki job is associated with the session, return WikiError code=internal."""
-    import mewbo_core.builtin_plugins.wiki.clone as clone_mod
-    from mewbo_core.builtin_plugins.wiki.clone import WikiCloneRepoTool
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
 
     store = _store(tmp_path)
     runtime = _fake_runtime(store)

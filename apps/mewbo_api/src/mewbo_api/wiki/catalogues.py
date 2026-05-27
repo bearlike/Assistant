@@ -7,7 +7,7 @@ the LiteLLM proxy actually serves. DRY: one model list, one source.
 """
 from __future__ import annotations
 
-from .types import Language, Platform
+from mewbo_graph.wiki.types import Language, Platform
 
 # ── Platforms ─────────────────────────────────────────────────────────────────
 

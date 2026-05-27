@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pydantic
 import pytest
-from mewbo_api.wiki.types import (
+from mewbo_graph.wiki.types import (
     AccordionBlock,
     BlockCloseEvent,
     BlockDeltaEvent,

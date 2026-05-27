@@ -3,13 +3,26 @@
 This page summarizes the code layout, core interfaces, and the minimal steps needed to build a new client.
 
 ## Monorepo layout
-- `packages/mewbo_core/`: orchestration loop, session runtime, schemas, session storage, compaction, tool registry, plugin system (`plugins.py`), agent definition registry (`agent_registry.py`).
+- `packages/mewbo_core/`: lean orchestration SDK — orchestration loop, session runtime, schemas, session storage, compaction, tool registry, plugin system (`plugins.py`), agent definition registry (`agent_registry.py`).
 - `packages/mewbo_tools/`: tool implementations and integration glue.
 - `packages/mewbo_tools/src/mewbo_tools/vendor/aider`: vendored Aider utilities used by local file and shell tools.
-- `apps/mewbo_api/`: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (`ide.py`, `ide_routes.py`).
+- `packages/mewbo_graph/` (`mewbo-graph`): the **optional** knowledge-graph capability library — the reusable substrate shared by both MewboWiki and Mewbo Search. Houses the tree-sitter code graph, the multiplex atomic-note memory engine, the embedder, the hybrid retriever, and the Source Capability Graph (SCG) reachability router, plus the bundled `wiki` and `scg` plugin suites (SessionTools + AgentDefs).
+- `apps/mewbo_api/`: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (`ide.py`, `ide_routes.py`). The wiki/search surface here is a thin product layer (HTTP routes, wire/SSE contracts, run/job lifecycle, persistence glue) over `mewbo_graph`.
 - `apps/mewbo_console/`: Web console for task orchestration, plugin management, and Web IDE access (React + Vite).
 - `apps/mewbo_cli/`: terminal CLI for interactive sessions.
 - `mewbo_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
+
+### Layering — the down-only dependency DAG
+
+Dependencies flow strictly **down** this DAG; a lower layer never imports a higher one:
+
+```
+mewbo-core (lean SDK)  ←  { mewbo-tools, mewbo-graph (optional) }  ←  apps (mewbo-api, mewbo-cli, mewbo-mcp)
+```
+
+- `mewbo-graph` depends only on `mewbo-core` + `pydantic`. Heavy deps are gated behind its own extras: `treesitter` (tree-sitter, tree-sitter-language-pack) and `retrieval` (rank-bm25, numpy); `full` pulls both. Embeddings ride `litellm`, so no extra client is needed.
+- **"Optional" means both layers.** A capability is exposed through PEP 621 extras *and* a graceful `try/except ImportError` at every import site, so when the extra is uninstalled the feature is simply absent — never a crash. `mewbo-api[wiki]` forwards to `mewbo-graph[treesitter,retrieval]` (the public `wiki` extra name and the Docker `WIKI_EXTRAS` toggle are unchanged); a base `mewbo-api` install boots graph-less because every graph import in the api is guarded.
+- **Placement rule.** A reusable substrate or domain engine goes in a library (core if generic and lean, else a capability library like `mewbo-graph`); a reusable engine must never live inside an app, and two apps must never import each other.
 
 ## Project instructions (`CLAUDE.md` / `AGENTS.md`)
 

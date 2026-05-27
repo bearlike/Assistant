@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import collections
 import time
-from typing import Any
+from typing import Any, Literal, cast
 
 from flask import Blueprint, Response, jsonify, request, stream_with_context
+from mewbo_graph.wiki.store import WikiStoreBase
+from mewbo_graph.wiki.types import IndexingJob, WikiError, WizardSubmission
 
 from .catalogues import LANGUAGES, PLATFORMS
 from .errors import register_error_handler, wiki_error_response
 from .events import WikiQaSseGenerator, WikiSseGenerator
 from .jobs import WikiIndexingJob, WikiQaSession
-from .store import WikiStoreBase
-from .types import IndexingJob, WikiError, WizardSubmission
 
 _runtime: Any = None  # populated by register()
 
@@ -97,6 +97,30 @@ def _require_auth():
 
 def _store() -> WikiStoreBase:
     return _runtime.wiki_store
+
+
+def _make_insight_llm() -> Any | None:
+    """Build the chat model for condense + dedup tier-3 on the human path.
+
+    Resolves a model from ``wiki.memory.model`` → ``wiki.default_qa_model``
+    → ``wiki.default_model``. Returns None (condense/LLM-dedup off) when no
+    model is configured or the model can't be built — the content path still
+    works with exact + fuzzy dedup. Isolated so tests can stub it.
+    """
+    try:
+        from mewbo_core.config import get_config_value  # noqa: PLC0415
+        from mewbo_core.llm import build_chat_model  # noqa: PLC0415
+
+        model = (
+            get_config_value("wiki", "memory", "model", default="")
+            or get_config_value("wiki", "default_qa_model", default="")
+            or get_config_value("wiki", "default_model", default="")
+        )
+        if not model:
+            return None
+        return build_chat_model(str(model))
+    except Exception:
+        return None
 
 
 def _hydrate_platform(job: IndexingJob) -> IndexingJob:
@@ -214,7 +238,7 @@ def _build_blueprint() -> Blueprint:
             node_limit = int(node_limit_raw) if node_limit_raw else None
         except (TypeError, ValueError):
             node_limit = None
-        from .graph import KnowledgeGraphView  # noqa: PLC0415
+        from mewbo_graph.wiki.graph import KnowledgeGraphView  # noqa: PLC0415
 
         view = KnowledgeGraphView.for_slug(_store(), slug, node_limit=node_limit)
         return jsonify(view.to_wire())
@@ -482,9 +506,78 @@ def _build_blueprint() -> Blueprint:
             },
         )
 
+    @bp.route("/projects/<path:slug>/insights", methods=["POST"])
+    def post_insight(slug: str):
+        """Ingest a suggested memory insight for *slug* (human/external agent).
+
+        Body: ``{content?, raw?, anchors?, links?, kind?, labels?, condense?}``.
+        Either ``content`` (one atomic claim) or ``raw`` (free text to
+        condense) is required. The shared ``InsightIngestor`` validates,
+        condenses (raw path), auto-anchors to the tree-sitter graph, dedups,
+        and safely merges. Returns the per-claim ``IngestResult`` — 201 when
+        at least one claim was stored, 200 (``ok: false``) when a well-formed
+        request was processed but every claim was rejected (a normal advisory
+        outcome, not a client error).
+        """
+        auth = _require_auth()
+        if auth:
+            return auth
+        if _store().get_project(slug) is None:
+            return wiki_error_response(
+                WikiError(code="not_found", message=f"project {slug} not found")
+            )
+        body = request.get_json(silent=True) or {}
+        content = str(body.get("content") or "").strip()
+        raw = str(body.get("raw") or "").strip()
+        condense = bool(body.get("condense", False))
+        kind = body.get("kind") or "propositional"
+        if not content and not raw:
+            return wiki_error_response(
+                WikiError(
+                    code="validation",
+                    message="content or raw is required",
+                    fields={"content": "required"},
+                )
+            )
+        if kind not in ("propositional", "prescriptive"):
+            return wiki_error_response(
+                WikiError(
+                    code="validation",
+                    message="kind must be 'propositional' or 'prescriptive'",
+                    fields={"kind": "invalid"},
+                )
+            )
+        # kind is already constrained to the two-member set by the guard above.
+        kind_lit = cast(Literal["propositional", "prescriptive"], kind)
+
+        from mewbo_graph.wiki.memory import InsightCondenser, InsightIngestor  # noqa: PLC0415
+
+        llm = _make_insight_llm()
+        want_condense = bool(condense or raw)
+        condenser = InsightCondenser(llm) if (llm is not None and want_condense) else None
+        ingestor = InsightIngestor.from_store(_store(), llm=llm, condenser=condenser)
+        try:
+            result = ingestor.ingest(
+                slug,
+                content or None,
+                raw=raw or None,
+                anchors=list(body.get("anchors") or []),
+                links=list(body.get("links") or []),
+                kind=kind_lit,
+                labels=list(body.get("labels") or []),
+                condense=want_condense,
+                source="on_demand",
+                author_agent="rest",
+            )
+        except Exception as exc:
+            return wiki_error_response(WikiError(code="internal", message=str(exc)))
+        resp = jsonify(result.model_dump(mode="json"))
+        resp.status_code = 201 if result.ok else 200
+        return resp
+
     @bp.route("/projects/<path:slug>/refresh", methods=["POST"])
     def refresh_project(slug: str):
-        """Re-trigger indexing for an existing project. No email collection."""
+        """Re-trigger a full re-index for an existing project (on-demand only)."""
         auth = _require_auth()
         if auth:
             return auth

@@ -2,32 +2,36 @@ import { useEffect, useMemo, useState } from "react"
 import { Loader2 } from "lucide-react"
 
 import {
+  toRunPayload,
   useCreateWorkspace,
-  useRunSearch,
+  useRun,
+  useRunStream,
   useSources,
-  useStaggeredReveal,
+  useStartRun,
   useUpdateWorkspace,
   useWorkspaces,
 } from "../../hooks/useAgenticSearch"
+import { useElapsedMs } from "../../hooks/useElapsed"
 import type { RunPayload, Workspace, WorkspaceInput } from "../../types/agenticSearch"
 import { LandingPanel } from "./LandingPanel"
 import { ResultsPanel } from "./ResultsPanel"
 import { WorkspaceModal } from "./WorkspaceModal"
 
-const DEFAULT_TOTAL_MS = 5500
 const STORAGE_WORKSPACE = "agentic-search:workspace-id"
+const STORAGE_RUN = "agentic-search:run-id"
 
 type ModalState = null | { mode: "create" } | { mode: "edit"; workspaceId: string }
 
 /**
  * Page root for the Agentic Search route. Owns transient view state
- * (selected workspace, current run, modal, run nonce); all server data
- * flows through useAgenticSearch hooks.
+ * (selected workspace, active run id, modal); all server data flows through
+ * useAgenticSearch hooks. Visibility is derived from REAL received stream
+ * state — no client-side fake-reveal timer.
  */
 export default function AgenticSearchView() {
   const sourcesQuery = useSources()
   const workspacesQuery = useWorkspaces()
-  const runMutation = useRunSearch()
+  const startRunMutation = useStartRun()
   const createWorkspaceMutation = useCreateWorkspace()
   const updateWorkspaceMutation = useUpdateWorkspace()
 
@@ -39,16 +43,18 @@ export default function AgenticSearchView() {
     return window.localStorage.getItem(STORAGE_WORKSPACE)
   })
   const [modal, setModal] = useState<ModalState>(null)
-  const [run, setRun] = useState<RunPayload | null>(null)
-  const [runNonce, setRunNonce] = useState(0)
+  // The active run id drives the live stream + snapshot rehydration. Persisted
+  // so a reload re-opens the last run via getRun / the replayed SSE stream.
+  const [runId, setRunId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null
+    return window.localStorage.getItem(STORAGE_RUN)
+  })
 
   // Resolve the current workspace, falling back to the first available one
   // if the persisted id is gone or no id has been chosen yet.
   const workspace = useMemo<Workspace | null>(() => {
     if (workspaces.length === 0) return null
-    return (
-      workspaces.find((w) => w.id === workspaceId) ?? workspaces[0]
-    )
+    return workspaces.find((w) => w.id === workspaceId) ?? workspaces[0]
   }, [workspaces, workspaceId])
 
   // Persist the active workspace and reconcile when it changes.
@@ -62,29 +68,46 @@ export default function AgenticSearchView() {
     }
   }, [workspace, workspaceId])
 
-  const totalMs = run?.total_ms ?? DEFAULT_TOTAL_MS
-  const elapsed = useStaggeredReveal(runNonce, totalMs)
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (runId) window.localStorage.setItem(STORAGE_RUN, runId)
+    else window.localStorage.removeItem(STORAGE_RUN)
+  }, [runId])
+
+  // Live stream (folds the run's SSE event log) + durable snapshot fallback
+  // for reload rehydration before the stream has replayed run_started.
+  const stream = useRunStream(runId)
+  const runQuery = useRun(runId)
+
+  // Real elapsed: ticks while the run is live, freezes on terminal.
+  const elapsedMs = useElapsedMs(stream.startedAt, !stream.done)
+
+  // Prefer live stream state once it has begun; otherwise rehydrate from the
+  // snapshot so a reload shows the finished run immediately.
+  const run: RunPayload | null = useMemo(() => {
+    if (stream.runId) return toRunPayload(stream)
+    return runQuery.data?.payload ?? null
+  }, [stream, runQuery.data])
+
+  // When rendering from a snapshot (no live stream yet) the run is terminal.
+  const streaming = Boolean(stream.runId)
+  const done = streaming ? stream.done : true
+  const answerReady = streaming ? stream.answerReady : true
+  const snapshotElapsed = run?.total_ms ?? 0
+  const displayElapsed = streaming ? elapsedMs : snapshotElapsed
 
   const handleSubmit = (query: string) => {
     if (!workspace) return
-    runMutation.mutate(
+    startRunMutation.mutate(
       { workspace_id: workspace.id, query },
-      {
-        onSuccess: (data) => {
-          setRun(data)
-          setRunNonce((n) => n + 1)
-        },
-      }
+      { onSuccess: (res) => setRunId(res.run_id) }
     )
   }
 
+  // ROUND-TRIP FIX #2: switching workspaces changes selection ONLY. It must
+  // not auto-re-run the last query — the user submits explicitly.
   const handlePickWorkspace = (next: Workspace) => {
     setWorkspaceId(next.id)
-    if (run) {
-      // Re-run the last query against the newly selected workspace so
-      // results reflect that workspace's enabled sources.
-      handleSubmit(run.query)
-    }
   }
 
   const handleSaveWorkspace = (values: WorkspaceInput) => {
@@ -163,8 +186,10 @@ export default function AgenticSearchView() {
           sources={sources}
           query={run.query}
           run={run}
-          elapsed={elapsed}
-          isLoading={runMutation.isPending}
+          elapsedMs={displayElapsed}
+          done={done}
+          answerReady={answerReady}
+          isLoading={startRunMutation.isPending || (Boolean(runId) && runQuery.isLoading && !stream.runId)}
           onRun={handleSubmit}
           onPickWorkspace={handlePickWorkspace}
           onOpenCreate={() => setModal({ mode: "create" })}
@@ -182,9 +207,9 @@ export default function AgenticSearchView() {
         />
       )}
 
-      {runMutation.isError && (
+      {startRunMutation.isError && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-md bg-[hsl(var(--destructive))] text-[hsl(var(--destructive-foreground))] text-sm shadow-lg">
-          Search failed: {runMutation.error?.message ?? "unknown error"}
+          Search failed: {startRunMutation.error?.message ?? "unknown error"}
         </div>
       )}
 

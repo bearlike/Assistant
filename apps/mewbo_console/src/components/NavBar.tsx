@@ -18,13 +18,14 @@ import {
   Clock,
   Square,
   FolderOpen,
+  KeyRound,
   ListChecks,
   Search } from
 'lucide-react';
 import { NotificationItem, SessionSummary, SessionUsage } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { formatSessionTime } from '../utils/time';
-import { ModelLabel } from './ModelLabel';
+import { ModelSummary } from './ModelSummary';
 import { ContextWindowBar } from './ContextWindowBar';
 import { NotificationPanel } from './NotificationPanel';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -76,6 +77,7 @@ export interface NavBarProps {
   onShareSession?: (sessionId: string) => void;
   onExportSession?: (sessionId: string) => void;
   onSettingsClick?: () => void;
+  onApiKeysClick?: () => void;
   onPluginsClick?: () => void;
   onProjectsClick?: () => void;
   onSearchClick?: () => void;
@@ -121,6 +123,7 @@ export function NavBar({
   onShareSession,
   onExportSession,
   onSettingsClick,
+  onApiKeysClick,
   onPluginsClick,
   onProjectsClick,
   onSearchClick,
@@ -134,6 +137,13 @@ export function NavBar({
   const isMobile = useIsMobile();
   const unreadCount = notifications.length;
   const isArchived = Boolean(session?.archived);
+
+  // Model(s) used — prefer usage data (richer: all models per turn) with a
+  // fallback to the session context model for legacy/unloaded sessions.
+  const models = sessionTokenTotals?.models_used?.length
+    ? sessionTokenTotals.models_used
+    : session?.context?.model ? [session.context.model] : [];
+  const currentModel = sessionTokenTotals?.root_model || session?.context?.model || null;
 
   // IDE state lives here so the header owns the capsule control. Both hooks
   // are safe to call unconditionally — `useIdeStatus(null)` no-ops and
@@ -380,6 +390,10 @@ export function NavBar({
           <Settings className="w-3.5 h-3.5 mr-2" />
           Settings
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onApiKeysClick?.()}>
+          <KeyRound className="w-3.5 h-3.5 mr-2" />
+          API Keys
+        </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <a href="https://docs.mewbo.com" target="_blank" rel="noopener noreferrer">
             <BookOpen className="w-3.5 h-3.5 mr-2" />
@@ -490,12 +504,10 @@ export function NavBar({
               {/* Subtitle line — timestamp · model name, both quiet muted text */}
               <div className="hidden md:flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))] min-w-0">
                 <span className="truncate">{formatSessionTime(session?.created_at)}</span>
-                {session?.context?.model &&
+                {models.length > 0 &&
                   <>
                     <span aria-hidden className="shrink-0">·</span>
-                    <ModelLabel
-                      modelId={session?.context?.model}
-                      className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] truncate" />
+                    <ModelSummary models={models} current={currentModel} />
                   </>
                 }
                 {sessionTokenTotals && sessionTokenTotals.root_max_input_tokens > 0 &&

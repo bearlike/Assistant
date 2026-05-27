@@ -4,8 +4,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mewbo_api.wiki.embedder import Embedder
-from mewbo_api.wiki.types import Embedding
+from mewbo_graph.wiki.embedder import Embedder
+from mewbo_graph.wiki.types import Embedding
 
 
 def _embedding_response(vectors: list[list[float]]) -> MagicMock:
@@ -23,7 +23,7 @@ def _embedding_response(vectors: list[list[float]]) -> MagicMock:
 @pytest.fixture(autouse=True)
 def _patch_litellm_embedding():
     """Stop ``litellm.embedding`` from making real HTTP."""
-    with patch("mewbo_api.wiki.embedder.litellm.embedding") as mock_fn:
+    with patch("mewbo_graph.wiki.embedder.litellm.embedding") as mock_fn:
         yield mock_fn
 
 

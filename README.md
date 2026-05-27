@@ -77,7 +77,7 @@ Mewbo is an open, model-agnostic stack for agentic work. At its core, a hypervis
 - **Agentic Wiki.** Turns any repository into living documentation you can interrogate. Indexing pairs a multiplexed memory graph with an AST index of the code, so question answering traverses structure and meaning across many hops for authoritative answers grounded in the source itself.
 - **Agentic Search.** A search engine rebuilt around agents and indexes. One query fans out across every source you've connected, from repos to trackers to chat, and comes back as one ranked list of results spanning them all, topped by a synthesised overview cited to its sources.
 - **Inline interactive widgets.** Sub-agents author Streamlit-in-WASM widgets that mount in a sandboxed Web Worker inside the conversation, with no server round-trip and no CORS.
-- **Provider-agnostic, multi-surface.** Any model behind LiteLLM, accessed from a terminal CLI, web console, REST API, Home Assistant, Nextcloud Talk, or email. Same session, same tools, same transcript.
+- **Provider-agnostic, multi-surface.** Any model behind LiteLLM, accessed from a terminal CLI, web console, REST API, MCP server, Home Assistant, Nextcloud Talk, or email. Same session, same tools, same transcript.
 
 ## Get started
 

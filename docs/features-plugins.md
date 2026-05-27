@@ -7,7 +7,7 @@
 Plugins extend Mewbo with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory. They activate automatically at session start without a restart. Plugins are first-class citizens. A plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.
 
 > [!TIP] Drop-in compatible with Claude Code plugins
-> Mewbo reads the exact same [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins) manifest, directory layout (`.claude-plugin/plugin.json`, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`), and marketplace format. The default marketplace is the [official Claude plugins marketplace](https://github.com/anthropics/claude-plugins-official). Any private marketplace that follows the Claude Code marketplace schema works too. Point `plugins.marketplaces` at the repo and it loads without translation. Plugins authored for Claude Code work in Mewbo unchanged.
+> Mewbo reads the exact same [Claude Code plugin](https://docs.claude.com/en/docs/claude-code/plugins) manifest, directory layout (`.claude-plugin/plugin.json`, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`), and marketplace format. The default marketplace is the [official Claude plugins marketplace](https://github.com/anthropics/claude-plugins-official). Any private marketplace that follows the Claude Code marketplace schema works too, on any git host (GitHub, Gitea, GitLab, Forgejo, GitHub Enterprise, or plain SSH). Point `plugins.marketplaces` at the catalog and it loads without translation. Plugins authored for Claude Code work in Mewbo unchanged.
 
 For setup and installation, see [Getting Started](getting-started.md).
 
@@ -119,8 +119,17 @@ Plugin system settings live under `plugins` in [`configs/app.json`](configuratio
 |---|---|---|---|
 | `plugins.enabled` | boolean | `true` | Enable or disable the entire plugin system |
 | `plugins.enabled_plugins` | array | `[]` | Explicit allowlist of plugin names to activate; empty = all installed plugins |
-| `plugins.marketplaces` | array | `["anthropics/claude-plugins-official"]` | GitHub repos (`owner/repo`) that contain a `marketplace.json` index |
+| `plugins.marketplaces` | array | `["anthropics/claude-plugins-official"]` | Marketplace catalogs on any git host (see forms below) |
+| `plugins.marketplace_default_host` | string | `github.com` | Default host for bare `owner/repo` entries |
 | `plugins.install_path` | string | `""` | Override for the plugin cache directory; defaults to `$MEWBO_HOME/plugins/` |
+
+Each `marketplaces` entry can take any of three forms — the catalog is **not** locked to GitHub:
+
+| Form | Example | Resolves to |
+|---|---|---|
+| Full git URL | `https://git.example.com/team/plugins.git` | used verbatim (also `http://`, `ssh://`, `git://`, and scp-style `git@host:team/plugins`) |
+| `host/owner/repo` | `git.example.com/team/plugins` | `https://git.example.com/team/plugins.git` |
+| Bare `owner/repo` | `anthropics/claude-plugins-official` | `https://<marketplace_default_host>/owner/repo.git` (GitHub by default) |
 
 ```json
 {
@@ -128,14 +137,24 @@ Plugin system settings live under `plugins` in [`configs/app.json`](configuratio
     "enabled": true,
     "marketplaces": [
       "anthropics/claude-plugins-official",
-      "my-org/internal-plugins"
+      "git.example.com/team/internal-plugins",
+      "https://gitlab.com/acme/plugins.git"
     ],
+    "marketplace_default_host": "github.com",
     "enabled_plugins": ["code-reviewer", "doc-generator"]
   }
 }
 ```
 
-When `marketplaces` lists repos that are not yet cloned locally, Mewbo shallow-clones them the first time you browse or install. Subsequent runs use the local cache; a fast-forward `git pull` keeps it up to date.
+When `marketplaces` lists catalogs that are not yet cloned locally, Mewbo shallow-clones them the first time you browse or install, into a per-host/per-owner cache directory so catalogs that share a leaf name never collide. Subsequent runs use the local cache; a fast-forward `git pull` keeps it up to date.
+
+### Authenticating to private and self-hosted catalogs
+
+Catalogs are fetched with plain `git clone`, so they inherit your ambient git configuration — no host-specific path is required. For private or self-hosted hosts (Gitea, GitLab, Forgejo, GitHub Enterprise, …):
+
+- **HTTPS token** — provide a credential helper. In containers, mount `~/.git-credentials` (`https://user:token@host`); the Docker image enables `credential.helper store`. `GITHUB_TOKEN` is still bridged to `github.com` automatically.
+- **SSH** — use an `ssh://` or scp-style entry and mount an SSH key or agent socket; git picks it up.
+- **Self-signed internal CA** — point `GIT_SSL_CAINFO` at your CA bundle. Git reads it from the environment, so verification stays on — no global `GIT_SSL_NO_VERIFY`.
 
 Plugin skills never override personal (`~/.claude/skills/`) or project-local (`.claude/skills/`) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name.
 

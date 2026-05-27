@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 from mewbo_api.wiki.events import WikiQaSseGenerator
 from mewbo_api.wiki.jobs import WikiQaSession
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import QaAnswer
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import QaAnswer
 
 API_KEY = "test-key-123"
 

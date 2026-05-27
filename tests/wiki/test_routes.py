@@ -13,7 +13,7 @@ import pytest
 
 
 def _seed_project(store, slug: str = "org/repo", indexed_at: str = "2026-01-01T00:00:00Z"):
-    from mewbo_api.wiki.types import Project
+    from mewbo_graph.wiki.types import Project
 
     proj = Project(
         slug=slug,
@@ -28,7 +28,7 @@ def _seed_project(store, slug: str = "org/repo", indexed_at: str = "2026-01-01T0
 
 
 def _seed_page(store, slug: str = "org/repo", page_id: str = "overview"):
-    from mewbo_api.wiki.types import Frontmatter, NavEntry, TocEntry, WikiPage
+    from mewbo_graph.wiki.types import Frontmatter, NavEntry, TocEntry, WikiPage
 
     page = WikiPage(
         id=page_id,
@@ -43,7 +43,7 @@ def _seed_page(store, slug: str = "org/repo", page_id: str = "overview"):
 
 
 def _seed_job(store, job_id: str = "job-001", slug: str = "org/repo"):
-    from mewbo_api.wiki.types import IndexingJob
+    from mewbo_graph.wiki.types import IndexingJob
 
     job = IndexingJob(
         job_id=job_id,
@@ -58,7 +58,7 @@ def _seed_job(store, job_id: str = "job-001", slug: str = "org/repo"):
 
 
 def _seed_qa(store, answer_id: str = "ans-001"):
-    from mewbo_api.wiki.types import QaAnswer
+    from mewbo_graph.wiki.types import QaAnswer
 
     ans = QaAnswer(
         answer_id=answer_id,
@@ -78,7 +78,7 @@ API_KEY = "test-key-123"
 
 @pytest.fixture()
 def store(tmp_path: Path):
-    from mewbo_api.wiki.store import JsonWikiStore
+    from mewbo_graph.wiki.store import JsonWikiStore
 
     return JsonWikiStore(root_dir=tmp_path / "wiki")
 

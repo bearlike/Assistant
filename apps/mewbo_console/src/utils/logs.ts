@@ -640,6 +640,55 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         });
       }
     }
+    // LLM resilience events — same-model retry, cross-model fallback, and the
+    // doom-loop halt. Surfaced inline in the telemetry lane so a flaky run is
+    // legible (why it slowed down / switched models / stopped).
+    if (event.type === "llm_retry") {
+      const p = event.payload || {};
+      logs.push({
+        id: `llm-retry-${idx++}`,
+        type: "llm_retry",
+        content: "",
+        timestamp: event.ts,
+        model: typeof p.model === "string" ? p.model : undefined,
+        agentId: typeof p.agent_id === "string" ? p.agent_id : undefined,
+        depth: typeof p.depth === "number" ? p.depth : undefined,
+        retryAttempt: typeof p.attempt === "number" ? p.attempt : undefined,
+        retryMaxAttempts: typeof p.max_attempts === "number" ? p.max_attempts : undefined,
+        retryErrorType: typeof p.error_type === "string" ? p.error_type : undefined,
+        retryDelay: typeof p.delay === "number" ? p.delay : undefined,
+        error: typeof p.error === "string" ? p.error : undefined,
+      });
+    }
+    if (event.type === "llm_fallback") {
+      const p = event.payload || {};
+      logs.push({
+        id: `llm-fallback-${idx++}`,
+        type: "llm_fallback",
+        content: "",
+        timestamp: event.ts,
+        agentId: typeof p.agent_id === "string" ? p.agent_id : undefined,
+        depth: typeof p.depth === "number" ? p.depth : undefined,
+        fallbackFromModel: typeof p.from_model === "string" ? p.from_model : undefined,
+        fallbackToModel: typeof p.to_model === "string" ? p.to_model : undefined,
+        fallbackReason: typeof p.reason === "string" ? p.reason : undefined,
+        fallbackPreviousErrorType:
+          typeof p.previous_error_type === "string" ? p.previous_error_type : undefined,
+      });
+    }
+    if (event.type === "recovery" && event.payload?.action === "halt_no_progress") {
+      const p = event.payload || {};
+      logs.push({
+        id: `recovery-halt-${idx++}`,
+        type: "recovery_halt",
+        content: "",
+        timestamp: event.ts,
+        agentId: typeof p.agent_id === "string" ? p.agent_id : undefined,
+        depth: typeof p.depth === "number" ? p.depth : undefined,
+        recoveryAction: typeof p.action === "string" ? p.action : undefined,
+        recoveryTool: typeof p.tool === "string" ? p.tool : undefined,
+      });
+    }
   }
   return logs;
 }

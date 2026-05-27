@@ -1,0 +1,104 @@
+{
+  "name": "wiki",
+  "description": "DeepWiki-style auto-generated documentation backend.",
+  "version": "0.1.0",
+  "author": "Mewbo",
+  "requires-capabilities": ["wiki"],
+  "session_tools": [
+    {
+      "tool_id": "wiki_clone_repo",
+      "module": "mewbo_graph.plugins.wiki.clone",
+      "class": "WikiCloneRepoTool"
+    },
+    {
+      "tool_id": "wiki_scan_tree",
+      "module": "mewbo_graph.plugins.wiki.scan",
+      "class": "WikiScanTreeTool"
+    },
+    {
+      "tool_id": "wiki_load_grounder",
+      "module": "mewbo_graph.plugins.wiki.grounder",
+      "class": "WikiLoadGrounderTool"
+    },
+    {
+      "tool_id": "wiki_commit_plan",
+      "module": "mewbo_graph.plugins.wiki.commit_plan",
+      "class": "WikiCommitPlanTool"
+    },
+    {
+      "tool_id": "wiki_submit_page",
+      "module": "mewbo_graph.plugins.wiki.submit_page",
+      "class": "WikiSubmitPageTool"
+    },
+    {
+      "tool_id": "wiki_finalize",
+      "module": "mewbo_graph.plugins.wiki.finalize",
+      "class": "WikiFinalizeTool"
+    },
+    {
+      "tool_id": "wiki_build_graph",
+      "module": "mewbo_graph.plugins.wiki.build_graph",
+      "class": "WikiBuildGraphTool"
+    },
+    {
+      "tool_id": "wiki_query_graph",
+      "module": "mewbo_graph.plugins.wiki.query_graph",
+      "class": "WikiQueryGraphTool"
+    },
+    {
+      "tool_id": "wiki_graph_neighbors",
+      "module": "mewbo_graph.plugins.wiki.graph_neighbors",
+      "class": "WikiGraphNeighborsTool"
+    },
+    {
+      "tool_id": "wiki_search_pages",
+      "module": "mewbo_graph.plugins.wiki.search_pages",
+      "class": "WikiSearchPagesTool"
+    },
+    {
+      "tool_id": "wiki_read_page",
+      "module": "mewbo_graph.plugins.wiki.read_page",
+      "class": "WikiReadPageTool"
+    },
+    {
+      "tool_id": "wiki_code_search",
+      "module": "mewbo_graph.plugins.wiki.code_search",
+      "class": "WikiCodeSearchTool"
+    },
+    {
+      "tool_id": "wiki_list_pages",
+      "module": "mewbo_graph.plugins.wiki.list_pages",
+      "class": "WikiListPagesTool"
+    },
+    {
+      "tool_id": "wiki_read_file",
+      "module": "mewbo_graph.plugins.wiki.source_tools",
+      "class": "WikiReadFileTool"
+    },
+    {
+      "tool_id": "wiki_grep",
+      "module": "mewbo_graph.plugins.wiki.source_tools",
+      "class": "WikiGrepTool"
+    },
+    {
+      "tool_id": "wiki_list_files",
+      "module": "mewbo_graph.plugins.wiki.source_tools",
+      "class": "WikiListFilesTool"
+    },
+    {
+      "tool_id": "wiki_emit_block",
+      "module": "mewbo_graph.plugins.wiki.emit_block",
+      "class": "WikiEmitBlockTool"
+    },
+    {
+      "tool_id": "wiki_submit_insight",
+      "module": "mewbo_graph.plugins.wiki.submit_insight",
+      "class": "WikiSubmitInsightTool"
+    }
+  ],
+  "agents": [
+    { "path": "agents/wiki-indexer.md" },
+    { "path": "agents/wiki-page-writer.md" },
+    { "path": "agents/wiki-qa.md" }
+  ]
+}

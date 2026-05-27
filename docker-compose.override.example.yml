@@ -21,3 +21,13 @@ services:
   #   ports: !override
   #     - "0.0.0.0:5126:8080"         # all interfaces, or:
   #     - "192.168.1.10:5126:8080"    # a specific LAN IP
+
+  # mewbo-mcp uses network_mode: host so it binds 0.0.0.0 inside the host
+  # network by default (MEWBO_MCP_HOST=0.0.0.0 in docker-compose.yml).
+  # If you need to restrict the bind to loopback or a specific interface,
+  # override the environment here:
+  #
+  # mewbo-mcp:
+  #   environment:
+  #     - MEWBO_MCP_HOST=127.0.0.1   # loopback-only
+  #     - MEWBO_MCP_PORT=5127

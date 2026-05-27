@@ -2,7 +2,7 @@
 from pathlib import Path
 
 import pytest
-from mewbo_api.wiki.graph import GraphIndex, GraphParseResult
+from mewbo_graph.wiki.graph import GraphIndex, GraphParseResult
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tiny_python_repo"
 

@@ -12,7 +12,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-from .store import WikiStoreBase
+from mewbo_graph.wiki.store import WikiStoreBase
 
 _TERMINAL_TYPES = frozenset({"complete", "cancelled", "error"})
 
@@ -43,20 +43,24 @@ def _heartbeat_frame() -> str:
 
 
 @dataclass
-class WikiSseGenerator:
-    r"""One-shot SSE generator for a wiki job.
+class _WikiSseGenerator:
+    r"""Shared one-shot SSE poll loop for a wiki event log.
 
-    Polls ``store.load_job_events(job_id, after_idx=...)`` until a terminal
-    event is observed or the idle threshold is exceeded. Yields strings
-    formatted as ``event: <type>\ndata: <json>\n\n`` per the SSE spec.
+    Polls ``_load(after_idx)`` until a terminal event is observed or the idle
+    threshold is exceeded, yielding ``event: <type>\ndata: <json>\n\n`` frames
+    (with the proxy-flush primer + periodic heartbeats). Subclasses bind the
+    concrete per-log poll call.
     """
 
     store: WikiStoreBase
-    job_id: str
     after_idx: int = -1
     max_idle_cycles: int = field(default_factory=_default_max_idle)
     sleep_s: float = field(default_factory=_default_sleep)
     heartbeat_every: int = 40           # 40 * 0.5s = 20s heartbeat cadence
+
+    def _load(self, after_idx: int) -> list[dict]:
+        """Return events with ``idx > after_idx`` for this generator's log."""
+        raise NotImplementedError
 
     def generate(self) -> Iterator[str]:
         """Yield SSE frames until terminal or idle timeout."""
@@ -69,7 +73,7 @@ class WikiSseGenerator:
         idle = 0
         terminal_seen = False
         while True:
-            events = self.store.load_job_events(self.job_id, after_idx=last_idx)
+            events = self._load(last_idx)
             if events:
                 for ev in events:
                     yield _to_sse(ev)
@@ -89,48 +93,29 @@ class WikiSseGenerator:
 
 
 @dataclass
-class WikiQaSseGenerator:
-    r"""One-shot SSE generator for a wiki QA answer.
+class WikiSseGenerator(_WikiSseGenerator):
+    """One-shot SSE generator for a wiki indexing job's event log."""
 
-    Polls ``store.load_qa_events(answer_id, after_idx=...)`` until a terminal
-    event is observed or the idle threshold is exceeded. Yields strings
-    formatted as ``event: <type>\ndata: <json>\n\n`` per the SSE spec.
+    job_id: str = ""
 
-    ``after_idx=-1`` (default) streams from the very first event, which is
-    the ``meta`` event emitted synchronously by ``WikiQaSession.start``.
+    def _load(self, after_idx: int) -> list[dict]:
+        """Poll the per-job event log."""
+        return self.store.load_job_events(self.job_id, after_idx=after_idx)
+
+
+@dataclass
+class WikiQaSseGenerator(_WikiSseGenerator):
+    """One-shot SSE generator for a wiki QA answer's event log.
+
+    ``after_idx=-1`` (default) streams from the very first event, which is the
+    ``meta`` event emitted synchronously by ``WikiQaSession.start``.
     """
 
-    store: WikiStoreBase
-    answer_id: str
-    after_idx: int = -1
-    max_idle_cycles: int = field(default_factory=_default_max_idle)
-    sleep_s: float = field(default_factory=_default_sleep)
-    heartbeat_every: int = 40           # 40 * 0.5s = 20s heartbeat cadence
+    answer_id: str = ""
 
-    def generate(self) -> Iterator[str]:
-        """Yield SSE frames until terminal or idle timeout."""
-        yield _SSE_PRIMER
-        last_idx = self.after_idx
-        idle = 0
-        terminal_seen = False
-        while True:
-            events = self.store.load_qa_events(self.answer_id, after_idx=last_idx)
-            if events:
-                for ev in events:
-                    yield _to_sse(ev)
-                    last_idx = max(last_idx, ev.get("idx", last_idx + 1))
-                    if ev.get("type") in _TERMINAL_TYPES:
-                        terminal_seen = True
-                idle = 0
-            else:
-                idle += 1
-            if terminal_seen:
-                break
-            if idle >= self.max_idle_cycles:
-                break
-            if idle > 0 and idle % self.heartbeat_every == 0:
-                yield _heartbeat_frame()
-            time.sleep(self.sleep_s)
+    def _load(self, after_idx: int) -> list[dict]:
+        """Poll the per-answer QA event log."""
+        return self.store.load_qa_events(self.answer_id, after_idx=after_idx)
 
 
 def _to_sse(ev: dict) -> str:

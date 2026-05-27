@@ -104,6 +104,16 @@ export function InputBar({
   const [activeSkill, setActiveSkill] = useState<string | null>(sessionContext?.skill ?? null);
   const [activeProject, setActiveProject] = useState<string | null>(sessionContext?.project ?? null);
   const [activeModel, setActiveModel] = useState<string | null>(sessionContext?.model ?? null);
+  // Opt-in cross-model fallback. ``fallbackEnabled`` gates the feature;
+  // ``fallbackModels`` is the ordered chain. Both are per-session run settings
+  // that travel in the query ``context`` alongside the model selection. The
+  // toggle defaults on when the session was created with a non-empty chain.
+  const [fallbackEnabled, setFallbackEnabled] = useState<boolean>(
+    (sessionContext?.fallback_models?.length ?? 0) > 0,
+  );
+  const [fallbackModels, setFallbackModels] = useState<string[]>(
+    sessionContext?.fallback_models ?? [],
+  );
   // ``activeBranch`` follows the parent repo's HEAD by default; it diverges
   // only when the user explicitly picks a different branch in the composer.
   // ``activeWorktree`` is the project_id of a managed worktree to run the
@@ -253,7 +263,9 @@ export function InputBar({
     setMcps([]);
     setActiveBranch(sessionContext?.branch ?? null);
     setActiveWorktree(null);
-  }, [sessionContext?.project, sessionContext?.skill, sessionContext?.model, sessionContext?.mode, sessionContext?.mcp_tools, sessionContext?.branch]);
+    setFallbackModels(sessionContext?.fallback_models ?? []);
+    setFallbackEnabled((sessionContext?.fallback_models?.length ?? 0) > 0);
+  }, [sessionContext?.project, sessionContext?.skill, sessionContext?.model, sessionContext?.mode, sessionContext?.mcp_tools, sessionContext?.branch, sessionContext?.fallback_models]);
 
   // If the session context resolves to a managed project that is itself a
   // worktree, lift its id into ``activeWorktree`` so the composer shows
@@ -403,8 +415,18 @@ export function InputBar({
     setActiveModel(null);
     setActiveBranch(null);
     setActiveWorktree(null);
+    setFallbackEnabled(false);
+    setFallbackModels([]);
     setMcps((prev) => prev.map((m) => (m.enabled ? { ...m, active: false } : m)));
   };
+
+  // Toggle a model in/out of the ordered fallback chain. Selecting appends
+  // (preserving click order = priority); re-selecting removes it.
+  const handleToggleFallbackModel = useCallback((model: string) => {
+    setFallbackModels((prev) =>
+      prev.includes(model) ? prev.filter((m) => m !== model) : [...prev, model],
+    );
+  }, []);
 
   const handleSelectProject = useCallback((next: string | null) => {
     setActiveProject(next);
@@ -526,12 +548,20 @@ export function InputBar({
       activeBranch !== projectGit.currentBranch
         ? activeBranch
         : null;
+    // Only attach the fallback chain when the user opted in and picked at
+    // least one model — empty/disabled is the safe default (no fallback).
+    // Drop the primary if it slipped into the chain; it's already tried first.
+    const fallbackForContext =
+      fallbackEnabled
+        ? fallbackModels.filter((m) => m !== modelToSend)
+        : [];
     const context: SessionContext = {
       mcp_tools: mcps.filter((m) => m.active).map((m) => m.id),
       ...(activeSkill ? { skill: activeSkill } : {}),
       ...(projectForContext ? { project: projectForContext } : {}),
       ...(branchForContext ? { branch: branchForContext } : {}),
-      ...(modelToSend ? { model: modelToSend } : {})
+      ...(modelToSend ? { model: modelToSend } : {}),
+      ...(fallbackForContext.length > 0 ? { fallback_models: fallbackForContext } : {})
     };
     void onSubmit(inputValue.trim(), context, queryMode, attachedFiles);
     setInputValue('');
@@ -621,6 +651,10 @@ export function InputBar({
       onSelectSkill={setActiveSkill}
       onSelectModel={setActiveModel}
       onResetAll={handleResetAll}
+      fallbackEnabled={fallbackEnabled}
+      fallbackModels={fallbackModels}
+      onToggleFallbackEnabled={setFallbackEnabled}
+      onToggleFallbackModel={handleToggleFallbackModel}
       gitRepo={projectGit.gitRepo}
       branches={projectGit.branches}
       currentBranch={projectGit.currentBranch}

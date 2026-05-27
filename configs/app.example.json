@@ -24,7 +24,11 @@
     "action_plan_model": "",
     "tool_model": "",
     "reasoning_effort": "",
-    "reasoning_effort_models": []
+    "reasoning_effort_models": [],
+    "fallback": {
+      "enabled": false,
+      "models": []
+    }
   },
   "context": {
     "recent_event_limit": 8,
@@ -79,6 +83,19 @@
     "sub_agent_max_steps": 10,
     "default_denied_tools": [],
     "edit_tool": "search_replace_block",
+    "llm_call_timeout": 120.0,
+    "llm_call_retries": 3,
+    "retry": {
+      "backoff_base": 1.0,
+      "backoff_cap": 60.0,
+      "retry_after_cap": 60.0,
+      "turn_deadline": 240.0,
+      "fallback_retries": 1,
+      "circuit_breaker_threshold": 3,
+      "circuit_breaker_cooldown": 30.0,
+      "budget_capacity": 24.0,
+      "doom_loop_threshold": 3
+    },
     "web_ide": {
       "enabled": false,
       "image": "codercom/code-server:latest",
@@ -151,6 +168,29 @@
       "default_model": "",
       "retrieval_k": 6,
       "answer_ttl_days": 30
+    },
+    "memory": {
+      "enabled": true,
+      "model": "",
+      "max_insight_chars": 200,
+      "max_anchors": 8,
+      "dedup_k": 5,
+      "dedup_cosine": 0.6,
+      "fuzzy_jaccard": 0.85,
+      "fusion_w_ppr": 0.1,
+      "hub_degree": 50,
+      "expansion_hops": 1
+    },
+    "refresh": {
+      "default_mode": "auto",
+      "closure_max_depth": 4,
+      "drift_keep": 0.90,
+      "drift_invalidate": 0.75,
+      "page_keep": 0.05,
+      "page_edit": 0.35,
+      "page_regen": 0.70,
+      "new_page_min": 5,
+      "require_scope_confirm": false
     },
     "grounder_paths": [".mewbo/wiki.json", ".devin/wiki.json"]
   },

@@ -47,8 +47,8 @@ vi.mock("../api/client", () => ({
   resolveShare: vi.fn(),
   listAgents: vi.fn(),
   getConfigSchema: vi.fn(),
-  getConfig: vi.fn(),
-  patchConfig: vi.fn(),
+  getConfig: vi.fn().mockResolvedValue({ config: {}, secrets: {} }),
+  patchConfig: vi.fn().mockResolvedValue({ config: {}, secrets: {} }),
   approvePlan: vi.fn(),
   recoverSession: vi.fn(),
   forkSession: vi.fn().mockResolvedValue({ session_id: 'fork-1', forked_from: 's1', forked_at: null }),
@@ -59,6 +59,9 @@ vi.mock("../api/client", () => ({
   uninstallPlugin: vi.fn().mockResolvedValue(undefined),
   fetchCommands: vi.fn().mockResolvedValue([]),
   executeCommand: vi.fn(),
+  listApiKeys: vi.fn().mockResolvedValue([]),
+  createApiKey: vi.fn(),
+  revokeApiKey: vi.fn(),
 }));
 const listSessions = vi.mocked(client.listSessions);
 const createSession = vi.mocked(client.createSession);
@@ -110,8 +113,8 @@ beforeEach(() => {
     summary: null
   });
   (client as Record<string, unknown>).getConfigSchema = vi.fn().mockResolvedValue({ type: "object", properties: {} });
-  (client as Record<string, unknown>).getConfig = vi.fn().mockResolvedValue({});
-  (client as Record<string, unknown>).patchConfig = vi.fn().mockResolvedValue({});
+  (client as Record<string, unknown>).getConfig = vi.fn().mockResolvedValue({ config: {}, secrets: {} });
+  (client as Record<string, unknown>).patchConfig = vi.fn().mockResolvedValue({ config: {}, secrets: {} });
   window.history.pushState({}, "", "/");
 });
 test("loads sessions from the API", async () => {

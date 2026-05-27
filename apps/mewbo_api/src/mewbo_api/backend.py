@@ -6,6 +6,7 @@ Single-user REST API with session-based orchestration and event polling.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import subprocess
@@ -39,6 +40,7 @@ from mewbo_core.config import (
     start_preflight,
 )
 from mewbo_core.exit_plan_mode import PLAN_DIR_ROOT, plan_file_for, session_temp_dir
+from mewbo_core.key_store import KeyStoreBase, create_key_store
 from mewbo_core.notifications import NotificationStore
 from mewbo_core.permissions import auto_approve
 from mewbo_core.project_store import VirtualProject, create_project_store
@@ -49,6 +51,8 @@ from mewbo_core.tool_registry import ToolSpec, load_registry
 from mewbo_core.worktree import WorktreeBranchInUseError, WorktreeManager
 from pydantic import ValidationError
 from werkzeug.utils import secure_filename
+
+from mewbo_api.config_view import ConfigSchemaView
 
 # ``done_reason`` taxonomy — the orchestrator and /command paths share these
 # canonical values so every consumer (notifications, status badge,
@@ -211,7 +215,7 @@ MASTER_API_TOKEN = os.environ.get("MASTER_API_TOKEN") or get_config_value(
 # Initialize logger
 logging = get_logger(name="mewbo-api")
 logging.info("Starting Mewbo API server.")
-logging.debug("Starting API server with API token: {}", MASTER_API_TOKEN)
+logging.debug("API master token configured: {}", "yes" if MASTER_API_TOKEN else "no")
 
 _config = get_config()
 if _config.runtime.preflight_enabled:
@@ -225,6 +229,7 @@ _hook_manager = _HookManager.load_from_config(_config.hooks)
 # Create Flask application
 app = Flask(__name__)
 session_store = create_session_store()
+key_store: KeyStoreBase = create_key_store()
 project_store = create_project_store()
 
 
@@ -360,13 +365,51 @@ def _add_cors_headers(response: Response) -> Response:
     return response
 
 
+def _request_credential() -> str | None:
+    """Return the presented credential (header preferred, query param for SSE)."""
+    return request.headers.get("X-API-Key") or request.args.get("api_key")
+
+
+def _token_matches_master(token: str) -> bool:
+    """Constant-time compare *token* against the master token.
+
+    Uses ``hmac.compare_digest`` so the master credential cannot be recovered
+    via a byte-by-byte timing side-channel — the same primitive the KeyStore
+    already uses to verify hashed keys.
+    """
+    return hmac.compare_digest(token, MASTER_API_TOKEN)
+
+
 def _require_api_key() -> tuple[dict, int] | None:
-    """Validate the API key header (or query param for SSE) for protected routes."""
-    api_token = request.headers.get("X-API-Key") or request.args.get("api_key")
+    """Authorize a protected route.
+
+    A request is authorized if the presented credential equals the master
+    token (break-glass) OR matches a non-revoked stored key via the
+    ``KeyStore``. Accepts the ``X-API-Key`` header or the ``api_key`` query
+    param (the latter for SSE, where EventSource cannot set headers).
+    """
+    api_token = _request_credential()
     if api_token is None:
         return {"message": "API token is not provided."}, 401
-    if api_token != MASTER_API_TOKEN:
-        logging.warning("Unauthorized API call attempt with token: {}", api_token)
+    if _token_matches_master(api_token):
+        return None
+    if key_store.verify_key(api_token) is not None:
+        return None
+    logging.warning("Unauthorized API call attempt from {}.", request.remote_addr)
+    return {"message": "Unauthorized"}, 401
+
+
+def _require_master_token() -> tuple[dict, int] | None:
+    """Authorize a master-token-only route (e.g. API key management).
+
+    Issued keys are deliberately rejected here: a leaked key must not be able
+    to mint or revoke keys, or revocation would be meaningless.
+    """
+    api_token = _request_credential()
+    if api_token is None:
+        return {"message": "API token is not provided."}, 401
+    if not _token_matches_master(api_token):
+        logging.warning("Unauthorized key-management attempt from {}.", request.remote_addr)
         return {"message": "Unauthorized"}, 401
     return None
 
@@ -397,13 +440,13 @@ if _web_ide_cfg is not None and _web_ide_cfg.enabled:
             _ide_manager = None
 
 
-# -- Agentic Search namespace (mock) --------------------------------------
-# In-memory mock backend for the Agentic Search console page. Always on;
-# the real implementation will swap the body of ``store.py`` without
-# changing the wire shape.
+# -- Agentic Search namespace ---------------------------------------------
+# Persistent workspaces + runs (JSON/Mongo via the store) and a run lifecycle
+# driven by the active SearchRunner (echo stub by default; the orchestration
+# team swaps in the real fan-out via runner.set_search_runner).
 from mewbo_api.agentic_search import init_agentic_search  # noqa: E402
 
-init_agentic_search(api, _require_api_key)
+init_agentic_search(api, _require_api_key, runtime=runtime)
 logging.info("agentic_search namespace registered at /api")
 
 
@@ -473,6 +516,21 @@ def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | No
     mcp_tools = context_payload.get("mcp_tools")
     if isinstance(mcp_tools, list) and mcp_tools:
         return [str(t) for t in mcp_tools if t]
+    return None
+
+
+def _extract_fallback_models(context_payload: dict[str, object]) -> tuple[str, ...] | None:
+    """Read an opt-in fallback model list from the request context.
+
+    ``None`` defers to the configured fallback policy; a non-empty list opts
+    this run into cross-model fallback in the given order.
+    """
+    if not context_payload:
+        return None
+    raw = context_payload.get("fallback_models")
+    if isinstance(raw, list):
+        models = tuple(str(m).strip() for m in raw if str(m).strip())
+        return models or None
     return None
 
 
@@ -588,6 +646,61 @@ init_channels(app, runtime, _hook_manager, _config)
 from mewbo_api.wiki import init_wiki  # noqa: E402
 
 init_wiki(app, runtime)
+
+
+key_create_model = api.model(
+    "ApiKeyCreate",
+    {
+        "label": fields.String(required=True, description="Human-readable label for the key"),
+    },
+)
+
+
+@ns.route("/keys")
+class ApiKeys(Resource):
+    """Mint and list API keys (master-token-only)."""
+
+    @api.doc(security="apikey")
+    @api.expect(key_create_model)
+    def post(self) -> tuple[dict, int]:
+        """Mint a new API key. The plaintext key is returned exactly once."""
+        auth_error = _require_master_token()
+        if auth_error:
+            return auth_error
+        payload = request.get_json(silent=True) or {}
+        label = str(payload.get("label", "")).strip()
+        if not label:
+            return {"message": "Invalid input: 'label' is required"}, 400
+        plaintext, record = key_store.create_key(label)
+        return {
+            "id": record["id"],
+            "label": record["label"],
+            "key": plaintext,
+            "created_at": record["created_at"],
+        }, 201
+
+    @api.doc(security="apikey")
+    def get(self) -> tuple[dict, int]:
+        """List API key metadata. Never returns hashes or plaintext."""
+        auth_error = _require_master_token()
+        if auth_error:
+            return auth_error
+        return {"keys": key_store.list_keys()}, 200
+
+
+@ns.route("/keys/<string:key_id>")
+class ApiKey(Resource):
+    """Revoke an API key (master-token-only)."""
+
+    @api.doc(security="apikey")
+    def delete(self, key_id: str) -> tuple[dict, int]:
+        """Revoke a key by ID."""
+        auth_error = _require_master_token()
+        if auth_error:
+            return auth_error
+        if not key_store.revoke_key(key_id):
+            return {"message": f"Key '{key_id}' not found"}, 404
+        return {"id": key_id, "revoked": True}, 200
 
 
 @ns.route("/models")
@@ -1165,6 +1278,7 @@ class SessionQuery(Resource):
 
         # Extract model for orchestration (may differ from config default)
         model_name = str(context_payload.get("model", "")) or None
+        fallback_models = _extract_fallback_models(context_payload)
 
         budget = int(get_config_value("agent", "session_step_budget", default=0))
         max_iters = int(get_config_value("agent", "max_iters", default=30))
@@ -1172,6 +1286,7 @@ class SessionQuery(Resource):
             session_id=session_id,
             user_query=user_query,
             model_name=model_name,
+            fallback_models=fallback_models,
             approval_callback=auto_approve,
             hook_manager=_hook_manager,
             mode=mode,
@@ -2321,76 +2436,11 @@ class MewboQuery(Resource):
 
 
 # ---------------------------------------------------------------------------
-# Config API helpers
+# Config API endpoints
 # ---------------------------------------------------------------------------
-
-_PROTECTED_KEY = "x-protected"
-
-
-def _collect_protected_paths(
-    schema: dict,
-    *,
-    defs: dict | None = None,
-    prefix: str = "",
-) -> set[str]:
-    """Return dot-separated paths of all x-protected fields in *schema*."""
-    if defs is None:
-        defs = schema.get("$defs", {})
-    protected: set[str] = set()
-    props = schema.get("properties", {})
-    for name, prop in props.items():
-        path = f"{prefix}{name}" if not prefix else f"{prefix}.{name}"
-        if prop.get(_PROTECTED_KEY):
-            protected.add(path)
-        # Recurse into $ref
-        ref = prop.get("$ref")
-        if ref:
-            ref_name = ref.rsplit("/", 1)[-1]
-            if ref_name in defs:
-                protected |= _collect_protected_paths(defs[ref_name], defs=defs, prefix=path)
-        # Recurse into inline objects
-        if prop.get("type") == "object" and "properties" in prop:
-            protected |= _collect_protected_paths(prop, defs=defs, prefix=path)
-    return protected
-
-
-def _strip_protected_from_schema(schema: dict) -> dict:
-    """Return a copy of *schema* with x-protected properties removed."""
-    schema = json.loads(json.dumps(schema))  # deep copy
-    defs = schema.get("$defs", {})
-    for def_schema in defs.values():
-        props = def_schema.get("properties")
-        if not props:
-            continue
-        to_remove = [k for k, v in props.items() if v.get(_PROTECTED_KEY)]
-        for k in to_remove:
-            del props[k]
-        req = def_schema.get("required")
-        if req:
-            def_schema["required"] = [r for r in req if r not in to_remove]
-    return schema
-
-
-def _strip_protected_values(data: dict, protected_paths: set[str], prefix: str = "") -> None:
-    """Remove protected keys from a config dict **in-place**."""
-    for key in list(data.keys()):
-        path = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
-        if path in protected_paths:
-            del data[key]
-        elif isinstance(data[key], dict):
-            _strip_protected_values(data[key], protected_paths, path)
-
-
-def _find_protected_in_patch(patch: dict, protected_paths: set[str], prefix: str = "") -> list[str]:
-    """Return protected dot-paths found in *patch*."""
-    violations: list[str] = []
-    for key, value in patch.items():
-        path = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
-        if path in protected_paths:
-            violations.append(path)
-        elif isinstance(value, dict):
-            violations.extend(_find_protected_in_patch(value, protected_paths, path))
-    return violations
+# All protected/secret handling lives in ``ConfigSchemaView`` (config_view.py),
+# a pure, single-traversal view over the AppConfig JSON schema. Construct one
+# per request via ``ConfigSchemaView.from_model()`` (cheap).
 
 
 @ns.route("/config/schema")
@@ -2399,12 +2449,11 @@ class ConfigSchemaResource(Resource):
 
     @api.doc(security="apikey", description="Get the AppConfig JSON Schema.")
     def get(self) -> tuple[dict, int]:
-        """Return the JSON Schema with protected fields stripped."""
+        """Return the public JSON Schema (protected removed, secrets writeOnly)."""
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
-        schema = AppConfig.model_json_schema()
-        return _strip_protected_from_schema(schema), 200
+        return ConfigSchemaView.from_model().public_schema(), 200
 
 
 @ns.route("/config")
@@ -2413,16 +2462,14 @@ class ConfigResource(Resource):
 
     @api.doc(security="apikey", description="Get current configuration values.")
     def get(self) -> tuple[dict, int]:
-        """Return current config values with protected fields omitted."""
+        """Return config values (protected + secret stripped) plus secret status."""
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
-        config = get_config()
-        data = config.model_dump()
-        schema = AppConfig.model_json_schema()
-        protected = _collect_protected_paths(schema)
-        _strip_protected_values(data, protected)
-        return {"config": data}, 200
+        view = ConfigSchemaView.from_model()
+        data = get_config().model_dump()
+        secrets = view.secret_status(data)
+        return {"config": view.strip_values(data), "secrets": secrets}, 200
 
     @api.doc(security="apikey", description="Partially update configuration.")
     def patch(self) -> tuple[dict, int]:
@@ -2434,9 +2481,8 @@ class ConfigResource(Resource):
         if not patch:
             return {"message": "Empty payload"}, 400
 
-        schema = AppConfig.model_json_schema()
-        protected = _collect_protected_paths(schema)
-        violations = _find_protected_in_patch(patch, protected)
+        view = ConfigSchemaView.from_model()
+        violations = view.reject_protected(patch)
         if violations:
             return {"message": f"Cannot modify protected fields: {violations}"}, 403
 
@@ -2451,8 +2497,8 @@ class ConfigResource(Resource):
         reset_config()
 
         data = validated.model_dump()
-        _strip_protected_values(data, protected)
-        return {"config": data}, 200
+        secrets = view.secret_status(data)
+        return {"config": view.strip_values(data), "secrets": secrets}, 200
 
 
 @ns.route("/plugins")

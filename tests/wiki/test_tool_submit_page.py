@@ -6,8 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import IndexingJob
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import IndexingJob
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -53,8 +53,8 @@ def _page_input(page_id: str = "overview", body: str = "# Overview\n\nBody text.
 
 def test_submit_page_persists_and_increments(tmp_path: Path) -> None:
     """Submit 2 different pages → counter = 2; both are readable via store.get_page."""
-    import mewbo_core.builtin_plugins.wiki.submit_page as mod
-    from mewbo_core.builtin_plugins.wiki.submit_page import WikiSubmitPageTool
+    import mewbo_graph.plugins.wiki.submit_page as mod
+    from mewbo_graph.plugins.wiki.submit_page import WikiSubmitPageTool
 
     store = _store(tmp_path)
     job = _job("job-sp1", "org/repo")
@@ -95,8 +95,8 @@ def test_submit_page_persists_and_increments(tmp_path: Path) -> None:
 
 def test_submit_page_overwrites_does_not_increment(tmp_path: Path) -> None:
     """Submit pageId='x' twice → counter = 1; second body wins."""
-    import mewbo_core.builtin_plugins.wiki.submit_page as mod
-    from mewbo_core.builtin_plugins.wiki.submit_page import WikiSubmitPageTool
+    import mewbo_graph.plugins.wiki.submit_page as mod
+    from mewbo_graph.plugins.wiki.submit_page import WikiSubmitPageTool
 
     store = _store(tmp_path)
     job = _job("job-sp2", "org/repo")
@@ -128,8 +128,8 @@ def test_submit_page_overwrites_does_not_increment(tmp_path: Path) -> None:
 
 def test_submit_page_validates_pageid_format(tmp_path: Path) -> None:
     """pageId with '/' or '_' is rejected with a validation error."""
-    import mewbo_core.builtin_plugins.wiki.submit_page as mod
-    from mewbo_core.builtin_plugins.wiki.submit_page import WikiSubmitPageTool
+    import mewbo_graph.plugins.wiki.submit_page as mod
+    from mewbo_graph.plugins.wiki.submit_page import WikiSubmitPageTool
 
     store = _store(tmp_path)
     job = _job("job-sp3", "org/repo")
@@ -165,8 +165,8 @@ def test_submit_page_validates_pageid_format(tmp_path: Path) -> None:
 
 def test_submit_page_validates_body_nonempty(tmp_path: Path) -> None:
     """Empty body → validation error; nothing persisted."""
-    import mewbo_core.builtin_plugins.wiki.submit_page as mod
-    from mewbo_core.builtin_plugins.wiki.submit_page import WikiSubmitPageTool
+    import mewbo_graph.plugins.wiki.submit_page as mod
+    from mewbo_graph.plugins.wiki.submit_page import WikiSubmitPageTool
 
     store = _store(tmp_path)
     job = _job("job-sp4", "org/repo")
@@ -192,8 +192,8 @@ def test_submit_page_validates_body_nonempty(tmp_path: Path) -> None:
 
 def test_submit_page_preserves_mermaid_fences(tmp_path: Path) -> None:
     """Body with a mermaid fence is saved verbatim without modification."""
-    import mewbo_core.builtin_plugins.wiki.submit_page as mod
-    from mewbo_core.builtin_plugins.wiki.submit_page import WikiSubmitPageTool
+    import mewbo_graph.plugins.wiki.submit_page as mod
+    from mewbo_graph.plugins.wiki.submit_page import WikiSubmitPageTool
 
     store = _store(tmp_path)
     job = _job("job-sp5", "org/repo")

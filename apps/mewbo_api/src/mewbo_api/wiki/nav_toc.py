@@ -17,8 +17,7 @@ import re
 from typing import Any
 
 import mistune
-
-from .types import NavEntry, TocEntry, WikiPage
+from mewbo_graph.wiki.types import NavEntry, TocEntry, WikiPage
 
 # Subset of github-slugger's strip set covering ASCII punctuation +
 # control characters. Covers every heading shape we've seen in

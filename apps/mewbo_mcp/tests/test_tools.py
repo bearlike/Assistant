@@ -1,0 +1,945 @@
+"""Unit tests for the MCP tool implementations.
+
+The HTTP boundary is stubbed via an injected ``httpx.MockTransport``
+(``FakeRest`` in conftest). Each test asserts both the outbound REST
+path/method/body AND the shaping of the returned MCP payload — no live
+server is started.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import httpx
+import pytest
+from mewbo_mcp import tools
+from mewbo_mcp.rest import RestError
+
+
+def run(coro):
+    """Run an async tool body in a fresh event loop (repo convention)."""
+    return asyncio.run(coro)
+
+
+def new_fake(fake_rest):
+    """Return a fresh FakeRest instance of the same type as the fixture."""
+    return type(fake_rest)()
+
+
+# ---------------------------------------------------------------------------
+# create_session
+# ---------------------------------------------------------------------------
+
+
+def test_create_session_auto_provisions_worktree(fake_rest):
+    """Default path: read base branch → create-from-base worktree → session → query."""
+    fake = (
+        fake_rest
+        .on("GET", "/api/v_projects/Assistant/branches", {"current_branch": "main"})
+        .on(
+            "POST",
+            "/api/v_projects/Assistant/worktrees",
+            {"project_id": "wt:1", "branch": "mewbo/add-x"},
+            status=201,
+        )
+        .on("POST", "/api/sessions", {"session_id": "s1"})
+        .on("POST", "/api/sessions/s1/query", {"accepted": True}, status=202)
+    )
+    result = run(
+        tools.SessionTools(fake.client()).create(prompt="add x", repo="Assistant", title="add x")
+    )
+    assert result == {"session_id": "s1", "status": "running"}
+
+    # create-from-base used the discovered base branch
+    wt_req = fake.find("POST", "/api/v_projects/Assistant/worktrees")
+    assert wt_req.json["base"] == "main"
+    assert wt_req.json["branch"].startswith("mewbo/")
+
+    # session pinned the managed worktree
+    sess_req = fake.find("POST", "/api/sessions")
+    assert sess_req.json["project"] == "managed:wt:1"
+
+    # query carried the prompt
+    q_req = fake.find("POST", "/api/sessions/s1/query")
+    assert q_req.json["query"] == "add x"
+
+
+def test_create_session_existing_branch_no_base(fake_rest):
+    """When ``branch`` is given, target it (worktree without a base)."""
+    fake = (
+        fake_rest
+        .on(
+            "POST",
+            "/api/v_projects/Assistant/worktrees",
+            {"project_id": "wt:9", "branch": "feature/y"},
+            status=201,
+        )
+        .on("POST", "/api/sessions", {"session_id": "s2"})
+        .on("POST", "/api/sessions/s2/query", {"accepted": True}, status=202)
+    )
+    result = run(
+        tools.SessionTools(fake.client()).create(
+            prompt="work on y", repo="Assistant", branch="feature/y"
+        )
+    )
+    assert result["session_id"] == "s2"
+    wt_req = fake.find("POST", "/api/v_projects/Assistant/worktrees")
+    assert wt_req.json == {"branch": "feature/y"}  # no base → existing branch
+    # branches endpoint should NOT have been consulted
+    assert "GET /api/v_projects/Assistant/branches" not in fake.paths()
+
+
+def test_create_session_existing_worktree_pins_managed_id(fake_rest):
+    """When ``worktree`` is given, pin it directly without creating one."""
+    fake = (
+        fake_rest
+        .on("POST", "/api/sessions", {"session_id": "s3"})
+        .on("POST", "/api/sessions/s3/query", {"accepted": True}, status=202)
+    )
+    result = run(
+        tools.SessionTools(fake.client()).create(
+            prompt="resume", repo="Assistant", worktree="abc123"
+        )
+    )
+    assert result["session_id"] == "s3"
+    assert "POST /api/v_projects/Assistant/worktrees" not in fake.paths()
+    sess_req = fake.find("POST", "/api/sessions")
+    assert sess_req.json["project"] == "managed:abc123"
+
+
+def test_create_session_integrations_become_mcp_tools_allowlist(fake_rest):
+    """``integrations`` maps to context.mcp_tools on both session + query."""
+    fake = (
+        fake_rest
+        .on("POST", "/api/sessions", {"session_id": "s4"})
+        .on("POST", "/api/sessions/s4/query", {"accepted": True}, status=202)
+    )
+    run(
+        tools.SessionTools(fake.client()).create(
+            prompt="go",
+            integrations=["shell", "file_edit"],
+            mode="plan",
+        )
+    )
+    sess_req = fake.find("POST", "/api/sessions")
+    assert sess_req.json["context"]["mcp_tools"] == ["shell", "file_edit"]
+    q_req = fake.find("POST", "/api/sessions/s4/query")
+    assert q_req.json["context"]["mcp_tools"] == ["shell", "file_edit"]
+    assert q_req.json["mode"] == "plan"
+
+
+def test_create_session_forwards_token_as_x_api_key(fake_rest):
+    """The caller's token is forwarded verbatim as X-API-Key on every call."""
+    fake = (
+        fake_rest
+        .on("POST", "/api/sessions", {"session_id": "s5"})
+        .on("POST", "/api/sessions/s5/query", {"accepted": True}, status=202)
+    )
+    run(tools.SessionTools(fake.client(token="mk_secret")).create(prompt="hi"))
+    for req in fake.requests:
+        assert req.headers.get("x-api-key") == "mk_secret"
+        assert "authorization" not in req.headers  # we never resend the bearer
+
+
+def test_create_session_missing_session_id_raises(fake_rest):
+    """A session POST without a session_id is a hard error."""
+    fake = fake_rest.on("POST", "/api/sessions", {})
+    with pytest.raises(RestError):
+        run(tools.SessionTools(fake.client()).create(prompt="hi"))
+
+
+def test_create_session_single_tag_applied(fake_rest):
+    """A single tag is forwarded as session_tag on the create POST."""
+    fake = (
+        fake_rest
+        .on("POST", "/api/sessions", {"session_id": "s6"})
+        .on("POST", "/api/sessions/s6/query", {"accepted": True}, status=202)
+    )
+    run(tools.SessionTools(fake.client()).create(prompt="hi", tags=["mine"]))
+    assert fake.find("POST", "/api/sessions").json["session_tag"] == "mine"
+
+
+def test_create_session_multiple_tags_raises(fake_rest):
+    """More than one tag raises rather than silently dropping the rest."""
+    with pytest.raises(ValueError):
+        run(tools.SessionTools(fake_rest.client()).create(prompt="hi", tags=["a", "b"]))
+
+
+# ---------------------------------------------------------------------------
+# send_followup / interrupt
+# ---------------------------------------------------------------------------
+
+
+def test_send_followup_posts_message(fake_rest):
+    fake = fake_rest.on("POST", "/api/sessions/s1/message", {"enqueued": True}, status=202)
+    result = run(
+        tools.SessionTools(fake.client()).send_followup(session_id="s1", message="also do z")
+    )
+    assert result == {"session_id": "s1", "status": "enqueued"}
+    assert fake.find("POST", "/api/sessions/s1/message").json == {"text": "also do z"}
+
+
+def test_interrupt_session_posts_interrupt(fake_rest):
+    fake = fake_rest.on("POST", "/api/sessions/s1/interrupt", {"interrupted": True}, status=202)
+    result = run(tools.SessionTools(fake.client()).interrupt(session_id="s1"))
+    assert result == {"session_id": "s1", "status": "interrupted"}
+
+
+# ---------------------------------------------------------------------------
+# list_sessions (client-side filters)
+# ---------------------------------------------------------------------------
+
+
+def _sessions_payload():
+    # Mirrors the real GET /api/sessions shape (summarize_session): each entry
+    # carries a ``context`` dict. Session "a" is a plain config-project session
+    # (context.project == raw name). Session "w" is a worktree session created
+    # via create_session: the API stores context.project as "managed:<id>" and
+    # context.repo as the parent repo name (see backend _populate_worktree_context).
+    return {
+        "sessions": [
+            {
+                "session_id": "a",
+                "status": "completed",
+                "created_at": "2026-06-01",
+                "context": {"project": "Assistant"},
+            },
+            {
+                "session_id": "b",
+                "status": "running",
+                "created_at": "2026-06-05",
+                "context": {"project": "Other"},
+            },
+            {
+                "session_id": "w",
+                "status": "running",
+                "created_at": "2026-06-04",
+                "context": {
+                    "project": "managed:wt:abc:mewbo-add-x",
+                    "repo": "Assistant",
+                    "branch": "mewbo/add-x",
+                },
+            },
+        ]
+    }
+
+
+def test_list_sessions_filters_by_status_project_since(fake_rest):
+    fake = fake_rest.on("GET", "/api/sessions", _sessions_payload())
+    by_status = run(tools.SessionTools(fake.client()).list_sessions(status="running"))
+    assert {s["session_id"] for s in by_status["sessions"]} == {"b", "w"}
+
+    fake3 = new_fake(fake_rest).on("GET", "/api/sessions", _sessions_payload())
+    by_since = run(tools.SessionTools(fake3.client()).list_sessions(since="2026-06-03"))
+    assert {s["session_id"] for s in by_since["sessions"]} == {"b", "w"}
+
+
+def test_list_sessions_project_matches_config_and_worktree(fake_rest):
+    """project= matches both a plain config session AND a worktree session.
+
+    The worktree session stores context.project="managed:..." + context.repo=
+    "Assistant"; filtering by "Assistant" must catch it via context.repo, not
+    miss it because context.project is the managed ref.
+    """
+    fake = fake_rest.on("GET", "/api/sessions", _sessions_payload())
+    out = run(tools.SessionTools(fake.client()).list_sessions(project="Assistant"))
+    assert {s["session_id"] for s in out["sessions"]} == {"a", "w"}
+
+    fake2 = new_fake(fake_rest).on("GET", "/api/sessions", _sessions_payload())
+    other = run(tools.SessionTools(fake2.client()).list_sessions(project="Other"))
+    assert {s["session_id"] for s in other["sessions"]} == {"b"}
+
+
+# ---------------------------------------------------------------------------
+# get_session_history — the four tiers
+# ---------------------------------------------------------------------------
+
+
+def _history_events():
+    return {
+        "running": False,
+        "events": [
+            {"type": "user", "ts": "t0", "payload": {"text": "q1"}},
+            {
+                "type": "tool_result",
+                "ts": "t1",
+                "payload": {
+                    "tool_id": "shell",
+                    "operation": "get",
+                    "summary": "ran ls",
+                    "success": True,
+                    "tool_input": {"cmd": "ls"},
+                    "result": "file1\nfile2",
+                },
+            },
+            {
+                "type": "llm_call_end",
+                "ts": "t2",
+                "payload": {"depth": 0, "input_tokens": 100, "output_tokens": 12},
+            },
+            {"type": "assistant", "ts": "t3", "payload": {"text": "a1"}},
+            {"type": "user", "ts": "t4", "payload": {"text": "q2"}},
+            {"type": "completion", "ts": "t5", "payload": {"done_reason": "stop"}},
+        ],
+    }
+
+
+def test_history_overview(fake_rest):
+    fake = fake_rest.on("GET", "/api/sessions/s1/events", _history_events())
+    out = run(tools.SessionTools(fake.client()).history(session_id="s1", level="overview"))
+    assert out["turn_count"] == 2
+    assert out["step_count"] == 1
+    assert out["total_input_tokens"] == 100
+    assert out["total_output_tokens"] == 12
+    assert out["running"] is False
+    # Title comes from the FIRST turn's user text (stable as the session grows);
+    # the last turn here is a bare completion so its assistant_text is empty.
+    assert out["title"] == "q1"
+    assert out["summary"] == ""
+
+
+def test_history_turns(fake_rest):
+    fake = fake_rest.on("GET", "/api/sessions/s1/events", _history_events())
+    out = run(tools.SessionTools(fake.client()).history(session_id="s1", level="turns"))
+    assert [t["index"] for t in out["turns"]] == [1, 2]
+    assert out["turns"][0]["user_text"] == "q1"
+    assert out["turns"][0]["assistant_text"] == "a1"
+    assert out["turns"][0]["step_count"] == 1
+    assert out["turns"][1]["done_reason"] == "stop"
+
+
+def test_history_steps_requires_turn_and_omits_full_result(fake_rest):
+    fake = fake_rest.on("GET", "/api/sessions/s1/events", _history_events())
+    out = run(
+        tools.SessionTools(fake.client()).history(session_id="s1", level="steps", turn=1)
+    )
+    assert out["turn"] == 1
+    assert len(out["steps"]) == 1
+    step = out["steps"][0]
+    assert step["tool_id"] == "shell"
+    assert step["summary"] == "ran ls"
+    assert "result" not in step  # steps tier never returns full results
+
+
+def test_history_full_includes_result_and_agents(fake_rest):
+    fake = (
+        fake_rest
+        .on("GET", "/api/sessions/s1/events", _history_events())
+        .on("GET", "/api/sessions/s1/agents", {"agents": [], "running": False})
+    )
+    out = run(
+        tools.SessionTools(fake.client()).history(session_id="s1", level="full", turn=1)
+    )
+    assert out["steps"][0]["result"] == "file1\nfile2"
+    assert out["steps"][0]["tool_input"] == {"cmd": "ls"}
+    assert out["agents"] == {"agents": [], "running": False}
+
+
+def test_history_invalid_level_raises(fake_rest):
+    fake = fake_rest.on("GET", "/api/sessions/s1/events", _history_events())
+    with pytest.raises(ValueError):
+        run(tools.SessionTools(fake.client()).history(session_id="s1", level="bogus"))
+
+
+def test_history_steps_without_turn_raises(fake_rest):
+    fake = fake_rest.on("GET", "/api/sessions/s1/events", _history_events())
+    with pytest.raises(ValueError):
+        run(tools.SessionTools(fake.client()).history(session_id="s1", level="steps"))
+
+
+def test_history_turn_out_of_range_raises(fake_rest):
+    fake = fake_rest.on("GET", "/api/sessions/s1/events", _history_events())
+    with pytest.raises(ValueError):
+        run(tools.SessionTools(fake.client()).history(session_id="s1", level="full", turn=99))
+
+
+# ---------------------------------------------------------------------------
+# wiki tools
+# ---------------------------------------------------------------------------
+
+
+def test_list_wiki_projects(fake_rest):
+    fake = fake_rest.on("GET", "/v1/wiki/projects", [{"slug": "assistant"}])
+    out = run(tools.WikiTools(fake.client()).list_projects())
+    assert out == [{"slug": "assistant"}]
+
+
+def test_read_wiki_page(fake_rest):
+    fake = fake_rest.on(
+        "GET", "/v1/wiki/projects/assistant/pages/intro", {"id": "intro", "body": "# Hi"}
+    )
+    out = run(tools.WikiTools(fake.client()).read_page(project="assistant", page_id="intro"))
+    assert out["body"] == "# Hi"
+
+
+def test_read_wiki_structure(fake_rest):
+    """read_wiki_structure returns the project's knowledge-graph wire payload."""
+    graph = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": [{"source": "a", "target": "b"}]}
+    fake = fake_rest.on("GET", "/v1/wiki/projects/assistant/graph", graph)
+    out = run(tools.WikiTools(fake.client()).read_structure(project="assistant"))
+    assert out == graph
+    fake.find("GET", "/v1/wiki/projects/assistant/graph")  # path/method asserted
+
+
+def test_submit_insight_condense_posts_raw(fake_rest):
+    """condense=True sends the text as `raw` so the server decomposes it."""
+    result = {"ok": True, "claims": [{"action": "created", "node_id": "n1", "content": "c"}]}
+    fake = fake_rest.on("POST", "/v1/wiki/projects/assistant/insights", result, status=201)
+    out = run(
+        tools.WikiTools(fake.client()).submit_insight(
+            project="assistant", insight="auth notes",
+            anchors=["auth.py#AuthService"], labels=["auth"],
+        )
+    )
+    assert out["ok"] is True
+    req = fake.find("POST", "/v1/wiki/projects/assistant/insights")
+    assert req.json["raw"] == "auth notes"
+    assert "content" not in req.json
+    assert req.json["condense"] is True
+    assert req.json["anchors"] == ["auth.py#AuthService"]
+    assert req.json["labels"] == ["auth"]
+
+
+def test_submit_insight_no_condense_posts_content(fake_rest):
+    """condense=False sends the text verbatim as a single `content` claim."""
+    result = {"ok": True, "claims": [{"action": "created", "node_id": "n1", "content": "c"}]}
+    fake = fake_rest.on("POST", "/v1/wiki/projects/assistant/insights", result, status=201)
+    run(
+        tools.WikiTools(fake.client()).submit_insight(
+            project="assistant", insight="AuthService verifies tokens",
+            condense=False,
+        )
+    )
+    req = fake.find("POST", "/v1/wiki/projects/assistant/insights")
+    assert req.json["content"] == "AuthService verifies tokens"
+    assert "raw" not in req.json
+    assert req.json["condense"] is False
+
+
+def test_submit_insight_forwards_token(fake_rest):
+    result = {"ok": True, "claims": []}
+    fake = fake_rest.on("POST", "/v1/wiki/projects/assistant/insights", result)
+    run(
+        tools.WikiTools(fake.client(token="mk_caller")).submit_insight(
+            project="assistant", insight="x"
+        )
+    )
+    req = fake.find("POST", "/v1/wiki/projects/assistant/insights")
+    assert req.headers.get("x-api-key") == "mk_caller"
+
+
+def test_get_agent_tree(fake_rest):
+    """get_agent_tree returns the sub-agent tree dict for the session."""
+    tree = {"agents": [{"agent_id": "x", "status": "running"}], "running": True, "total_steps": 3}
+    fake = fake_rest.on("GET", "/api/sessions/s1/agents", tree)
+    out = run(tools.SessionTools(fake.client()).agent_tree(session_id="s1"))
+    assert out == tree
+    fake.find("GET", "/api/sessions/s1/agents")
+
+
+# -- ask_wiki: SSE-streamed start (real endpoint shape) + blocks snapshot -----
+
+
+def _qa_meta_sse(answer_id: str) -> str:
+    """Build a QA-start SSE body matching the real endpoint.
+
+    The real route yields a ``_SSE_PRIMER`` comment frame, then ``_to_sse``
+    frames: ``id: <idx>\\nevent: <type>\\ndata: <json>\\n\\n``. The first real
+    event is ``meta`` carrying ``answerId``.
+    """
+    primer = ":" + (" " * 16) + "\n\n"
+    meta = (
+        "id: 0\n"
+        "event: meta\n"
+        f'data: {{"answerId": "{answer_id}", "model": "m", "fromPageId": ""}}\n\n'
+    )
+    # A following block_open frame the parser must NOT need to consume.
+    extra = 'id: 1\nevent: block_open\ndata: {"index": 0}\n\n'
+    return primer + meta + extra
+
+
+def _sequence_poller(sequence):
+    """Return a snapshot handler walking *sequence* plus its read counter.
+
+    Each call returns the next snapshot (clamping at the last), so a test can
+    model an incrementally-filling QA snapshot. ``poll_state["n"]`` records how
+    many reads happened, letting tests assert the poll/stability behavior.
+    """
+    poll_state = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        idx = min(poll_state["n"], len(sequence) - 1)
+        poll_state["n"] += 1
+        return httpx.Response(200, json=sequence[idx])
+
+    return handler, poll_state
+
+
+def test_ask_wiki_resets_event_state_between_frames(fake_rest):
+    """A non-meta data frame before the meta frame must not yield a bad answerId.
+
+    Exercises the blank-line frame reset (fix: a blank line terminates an SSE
+    frame, so a prior ``event:`` does not bleed into the next ``data:``). Here a
+    ``summary_ready`` frame with no answerId precedes the real ``meta`` frame.
+    """
+    primer = ":" + (" " * 8) + "\n\n"
+    summary = "id: 0\nevent: summary_ready\ndata: {\"sources\": []}\n\n"
+    meta = (
+        "id: 1\nevent: meta\n"
+        'data: {"answerId": "ansR", "model": "m", "fromPageId": ""}\n\n'
+    )
+    sse = primer + summary + meta
+    stable = {"blocks": [{"kind": "p", "text": "ok"}]}
+    fake = (
+        fake_rest
+        .on_sse("POST", "/v1/wiki/qa", sse)
+        .on("GET", "/v1/wiki/qa/ansR", stable)
+    )
+    out = run(
+        tools.WikiTools(fake.client(), timeout_s=5.0, poll_interval_s=0.0).ask(
+            project="assistant", question="q"
+        )
+    )
+    assert out["answer_id"] == "ansR"
+    assert out["answer"] == "ok"
+
+
+def test_ask_wiki_waits_for_block_stability(fake_rest):
+    """ask_wiki streams the meta answerId, then waits until blocks stop growing.
+
+    The snapshot fills incrementally and has no terminal flag, so the tool must
+    NOT return on the first non-empty read — it waits until ``blocks`` is
+    unchanged across two consecutive polls before declaring ``complete``.
+    """
+    p_block = {"kind": "p", "text": "Because reasons."}
+    sources_block = {"kind": "sources", "items": ["src://a", "src://b"]}
+    # Poll sequence: empty → first (partial) block → both blocks → both blocks
+    # (stable). Stability is reached only on the 4th read.
+    sequence = [
+        {"answerId": "ans1", "blocks": []},
+        {"answerId": "ans1", "blocks": [p_block]},
+        {"answerId": "ans1", "blocks": [p_block, sources_block]},
+        {"answerId": "ans1", "blocks": [p_block, sources_block]},
+    ]
+    qa_snapshot, poll_state = _sequence_poller(sequence)
+    fake = (
+        fake_rest
+        .on_sse("POST", "/v1/wiki/qa", _qa_meta_sse("ans1"))
+        .on_handler("GET", "/v1/wiki/qa/ans1", qa_snapshot)
+    )
+    out = run(
+        tools.WikiTools(fake.client(), timeout_s=5.0, poll_interval_s=0.0).ask(
+            project="assistant",
+            question="why?",
+        )
+    )
+    assert out["answer_id"] == "ans1"
+    assert out["answer"] == "Because reasons."
+    assert out["citations"] == ["src://a", "src://b"]
+    assert out["status"] == "complete"
+    # 4 reads: only the 4th (== the 3rd) settles stability — proves it did not
+    # return on the first non-empty (partial) snapshot.
+    assert poll_state["n"] == 4
+    # The streamed POST body carried slug + question (and no empty model).
+    qa_req = fake.find("POST", "/v1/wiki/qa")
+    assert qa_req.json["slug"] == "assistant"
+    assert qa_req.json["question"] == "why?"
+    assert "model" not in qa_req.json
+
+
+def test_ask_wiki_partial_first_block_not_marked_complete(fake_rest):
+    """A fast poll that only catches the first (citations) block must not settle.
+
+    Reproduces the mislabel risk: the snapshot's first non-empty read is just a
+    sources block with no prose. Because it changes on the next poll, the tool
+    keeps waiting rather than returning an empty answer as ``complete``.
+    """
+    sources_only = {"answerId": "ansP", "blocks": [{"kind": "sources", "items": ["s://x"]}]}
+    full = {
+        "answerId": "ansP",
+        "blocks": [
+            {"kind": "sources", "items": ["s://x"]},
+            {"kind": "p", "text": "Full answer."},
+        ],
+    }
+    sequence = [sources_only, full, full]
+    qa_snapshot, poll_state = _sequence_poller(sequence)
+    fake = (
+        fake_rest
+        .on_sse("POST", "/v1/wiki/qa", _qa_meta_sse("ansP"))
+        .on_handler("GET", "/v1/wiki/qa/ansP", qa_snapshot)
+    )
+    out = run(
+        tools.WikiTools(fake.client(), timeout_s=5.0, poll_interval_s=0.0).ask(
+            project="assistant",
+            question="why?",
+        )
+    )
+    assert out["status"] == "complete"
+    assert out["answer"] == "Full answer."  # not the empty partial
+    assert out["citations"] == ["s://x"]
+    assert poll_state["n"] == 3  # waited past the partial first block
+
+
+def test_ask_wiki_omits_model_when_none(fake_rest):
+    """model=None means the body carries no model so the server uses its default."""
+    stable = {"blocks": [{"kind": "p", "text": "hi"}]}
+    fake = (
+        fake_rest
+        .on_sse("POST", "/v1/wiki/qa", _qa_meta_sse("ansX"))
+        .on("GET", "/v1/wiki/qa/ansX", stable)
+    )
+    run(
+        tools.WikiTools(fake.client(), timeout_s=5.0, poll_interval_s=0.0).ask(
+            project="assistant", question="q", model=None
+        )
+    )
+    assert "model" not in fake.find("POST", "/v1/wiki/qa").json
+
+
+def test_ask_wiki_forwards_model_when_given(fake_rest):
+    """A truthy model is forwarded in the QA body."""
+    stable = {"blocks": [{"kind": "p", "text": "hi"}]}
+    fake = (
+        fake_rest
+        .on_sse("POST", "/v1/wiki/qa", _qa_meta_sse("ansM"))
+        .on("GET", "/v1/wiki/qa/ansM", stable)
+    )
+    run(
+        tools.WikiTools(fake.client(), timeout_s=5.0, poll_interval_s=0.0).ask(
+            project="assistant", question="q", model="gpt-x"
+        )
+    )
+    assert fake.find("POST", "/v1/wiki/qa").json["model"] == "gpt-x"
+
+
+def test_ask_wiki_returns_partial_on_timeout(fake_rest):
+    """A QA whose blocks never render returns status 'running' rather than hanging."""
+    fake = (
+        fake_rest
+        .on_sse("POST", "/v1/wiki/qa", _qa_meta_sse("ans2"))
+        .on("GET", "/v1/wiki/qa/ans2", {"answerId": "ans2", "blocks": []})
+    )
+    out = run(
+        tools.WikiTools(fake.client(), timeout_s=0.0, poll_interval_s=0.0).ask(
+            project="assistant", question="slow?"
+        )
+    )
+    assert out["status"] == "running"
+    assert out["answer"] == ""
+    assert out["citations"] == []
+
+
+def test_ask_wiki_raises_when_no_meta_answer_id(fake_rest):
+    """If the SSE stream never yields a meta answerId, ask_wiki raises."""
+    primer_only = ":" + (" " * 8) + "\n\nevent: heartbeat\ndata: {}\n\n"
+    fake = fake_rest.on_sse("POST", "/v1/wiki/qa", primer_only)
+    with pytest.raises(RestError):
+        run(tools.WikiTools(fake.client(), timeout_s=1.0).ask(project="assistant", question="q"))
+
+
+# ---------------------------------------------------------------------------
+# integrations
+# ---------------------------------------------------------------------------
+
+
+def test_list_integrations_merges_tools_and_plugins(fake_rest):
+    fake = (
+        fake_rest
+        .on("GET", "/api/tools", {"tools": [{"tool_id": "shell"}]})
+        .on("GET", "/api/plugins", {"plugins": [{"name": "wiki"}]})
+    )
+    out = run(tools.IntegrationTools(fake.client()).discover(project="Assistant"))
+    assert out["tools"] == [{"tool_id": "shell"}]
+    assert out["plugins"] == [{"name": "wiki"}]
+    # project scope passed through as a query param on /api/tools
+    tools_req = fake.find("GET", "/api/tools")
+    assert tools_req.params.get("project") == "Assistant"
+
+
+# ---------------------------------------------------------------------------
+# RestError propagation
+# ---------------------------------------------------------------------------
+
+
+def test_rest_error_surfaces_api_message(fake_rest):
+    fake = fake_rest.on(
+        "POST", "/api/sessions/s1/message", {"message": "No active run."}, status=404
+    )
+    with pytest.raises(RestError) as exc:
+        run(tools.SessionTools(fake.client()).send_followup(session_id="s1", message="x"))
+    assert "No active run." in str(exc.value)
+    assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Agentic Search ("Mewbo Search")
+# ---------------------------------------------------------------------------
+
+_WS = "/api/agentic_search/workspaces"
+_RUNS = "/api/agentic_search/runs"
+
+
+def _workspaces_payload():
+    """Two workspaces — one carries console-only fields (instructions/history)."""
+    return {
+        "workspaces": [
+            {
+                "id": "ws-eng",
+                "name": "Engineering",
+                "desc": "eng docs + chat",
+                "sources": ["notion", "slack"],
+                "instructions": "internal-only prompt — must not leak to MCP",
+                "past_queries": [{"q": "old query", "results": 3}],
+                "created": "Jun 05, 2026",
+            },
+            {
+                "id": "ws-design",
+                "name": "Design",
+                "desc": "",
+                "sources": ["figma"],
+                "past_queries": [],
+            },
+        ]
+    }
+
+
+def _run_payload(status="completed"):
+    """A normalized RunPayload as POST /runs (echo) returns it under ``run``."""
+    return {
+        "run_id": "run-1",
+        "session_id": "sess-1",
+        "workspace_id": "ws-eng",
+        "query": "deploy process",
+        "status": status,
+        "total_ms": 1234,
+        "answer": {
+            "tldr": "Deploys go through CI.",
+            "bullets": [
+                {"text": "CI gates every merge.", "cites": ["r1"]},
+                {"text": "Rollback is one click.", "cites": ["r2"]},
+            ],
+            "confidence": 0.8,
+            "sources_count": 2,
+        },
+        "results": [
+            {
+                "id": "r1", "source": "notion", "kind": "docs", "relevance": 0.9,
+                "title": "Deploy Runbook", "url": "https://n/r1",
+                "snippet": "Step 1: open the runbook.", "author": "Ada",
+                "timestamp": "2026-06-01",
+                "insight": {"label": "Key", "body": "CI is required."},
+                "refs": [{"title": "CI", "url": "https://n/ci", "kind": "doc"}],
+            },
+            {
+                "id": "r2", "source": "slack", "kind": "threads", "relevance": 0.7,
+                "title": "rollback thread", "url": "https://s/r2",
+                "snippet": "just click rollback.", "author": "Bo",
+                "timestamp": "2026-06-02",
+            },
+        ],
+        # Console-only surface the MCP projection must drop:
+        "trace": [
+            {"id": "t1", "agent_id": "a1", "name": "Notion", "source_id": "notion",
+             "slot": 0, "lines": [{"t_ms": 1, "text": "searching"}]},
+        ],
+        "related_questions": ["How do I roll back a deploy?"],
+        "related_people": [{"name": "Ada", "role": "SRE", "initials": "A", "color": 0}],
+    }
+
+
+def _post_runs_response(status="completed"):
+    """POST /runs back-compat envelope: {run, run_id, session_id, status}."""
+    payload = _run_payload(status)
+    return {
+        "run": payload,
+        "run_id": payload["run_id"],
+        "session_id": payload["session_id"],
+        "status": status,
+    }
+
+
+def test_list_search_workspaces_drops_console_only_fields(fake_rest):
+    """Discovery is compact: ids/names/sources/count, no instructions or history."""
+    fake = fake_rest.on("GET", _WS, _workspaces_payload())
+    out = run(tools.SearchTools(fake.client()).list_workspaces())
+    eng = out["workspaces"][0]
+    assert eng == {
+        "id": "ws-eng",
+        "name": "Engineering",
+        "desc": "eng docs + chat",
+        "sources": ["notion", "slack"],
+        "recent_query_count": 1,
+    }
+    # instructions (untrusted) and full past_queries never reach the consumer.
+    assert "instructions" not in eng
+    assert "past_queries" not in eng
+
+
+def test_search_resolves_by_name_and_returns_answer_tier(fake_rest):
+    """search(workspace=<name>) → resolves id → POST /runs → compact answer tier."""
+    fake = (
+        fake_rest
+        .on("GET", _WS, _workspaces_payload())
+        .on("POST", _RUNS, _post_runs_response("completed"))
+    )
+    out = run(
+        tools.SearchTools(fake.client()).search(query="deploy process", workspace="Engineering")
+    )
+
+    # The run was scoped to the resolved workspace id + carried the query.
+    body = fake.find("POST", _RUNS).json
+    assert body["workspace_id"] == "ws-eng"
+    assert body["query"] == "deploy process"
+    assert "project" not in body
+
+    assert out["status"] == "completed"
+    assert out["workspace_name"] == "Engineering"
+    assert out["answer"]["tldr"] == "Deploys go through CI."
+    # Bullets keep their cite ids so they resolve against the result index.
+    assert out["answer"]["bullets"][0]["cites"] == ["r1"]
+    assert out["result_count"] == 2
+    assert out["related_questions"] == ["How do I roll back a deploy?"]
+
+    # answer tier: compact results only — no snippet/insight/refs.
+    first = out["results"][0]
+    assert first == {
+        "id": "r1", "source": "notion", "kind": "docs",
+        "title": "Deploy Runbook", "url": "https://n/r1", "relevance": 0.9,
+    }
+    # Console-only surface is omitted entirely.
+    assert "trace" not in out
+    assert "related_people" not in out
+
+
+def test_search_full_detail_includes_result_content(fake_rest):
+    """detail='full' adds snippet/insight/refs to each result."""
+    fake = (
+        fake_rest
+        .on("GET", _WS, _workspaces_payload())
+        .on("POST", _RUNS, _post_runs_response("completed"))
+    )
+    out = run(
+        tools.SearchTools(fake.client()).search(
+            query="deploy", workspace="ws-eng", detail="full"
+        )
+    )
+    first = out["results"][0]
+    assert first["snippet"] == "Step 1: open the runbook."
+    assert first["insight"] == {"label": "Key", "body": "CI is required."}
+    assert first["refs"] == [{"title": "CI", "url": "https://n/ci", "kind": "doc"}]
+    # A result without refs/insight stays lean even in full mode.
+    assert "insight" not in out["results"][1]
+    assert "refs" not in out["results"][1]
+
+
+def test_search_resolves_by_id(fake_rest):
+    """An exact id match wins without needing the name."""
+    fake = (
+        fake_rest
+        .on("GET", _WS, _workspaces_payload())
+        .on("POST", _RUNS, _post_runs_response("completed"))
+    )
+    run(tools.SearchTools(fake.client()).search(query="q", workspace="ws-design"))
+    assert fake.find("POST", _RUNS).json["workspace_id"] == "ws-design"
+
+
+def test_search_forwards_project(fake_rest):
+    """A project scope is forwarded to POST /runs for source→tool scoping."""
+    fake = (
+        fake_rest
+        .on("GET", _WS, _workspaces_payload())
+        .on("POST", _RUNS, _post_runs_response("completed"))
+    )
+    run(tools.SearchTools(fake.client()).search(query="q", workspace="ws-eng", project="Assistant"))
+    assert fake.find("POST", _RUNS).json["project"] == "Assistant"
+
+
+def test_search_unknown_workspace_raises(fake_rest):
+    """An unmatched workspace ref raises with the available names."""
+    fake = fake_rest.on("GET", _WS, _workspaces_payload())
+    with pytest.raises(ValueError) as exc:
+        run(tools.SearchTools(fake.client()).search(query="q", workspace="Nope"))
+    assert "Engineering" in str(exc.value)
+    # No run was started for an unresolved workspace.
+    assert f"POST {_RUNS}" not in fake.paths()
+
+
+def test_search_ambiguous_name_raises(fake_rest):
+    """A name matching multiple workspaces raises rather than guessing."""
+    dup = {
+        "workspaces": [
+            {"id": "a", "name": "Dup", "sources": []},
+            {"id": "b", "name": "dup", "sources": []},
+        ]
+    }
+    fake = fake_rest.on("GET", _WS, dup)
+    with pytest.raises(ValueError):
+        run(tools.SearchTools(fake.client()).search(query="q", workspace="Dup"))
+
+
+def test_search_invalid_detail_raises(fake_rest):
+    """An unknown detail tier is rejected before any REST call."""
+    with pytest.raises(ValueError):
+        run(tools.SearchTools(fake_rest.client()).search(query="q", workspace="x", detail="bogus"))
+
+
+def test_search_async_polls_until_terminal(fake_rest):
+    """An async runner returns 'running'; search polls GET /runs/<id> to terminal."""
+    sequence = [
+        {"run": {"run_id": "run-1", "status": "running", "payload": None}},
+        {"run": {"run_id": "run-1", "status": "completed", "payload": _run_payload()}},
+    ]
+    snapshot, poll_state = _sequence_poller(sequence)
+    fake = (
+        fake_rest
+        .on("GET", _WS, _workspaces_payload())
+        .on("POST", _RUNS, _post_runs_response("running"))
+        .on_handler("GET", f"{_RUNS}/run-1", snapshot)
+    )
+    out = run(
+        tools.SearchTools(fake.client(), timeout_s=5.0, poll_interval_s=0.0).search(
+            query="q", workspace="ws-eng"
+        )
+    )
+    assert out["status"] == "completed"
+    assert out["answer"]["tldr"] == "Deploys go through CI."
+    assert poll_state["n"] == 2  # polled once more after the initial 'running' read
+
+
+def test_search_async_timeout_returns_running_partial(fake_rest):
+    """A run that never settles returns status 'running' rather than hanging."""
+    fake = (
+        fake_rest
+        .on("GET", _WS, _workspaces_payload())
+        .on("POST", _RUNS, _post_runs_response("running"))
+        .on("GET", f"{_RUNS}/run-1", {"run": {"status": "running", "payload": None}})
+    )
+    out = run(
+        tools.SearchTools(fake.client(), timeout_s=0.0, poll_interval_s=0.0).search(
+            query="q", workspace="ws-eng"
+        )
+    )
+    assert out["status"] == "running"
+    assert out["answer"]["tldr"] == ""  # no payload yet → empty synthesis
+    assert out["results"] == []
+
+
+def test_get_search_run_shapes_snapshot(fake_rest):
+    """get_search_run reads the durable RunRecord and shapes its payload."""
+    fake = fake_rest.on(
+        "GET", f"{_RUNS}/run-1",
+        {"run": {"status": "completed", "payload": _run_payload()}},
+    )
+    out = run(tools.SearchTools(fake.client()).get_run(run_id="run-1"))
+    assert out["status"] == "completed"
+    assert out["run_id"] == "run-1"
+    assert out["result_count"] == 2
+    # No workspace name is known on a bare snapshot read.
+    assert "workspace_name" not in out
+
+
+def test_get_search_run_invalid_detail_raises(fake_rest):
+    """An unknown detail tier is rejected before any REST call."""
+    with pytest.raises(ValueError):
+        run(tools.SearchTools(fake_rest.client()).get_run(run_id="run-1", detail="bogus"))

@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from mewbo_api.wiki.jobs import WikiIndexingJob
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import WizardSubmission
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import WizardSubmission
 
 
 @pytest.fixture

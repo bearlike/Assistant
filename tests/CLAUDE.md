@@ -45,6 +45,12 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 - Parameterize micro-variants instead of duplicating tests (schema coercion, tool discovery).
 - Use lightweight stubs for CLI I/O (dummy input/output) to avoid terminal dependencies.
 
+## Coverage scope & conventions
+- CI's coverage gate (`.github/workflows/coverage.yml`) measures **only** `--source=mewbo_core,mewbo_tools,mewbo_ha_conversation`. The apps (`mewbo_api`/`mewbo_cli`/`mewbo_mcp`) and `mewbo_graph` are executed but **not** in the gated number — add them to `--source` to see the whole picture locally. The committed root `coverage.json` is a stale point-in-time snapshot, not live output; regenerate, don't trust it.
+- Full local run: `.venv/bin/coverage run --source=mewbo_core,mewbo_tools,mewbo_graph,mewbo_api,mewbo_cli,mewbo_mcp,mewbo_ha_conversation -m pytest` then `coverage json -o coverage.json` and slice per-package from `files[].summary.missing_lines`. `testpaths` = `tests/` + `apps/{api,mcp,cli}/tests`.
+- Under pytest, `tests/` is on `sys.path`, so coverage tests reuse sibling helpers directly (e.g. `from test_tool_use_loop import _make_agent_context, _text_response, _tool_call_response`). Naming: broad coverage/integration suites use `*_integration.py` / `*_flow.py` / `*_extra.py`; graph wiki-plugin tool tests live in `tests/wiki/test_tool_*.py`, SCG engine tests in `tests/agentic_search/scg/`.
+- New tests are integration/contract-first: drive the public caller site, assert real outputs/side-effects, stub only I/O boundaries. Reject namesake tests (a test that still passes if the production body were deleted is worthless).
+
 ## Cross-project insights (for test design)
 - Assert outbound request payloads and event ordering rather than only return values (tool_id/operation/tool_input).
 - Build tests around "event streams" (tool call, tool result, response) to catch orchestration regressions.

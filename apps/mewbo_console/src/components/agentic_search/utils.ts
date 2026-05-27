@@ -9,13 +9,17 @@ export interface AgentSnapshot {
   running: boolean
 }
 
-/** Derive the agent's progress state at a given elapsed time. */
-export function agentSnapshot(agent: TraceAgent, elapsed: number): AgentSnapshot {
-  const visibleLines = agent.lines.filter((l) => l.t_ms <= elapsed)
-  const done = agent.lines.some((l) => l.done && l.t_ms <= elapsed)
+/**
+ * Derive an agent's progress state from REAL stream state. Every line in
+ * `agent.lines` has already arrived over SSE, so visibility is the full set —
+ * we no longer gate on a fake `elapsed` timer. `done` / `empty` come from the
+ * terminal line the BE emits on `agent_done`.
+ */
+export function agentSnapshot(agent: TraceAgent): AgentSnapshot {
+  const visibleLines = agent.lines
+  const done = agent.lines.some((l) => l.done)
   const started = visibleLines.length > 0
-  const last = agent.lines[agent.lines.length - 1]
-  const empty = !!last?.empty
+  const empty = agent.lines.some((l) => l.empty)
   const state: AgentRunState = !started
     ? "queued"
     : !done
@@ -24,4 +28,16 @@ export function agentSnapshot(agent: TraceAgent, elapsed: number): AgentSnapshot
     ? "empty"
     : "done"
   return { state, visibleLines, done, running: started && !done }
+}
+
+/**
+ * Fraction (0..1) of spawned agents that have finished, for the run progress
+ * bar. Single source of truth: ProgressStrip, RightRail, and TraceDrawer all
+ * call this so the bar never diverges. Once the run is terminal the bar is
+ * full even if an agent ended empty.
+ */
+export function runProgress(agents: TraceAgent[], done: boolean): number {
+  if (done) return 1
+  if (agents.length === 0) return 0
+  return agents.filter((a) => agentSnapshot(a).done).length / agents.length
 }

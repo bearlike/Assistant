@@ -14,37 +14,16 @@ from urllib.parse import urlparse
 from mewbo_core.agent_registry import parse_agent_file
 from mewbo_core.common import get_logger
 from mewbo_core.permissions import auto_approve
-
-from .store import WikiStoreBase
-from .types import IndexingJob, QaAnswer, WizardSubmission
+from mewbo_graph import plugins_root
+from mewbo_graph.wiki.store import WikiStoreBase
+from mewbo_graph.wiki.tokens import CloneTokenCache
+from mewbo_graph.wiki.types import IndexingJob, QaAnswer, WizardSubmission
 
 logging = get_logger(name="api.wiki.jobs")
 
-# In-memory clone-token cache. Keyed by job_id; value = the auth token the
-# wizard provided. ``wiki_clone_repo`` reads + evicts the entry on first
-# call so the token never enters the transcript or persistent store.
-_CLONE_TOKENS: dict[str, str] = {}
-
-
-def _store_clone_token(job_id: str, token: str) -> None:
-    """Stash a clone-time auth token, ephemerally, until the clone tool runs."""
-    _CLONE_TOKENS[job_id] = token
-
-
-def pop_clone_token(job_id: str) -> str | None:
-    """Return the stashed clone-time token for *job_id*, if any.
-
-    Despite the name, kept in cache after read — ``wiki_finalize`` needs
-    the same token later to call the platform's metadata API. The cache
-    is cleared explicitly by ``forget_clone_token`` once the job reaches
-    a terminal state.
-    """
-    return _CLONE_TOKENS.get(job_id)
-
-
-def forget_clone_token(job_id: str) -> None:
-    """Drop the cached clone-time token for *job_id* (idempotent)."""
-    _CLONE_TOKENS.pop(job_id, None)
+# The ephemeral clone-token cache moved to ``mewbo_graph.wiki.tokens`` (Gitea
+# #25) so the relocated clone/finalize tools share it via a down-only import
+# instead of reaching up into this module.
 
 # Tools the wiki-indexer agent is allowed to call. Mirrors the AgentDef's
 # frontmatter `tools:` list (wiki-indexer.md); these MUST stay in sync.
@@ -59,6 +38,7 @@ INDEXER_TOOLS: list[str] = [
     "wiki_graph_neighbors",  # Phase 3 — directed multi-hop traversal
     "wiki_commit_plan",
     "wiki_submit_page",      # also bound for sub-agents, but indexer can fall back
+    "wiki_submit_insight",   # bootstrap the memory layer during indexing (flywheel)
     "wiki_finalize",
     "spawn_agent",
     "check_agents",
@@ -68,19 +48,10 @@ INDEXER_TOOLS: list[str] = [
     "ls",
 ]
 
-# Absolute path to the built-in wiki agents directory.
-# parents[5] from this file's location walks up to the monorepo root:
-#   [0] wiki/  [1] mewbo_api/  [2] src/  [3] mewbo_api (app)  [4] apps/  [5] repo root
-_WIKI_AGENTS_DIR = (
-    Path(__file__).resolve().parents[5]
-    / "packages"
-    / "mewbo_core"
-    / "src"
-    / "mewbo_core"
-    / "builtin_plugins"
-    / "wiki"
-    / "agents"
-)
+# Directory of the bundled wiki AgentDef markdown, resolved from the graph
+# package's own plugin root (works across wheels, editable installs, and
+# source trees alike — no fragile parents[N] walk).
+_WIKI_AGENTS_DIR = plugins_root() / "wiki" / "agents"
 
 
 class WikiIndexingJob:
@@ -148,7 +119,7 @@ class WikiIndexingJob:
         # Stash the token for wiki_clone_repo to read — keeps it out of the
         # LLM transcript while still letting the tool authenticate the clone.
         if submission.token:
-            _store_clone_token(job_id, submission.token)
+            CloneTokenCache.store(job_id, submission.token)
         runtime.start_async(
             session_id=session_id,
             user_query=user_query,
@@ -185,11 +156,14 @@ class WikiIndexingJob:
         runtime: Any,
         hook_manager: Any = None,
     ) -> IndexingJob:
-        """Re-index an existing project by reconstructing a WizardSubmission.
+        """Re-index an existing project (on-demand only) with a full rebuild.
 
-        Looks up the latest stored submission for the slug (falling back to
-        minimal defaults derived from the project record) and calls
-        ``WikiIndexingJob.start`` to queue a new indexing job.
+        Rebuilds the whole wiki from a reconstructed ``WizardSubmission`` (the
+        proven path; also re-bootstraps the memory layer as the indexer
+        deposits insights while indexing). The on-demand incremental engine
+        (``mewbo_graph.wiki.refresh.RefreshOrchestrator``) is the tested
+        substrate for a future scoped-refresh ACT path; until it is wired in,
+        every refresh does a full re-index.
 
         Returns the freshly-created :class:`IndexingJob`.
         """
@@ -199,6 +173,7 @@ class WikiIndexingJob:
         project = store.get_project(slug)
         if project is None:
             raise KeyError(f"Project not found: {slug}")
+        logging.info("wiki refresh slug=%s", slug)
 
         # 2. Find the latest stored submission for this slug.
         sub_dict: dict[str, Any] | None = None
@@ -271,6 +246,7 @@ QA_TOOLS: list[str] = [
     "wiki_grep",
     "wiki_list_files",
     "wiki_emit_block",
+    "wiki_submit_insight",   # QA→memory flywheel (deposit a durable fact)
 ]
 
 

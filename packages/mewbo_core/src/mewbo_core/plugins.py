@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.resources
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field, replace
@@ -40,6 +41,64 @@ _LOGGED_STALE_CACHE: set[tuple[str, str]] = set()
 def _sanitize_path_component(value: str) -> str:
     """Remove path separators and '..' from a value used in path construction."""
     return value.replace("/", "-").replace("\\", "-").replace("..", "").strip("-")
+
+
+# ---------------------------------------------------------------------------
+# Host-agnostic git URL resolution
+# ---------------------------------------------------------------------------
+#
+# One resolver shared by ``sync_marketplaces`` (the catalog) and
+# ``install_plugin`` (individual plugin sources) so the two paths can't drift
+# back to a GitHub-only assumption.
+
+_URL_SCHEME_RE = re.compile(r"^(?:https?|ssh|git)://", re.IGNORECASE)
+# scp-style SSH ref, e.g. ``git@github.com:owner/repo(.git)``.
+_SCP_LIKE_RE = re.compile(r"^[A-Za-z0-9._+-]+@[A-Za-z0-9._-]+:")
+
+
+def _looks_like_host(segment: str) -> bool:
+    """A path segment looks like a git host when it has a dot or an explicit port."""
+    return "." in segment or ":" in segment
+
+
+def _resolve_git_url(entry: str, *, default_host: str = "github.com") -> str:
+    """Resolve a marketplace/plugin entry to a clonable git URL, host-agnostically.
+
+    Three accepted forms:
+
+    - A full git URL (``https://``, ``http://``, ``ssh://``, ``git://``) or an
+      scp-style SSH ref (``git@host:owner/repo``) — used **verbatim**.
+    - ``host/owner/repo`` where the first segment looks like a host (contains a
+      ``.`` or a ``:port``) — resolved to ``https://host/owner/repo.git``.
+    - Bare ``owner/repo`` — resolved to ``https://<default_host>/owner/repo.git``
+      (the historical GitHub default unless *default_host* is overridden).
+    """
+    entry = entry.strip()
+    if _URL_SCHEME_RE.match(entry) or _SCP_LIKE_RE.match(entry):
+        return entry
+
+    parts = entry.split("/")
+    if len(parts) >= 3 and _looks_like_host(parts[0]):
+        host, path = parts[0], "/".join(parts[1:])
+        return f"https://{host}/{path.removesuffix('.git')}.git"
+
+    return f"https://{default_host}/{entry.removesuffix('.git')}.git"
+
+
+def marketplace_dir_name(entry: str, *, default_host: str = "github.com") -> str:
+    """Stable, collision-free local cache-dir name for a marketplace entry.
+
+    Derived from the *resolved* git URL's host + path (scheme, ``user@``, and a
+    trailing ``.git`` stripped) so entries that share a leaf name but differ in
+    host or owner never collide. For example
+    ``anthropics/claude-plugins-official`` →
+    ``github.com-anthropics-claude-plugins-official``.
+    """
+    url = _resolve_git_url(entry, default_host=default_host)
+    name = _URL_SCHEME_RE.sub("", url)  # drop scheme
+    name = name.split("@", 1)[-1]  # drop scp/ssh user@
+    name = name.replace(":", "/")  # scp host:path and host:port → path separator
+    return _sanitize_path_component(name.removesuffix(".git"))
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +423,29 @@ def discover_installed_plugins(
 # resolves the real root via :func:`importlib.resources.files`.
 _BUILTIN_ROOT_OVERRIDE: Path | None = None
 
+# Additional built-in plugin roots contributed by OPTIONAL capability libraries
+# that sit ABOVE core in the dependency DAG (e.g. ``mewbo_graph`` ships the
+# ``wiki`` / ``scg`` suites). Such a library cannot live in the core wheel
+# without inverting the layering, so it *pushes* its root here on import via
+# :func:`register_builtin_root` — core never imports up to discover it.
+_EXTRA_BUILTIN_ROOTS: list[Path] = []
+
+
+def register_builtin_root(root: Path | str) -> None:
+    """Register an extra built-in plugin root (idempotent; down-only push).
+
+    A capability library above core in the DAG calls this on import so its
+    bundled plugin suites are discovered by :func:`load_all_plugin_components`
+    alongside the core wheel's own ``builtin_plugins/`` — without core ever
+    importing the library. Invalidates the fan-out cache so a freshly
+    registered root is picked up on the next load.
+    """
+    global _fanout_cache
+    path = Path(root)
+    if path not in _EXTRA_BUILTIN_ROOTS:
+        _EXTRA_BUILTIN_ROOTS.append(path)
+        _fanout_cache = None  # force re-discovery to include the new root
+
 
 def discover_builtin_plugins(root: Path | str) -> list[PluginComponents]:
     """Discover first-party plugins shipped inside the core package.
@@ -413,6 +495,18 @@ def _resolve_builtin_root() -> Path:
         return Path("")
 
 
+def _all_builtin_roots() -> list[Path]:
+    """Return every built-in plugin root: the core wheel's plus registered extras.
+
+    An explicit ``_BUILTIN_ROOT_OVERRIDE`` (test seam) short-circuits to just
+    that root. Otherwise the core root comes first (so it wins the dedup race)
+    followed by any roots an optional capability library registered.
+    """
+    if _BUILTIN_ROOT_OVERRIDE is not None:
+        return [_BUILTIN_ROOT_OVERRIDE]
+    return [_resolve_builtin_root(), *_EXTRA_BUILTIN_ROOTS]
+
+
 # ---------------------------------------------------------------------------
 # Marketplace sync (clone/update repos from config)
 # ---------------------------------------------------------------------------
@@ -421,12 +515,19 @@ def _resolve_builtin_root() -> Path:
 def sync_marketplaces(
     marketplace_repos: list[str],
     install_base: Path,
+    *,
+    default_host: str = "github.com",
 ) -> list[Path]:
-    """Ensure marketplace repos are cloned locally, return their directory paths.
+    """Ensure marketplace catalogs are cloned locally, return their directory paths.
 
-    For each repo in *marketplace_repos* (GitHub ``owner/repo`` format), clone
-    it into ``install_base/marketplaces/<repo-name>/`` if not already present.
-    Returns the list of marketplace directories (same contract as
+    Each entry in *marketplace_repos* is resolved host-agnostically via
+    :func:`_resolve_git_url` — a full git URL, an ``host/owner/repo`` shorthand,
+    or a bare ``owner/repo`` (cloned from *default_host*). The catalog is cloned
+    into ``install_base/marketplaces/<marketplace_dir_name(entry)>/`` if not
+    already present. Cloning uses plain ``git clone``, so it inherits the
+    ambient git credential helpers, SSH agent, and TLS configuration — private
+    and self-hosted catalogs work without a GitHub-specific path. Returns the
+    list of marketplace directories (same contract as
     ``PluginsConfig.resolve_marketplace_dirs()``).
 
     This is the bridge between the ``plugins.marketplaces`` config list and the
@@ -437,10 +538,8 @@ def sync_marketplaces(
     marketplaces_base.mkdir(parents=True, exist_ok=True)
 
     dirs: list[Path] = []
-    for repo in marketplace_repos:
-        # "anthropics/claude-plugins-official" → dir name "claude-plugins-official"
-        repo_name = repo.split("/")[-1] if "/" in repo else repo
-        mp_dir = marketplaces_base / _sanitize_path_component(repo_name)
+    for entry in marketplace_repos:
+        mp_dir = marketplaces_base / marketplace_dir_name(entry, default_host=default_host)
 
         if mp_dir.is_dir():
             # Already cloned — check for marketplace.json
@@ -458,14 +557,14 @@ def sync_marketplaces(
                         timeout=60,
                     )
                 except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-                    logging.warning("Failed to update marketplace {}: {}", repo, exc)
+                    logging.warning("Failed to update marketplace {}: {}", entry, exc)
                 if marker.is_file():
                     dirs.append(mp_dir)
                 continue
 
         # Not yet cloned — shallow clone (only need marketplace.json + plugin dirs)
-        git_url = f"https://github.com/{repo}.git"
-        logging.info("Cloning marketplace {} into {}", repo, mp_dir)
+        git_url = _resolve_git_url(entry, default_host=default_host)
+        logging.info("Cloning marketplace {} from {} into {}", entry, git_url, mp_dir)
         try:
             subprocess.run(
                 ["git", "clone", "--depth=1", git_url, str(mp_dir)],
@@ -475,7 +574,7 @@ def sync_marketplaces(
             )
             dirs.append(mp_dir)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-            logging.warning("Failed to clone marketplace {}: {}", repo, exc)
+            logging.warning("Failed to clone marketplace {}: {}", entry, exc)
 
     return dirs
 
@@ -594,7 +693,9 @@ def install_plugin(
                 raise ValueError(
                     f"Plugin '{name}' has a dict source with no 'repo' or 'url': {source!r}"
                 )
-            git_url = f"https://github.com/{repo}.git"
+            # Shared resolver: a bare ``owner/repo`` keeps the GitHub default,
+            # while ``host/owner/repo`` and full URLs target any git host.
+            git_url = _resolve_git_url(repo)
         if (cache_dir / ".git").exists():
             logging.info("Plugin {} already cloned, skipping", name)
         else:
@@ -723,21 +824,25 @@ def load_all_plugin_components() -> PluginFanOut:
         except OSError:
             pass
 
-    # Include the built-in plugin root's mtime so the cache refreshes when
-    # a developer edits a built-in plugin during local dev. Lookup is cheap
-    # (single stat call) and keeps editable installs responsive.
-    builtin_root = _resolve_builtin_root()
-    try:
-        max_mtime = max(max_mtime, builtin_root.stat().st_mtime)
-    except OSError:
-        pass
+    # Include each built-in plugin root's mtime so the cache refreshes when a
+    # developer edits a built-in plugin during local dev. Lookups are cheap
+    # (one stat per root) and keep editable installs responsive.
+    builtin_roots = _all_builtin_roots()
+    for root in builtin_roots:
+        try:
+            max_mtime = max(max_mtime, root.stat().st_mtime)
+        except OSError:
+            pass
 
     if _fanout_cache is not None and max_mtime <= _fanout_cache_mtime:
         return _fanout_cache
 
     # Built-in components come first so they win the dedup race inside the
-    # fan-out loop below (same-name plugin from a marketplace loses).
-    builtin_components = discover_builtin_plugins(builtin_root)
+    # fan-out loop below (same-name plugin from a marketplace loses). The core
+    # wheel's root leads; optional capability libraries (mewbo_graph) follow.
+    builtin_components = [
+        pc for root in builtin_roots for pc in discover_builtin_plugins(root)
+    ]
     all_components = [
         *builtin_components,
         *discover_installed_plugins(

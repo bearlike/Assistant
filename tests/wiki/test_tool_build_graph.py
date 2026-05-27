@@ -6,10 +6,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import IndexingJob
-from mewbo_core.builtin_plugins.wiki import build_graph as build_graph_mod
-from mewbo_core.builtin_plugins.wiki.build_graph import WikiBuildGraphTool
+from mewbo_graph.plugins.wiki import build_graph as build_graph_mod
+from mewbo_graph.plugins.wiki.build_graph import WikiBuildGraphTool
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import IndexingJob
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tiny_python_repo"
 
@@ -65,7 +65,7 @@ def test_build_graph_emits_embeddings_when_enabled(setup, monkeypatch):
     store, session_id, _ = setup
     runtime = _stub_runtime(store)
     # Stub embedder so it produces one Embedding per node.
-    from mewbo_api.wiki.types import Embedding
+    from mewbo_graph.wiki.types import Embedding
     class _StubEmbedder:
         model = "stub-model"
 

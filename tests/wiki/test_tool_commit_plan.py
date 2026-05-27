@@ -6,8 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from mewbo_api.wiki.store import JsonWikiStore
-from mewbo_api.wiki.types import IndexingJob
+from mewbo_graph.wiki.store import JsonWikiStore
+from mewbo_graph.wiki.types import IndexingJob
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -49,8 +49,8 @@ def _two_page_plan() -> list[dict]:
 
 def test_commit_plan_persists_plan_and_emits_finalizing(tmp_path: Path) -> None:
     """A 2-page plan is saved; a finalizing event with correct counts is emitted."""
-    import mewbo_core.builtin_plugins.wiki.commit_plan as mod
-    from mewbo_core.builtin_plugins.wiki.commit_plan import WikiCommitPlanTool
+    import mewbo_graph.plugins.wiki.commit_plan as mod
+    from mewbo_graph.plugins.wiki.commit_plan import WikiCommitPlanTool
 
     store = _store(tmp_path)
     job = _job("job-cp1", "org/repo")
@@ -88,8 +88,8 @@ def test_commit_plan_persists_plan_and_emits_finalizing(tmp_path: Path) -> None:
 
 def test_commit_plan_empty_returns_validation_error(tmp_path: Path) -> None:
     """Empty pages list → validation error; no event is appended."""
-    import mewbo_core.builtin_plugins.wiki.commit_plan as mod
-    from mewbo_core.builtin_plugins.wiki.commit_plan import WikiCommitPlanTool
+    import mewbo_graph.plugins.wiki.commit_plan as mod
+    from mewbo_graph.plugins.wiki.commit_plan import WikiCommitPlanTool
 
     store = _store(tmp_path)
     job = _job("job-cp2", "org/repo")
@@ -114,8 +114,8 @@ def test_commit_plan_empty_returns_validation_error(tmp_path: Path) -> None:
 
 def test_commit_plan_overwrites_previous_plan(tmp_path: Path) -> None:
     """Calling commit_plan twice: the second call's plan wins."""
-    import mewbo_core.builtin_plugins.wiki.commit_plan as mod
-    from mewbo_core.builtin_plugins.wiki.commit_plan import WikiCommitPlanTool
+    import mewbo_graph.plugins.wiki.commit_plan as mod
+    from mewbo_graph.plugins.wiki.commit_plan import WikiCommitPlanTool
 
     store = _store(tmp_path)
     job = _job("job-cp3", "org/repo")

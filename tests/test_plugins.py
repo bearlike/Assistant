@@ -14,6 +14,17 @@ def test_plugins_config_defaults():
     assert config.plugins.enabled_plugins == []
     assert "anthropics/claude-plugins-official" in config.plugins.marketplaces
     assert config.plugins.install_path == ""
+    assert config.plugins.marketplace_default_host == "github.com"
+
+
+def test_plugins_config_marketplace_default_host_override():
+    config = AppConfig(plugins={"marketplace_default_host": "gitea.local"})
+    assert config.plugins.marketplace_default_host == "gitea.local"
+
+
+def test_plugins_config_marketplace_default_host_blank_falls_back():
+    config = AppConfig(plugins={"marketplace_default_host": "  "})
+    assert config.plugins.marketplace_default_host == "github.com"
 
 
 def test_plugins_config_from_dict():
@@ -62,11 +73,15 @@ def test_plugins_resolve_install_dir_custom():
 # ---------------------------------------------------------------------------
 
 from mewbo_core.plugins import (  # noqa: E402
+    _resolve_git_url,
     discover_installed_plugins,
     discover_marketplace_plugins,
     discover_plugin_components,
+    install_plugin,
+    marketplace_dir_name,
     parse_plugin_manifest,
     substitute_plugin_vars,
+    sync_marketplaces,
 )
 
 
@@ -474,3 +489,203 @@ def test_skill_registry_load_command_file_with_name(tmp_path):
     registry.load_command_file(str(cmd), source="plugin:test")
     assert registry.get("custom-name") is not None
     assert registry.get("my-cmd") is None
+
+
+# ---------------------------------------------------------------------------
+# Host-agnostic git URL resolution (issue #9)
+# ---------------------------------------------------------------------------
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "https://git.example.com/team/plugins.git",
+        "http://git.example.com/team/plugins.git",
+        "ssh://git@git.example.com/team/plugins.git",
+        "git://git.example.com/team/plugins.git",
+        "git@git.example.com:team/plugins.git",
+        "git@github.com:anthropics/claude-plugins-official",
+    ],
+)
+def test_resolve_git_url_full_urls_used_verbatim(entry):
+    """Full git URLs and scp-style SSH refs pass through untouched."""
+    assert _resolve_git_url(entry) == entry
+
+
+def test_resolve_git_url_host_owner_repo():
+    """A 'host/owner/repo' shorthand resolves to that host over HTTPS."""
+    assert (
+        _resolve_git_url("git.example.com/team/plugins")
+        == "https://git.example.com/team/plugins.git"
+    )
+
+
+def test_resolve_git_url_host_with_port():
+    """A host carrying an explicit port is recognised as a host segment."""
+    assert (
+        _resolve_git_url("gitea.local:3000/team/plugins")
+        == "https://gitea.local:3000/team/plugins.git"
+    )
+
+
+def test_resolve_git_url_bare_owner_repo_defaults_to_github():
+    """Bare 'owner/repo' keeps the historical GitHub default."""
+    assert (
+        _resolve_git_url("anthropics/claude-plugins-official")
+        == "https://github.com/anthropics/claude-plugins-official.git"
+    )
+
+
+def test_resolve_git_url_bare_owner_repo_strips_trailing_git():
+    assert _resolve_git_url("owner/repo.git") == "https://github.com/owner/repo.git"
+
+
+def test_resolve_git_url_bare_owner_repo_custom_default_host():
+    """The default host is overridable for the bare shorthand."""
+    assert (
+        _resolve_git_url("owner/repo", default_host="gitea.local")
+        == "https://gitea.local/owner/repo.git"
+    )
+
+
+def test_resolve_git_url_host_owner_repo_ignores_default_host():
+    """An explicit host wins over default_host."""
+    assert (
+        _resolve_git_url("git.example.com/team/plugins", default_host="gitea.local")
+        == "https://git.example.com/team/plugins.git"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Collision-free marketplace cache-dir naming (issue #9)
+# ---------------------------------------------------------------------------
+
+
+def test_marketplace_dir_name_strips_git_suffix():
+    assert ".git" not in marketplace_dir_name("https://git.example.com/team/plugins.git")
+
+
+def test_marketplace_dir_name_no_collision_across_owners():
+    """Same leaf name, different owners → different cache dirs."""
+    a = marketplace_dir_name("anthropics/claude-plugins-official")
+    b = marketplace_dir_name("acme/claude-plugins-official")
+    assert a != b
+
+
+def test_marketplace_dir_name_no_collision_across_hosts():
+    """Same owner/repo on different hosts → different cache dirs."""
+    a = marketplace_dir_name("anthropics/plugins")
+    b = marketplace_dir_name("git.example.com/anthropics/plugins")
+    assert a != b
+
+
+def test_marketplace_dir_name_is_filesystem_safe():
+    """The name never contains path separators."""
+    name = marketplace_dir_name("git@git.example.com:team/plugins.git")
+    assert "/" not in name
+    assert "\\" not in name
+
+
+def test_marketplace_dir_name_is_stable():
+    """Resolution is deterministic for the same entry."""
+    entry = "https://git.example.com/team/plugins.git"
+    assert marketplace_dir_name(entry) == marketplace_dir_name(entry)
+
+
+# ---------------------------------------------------------------------------
+# sync_marketplaces host-agnostic cloning (issue #9)
+# ---------------------------------------------------------------------------
+
+
+def test_sync_marketplaces_reuses_existing_dir_without_network(tmp_path, monkeypatch):
+    """An already-cloned catalog dir is reused without any git invocation."""
+    entry = "anthropics/claude-plugins-official"
+    install_base = tmp_path / "plugins"
+    mp_dir = install_base / "marketplaces" / marketplace_dir_name(entry)
+    (mp_dir / ".claude-plugin").mkdir(parents=True)
+    (mp_dir / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"name": "claude-plugins-official", "plugins": []})
+    )
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("git must not run when the catalog is already cloned")
+
+    monkeypatch.setattr("mewbo_core.plugins.subprocess.run", _fail)
+
+    dirs = sync_marketplaces([entry], install_base)
+    assert dirs == [mp_dir]
+
+
+def test_sync_marketplaces_clones_from_any_host(tmp_path, monkeypatch):
+    """A full URL entry is cloned from that host verbatim."""
+    entry = "https://git.example.com/team/plugins.git"
+    install_base = tmp_path / "plugins"
+    recorded: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        return None
+
+    monkeypatch.setattr("mewbo_core.plugins.subprocess.run", _fake_run)
+
+    dirs = sync_marketplaces([entry], install_base)
+    assert len(recorded) == 1
+    assert entry in recorded[0]  # cloned from the host verbatim
+    assert dirs[0].name == marketplace_dir_name(entry)
+
+
+def test_sync_marketplaces_honors_default_host(tmp_path, monkeypatch):
+    """Bare shorthand is cloned from the configured default host."""
+    recorded: list[list[str]] = []
+    monkeypatch.setattr(
+        "mewbo_core.plugins.subprocess.run",
+        lambda cmd, **kw: recorded.append(cmd),
+    )
+    sync_marketplaces(["team/plugins"], tmp_path, default_host="gitea.local")
+    assert "https://gitea.local/team/plugins.git" in recorded[0]
+
+
+# ---------------------------------------------------------------------------
+# install_plugin shares the same resolver (issue #9)
+# ---------------------------------------------------------------------------
+
+
+def test_install_plugin_resolves_host_owner_repo_source(tmp_path, monkeypatch):
+    """A 'repo' source carrying a host resolves through the shared resolver."""
+    mp_dir = tmp_path / "mp"
+    (mp_dir / ".claude-plugin").mkdir(parents=True)
+    (mp_dir / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps(
+            {
+                "name": "mp",
+                "plugins": [
+                    {
+                        "name": "p",
+                        "version": "1.0.0",
+                        "source": {"repo": "git.example.com/team/p"},
+                    }
+                ],
+            }
+        )
+    )
+    install_base = tmp_path / "install"
+    recorded: list[list[str]] = []
+
+    def _fake_clone(cmd, **kwargs):
+        # Emulate git clone: create the manifest the installer expects.
+        dest = Path(cmd[-1])
+        (dest / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        (dest / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "p"}))
+        recorded.append(cmd)
+        return None
+
+    monkeypatch.setattr("mewbo_core.plugins.subprocess.run", _fake_clone)
+
+    manifest = install_plugin(
+        "p", "mp", marketplace_dirs=[mp_dir], install_base=install_base
+    )
+    assert manifest.name == "p"
+    assert "https://git.example.com/team/p.git" in recorded[0]

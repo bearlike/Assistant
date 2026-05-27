@@ -11,9 +11,8 @@ export function useWebIdeEnabled(): boolean | null {
     queryKey: ["config"],
     queryFn: getConfig,
     select: (cfg) => {
-      const agent = (cfg as Record<string, unknown> | undefined)?.agent as
-        | Record<string, unknown>
-        | undefined;
+      const config = cfg?.config as Record<string, unknown> | undefined;
+      const agent = config?.agent as Record<string, unknown> | undefined;
       const webIde = agent?.web_ide as Record<string, unknown> | undefined;
       return Boolean(webIde?.enabled);
     },
