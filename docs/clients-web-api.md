@@ -24,7 +24,7 @@ Core endpoints:
 
 - `POST /api/sessions` create a session
 - `POST /api/sessions/{session_id}/query` enqueue a query or core command
-- `GET /api/sessions/{session_id}/events?after=...` poll events (event kinds include `widget_ready` for capability-gated widget output — see [Widgets in the timeline](#widgets-in-the-timeline))
+- `GET /api/sessions/{session_id}/events?after=...` poll events (event kinds include `widget_ready` for capability-gated widget output; see [Widgets in the timeline](#widgets-in-the-timeline))
 - `GET /api/sessions` list sessions (defaults to non-archived, non-empty)
 - `GET /api/sessions?include_archived=1` include archived sessions
 - `POST /api/sessions/{session_id}/archive` archive a session
@@ -88,7 +88,7 @@ Sessions that advertise `stlite` get the bundled widget surface: the `st-widget-
 | `requirements` | Optional list of extra Python packages the widget imports. |
 | `summary` | Optional one-line description. |
 
-The console timeline builder attaches the payload to the turn that contained the `submit_widget` call and mounts it inline as an [stlite](https://github.com/whitphx/stlite) panel running in a Web Worker; theme sync to the console's dark/light mode is automatic. The REST API returns the same event in the `GET /api/sessions/{id}/events` poll response — programmatic clients can either render it themselves with stlite or ignore it.
+The console timeline builder attaches the payload to the turn that contained the `submit_widget` call and mounts it inline as an [stlite](https://github.com/whitphx/stlite) panel running in a Web Worker; theme sync to the console's dark/light mode is automatic. The REST API returns the same event in the `GET /api/sessions/{id}/events` poll response. Programmatic clients can either render it themselves with stlite or ignore it.
 
 See [Widgets](features-widgets.md) for the full picture, including the lint loop and the component library.
 

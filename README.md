@@ -29,12 +29,12 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
     </tr>
     <tr>
         <td align="center"><img src="docs/mewbo-wiki-03-graph.jpg" alt="MewboWiki interactive knowledge graph of a repository" height="280px"></td>
-        <td align="center"><img src="docs/mewbo-search-02-results.jpg" alt="Agentic Search — a synthesised, cited answer with an agent trace across connected sources" height="280px"></td>
+        <td align="center"><img src="docs/mewbo-search-02-results.jpg" alt="Agentic Search: one ranked list of results across connected sources, topped by a synthesised overview" height="280px"></td>
     </tr>
 </table>
 
 <details>
-<summary><b>More screenshots</b> — console, wiki, search, and integrations</summary>
+<summary><b>More screenshots</b>: console, wiki, search, and integrations</summary>
 
 <br>
 

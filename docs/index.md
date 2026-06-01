@@ -12,11 +12,12 @@
 # An open stack for agentic work, grounded in your own knowledge.
 
 <p class="ms-hero__lede">
-At its core, a hypervisor decomposes any goal into parallel agents you can observe and steer.
-Three products build on that foundation. The first automates multi-step tasks across your
-codebase and tools. The second generates documentation you can interrogate, grounded in a
-multiplexed memory graph over your code. The third is a search engine that ranks results across
-every source you've connected. Every layer runs on any model, and all of it is open source.
+Real work outgrows a single context, a single tool, a single attempt. Mewbo's hypervisor
+splits a goal into parallel agents you watch as a live tree and steer mid-run. Three products
+stand on that one foundation. Automation that does the multi-step work and isolates every
+change. A wiki that turns your codebase into a graph you can question. Search that reaches
+across every tool you connect and returns one ranked list. Every layer runs on any model.
+All of it is open source.
 </p>
 
 <div class="ms-cta-row">
@@ -114,13 +115,15 @@ One engine. Five clients. Pick whichever matches where the work already happens 
 
 ## How it works { .ms-h2-icon data-icon="flow" }
 
+Every product on this page runs the same loop underneath. You ask. Mewbo splits the work. You get one answer you can trace back to its sources.
+
 ### You describe an outcome
 
 Ask for it in plain English on whichever surface is closest. In plan mode, the root agent drafts the steps first and waits for your approval. Destructive work never runs before you sign off on the plan.
 
 ### Mewbo delegates in parallel
 
-The root agent spawns sub-agents for any pieces of work that can run at the same time. A test run, a search, a refactor, and an MCP call against an external service can all execute in parallel. A live hypervisor watches every child for stalls. It steers drifting agents back with natural-language nudges between tool steps, and enforces per-agent token budgets without killing in-flight context. The tree grows in real time and you can steer or cancel any branch.
+The root agent spawns sub-agents for every piece of work that can run at once. A test run, a search, a refactor, and an MCP call against an external service all execute in parallel. A live hypervisor sits over the run like a control tower. It watches every child for stalls, nudges drifting agents back on course with plain-language corrections between tool steps, and holds each one to its token budget without killing work already in flight. The tree grows in real time, and you can steer or cancel any branch.
 
 ### You get a synthesised answer, not a pile of logs
 
@@ -138,12 +141,12 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 
 <a class="ms-card" href="features-wiki/">
 <span class="ms-card__title">Agentic Wiki</span>
-<span class="ms-card__body">Paste a repository URL and Mewbo writes the documentation for it. Indexing lifts the codebase's ASTs into a multiplex code memory graph — its structure plus an LLM-attached semantic layer — then sub-agents write grounded overview pages in parallel, every claim traced to source. Browse the repository as an interactive graph, and get fast, authoritative answers that retrieve across multiple hops instead of guessing from the open web.</span>
+<span class="ms-card__body">Stop reading the codebase. Ask it. Mewbo lifts your code's ASTs into a multiplex memory graph: structure on one layer, LLM-attached meaning on another. Sub-agents write grounded pages in parallel, every claim traced back to source. A question then travels the graph across many hops, so answers cite where they came from instead of approximating from the open web. Or browse the whole repository as a live, zoomable graph.</span>
 </a>
 
 <a class="ms-card" href="features-search/">
 <span class="ms-card__title">Agentic Search</span>
-<span class="ms-card__body">Ask one question and sub-agents fan out across a workspace's connected MCP sources — code, tickets, chat, docs, and the web — in parallel. You get back a synthesised, cited answer with a confidence score and an agent trace of everywhere it looked, not a pile of links.</span>
+<span class="ms-card__body">Your team's knowledge hides in repos, trackers, chat, and docs. One question fans a sub-agent out to each connected source in parallel. Their hits merge and re-rank into a single list that spans every source, topped by a synthesised overview cited to its origins, with a trace of every source it queried. One question. Every tool. One ranked answer.</span>
 </a>
 
 <a class="ms-card" href="features-widgets/">
