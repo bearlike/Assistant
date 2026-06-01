@@ -39,24 +39,27 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
 <br>
 
 <table align="center">
+    <tr><td colspan="2" align="center"><sub><b>A SESSION, END TO END</b></sub></td></tr>
     <tr>
-        <td align="center"><img src="docs/mewbo-console-02-tasks.png" alt="Mewbo task detail page" height="300px"></td>
-        <td align="center"><img src="docs/mewbo-console-01-front.png" alt="Mewbo console landing page" height="300px"></td>
+        <td align="center" width="50%"><img src="docs/mewbo-console-01-front.png" alt="Mewbo console landing page listing recent sessions" height="260px"><br><sub>Your sessions at a glance</sub></td>
+        <td align="center" width="50%"><img src="docs/mewbo-console-02-tasks.png" alt="Mewbo task detail page" height="260px"><br><sub>Inside a task, step by step</sub></td>
     </tr>
     <tr>
-        <td align="center"><img src="docs/mewbo-console-03-plan-approval.jpg" alt="Plan approval in the Mewbo console" height="280px"></td>
-        <td align="center"><img src="docs/mewbo-console-04-file-edit.jpg" alt="File-edit diff card in the Mewbo console" height="280px"></td>
+        <td align="center" width="50%"><img src="docs/mewbo-console-03-plan-approval.jpg" alt="Plan approval in the Mewbo console" height="260px"><br><sub>Plan mode: approve before anything runs</sub></td>
+        <td align="center" width="50%"><img src="docs/mewbo-console-04-file-edit.jpg" alt="File-edit diff card in the Mewbo console" height="260px"><br><sub>Every edit lands as a reviewable diff</sub></td>
+    </tr>
+    <tr><td colspan="2" align="center"><sub><b>THE KNOWLEDGE PRODUCTS</b></sub></td></tr>
+    <tr>
+        <td align="center" width="50%"><img src="docs/mewbo-wiki-01-landing.jpg" alt="Agentic Wiki landing page that generates source-grounded documentation from a repository URL" height="260px"><br><sub>Agentic Wiki: documentation from a repo URL</sub></td>
+        <td align="center" width="50%"><img src="docs/mewbo-search-01-landing.jpg" alt="Agentic Search landing page with workspaces scoped to connected sources" height="260px"><br><sub>Agentic Search: workspaces over your connected tools</sub></td>
+    </tr>
+    <tr><td colspan="2" align="center"><sub><b>EXTEND IT, ON EVERY SURFACE</b></sub></td></tr>
+    <tr>
+        <td align="center" width="50%"><img src="docs/mewbo-console-05-plugins.png" alt="Plugins page with installed plugins and marketplace listings" height="260px"><br><sub>Plugins and a marketplace to extend any session</sub></td>
+        <td align="center" width="50%"><img src="docs/screenshot_ha_assist_2.png" alt="Home Assistant device control via Mewbo" height="260px"><br><sub>The same agent, controlling Home Assistant</sub></td>
     </tr>
     <tr>
-        <td align="center"><img src="docs/mewbo-wiki-01-landing.jpg" alt="Agentic Wiki — generate source-grounded documentation from a repository URL" height="280px"></td>
-        <td align="center"><img src="docs/mewbo-search-01-landing.jpg" alt="Agentic Search landing page with workspaces scoped to connected MCP sources" height="280px"></td>
-    </tr>
-    <tr>
-        <td align="center"><img src="docs/mewbo-console-05-plugins.png" alt="Plugins page with installed plugins and marketplace listings" height="280px"></td>
-        <td align="center"><img src="docs/screenshot_ha_assist_2.png" alt="Home Assistant device control" height="280px"></td>
-    </tr>
-    <tr>
-        <td colspan="2" align="center"><img src="docs/mewbo-email-01.jpg" alt="Mewbo email thread in Gmail" height="380px"></td>
+        <td colspan="2" align="center"><img src="docs/mewbo-email-01.jpg" alt="Mewbo email thread in Gmail" height="340px"><br><sub>Or working from your inbox over email</sub></td>
     </tr>
 </table>
 
