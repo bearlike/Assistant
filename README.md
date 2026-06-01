@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="docs/logos/logo-transparent.svg" alt="Mewbo logo" width="96" />
+  <img src="docs/logos/logo-transparent.png" alt="Mewbo logo" width="96" />
 </p>
 
 <h1 align="center">Mewbo</h1>
@@ -22,8 +22,8 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
 
 <table align="center">
     <tr>
-        <td align="center"><img src="docs/mewbo-wiki-01-landing.jpg" alt="Agentic Wiki — generate source-grounded documentation from a repository URL" height="300px"></td>
-        <td align="center"><img src="docs/mewbo-search-02-results.jpg" alt="Agentic Search — a synthesised, cited answer with an agent trace across connected sources" height="300px"></td>
+        <td align="center"><img src="docs/mewbo-wiki-02-overview.jpg" alt="MewboWiki overview page with a runtime flow diagram and inline Ask MewboWiki Q&A" height="300px"></td>
+        <td align="center"><img src="docs/mewbo-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Mewbo Console" height="300px"></td>
     </tr>
 </table>
 
@@ -42,15 +42,15 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
         <td align="center"><img src="docs/mewbo-console-04-file-edit.jpg" alt="File-edit diff card in the Mewbo console" height="280px"></td>
     </tr>
     <tr>
-        <td align="center"><img src="docs/mewbo-wiki-02-overview.jpg" alt="MewboWiki overview page with a runtime flow diagram and inline Ask MewboWiki Q&A" height="280px"></td>
+        <td align="center"><img src="docs/mewbo-wiki-01-landing.jpg" alt="Agentic Wiki — generate source-grounded documentation from a repository URL" height="280px"></td>
         <td align="center"><img src="docs/mewbo-wiki-03-graph.jpg" alt="MewboWiki interactive knowledge graph of a repository" height="280px"></td>
     </tr>
     <tr>
         <td align="center"><img src="docs/mewbo-search-01-landing.jpg" alt="Agentic Search landing page with workspaces scoped to connected MCP sources" height="280px"></td>
-        <td align="center"><img src="docs/mewbo-console-05-plugins.png" alt="Plugins page with installed plugins and marketplace listings" height="280px"></td>
+        <td align="center"><img src="docs/mewbo-search-02-results.jpg" alt="Agentic Search — a synthesised, cited answer with an agent trace across connected sources" height="280px"></td>
     </tr>
     <tr>
-        <td align="center"><img src="docs/mewbo-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Mewbo Console" height="280px"></td>
+        <td align="center"><img src="docs/mewbo-console-05-plugins.png" alt="Plugins page with installed plugins and marketplace listings" height="280px"></td>
         <td align="center"><img src="docs/screenshot_ha_assist_2.png" alt="Home Assistant device control" height="280px"></td>
     </tr>
     <tr>
