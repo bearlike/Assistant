@@ -5,7 +5,6 @@
 
 <h1 align="center">Mewbo</h1>
 <p align="center"><strong>An open stack for agentic work, grounded in your own knowledge.</strong></p>
-<p align="center"><em>At its core, a hypervisor decomposes any goal into parallel agents you can observe and steer. Three products build on that foundation. The first automates multi-step tasks across your codebase and tools. Each change lands in its own Git worktree. The second generates living documentation you can interrogate. A multiplexed memory graph runs alongside an AST index of your code. Answers traverse structure and meaning across many hops, so they stay authoritative rather than approximate. The third is a search engine rebuilt around agents and indexes. One query fans out across every source you've connected and comes back as one ranked list that spans them all. A synthesized overview sits on top, cited to its sources. Every layer runs on any model. All of it is open source.</em></p>
 
 <p align="center">
     <a href="https://deepwiki.com/bearlike/Assistant"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg"></a>
@@ -16,6 +15,8 @@
     <a href="https://github.com/bearlike/Assistant/releases"><img src="https://img.shields.io/github/v/release/bearlike/Assistant" alt="GitHub Release"></a>
     <a href="https://github.com/bearlike/Assistant/pkgs/container/mewbo-api"><img src="https://img.shields.io/badge/ghcr.io-bearlike/mewbo--api:latest-blue?logo=docker&logoColor=white" alt="Docker Image"></a>
 </p>
+
+<p align="center"><em>Agentic task automation, memory-graph documentation and Q&amp;A, and search across every tool you connect. Any model, open source.</em></p>
 
 
 
