@@ -49,6 +49,9 @@ theme:
     Widgets: lucide:panel-left
     "Code Intelligence": lucide:zap
     "External Tools (MCP)": lucide:plug
+    "Knowledge & Discovery": lucide:library
+    "Agentic Wiki": lucide:book-marked
+    "Agentic Search": lucide:search
     "Composition & Delegation": lucide:users
     "Sub-agents": lucide:git-branch
     Skills: lucide:graduation-cap
@@ -146,6 +149,9 @@ nav:
           - Widgets: features-widgets.md
           - Code Intelligence: features-lsp.md
           - External Tools (MCP): features-mcp.md
+      - Knowledge & Discovery:
+          - Agentic Wiki: features-wiki.md
+          - Agentic Search: features-search.md
       - Composition & Delegation:
           - Sub-agents: features-agents.md
           - Skills: features-skills.md

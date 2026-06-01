@@ -22,24 +22,43 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
 
 <table align="center">
     <tr>
-        <td align="center"><img src="docs/mewbo-console-02-tasks.png" alt="Mewbo task detail page" height="320px"></td>
-        <td align="center"><img src="docs/mewbo-console-01-front.png" alt="Mewbo console landing page" height="320px"></td>
+        <td align="center"><img src="docs/mewbo-wiki-01-landing.jpg" alt="Agentic Wiki — generate source-grounded documentation from a repository URL" height="300px"></td>
+        <td align="center"><img src="docs/mewbo-search-02-results.jpg" alt="Agentic Search — a synthesised, cited answer with an agent trace across connected sources" height="300px"></td>
+    </tr>
+</table>
+
+<details>
+<summary><b>More screenshots</b> — console, wiki, search, and integrations</summary>
+
+<br>
+
+<table align="center">
+    <tr>
+        <td align="center"><img src="docs/mewbo-console-02-tasks.png" alt="Mewbo task detail page" height="300px"></td>
+        <td align="center"><img src="docs/mewbo-console-01-front.png" alt="Mewbo console landing page" height="300px"></td>
     </tr>
     <tr>
         <td align="center"><img src="docs/mewbo-console-03-plan-approval.jpg" alt="Plan approval in the Mewbo console" height="280px"></td>
         <td align="center"><img src="docs/mewbo-console-04-file-edit.jpg" alt="File-edit diff card in the Mewbo console" height="280px"></td>
     </tr>
     <tr>
+        <td align="center"><img src="docs/mewbo-wiki-02-overview.jpg" alt="MewboWiki overview page with a runtime flow diagram and inline Ask MewboWiki Q&A" height="280px"></td>
+        <td align="center"><img src="docs/mewbo-wiki-03-graph.jpg" alt="MewboWiki interactive knowledge graph of a repository" height="280px"></td>
+    </tr>
+    <tr>
+        <td align="center"><img src="docs/mewbo-search-01-landing.jpg" alt="Agentic Search landing page with workspaces scoped to connected MCP sources" height="280px"></td>
         <td align="center"><img src="docs/mewbo-console-05-plugins.png" alt="Plugins page with installed plugins and marketplace listings" height="280px"></td>
+    </tr>
+    <tr>
+        <td align="center"><img src="docs/mewbo-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Mewbo Console" height="280px"></td>
         <td align="center"><img src="docs/screenshot_ha_assist_2.png" alt="Home Assistant device control" height="280px"></td>
     </tr>
     <tr>
-        <td colspan="2" align="center"><img src="docs/mewbo-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Mewbo Console" width="100%"></td>
-    </tr>
-    <tr>
-        <td colspan="2" align="center"><img src="docs/mewbo-email-01.jpg" alt="Mewbo email thread in Gmail" height="400px"></td>
+        <td colspan="2" align="center"><img src="docs/mewbo-email-01.jpg" alt="Mewbo email thread in Gmail" height="380px"></td>
     </tr>
 </table>
+
+</details>
 
 ## Overview
 
@@ -50,6 +69,7 @@ Mewbo is an open-source, self-hosted AI orchestration system for long-horizon wo
 - **Agent hypervisor.** Sub-agents spawn in parallel with scoped tools and approval-gated actions. Progress shows as a live tree, and you can steer or cancel any branch mid-flight. The hypervisor enforces resource budgets through natural-language warnings rather than force-kills, and resolves every child into a structured result.
 - **Long-horizon context.** Two-mode compaction summarises older turns near the budget. Post-compact file restoration replays the working set. Conversation fork lets you branch from any message and replay against a different model.
 - **Native skills, plugins, and MCP.** Agent Skills, plugins from any compatible marketplace, and MCP servers load from user or project scope without translation. Plugins also contribute per-session stateful tools, hooks, and agent definitions.
+- **Agentic Wiki and Search.** Generate a navigable, source-grounded wiki for any repository. Indexing lifts the codebase's ASTs into a multiplex code memory graph — structure plus an LLM-attached semantic layer — so question answering retrieves across multiple hops for fast, authoritative answers grounded in the code itself. Ask one question and sub-agents fan out across a workspace's connected MCP sources to return a synthesised, cited answer with a full agent trace.
 - **Inline interactive widgets.** Sub-agents author Streamlit-in-WASM widgets that mount in a sandboxed Web Worker inside the conversation, with no server round-trip and no CORS.
 - **Provider-agnostic, multi-surface.** Any model behind LiteLLM, accessed from a terminal CLI, web console, REST API, Home Assistant, Nextcloud Talk, or email. Same session, same tools, same transcript.
 

@@ -135,6 +135,16 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 
 <div class="ms-grid ms-grid--2">
 
+<a class="ms-card" href="features-wiki/">
+<span class="ms-card__title">Agentic Wiki</span>
+<span class="ms-card__body">Paste a repository URL and Mewbo writes the documentation for it. Indexing lifts the codebase's ASTs into a multiplex code memory graph — its structure plus an LLM-attached semantic layer — then sub-agents write grounded overview pages in parallel, every claim traced to source. Browse the repository as an interactive graph, and get fast, authoritative answers that retrieve across multiple hops instead of guessing from the open web.</span>
+</a>
+
+<a class="ms-card" href="features-search/">
+<span class="ms-card__title">Agentic Search</span>
+<span class="ms-card__body">Ask one question and sub-agents fan out across a workspace's connected MCP sources — code, tickets, chat, docs, and the web — in parallel. You get back a synthesised, cited answer with a confidence score and an agent trace of everywhere it looked, not a pile of links.</span>
+</a>
+
 <a class="ms-card" href="features-widgets/">
 <span class="ms-card__title">Widgets inline in chat</span>
 <span class="ms-card__body">Ask for a chart, a card, or a data table and an interactive widget appears directly in the conversation. Widgets run in a sandboxed browser environment with no server involvement. Data is baked in at creation time, so widgets persist across sessions as permanent snapshots. Teams with internal data systems that lack good reporting interfaces can surface results visually on demand.</span>
@@ -190,7 +200,7 @@ Mewbo reads the configuration you already have. Point it at a project and it pic
 
 ## What you can do { .ms-h2-icon data-icon="grid" }
 
-<div class="ms-grid ms-grid--4">
+<div class="ms-grid ms-grid--5">
 
 <div class="ms-card">
 <span class="ms-card__title">Workspace &amp; execution</span>
@@ -200,6 +210,15 @@ Mewbo reads the configuration you already have. Point it at a project and it pic
   <li><a href="features-lsp/">Code intelligence (LSP)</a></li>
   <li><a href="features-mcp/">External tools (MCP)</a></li>
   <li><a href="features-widgets/">Widgets</a>: interactive UI inline in chat</li>
+</ul>
+</div>
+
+<div class="ms-card">
+<span class="ms-card__title">Knowledge &amp; discovery</span>
+<ul class="ms-card__list">
+  <li><a href="features-wiki/">Agentic Wiki</a>: source-grounded repo docs</li>
+  <li><a href="features-wiki/#the-knowledge-graph">Knowledge graph</a> of the codebase</li>
+  <li><a href="features-search/">Agentic Search</a> across connected MCPs</li>
 </ul>
 </div>
 
