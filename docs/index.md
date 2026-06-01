@@ -9,13 +9,14 @@
 
 <p class="ms-hero__eyebrow">Documentation</p>
 
-# Mewbo is an AI agent that plans, delegates, and completes your work.
+# An open stack for agentic work, grounded in your own knowledge.
 
 <p class="ms-hero__lede">
-Hand off a goal. Mewbo drafts a plan and spawns parallel sub-agents for the independent
-pieces. A live hypervisor watches every child for stalls, drift, and budget overruns. You get
-one synthesised answer with the full audit trail. Any model works. Your existing MCP configs,
-skills, plugins, and project instructions drop in unchanged.
+At its core, a hypervisor decomposes any goal into parallel agents you can observe and steer.
+Three products build on that foundation. The first automates multi-step tasks across your
+codebase and tools. The second generates documentation you can interrogate, grounded in a
+multiplexed memory graph over your code. The third is a search engine that ranks results across
+every source you've connected. Every layer runs on any model, and all of it is open source.
 </p>
 
 <div class="ms-cta-row">

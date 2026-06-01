@@ -4,7 +4,8 @@
 </p>
 
 <h1 align="center">Mewbo</h1>
-<p align="center"><em>Open-source, self-hosted AI orchestration system for long-horizon work. Parallel sub-agents you can scope, observe, and steer, with durable context and provider-agnostic model routing.</em></p>
+<p align="center"><strong>An open stack for agentic work, grounded in your own knowledge.</strong></p>
+<p align="center"><em>At its core, a hypervisor decomposes any goal into parallel agents you can observe and steer. Three products build on that foundation. The first automates multi-step tasks across your codebase and tools. Each change lands in its own Git worktree. The second generates living documentation you can interrogate. A multiplexed memory graph runs alongside an AST index of your code. Answers traverse structure and meaning across many hops, so they stay authoritative rather than approximate. The third is a search engine rebuilt around agents and indexes. One query fans out across every source you've connected and comes back as one ranked list that spans them all. A synthesized overview sits on top, cited to its sources. Every layer runs on any model. All of it is open source.</em></p>
 
 <p align="center">
     <a href="https://deepwiki.com/bearlike/Assistant"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg"></a>
@@ -62,14 +63,15 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
 
 ## Overview
 
-Mewbo is an open-source, self-hosted AI orchestration system for long-horizon work. Tasks decompose into parallel sub-agents that each carry only the tools they need, exchange compressed summaries instead of raw transcripts, and run within resource budgets you tune per deployment. You approve destructive actions, watch the agent tree as it grows, and can interrupt or steer any branch mid-flight. Sessions persist with full provenance, compact automatically near the budget, and survive across every client.
+Mewbo is an open, model-agnostic stack for agentic work. At its core, a hypervisor decomposes a goal into parallel sub-agents that each carry only the tools they need and exchange compressed summaries instead of raw transcripts, within resource budgets you tune per deployment. Three products build on that core. The first automates multi-step tasks across your codebase and tools, isolating each change in its own Git worktree. The second generates living documentation and question answering, grounded in a multiplexed memory graph that runs alongside an AST index of your code. The third is a search engine rebuilt around agents and indexes, ranking results across every source you have connected. You approve destructive actions, watch the agent tree as it grows, and can steer any branch mid-flight. Sessions persist with full provenance, compact automatically near the budget, and run on any model across every client.
 
 ## Features
 
 - **Agent hypervisor.** Sub-agents spawn in parallel with scoped tools and approval-gated actions. Progress shows as a live tree, and you can steer or cancel any branch mid-flight. The hypervisor enforces resource budgets through natural-language warnings rather than force-kills, and resolves every child into a structured result.
 - **Long-horizon context.** Two-mode compaction summarises older turns near the budget. Post-compact file restoration replays the working set. Conversation fork lets you branch from any message and replay against a different model.
 - **Native skills, plugins, and MCP.** Agent Skills, plugins from any compatible marketplace, and MCP servers load from user or project scope without translation. Plugins also contribute per-session stateful tools, hooks, and agent definitions.
-- **Agentic Wiki and Search.** Generate a navigable, source-grounded wiki for any repository. Indexing lifts the codebase's ASTs into a multiplex code memory graph — structure plus an LLM-attached semantic layer — so question answering retrieves across multiple hops for fast, authoritative answers grounded in the code itself. Ask one question and sub-agents fan out across a workspace's connected MCP sources to return a synthesised, cited answer with a full agent trace.
+- **Agentic Wiki.** Turns any repository into living documentation you can interrogate. Indexing pairs a multiplexed memory graph with an AST index of the code, so question answering traverses structure and meaning across many hops for authoritative answers grounded in the source itself.
+- **Agentic Search.** A search engine rebuilt around agents and indexes. One query fans out across every source you've connected, from repos to trackers to chat, and comes back as one ranked list of results spanning them all, topped by a synthesised overview cited to its sources.
 - **Inline interactive widgets.** Sub-agents author Streamlit-in-WASM widgets that mount in a sandboxed Web Worker inside the conversation, with no server round-trip and no CORS.
 - **Provider-agnostic, multi-surface.** Any model behind LiteLLM, accessed from a terminal CLI, web console, REST API, Home Assistant, Nextcloud Talk, or email. Same session, same tools, same transcript.
 
