@@ -48,6 +48,10 @@ def _fast_sse(monkeypatch):
 def wiki_app(tmp_path: Path, monkeypatch, store, runtime):
     """Flask test app with wiki routes mounted and a temp JsonWikiStore."""
     monkeypatch.setenv("MASTER_API_TOKEN", API_KEY)
+    # backend reads MASTER_API_TOKEN at import time; if another test imported it
+    # earlier in the run, setenv is too late. Force the resolved attribute so
+    # auth works regardless of collection/import order.
+    monkeypatch.setattr("mewbo_api.backend.MASTER_API_TOKEN", API_KEY, raising=False)
 
     import mewbo_api.wiki.routes as routes_mod
     from flask import Flask

@@ -50,7 +50,7 @@ def test_wiki_qa_agent_def_loads():
     agent_def = parse_agent_def(path, source="plugin:wiki")
     assert agent_def is not None
     assert agent_def.name == "wiki-qa"
-    expected_tools = {"wiki_search_pages", "wiki_read_page", "code_search",
+    expected_tools = {"wiki_search_pages", "wiki_read_page", "wiki_code_search",
                       "wiki_query_graph", "wiki_emit_block"}
     assert expected_tools.issubset(set(agent_def.allowed_tools or []))
     for kw in ["wiki_emit_block", "wiki_search_pages", "wiki_read_page"]:

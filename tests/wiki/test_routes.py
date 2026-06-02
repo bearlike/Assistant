@@ -98,8 +98,11 @@ def runtime_stub(store):
 @pytest.fixture()
 def wiki_app(tmp_path: Path, monkeypatch, store, runtime_stub):
     """Flask test app with wiki routes mounted and a temp JsonWikiStore."""
-    # Patch MASTER_API_TOKEN before importing backend (it reads at module level)
+    # backend reads MASTER_API_TOKEN at import time; if another test imported it
+    # earlier in the run, setenv is too late. Force the resolved attribute so
+    # auth works regardless of collection/import order.
     monkeypatch.setenv("MASTER_API_TOKEN", API_KEY)
+    monkeypatch.setattr("mewbo_api.backend.MASTER_API_TOKEN", API_KEY, raising=False)
 
     import mewbo_api.wiki.routes as routes_mod
     from flask import Flask
