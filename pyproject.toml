@@ -1,6 +1,6 @@
 [project]
 name = "mewbo-workspace"
-version = "0.0.11"
+version = "0.0.13"
 description = "Workspace package for the Mewbo monorepo."
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
@@ -21,6 +21,7 @@ mewbo = "mewbo_cli.cli_master:main"
 [project.optional-dependencies]
 api = ["mewbo-api>=0.0.10"]
 ha = ["mewbo-ha-conversation>=0.0.10"]
+wiki = ["mewbo-api[wiki]>=0.0.10"]
 
 [dependency-groups]
 dev = [

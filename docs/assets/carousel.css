@@ -1,0 +1,97 @@
+/* Hero product-tour carousel (Swiper), themed to the shadcn fork.
+   Loaded after the Swiper CDN stylesheet via mkdocs.yml extra_css.
+   Design tokens (--border, --muted, --muted-foreground, --card, --primary)
+   come from the theme, so light/dark both track automatically. */
+
+.ms-shots {
+  width: 100%;
+  max-width: 100%; /* never exceed the article column (no TOC overflow) */
+  margin: 0.75rem 0 0.25rem;
+  overflow: hidden; /* belt-and-braces; Swiper's root already clips */
+  /* Swiper reads these for its arrows + active pagination bullet */
+  --swiper-theme-color: var(--primary, #c15f3c);
+  --swiper-navigation-size: 20px;
+}
+
+.ms-shots .swiper-slide {
+  display: flex;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.ms-shots figure {
+  margin: 0;
+  width: 100%;
+}
+
+/* contain + muted backdrop: every shot shows in full inside one uniform
+   frame, regardless of its native aspect ratio. No cropping. */
+.ms-shots img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  background: var(--muted, hsl(48 25% 92.2%));
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  border-radius: 0.6rem; /* matches .ms-hero__screens img */
+}
+
+.ms-shots figcaption {
+  margin-top: 0.55rem;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--muted-foreground, currentColor);
+}
+
+/* Dots sit just below the frame, in normal flow (not overlaid on the image) */
+.ms-shots .swiper-pagination {
+  position: static;
+  margin-top: 0.6rem;
+}
+
+/* Arrows: shadcn-style small outline buttons with a thin lucide chevron.
+   Swiper's default chunky icon-font glyph is replaced by a crisp masked SVG. */
+.ms-shots .swiper-button-prev,
+.ms-shots .swiper-button-next {
+  width: 32px;
+  height: 32px;
+  margin-top: calc(0px - 16px); /* re-centre after the size change */
+  border-radius: 999px;
+  background: var(--card, hsl(0 0% 100%));
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  color: var(--card-foreground, currentColor);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.ms-shots .swiper-button-prev:hover,
+.ms-shots .swiper-button-next:hover {
+  background: var(--accent, hsl(48 25% 92.2%));
+  border-color: var(--ring, var(--border, rgba(0, 0, 0, 0.18)));
+}
+.ms-shots .swiper-button-prev::after,
+.ms-shots .swiper-button-next::after {
+  content: "";
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask: var(--ms-chev) center / 16px 16px no-repeat;
+  mask: var(--ms-chev) center / 16px 16px no-repeat;
+}
+.ms-shots .swiper-button-prev {
+  --ms-chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E");
+}
+.ms-shots .swiper-button-next {
+  --ms-chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 18l6-6-6-6'/%3E%3C/svg%3E");
+}
+/* Swiper v12 injects its own bold <svg class="swiper-navigation-icon"> into each
+   button. Hide it so only our thin chevron (drawn on ::after) shows. */
+.ms-shots .swiper-button-prev .swiper-navigation-icon,
+.ms-shots .swiper-button-next .swiper-navigation-icon {
+  display: none;
+}
+
+/* Mobile: drop arrows, keep dots + native swipe */
+@media (max-width: 720px) {
+  .ms-shots .swiper-button-prev,
+  .ms-shots .swiper-button-next { display: none; }
+}

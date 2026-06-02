@@ -18,7 +18,7 @@ set -u
 # /tmp/mewbo-ide holds per-session deadline files written by the Web
 # IDE feature; it is bind-mounted from the host so docker can expose the
 # same paths to sibling code-server containers.
-for _dir in /tmp/mewbo /app/data /tmp/mewbo-ide; do
+for _dir in /tmp/mewbo /tmp/mewbo/plans /tmp/mewbo/wiki /tmp/mewbo/wiki/clones /app/data /tmp/mewbo-ide; do
     if [ -d "$_dir" ] && [ ! -w "$_dir" ]; then
         printf '[entrypoint] Fixing ownership on %s\n' "$_dir"
         sudo chown -R "$(id -u):$(id -g)" "$_dir"

@@ -23,8 +23,12 @@ from mewbo_core.project_store import (
     worktree_project_id,
 )
 from mewbo_core.worktree import (
+    MEWBO_BRANCH_PREFIX,
     WORKTREES_DIR,
+    WorktreeBranchInUseError,
     WorktreeManager,
+    generate_worktree_branch_name,
+    is_mewbo_branch,
     slugify_branch,
 )
 
@@ -328,3 +332,136 @@ def test_regular_project_unaffected_by_worktree_fields(store: JsonProjectStore) 
     assert fetched.is_worktree is False
     assert fetched.parent_project_id is None
     assert fetched.branch is None
+
+
+# ---------------------------------------------------------------------------
+# generate_worktree_branch_name / is_mewbo_branch
+# ---------------------------------------------------------------------------
+
+
+def test_generate_worktree_branch_name_uses_prefix_and_slug() -> None:
+    name = generate_worktree_branch_name("feature/auth")
+    assert name.startswith(MEWBO_BRANCH_PREFIX)
+    assert "feature-auth" in name
+    # 6-hex suffix → total length is prefix + slug + dash + 6.
+    assert len(name) == len(MEWBO_BRANCH_PREFIX) + len("feature-auth") + 1 + 6
+
+
+def test_generate_worktree_branch_name_uniqueness() -> None:
+    names = {generate_worktree_branch_name("main") for _ in range(50)}
+    # 6-hex suffix space is huge — collisions in 50 draws are basically zero.
+    assert len(names) == 50
+
+
+def test_is_mewbo_branch_recognises_prefix() -> None:
+    assert is_mewbo_branch("mewbo/feature-x-ab12cd")
+    assert not is_mewbo_branch("feature/x")
+    assert not is_mewbo_branch("main")
+
+
+# ---------------------------------------------------------------------------
+# branches_in_use + WorktreeBranchInUseError
+# ---------------------------------------------------------------------------
+
+
+def test_branches_in_use_includes_current_branch(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    in_use = WorktreeManager.branches_in_use(str(repo))
+    # Parent repo has ``main`` checked out; ``feature/auth`` exists but is free.
+    assert "main" in in_use
+    assert "feature/auth" not in in_use
+
+
+def test_branches_in_use_includes_existing_worktree(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    WorktreeManager.create(str(repo), "feature/auth")
+    in_use = WorktreeManager.branches_in_use(str(repo))
+    assert "main" in in_use
+    assert "feature/auth" in in_use
+
+
+def test_create_raises_branch_in_use_when_branch_already_checked_out(
+    tmp_path: Path,
+) -> None:
+    """Reproduces the original RCA: ``main`` is already checked out by the
+    parent repo, so a second ``git worktree add main`` must surface a
+    structured ``WorktreeBranchInUseError`` (not a generic RuntimeError)."""
+    repo = _make_repo(tmp_path)
+    with pytest.raises(WorktreeBranchInUseError) as excinfo:
+        WorktreeManager.create(str(repo), "main")
+    err = excinfo.value
+    assert err.branch == "main"
+    assert err.existing_path  # git tells us where it's checked out
+
+
+# ---------------------------------------------------------------------------
+# create(..., base=...) — new branch from base atomically
+# ---------------------------------------------------------------------------
+
+
+def test_create_with_base_creates_new_branch(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    new_branch = "mewbo/feature-auth-deadbe"
+    path = WorktreeManager.create(str(repo), new_branch, base="feature/auth")
+    assert Path(path).exists()
+    # Branch must now exist locally.
+    assert new_branch in WorktreeManager.list_branches(str(repo))
+    # And the worktree's HEAD points at it.
+    head = _git(path, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    assert head == new_branch
+
+
+def test_create_with_base_can_use_in_use_base(tmp_path: Path) -> None:
+    """The whole point of ``-b``: branching from ``main`` should work even
+    though ``main`` is currently checked out by the parent repo."""
+    repo = _make_repo(tmp_path)
+    new_branch = "mewbo/main-cafef0"
+    WorktreeManager.create(str(repo), new_branch, base="main")
+    assert new_branch in WorktreeManager.list_branches(str(repo))
+
+
+# ---------------------------------------------------------------------------
+# delete_branch + branch cleanup on worktree delete
+# ---------------------------------------------------------------------------
+
+
+def test_delete_branch_returns_true_on_success(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    _git(str(repo), "branch", "scratch")
+    assert WorktreeManager.delete_branch(str(repo), "scratch") is True
+    assert "scratch" not in WorktreeManager.list_branches(str(repo))
+
+
+def test_delete_branch_returns_false_for_missing_branch(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    assert WorktreeManager.delete_branch(str(repo), "no-such-branch") is False
+
+
+def test_delete_worktree_cleans_up_mewbo_branch(
+    repo_with_parent: tuple[Path, VirtualProject],
+    store: JsonProjectStore,
+) -> None:
+    """Mewbo-owned branches (``mewbo/...``) should be auto-deleted when the
+    worktree they back is removed — otherwise the parent repo accumulates
+    orphan session branches forever."""
+    repo, parent = repo_with_parent
+    new_branch = "mewbo/feature-auth-abcdef"
+    wt = store.create_worktree(parent.project_id, new_branch, base="feature/auth")
+    assert new_branch in WorktreeManager.list_branches(str(repo))
+
+    store.delete_worktree(wt.project_id)
+    assert new_branch not in WorktreeManager.list_branches(str(repo))
+
+
+def test_delete_worktree_keeps_user_owned_branch(
+    repo_with_parent: tuple[Path, VirtualProject],
+    store: JsonProjectStore,
+) -> None:
+    """User-owned branches must be left alone on worktree removal — the
+    user might want to keep working on them elsewhere."""
+    repo, parent = repo_with_parent
+    wt = store.create_worktree(parent.project_id, "feature/auth")
+    assert "feature/auth" in WorktreeManager.list_branches(str(repo))
+
+    store.delete_worktree(wt.project_id)
+    assert "feature/auth" in WorktreeManager.list_branches(str(repo))

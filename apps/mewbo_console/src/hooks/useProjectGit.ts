@@ -6,7 +6,7 @@ import {
   listProjectBranches,
   listWorktrees,
 } from "../api/client";
-import { ProjectBranches, WorktreeSummary } from "../types";
+import { CreateWorktreeInput, ProjectBranches, WorktreeSummary } from "../types";
 import { logApiError } from "../utils/errors";
 
 /**
@@ -26,12 +26,22 @@ export type ProjectGitState = {
   gitRepo: boolean;
   branches: string[];
   currentBranch: string | null;
+  /** Branches ``git worktree add`` will refuse — already checked out. */
+  branchesInUse: string[];
   worktrees: WorktreeSummary[];
   loading: boolean;
   error: string | null;
   reason?: string;
   refresh: () => void;
-  createWorktreeFor: (branch: string) => Promise<WorktreeSummary>;
+  /**
+   * Create a worktree. Pass ``{branch}`` to reuse an existing branch, or
+   * ``{branch, base}`` to create a new branch from <base> atomically
+   * (the Mewbo-default workflow). The hook stays string-compatible for
+   * legacy callers via the ``string`` overload below.
+   */
+  createWorktreeFor: (
+    input: CreateWorktreeInput | string,
+  ) => Promise<WorktreeSummary>;
   deleteWorktreeFor: (worktreeId: string, force?: boolean) => Promise<void>;
   /** ``true`` while a write (create / delete) is in-flight. */
   mutating: boolean;
@@ -70,8 +80,8 @@ export function useProjectGit(activeProject: string | null | undefined): Project
   }, [qc, projectKey]);
 
   const createMutation = useMutation({
-    mutationFn: ({ branch }: { branch: string }) =>
-      createWorktree(projectKey as string, branch),
+    mutationFn: (input: CreateWorktreeInput) =>
+      createWorktree(projectKey as string, input),
     onSuccess: () => invalidate(),
   });
 
@@ -82,11 +92,16 @@ export function useProjectGit(activeProject: string | null | undefined): Project
   });
 
   const createWorktreeFor = useCallback(
-    async (branch: string) => {
+    async (input: CreateWorktreeInput | string) => {
       if (!projectKey) {
         throw new Error("No project selected");
       }
-      return createMutation.mutateAsync({ branch });
+      // Accept a bare branch string for back-compat with the older
+      // single-argument call sites; normalize to the structured payload
+      // before hitting the mutation.
+      const payload: CreateWorktreeInput =
+        typeof input === "string" ? { branch: input } : input;
+      return createMutation.mutateAsync(payload);
     },
     [projectKey, createMutation],
   );
@@ -113,6 +128,7 @@ export function useProjectGit(activeProject: string | null | undefined): Project
     gitRepo: branchesQuery.data?.git_repo ?? false,
     branches: branchesQuery.data?.branches ?? [],
     currentBranch: branchesQuery.data?.current_branch ?? null,
+    branchesInUse: branchesQuery.data?.branches_in_use ?? [],
     worktrees: worktreesQuery.data ?? [],
     loading: branchesQuery.isPending || worktreesQuery.isPending,
     error,
