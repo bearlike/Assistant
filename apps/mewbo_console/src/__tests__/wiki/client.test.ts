@@ -7,6 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 
 // getApiKey() in client.ts reads window.__MEWBO_CONFIG__ lazily (at call time),
 // so setting it here before tests run is sufficient — no module re-import needed.
@@ -64,7 +65,7 @@ async function collect<T>(iter: AsyncIterable<T>): Promise<T[]> {
 
 // ── Setup ──────────────────────────────────────────────────────────────────
 
-let fetchSpy: ReturnType<typeof vi.spyOn>;
+let fetchSpy: MockInstance<Parameters<typeof fetch>, ReturnType<typeof fetch>>;
 
 beforeEach(() => {
   fetchSpy = vi.spyOn(global, "fetch");
