@@ -49,10 +49,20 @@ All of it is open source.
   </span>
 </div>
 
-<div class="ms-hero__screens">
-  <img src="mewbo-console-01-front.png" alt="Mewbo Console landing page" />
-  <img src="mewbo-console-02-tasks.png" alt="Mewbo Console tasks page" />
-  <img src="mewbo-console-07-widgets.png" alt="Widgets rendered inline in the Mewbo Console" />
+<div class="swiper ms-shots">
+<div class="swiper-wrapper">
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-01-front.png" alt="The Mewbo Console home listing recent sessions" /><figcaption>Your sessions at a glance</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-02-tasks.png" alt="A Mewbo task in the console, broken into steps with tool calls and results" /><figcaption>Inside a task, step by step</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-07-widgets.png" alt="Interactive widgets rendered inline in a Mewbo conversation" /><figcaption>Interactive widgets, inline in chat</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-wiki-02-overview.jpg" alt="A MewboWiki overview page with a runtime flow diagram and an Ask MewboWiki box" /><figcaption>Agentic Wiki: documentation grounded in your code</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-wiki-03-graph.jpg" alt="The MewboWiki interactive knowledge graph of a repository" /><figcaption>Your codebase as a living knowledge graph</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-search-01-landing.jpg" alt="The Agentic Search landing page with workspaces scoped to connected sources" /><figcaption>Agentic Search: workspaces over your connected tools</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-search-02-results.jpg" alt="Agentic Search results: one ranked list across connected sources with a synthesised overview" /><figcaption>One ranked list across every tool, topped by a synthesis</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-05-plugins.png" alt="The Mewbo plugins page with installed plugins and marketplace listings" /><figcaption>Plugins and a marketplace to extend any session</figcaption></figure></div>
+</div>
+<div class="swiper-pagination"></div>
+<div class="swiper-button-prev"></div>
+<div class="swiper-button-next"></div>
 </div>
 
 </section>

@@ -92,6 +92,7 @@ Full documentation lives at **[docs.mewbo.com](https://docs.mewbo.com/latest/)**
 | [Get Started](https://docs.mewbo.com/latest/getting-started/) | Install, configure an LLM, run a first session. |
 | [Configure](https://docs.mewbo.com/latest/configuration/) | LLM setup, project config, configuration reference. |
 | [Clients](https://docs.mewbo.com/latest/clients-cli/) | CLI, web console, REST API, Home Assistant, Nextcloud Talk, email. |
+| [Knowledge & Discovery](https://docs.mewbo.com/latest/features-wiki/) | Agentic Wiki and Agentic Search, the source-grounded docs and cross-tool search products. |
 | [Capabilities](https://docs.mewbo.com/latest/features-builtin-tools/) | Built-in tools, sub-agents, skills, plugins, widgets, plan mode, permissions, compaction. |
 | [Deploy](https://docs.mewbo.com/latest/deployment-docker/) | Docker Compose, storage backends, production setup. |
 | [Develop](https://docs.mewbo.com/latest/core-orchestration/) | Architecture, session runtime, building a client, API reference. |

@@ -123,6 +123,16 @@ extra:
   version:
     provider: mike
 
+# Hero product-tour carousel: Swiper (pinned major, jsDelivr CDN) + two small
+# local assets. Standard mkdocs keys, theme-agnostic. No Python plugin / build step.
+extra_css:
+  - https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css
+  - assets/carousel.css
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js
+  - assets/carousel.js
+
 # Theme now ships everything that used to live in extra_css/extra_javascript
 # and overrides/. If you ever need to override theme behavior again, you can
 # add `theme.custom_dir: overrides`, but the brand chrome / Ask AI / nav
@@ -142,6 +152,9 @@ nav:
       - Home Assistant: clients-home-assistant.md
       - Nextcloud Talk: clients-nextcloud-talk.md
       - Email: clients-email.md
+  - Knowledge & Discovery:
+      - Agentic Wiki: features-wiki.md
+      - Agentic Search: features-search.md
   - Capabilities:
       - Workspace & Execution:
           - Built-in Tools: features-builtin-tools.md
@@ -149,9 +162,6 @@ nav:
           - Widgets: features-widgets.md
           - Code Intelligence: features-lsp.md
           - External Tools (MCP): features-mcp.md
-      - Knowledge & Discovery:
-          - Agentic Wiki: features-wiki.md
-          - Agentic Search: features-search.md
       - Composition & Delegation:
           - Sub-agents: features-agents.md
           - Skills: features-skills.md
