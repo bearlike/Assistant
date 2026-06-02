@@ -924,6 +924,92 @@
       },
       "title": "WebIdeConfig",
       "type": "object"
+    },
+    "WikiConfig": {
+      "additionalProperties": false,
+      "description": "Operator-facing knobs for the wiki subsystem.",
+      "properties": {
+        "default_model": {
+          "default": "",
+          "description": "Model the wiki picker pre-selects for indexing (the wizard). Overrides ``llm.default_model`` for the wizard. Empty string means: fall back to ``llm.default_model``.",
+          "examples": [
+            "openai/gpt-5.4-mini"
+          ],
+          "title": "Default Model",
+          "type": "string"
+        },
+        "default_qa_model": {
+          "default": "",
+          "description": "Model the Q&A composer pre-selects. Typically smaller/faster than ``default_model`` because Q&A is a tight read-only loop where latency matters more than depth. Empty string means: fall back to ``default_model``, then to ``llm.default_model``.",
+          "examples": [
+            "openai/gpt-5.4-nano"
+          ],
+          "title": "Default Qa Model",
+          "type": "string"
+        },
+        "default_depth": {
+          "default": "",
+          "description": "Indexing depth the wizard pre-selects. Empty string means: use the wizard's own default (``comprehensive``).",
+          "enum": [
+            "",
+            "comprehensive",
+            "concise"
+          ],
+          "title": "Default Depth",
+          "type": "string"
+        },
+        "default_language": {
+          "default": "",
+          "description": "Language code the wizard pre-selects (e.g. ``en``, ``es``). Empty string means: use the wizard's own default.",
+          "title": "Default Language",
+          "type": "string"
+        },
+        "embedding": {
+          "$ref": "#/$defs/WikiEmbeddingConfig"
+        }
+      },
+      "title": "WikiConfig",
+      "type": "object"
+    },
+    "WikiEmbeddingConfig": {
+      "additionalProperties": false,
+      "description": "Embedding settings for the wiki indexer.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "When false, ``wiki_build_graph`` skips embedding generation and retrieval falls back to BM25 + graph traversal only.",
+          "examples": [
+            true,
+            false
+          ],
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "model": {
+          "default": "openai/text-embedding-3-small",
+          "description": "Embedding model ID routed through the LLM proxy. Must support the OpenAI ``/v1/embeddings`` shape (LiteLLM normalises Gemini and others to this shape). Pin a fast model here to speed up indexing \u2014 embedding is per-node and runs synchronously.",
+          "examples": [
+            "openai/gemini-embedding-001",
+            "openai/text-embedding-3-large"
+          ],
+          "title": "Model",
+          "type": "string"
+        },
+        "batch_size": {
+          "default": 64,
+          "description": "Batch size when embedding nodes in chunks.",
+          "examples": [
+            32,
+            64,
+            128
+          ],
+          "exclusiveMinimum": 0,
+          "title": "Batch Size",
+          "type": "integer"
+        }
+      },
+      "title": "WikiEmbeddingConfig",
+      "type": "object"
     }
   },
   "description": "Typed configuration for the Mewbo runtime.",
@@ -972,6 +1058,10 @@
     },
     "agent": {
       "$ref": "#/$defs/AgentConfig"
+    },
+    "wiki": {
+      "$ref": "#/$defs/WikiConfig",
+      "description": "Wiki subsystem defaults and embedding behavior."
     },
     "hooks": {
       "$ref": "#/$defs/HooksConfig",

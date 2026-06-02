@@ -58,7 +58,7 @@ When `allowed-tools` is omitted, the skill inherits the full tool set of the cur
 
 ## Capability gating
 
-A skill can opt out of sessions that lack a required runtime by declaring `requires-capabilities` in its frontmatter. The client advertises capabilities via the `X-Mewbo-Capabilities` header; the orchestrator resolves the session capability set once, and `SkillRegistry` then filters both the auto-invocation catalog and the `/skill-name` lookup. Skills whose `requires-capabilities` is not a subset of the session capabilities are invisible — they are not surfaced to the model and cannot be invoked explicitly. The built-in `widget-builder` plugin uses this: its `st-widget-builder` skill declares `requires-capabilities: [stlite]`, so it never appears on CLI sessions that do not advertise stlite.
+A skill can opt out of sessions that lack a required runtime by declaring `requires-capabilities` in its frontmatter. The client advertises capabilities via the `X-Mewbo-Capabilities` header; the orchestrator resolves the session capability set once, and `SkillRegistry` then filters both the auto-invocation catalog and the `/skill-name` lookup. Skills whose `requires-capabilities` is not a subset of the session capabilities are invisible: they are not surfaced to the model and cannot be invoked explicitly. The built-in `widget-builder` plugin uses this: its `st-widget-builder` skill declares `requires-capabilities: [stlite]`, so it never appears on CLI sessions that do not advertise stlite.
 
 ```yaml
 ---
@@ -68,7 +68,7 @@ requires-capabilities: [stlite]
 ---
 ```
 
-Skills inherit the capability list from their plugin when one is set — `plugin.json` can declare `requires-capabilities` at bundle level and have every skill under the plugin pick it up automatically. See [Plugins & Marketplace → Capability gating](features-plugins.md#capability-gating).
+Skills inherit the capability list from their plugin when one is set. `plugin.json` can declare `requires-capabilities` at bundle level and have every skill under the plugin pick it up automatically. See [Plugins & Marketplace → Capability gating](features-plugins.md#capability-gating).
 
 ---
 

@@ -103,6 +103,8 @@
 
     
     <link href="../assets/_mkdocstrings.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet">
+    <link href="../assets/carousel.css" rel="stylesheet">
 
     
 
@@ -680,6 +682,67 @@
 
         
         Email
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+        </ul>
+    </div>
+</div>
+
+
+
+<div data-slot="sidebar-group" data-sidebar="group" class="mewbo-sidebar-group relative flex w-full min-w-0 flex-col p-2">
+    <div data-slot="sidebar-group-label" data-sidebar="group-label"
+        class="mewbo-sidebar-group-label flex h-8 shrink-0 items-center rounded-md px-2 text-xs ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-200 ease-linear focus-visible:ring-2 group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0 font-medium text-foreground tracking-tight">
+        Knowledge & Discovery</div>
+    <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
+        <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-wiki/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 2v8l3-3l3 3V2"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></g></svg>
+
+        
+        Agentic Wiki
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-search/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
+
+        
+        Agentic Search
         
 
         
@@ -1511,7 +1574,7 @@
 </tbody>
 </table></div>
 <h3 id="path-substitution">Path substitution</h3>
-<p>Inside any plugin-owned file — <code>.mcp.json</code>, <code>hooks/hooks.json</code>, <code>agents/*.md</code> bodies, <code>skills/*/SKILL.md</code> bodies — you can reference the plugin's own installation directory with <code>${CLAUDE_PLUGIN_ROOT}</code>. It is substituted when the plugin is discovered. In agent bodies, additional placeholders are resolved at spawn time:</p>
+<p>Inside any plugin-owned file (<code>.mcp.json</code>, <code>hooks/hooks.json</code>, <code>agents/*.md</code> bodies, <code>skills/*/SKILL.md</code> bodies) you can reference the plugin's own installation directory with <code>${CLAUDE_PLUGIN_ROOT}</code>. It is substituted when the plugin is discovered. In agent bodies, additional placeholders are resolved at spawn time:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1534,7 +1597,7 @@
 </tr>
 </tbody>
 </table></div>
-<p>Substitution is a single linear <code>replace</code> pass — no template engine — so a body with no placeholders is byte-identical after substitution.</p>
+<p>Substitution is a single linear <code>replace</code> pass (no template engine), so a body with no placeholders is byte-identical after substitution.</p>
 <hr />
 <h2 id="installing-plugins">Installing plugins</h2>
 <h3 id="via-cli">Via CLI</h3>
@@ -1631,13 +1694,13 @@
 <p>Plugin skills never override personal (<code>~/.claude/skills/</code>) or project-local (<code>.claude/skills/</code>) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name.</p>
 <hr />
 <h2 id="capability-gating">Capability gating</h2>
-<p>A plugin can declare that its agents, skills, and session tools only make sense on sessions that advertise a specific capability — for instance, the widget-builder bundle only makes sense when the client has an stlite runtime.</p>
+<p>A plugin can declare that its agents, skills, and session tools only make sense on sessions that advertise a specific capability. For instance, the widget-builder bundle only makes sense when the client has an stlite runtime.</p>
 <p>Capabilities flow top-down:</p>
 <ol>
 <li>The <strong>client</strong> announces its capabilities on every request. The web console sends <code>X-Mewbo-Capabilities: stlite</code> by default. Other clients (CLI, webhook adapters) send nothing unless configured to.</li>
 <li>The <strong>API</strong> writes the advertised list onto the session's context event.</li>
 <li>The <strong>orchestrator</strong> resolves <code>session_capabilities</code> once per session and passes the tuple to <code>ToolUseLoop</code>.</li>
-<li>The <strong>registries</strong> apply <code>filter_by_capabilities</code> before rendering the agent and skill catalogs. An entry whose <code>requires-capabilities</code> is not a subset of the session's set is invisible — no tool schema, no catalog line, no accidental invocation.</li>
+<li>The <strong>registries</strong> apply <code>filter_by_capabilities</code> before rendering the agent and skill catalogs. An entry whose <code>requires-capabilities</code> is not a subset of the session's set is invisible: no tool schema, no catalog line, no accidental invocation.</li>
 </ol>
 <p>Declare capabilities at the bundle level in <code>plugin.json</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
@@ -1655,7 +1718,7 @@
 <p>Empty <code>requires-capabilities</code> is the default and means "always visible".</p>
 <hr />
 <h2 id="session-tools">Session tools</h2>
-<p>A <strong>session tool</strong> is a per-agent stateful tool — a tool whose lifecycle is coupled to a specific agent instance rather than the global <code>ToolRegistry</code>. The core <code>exit_plan_mode</code> tool is a session tool; the widget-builder's <code>submit_widget</code> is a session tool.</p>
+<p>A <strong>session tool</strong> is a per-agent stateful tool: its lifecycle is coupled to a specific agent instance rather than the global <code>ToolRegistry</code>. The core <code>exit_plan_mode</code> tool is a session tool; the widget-builder's <code>submit_widget</code> is a session tool.</p>
 <p>Plugins contribute session tools through the <code>session_tools</code> array in <code>plugin.json</code>:</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;session_tools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
@@ -1699,11 +1762,11 @@
 </tr>
 </tbody>
 </table></div>
-<p>At session start, the core instantiates a <code>SessionToolRegistry</code>, imports each listed <code>module</code> + <code>class</code>, and registers a factory. When an agent spawns with a <code>session_tools</code>-contributed tool in its <code>allowed_tools</code>, the loop instantiates one per-agent instance and wires it alongside the built-in session tools. Dispatch, schema injection, and termination all go through the same path — no widget-specific branch exists in core.</p>
+<p>At session start, the core instantiates a <code>SessionToolRegistry</code>, imports each listed <code>module</code> + <code>class</code>, and registers a factory. When an agent spawns with a <code>session_tools</code>-contributed tool in its <code>allowed_tools</code>, the loop instantiates one per-agent instance and wires it alongside the built-in session tools. Dispatch, schema injection, and termination all go through the same path. No widget-specific branch exists in core.</p>
 <p>This keeps core widget-agnostic: the full contract for a capability bundle is <strong>(a)</strong> a plugin manifest and <strong>(b)</strong> a Python class that satisfies the protocol.</p>
 <hr />
 <h2 id="built-in-plugins">Built-in plugins</h2>
-<p>Some plugins ship inside the core package at <code>packages/mewbo_core/src/mewbo_core/builtin_plugins/</code>. They are discovered through the same plugin pipeline as user and marketplace plugins — byte-for-byte normal plugins, indistinguishable except for their location on the scan path. No <code>installed_plugins.json</code> entry is needed.</p>
+<p>Some plugins ship inside the core package at <code>packages/mewbo_core/src/mewbo_core/builtin_plugins/</code>. They are discovered through the same plugin pipeline as user and marketplace plugins, byte-for-byte normal plugins indistinguishable except for their location on the scan path. No <code>installed_plugins.json</code> entry is needed.</p>
 <p>Currently bundled:</p>
 <div class="table-wrapper"><table>
 <thead>
@@ -1725,7 +1788,7 @@
 <hr />
 <h2 id="writing-a-local-plugin">Writing a local plugin</h2>
 <p>To develop a plugin locally before publishing it to a marketplace, place the plugin directory anywhere on disk and point <code>plugins.registry_paths</code> at a custom <code>installed_plugins.json</code> that references it. Alternatively, use the CLI install flow with a <code>./relative-path</code> source in a local <code>marketplace.json</code>.</p>
-<p>The minimum viable plugin is a directory containing only <code>.claude-plugin/plugin.json</code>. Everything else (<code>skills/</code>, <code>agents/</code>, <code>hooks/</code>, <code>.mcp.json</code>, <code>session_tools</code>) is optional and discovered automatically. The bundled <a href="../features-widgets/">widget-builder</a> is a complete working example — see <code>packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/</code>.</p>
+<p>The minimum viable plugin is a directory containing only <code>.claude-plugin/plugin.json</code>. Everything else (<code>skills/</code>, <code>agents/</code>, <code>hooks/</code>, <code>.mcp.json</code>, <code>session_tools</code>) is optional and discovered automatically. The bundled <a href="../features-widgets/">widget-builder</a> is a complete working example. See <code>packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/</code>.</p>
 <hr />
 <div class="admonition note">
 <p class="admonition-title">How it works internally</p>
@@ -2069,6 +2132,67 @@
 
         
         Email
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+        </ul>
+    </div>
+</div>
+
+
+
+<div data-slot="sidebar-group" data-sidebar="group" class="mewbo-sidebar-group relative flex w-full min-w-0 flex-col p-2">
+    <div data-slot="sidebar-group-label" data-sidebar="group-label"
+        class="mewbo-sidebar-group-label flex h-8 shrink-0 items-center rounded-md px-2 text-xs ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-200 ease-linear focus-visible:ring-2 group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0 font-medium text-foreground tracking-tight">
+        Knowledge & Discovery</div>
+    <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
+        <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-wiki/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 2v8l3-3l3 3V2"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></g></svg>
+
+        
+        Agentic Wiki
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-search/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
+
+        
+        Agentic Search
         
 
         
@@ -2890,6 +3014,14 @@
   
     
     
+    
+      
+    
+  
+
+  
+    
+    
       
         
           
@@ -2988,6 +3120,8 @@
         
         <li><a href="/main/clients-cli/">Use</a></li>
         
+        <li><a href="/main/features-wiki/">Knowledge & Discovery</a></li>
+        
         <li><a href="/main/deployment-docker/">Deploy</a></li>
         
         <li><a href="/main/core-orchestration/">Develop</a></li>
@@ -3015,6 +3149,14 @@
   </div>
 </footer>
     </div>
+     
+
+<script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
+
+     
+
+<script src="../assets/carousel.js"></script>
+
      
 
 <script src="../search/main.js"></script>

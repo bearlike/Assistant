@@ -103,6 +103,8 @@
 
     
     <link href="../assets/_mkdocstrings.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet">
+    <link href="../assets/carousel.css" rel="stylesheet">
 
     
 
@@ -680,6 +682,67 @@
 
         
         Email
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+        </ul>
+    </div>
+</div>
+
+
+
+<div data-slot="sidebar-group" data-sidebar="group" class="mewbo-sidebar-group relative flex w-full min-w-0 flex-col p-2">
+    <div data-slot="sidebar-group-label" data-sidebar="group-label"
+        class="mewbo-sidebar-group-label flex h-8 shrink-0 items-center rounded-md px-2 text-xs ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-200 ease-linear focus-visible:ring-2 group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0 font-medium text-foreground tracking-tight">
+        Knowledge & Discovery</div>
+    <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
+        <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-wiki/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 2v8l3-3l3 3V2"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></g></svg>
+
+        
+        Agentic Wiki
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-search/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
+
+        
+        Agentic Search
         
 
         
@@ -1536,7 +1599,7 @@
 <p>The skill registry checks file modification times and reloads changed files between sessions. New skill directories appearing while the server runs are detected on the next scan.</p>
 <hr />
 <h2 id="capability-overlay">Capability overlay</h2>
-<p>Capabilities are opaque string ids advertised by the client (e.g. <code>stlite</code>). They gate which agents and skills are visible to a given session. The model never sees a gated entry — the tool schema is not bound, the agent definition does not enter the spawn catalog, and the skill catalog line is omitted.</p>
+<p>Capabilities are opaque string ids advertised by the client (e.g. <code>stlite</code>). They gate which agents and skills are visible to a given session. The model never sees a gated entry. The tool schema is not bound, the agent definition does not enter the spawn catalog, and the skill catalog line is omitted.</p>
 <h3 id="data-flow">Data flow</h3>
 <pre class="mermaid"><code>flowchart LR
     A[Client request] -- X-Mewbo-Capabilities: stlite --&gt; B[API route]
@@ -1555,7 +1618,7 @@
 <li><code>AgentRegistry.visible_for(session_capabilities)</code> and <code>SkillRegistry.list_auto_invocable(session_capabilities)</code> / <code>list_user_invocable(session_capabilities)</code> apply the filter at every render of their catalogs.</li>
 </ol>
 <h3 id="filter-implementation">Filter implementation</h3>
-<p><code>packages/mewbo_core/src/mewbo_core/capabilities.py::filter_by_capabilities</code> is the single filter. An item whose <code>requires_capabilities</code> tuple is a subset of the session's set is included; an empty <code>requires_capabilities</code> is always included. Ordering and duplication of <code>session_capabilities</code> do not matter — comparison uses set semantics.</p>
+<p><code>packages/mewbo_core/src/mewbo_core/capabilities.py::filter_by_capabilities</code> is the single filter. An item whose <code>requires_capabilities</code> tuple is a subset of the session's set is included; an empty <code>requires_capabilities</code> is always included. Ordering and duplication of <code>session_capabilities</code> do not matter, as comparison uses set semantics.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1608,7 +1671,7 @@
 </table></div>
 <p>Plugin-level declarations are applied via <code>overlay_capabilities()</code> during discovery: the plugin's capabilities are unioned onto each contributed spec before the spec enters the registry. Authors never repeat a bundle-level capability per file.</p>
 <h3 id="tool-gating">Tool gating</h3>
-<p>Session tools bound to a gated agent are also hidden. When a session does not advertise <code>stlite</code>, the <code>st-widget-builder</code> agent is not in the spawn catalog, so the <code>submit_widget</code> session tool is never instantiated. No tool-schema filtering is required at the <code>filter_specs()</code> level for this path — the agent gate is upstream of binding.</p>
+<p>Session tools bound to a gated agent are also hidden. When a session does not advertise <code>stlite</code>, the <code>st-widget-builder</code> agent is not in the spawn catalog, so the <code>submit_widget</code> session tool is never instantiated. No tool-schema filtering is required at the <code>filter_specs()</code> level for this path. The agent gate is upstream of binding.</p>
 <hr />
 <h2 id="sub-agents">Sub-agents and the hypervisor</h2>
 <p>Every session has a single <code>AgentHypervisor</code> instance shared across the entire agent tree. It has two layers.</p>
@@ -1998,11 +2061,11 @@
 <p><code>PluginsConfig</code> lives in <code>config.py</code> and defines <code>registry_paths</code> and <code>marketplaces</code>. The CLI exposes <code>/plugins</code>; the API exposes <code>GET/POST /api/plugins</code>, <code>GET/POST /api/plugins/marketplace</code>, and <code>DELETE /api/plugins/&lt;name&gt;</code>; the console renders <code>PluginsView</code>.</p>
 <p>See <a href="#session-tools">Session tools</a> for plugin-contributed per-agent stateful tools.</p>
 <h3 id="built-in-plugin-scan-path">Built-in plugin scan path</h3>
-<p>A fourth scan source sits alongside the registry-driven paths: the directory <code>packages/mewbo_core/src/mewbo_core/builtin_plugins/</code>. Any plugin checked in under this path is discovered through the <strong>same</strong> pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin — manifest, <code>agents/</code>, <code>skills/</code>, <code>hooks/hooks.json</code>, <code>.mcp.json</code>, <code>session_tools</code> — with no <code>installed_plugins.json</code> entry required.</p>
+<p>A fourth scan source sits alongside the registry-driven paths: the directory <code>packages/mewbo_core/src/mewbo_core/builtin_plugins/</code>. Any plugin checked in under this path is discovered through the <strong>same</strong> pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin (manifest, <code>agents/</code>, <code>skills/</code>, <code>hooks/hooks.json</code>, <code>.mcp.json</code>, <code>session_tools</code>) with no <code>installed_plugins.json</code> entry required.</p>
 <p>The path is resolved at runtime via <code>importlib.resources.files("mewbo_core") / "builtin_plugins"</code> so discovery works identically for editable installs (<code>pip install -e .</code>), wheels, and zipapps. The scanner iterates every immediate subdirectory that contains a <code>.claude-plugin/plugin.json</code>.</p>
 <p>Currently bundled: <code>widget_builder/</code> (declares <code>requires-capabilities: ["stlite"]</code>). Other bundles slot in by dropping a plugin-shaped directory next to it. No discovery code needs to change.</p>
 <h3 id="path-substitution">Path substitution</h3>
-<p>Plugin-owned agent bodies and skill bodies can reference three placeholders. Substitution is a single linear <code>str.replace</code> pass per placeholder — there is no template engine, no expression language, and bodies with no placeholders are byte-identical after the pass.</p>
+<p>Plugin-owned agent bodies and skill bodies can reference three placeholders. Substitution is a single linear <code>str.replace</code> pass per placeholder. There is no template engine, no expression language, and bodies with no placeholders are byte-identical after the pass.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -2032,7 +2095,7 @@
 <p><code>${CLAUDE_PLUGIN_ROOT}</code> is also substituted inside <code>.mcp.json</code> and <code>hooks/hooks.json</code> at discovery time, as noted above. <code>${SESSION_ID}</code> and <code>${MEWBO_WIDGET_ROOT}</code> are agent-body-only and resolve inside <code>spawn_agent</code> just before the body is handed to the child <code>ToolUseLoop</code>.</p>
 <hr />
 <h2 id="session-tools">Session tools</h2>
-<p>A <strong>session tool</strong> is a per-agent stateful tool — a tool whose lifecycle is coupled to one specific agent instance rather than the global <code>ToolRegistry</code>. The handler holds state (accumulated across calls within the agent's run), declares its own OpenAI function schema, and can signal clean loop termination independently of the model's final text response. The core <code>ExitPlanModeTool</code> is a session tool. The widget-builder's <code>SubmitWidgetTool</code> is a session tool contributed by a plugin.</p>
+<p>A <strong>session tool</strong> is a per-agent stateful tool whose lifecycle is coupled to one specific agent instance rather than the global <code>ToolRegistry</code>. The handler holds state (accumulated across calls within the agent's run), declares its own OpenAI function schema, and can signal clean loop termination independently of the model's final text response. The core <code>ExitPlanModeTool</code> is a session tool. The widget-builder's <code>SubmitWidgetTool</code> is a session tool contributed by a plugin.</p>
 <p>Session tools are defined in <code>packages/mewbo_core/src/mewbo_core/session_tools.py</code>.</p>
 <h3 id="protocol">Protocol</h3>
 <div class="codehilite"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">SessionTool</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
@@ -2057,7 +2120,7 @@
 </tr>
 <tr>
 <td><code>schema</code></td>
-<td>OpenAI function schema — identical shape to any other bound tool.</td>
+<td>OpenAI function schema (identical shape to any other bound tool).</td>
 </tr>
 <tr>
 <td><code>modes</code></td>
@@ -2074,7 +2137,7 @@
 </tbody>
 </table></div>
 <h3 id="registry-and-factories">Registry and factories</h3>
-<p><code>SessionToolRegistry</code> holds one <code>SessionToolFactory</code> per <code>tool_id</code>. A factory is <code>Callable[[session_id, event_logger], SessionTool]</code> — construction is cheap and happens per agent.</p>
+<p><code>SessionToolRegistry</code> holds one <code>SessionToolFactory</code> per <code>tool_id</code>. A factory is <code>Callable[[session_id, event_logger], SessionTool]</code>. Construction is cheap and happens per agent.</p>
 <pre class="mermaid"><code>sequenceDiagram
     participant Plugin as plugin.json
     participant Core as Session init
@@ -2104,9 +2167,9 @@
 <span class="w">  </span><span class="p">]</span>
 <span class="p">}</span>
 </code></pre></div>
-<p><code>SessionToolRegistry.load_entry()</code> imports the class at session start and registers a factory. <code>build_for(allowed_tools, …)</code> instantiates one per-agent instance when an agent spawns with a matching <code>tool_id</code> in its <code>allowed_tools</code>. A broken plugin (missing fields, import error, constructor raises) is logged and skipped — it never crashes the host session.</p>
+<p><code>SessionToolRegistry.load_entry()</code> imports the class at session start and registers a factory. <code>build_for(allowed_tools, …)</code> instantiates one per-agent instance when an agent spawns with a matching <code>tool_id</code> in its <code>allowed_tools</code>. A broken plugin (missing fields, import error, constructor raises) is logged and skipped. It never crashes the host session.</p>
 <h3 id="loop-integration">Loop integration</h3>
-<p>Inside <code>ToolUseLoop</code>, schema injection, dispatch, and termination all iterate a single <code>list[SessionTool]</code> — core's built-in session tools and plugin-contributed ones are handled by the same three call sites. There is no widget-specific branch; the only asymmetry is the built-in set (just <code>ExitPlanModeTool</code> today) versus the plugin-loaded set. Gated agents (see <a href="#capability-overlay">Capability overlay</a>) never reach <code>build_for</code>, so a plugin session tool on a hidden agent is never instantiated.</p>
+<p>Inside <code>ToolUseLoop</code>, schema injection, dispatch, and termination all iterate a single <code>list[SessionTool]</code>. Core's built-in session tools and plugin-contributed ones are handled by the same three call sites. There is no widget-specific branch; the only asymmetry is the built-in set (just <code>ExitPlanModeTool</code> today) versus the plugin-loaded set. Gated agents (see <a href="#capability-overlay">Capability overlay</a>) never reach <code>build_for</code>, so a plugin session tool on a hidden agent is never instantiated.</p>
 <hr />
 <h2 id="channel-adapters">Channel adapters</h2>
 <p>Chat-platform adapters implement the <code>ChannelAdapter</code> protocol (<code>channels/base.py</code>):</p>
@@ -2496,6 +2559,67 @@
 
         
         Email
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+        </ul>
+    </div>
+</div>
+
+
+
+<div data-slot="sidebar-group" data-sidebar="group" class="mewbo-sidebar-group relative flex w-full min-w-0 flex-col p-2">
+    <div data-slot="sidebar-group-label" data-sidebar="group-label"
+        class="mewbo-sidebar-group-label flex h-8 shrink-0 items-center rounded-md px-2 text-xs ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-200 ease-linear focus-visible:ring-2 group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0 font-medium text-foreground tracking-tight">
+        Knowledge & Discovery</div>
+    <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
+        <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-wiki/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 2v8l3-3l3 3V2"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></g></svg>
+
+        
+        Agentic Wiki
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-search/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
+
+        
+        Agentic Search
         
 
         
@@ -3557,6 +3681,14 @@
   
     
     
+    
+      
+    
+  
+
+  
+    
+    
       
         
           
@@ -3655,6 +3787,8 @@
         
         <li><a href="/main/clients-cli/">Use</a></li>
         
+        <li><a href="/main/features-wiki/">Knowledge & Discovery</a></li>
+        
         <li><a href="/main/deployment-docker/">Deploy</a></li>
         
         <li><a href="/main/core-orchestration/">Develop</a></li>
@@ -3682,6 +3816,14 @@
   </div>
 </footer>
     </div>
+     
+
+<script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
+
+     
+
+<script src="../assets/carousel.js"></script>
+
      
 
 <script src="../search/main.js"></script>

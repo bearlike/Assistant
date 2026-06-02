@@ -9,13 +9,15 @@
 
 <p class="ms-hero__eyebrow">Documentation</p>
 
-# Mewbo is an AI agent that plans, delegates, and completes your work.
+# An open stack for agentic work, grounded in your own knowledge.
 
 <p class="ms-hero__lede">
-Hand off a goal. Mewbo drafts a plan and spawns parallel sub-agents for the independent
-pieces. A live hypervisor watches every child for stalls, drift, and budget overruns. You get
-one synthesised answer with the full audit trail. Any model works. Your existing MCP configs,
-skills, plugins, and project instructions drop in unchanged.
+Real work outgrows a single context, a single tool, a single attempt. Mewbo's hypervisor
+splits a goal into parallel agents you watch as a live tree and steer mid-run. Three products
+stand on that one foundation. Automation that does the multi-step work and isolates every
+change. A wiki that turns your codebase into a graph you can question. Search that reaches
+across every tool you connect and returns one ranked list. Every layer runs on any model.
+All of it is open source.
 </p>
 
 <div class="ms-cta-row">
@@ -47,10 +49,20 @@ skills, plugins, and project instructions drop in unchanged.
   </span>
 </div>
 
-<div class="ms-hero__screens">
-  <img src="mewbo-console-01-front.png" alt="Mewbo Console landing page" />
-  <img src="mewbo-console-02-tasks.png" alt="Mewbo Console tasks page" />
-  <img src="mewbo-console-07-widgets.png" alt="Widgets rendered inline in the Mewbo Console" />
+<div class="swiper ms-shots">
+<div class="swiper-wrapper">
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-01-front.png" alt="The Mewbo Console home listing recent sessions" /><figcaption>Your sessions at a glance</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-02-tasks.png" alt="A Mewbo task in the console, broken into steps with tool calls and results" /><figcaption>Inside a task, step by step</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-07-widgets.png" alt="Interactive widgets rendered inline in a Mewbo conversation" /><figcaption>Interactive widgets, inline in chat</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-wiki-02-overview.jpg" alt="A MewboWiki overview page with a runtime flow diagram and an Ask MewboWiki box" /><figcaption>Agentic Wiki: documentation grounded in your code</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-wiki-03-graph.jpg" alt="The MewboWiki interactive knowledge graph of a repository" /><figcaption>Your codebase as a living knowledge graph</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-search-01-landing.jpg" alt="The Agentic Search landing page with workspaces scoped to connected sources" /><figcaption>Agentic Search: workspaces over your connected tools</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-search-02-results.jpg" alt="Agentic Search results: one ranked list across connected sources with a synthesised overview" /><figcaption>One ranked list across every tool, topped by a synthesis</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-05-plugins.png" alt="The Mewbo plugins page with installed plugins and marketplace listings" /><figcaption>Plugins and a marketplace to extend any session</figcaption></figure></div>
+</div>
+<div class="swiper-pagination"></div>
+<div class="swiper-button-prev"></div>
+<div class="swiper-button-next"></div>
 </div>
 
 </section>
@@ -113,13 +125,15 @@ One engine. Five clients. Pick whichever matches where the work already happens 
 
 ## How it works { .ms-h2-icon data-icon="flow" }
 
+Every product on this page runs the same loop underneath. You ask. Mewbo splits the work. You get one answer you can trace back to its sources.
+
 ### You describe an outcome
 
 Ask for it in plain English on whichever surface is closest. In plan mode, the root agent drafts the steps first and waits for your approval. Destructive work never runs before you sign off on the plan.
 
 ### Mewbo delegates in parallel
 
-The root agent spawns sub-agents for any pieces of work that can run at the same time. A test run, a search, a refactor, and an MCP call against an external service can all execute in parallel. A live hypervisor watches every child for stalls. It steers drifting agents back with natural-language nudges between tool steps, and enforces per-agent token budgets without killing in-flight context. The tree grows in real time and you can steer or cancel any branch.
+The root agent spawns sub-agents for every piece of work that can run at once. A test run, a search, a refactor, and an MCP call against an external service all execute in parallel. A live hypervisor sits over the run like a control tower. It watches every child for stalls, nudges drifting agents back on course with plain-language corrections between tool steps, and holds each one to its token budget without killing work already in flight. The tree grows in real time, and you can steer or cancel any branch.
 
 ### You get a synthesised answer, not a pile of logs
 
@@ -134,6 +148,16 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 ## What's new { .ms-h2-icon data-icon="star" }
 
 <div class="ms-grid ms-grid--2">
+
+<a class="ms-card" href="features-wiki/">
+<span class="ms-card__title">Agentic Wiki</span>
+<span class="ms-card__body">Stop reading the codebase. Ask it. Mewbo lifts your code's ASTs into a multiplex memory graph: structure on one layer, LLM-attached meaning on another. Sub-agents write grounded pages in parallel, every claim traced back to source. A question then travels the graph across many hops, so answers cite where they came from instead of approximating from the open web. Or browse the whole repository as a live, zoomable graph.</span>
+</a>
+
+<a class="ms-card" href="features-search/">
+<span class="ms-card__title">Agentic Search</span>
+<span class="ms-card__body">Your team's knowledge hides in repos, trackers, chat, and docs. One question fans a sub-agent out to each connected source in parallel. Their hits merge and re-rank into a single list that spans every source, topped by a synthesised overview cited to its origins, with a trace of every source it queried. One question. Every tool. One ranked answer.</span>
+</a>
 
 <a class="ms-card" href="features-widgets/">
 <span class="ms-card__title">Widgets inline in chat</span>
@@ -190,7 +214,7 @@ Mewbo reads the configuration you already have. Point it at a project and it pic
 
 ## What you can do { .ms-h2-icon data-icon="grid" }
 
-<div class="ms-grid ms-grid--4">
+<div class="ms-grid ms-grid--5">
 
 <div class="ms-card">
 <span class="ms-card__title">Workspace &amp; execution</span>
@@ -200,6 +224,15 @@ Mewbo reads the configuration you already have. Point it at a project and it pic
   <li><a href="features-lsp/">Code intelligence (LSP)</a></li>
   <li><a href="features-mcp/">External tools (MCP)</a></li>
   <li><a href="features-widgets/">Widgets</a>: interactive UI inline in chat</li>
+</ul>
+</div>
+
+<div class="ms-card">
+<span class="ms-card__title">Knowledge &amp; discovery</span>
+<ul class="ms-card__list">
+  <li><a href="features-wiki/">Agentic Wiki</a>: source-grounded repo docs</li>
+  <li><a href="features-wiki/#the-knowledge-graph">Knowledge graph</a> of the codebase</li>
+  <li><a href="features-search/">Agentic Search</a> across connected MCPs</li>
 </ul>
 </div>
 

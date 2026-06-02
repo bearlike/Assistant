@@ -103,6 +103,8 @@
 
     
     <link href="../assets/_mkdocstrings.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet">
+    <link href="../assets/carousel.css" rel="stylesheet">
 
     
 
@@ -680,6 +682,67 @@
 
         
         Email
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+        </ul>
+    </div>
+</div>
+
+
+
+<div data-slot="sidebar-group" data-sidebar="group" class="mewbo-sidebar-group relative flex w-full min-w-0 flex-col p-2">
+    <div data-slot="sidebar-group-label" data-sidebar="group-label"
+        class="mewbo-sidebar-group-label flex h-8 shrink-0 items-center rounded-md px-2 text-xs ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-200 ease-linear focus-visible:ring-2 group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0 font-medium text-foreground tracking-tight">
+        Knowledge & Discovery</div>
+    <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
+        <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-wiki/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 2v8l3-3l3 3V2"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></g></svg>
+
+        
+        Agentic Wiki
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-search/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
+
+        
+        Agentic Search
         
 
         
@@ -1400,36 +1463,36 @@
   <img src="../mewbo-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Mewbo Console" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
 
-<p>Ask Mewbo to visualise a result and an interactive widget appears inline in the conversation — right where the answer landed, no separate tabs, no external tools.</p>
+<p>Ask Mewbo to visualise a result and an interactive widget appears inline in the conversation, right where the answer landed. No separate tabs, no external tools.</p>
 <hr />
 <h2 id="when-to-reach-for-a-widget">When to reach for a widget</h2>
 <p>Widgets are most useful when a visual result communicates more than a text reply ever could:</p>
 <ul>
-<li><strong>Private data systems</strong> — internal APIs, databases, and pipelines that lack a search or reporting interface can surface results as scannable cards or charts on demand.</li>
-<li><strong>Research and analysis</strong> — repository metrics, search results, financial positions, or any multi-field dataset formatted as cards the whole team can read at a glance.</li>
-<li><strong>Reference artefacts</strong> — cheat sheets, comparison tables, sequence diagrams, and KPI snapshots that persist in the session for as long as you need them.</li>
+<li><strong>Private data systems</strong>: internal APIs, databases, and pipelines that lack a search or reporting interface can surface results as scannable cards or charts on demand.</li>
+<li><strong>Research and analysis</strong>: repository metrics, search results, financial positions, or any multi-field dataset formatted as cards the whole team can read at a glance.</li>
+<li><strong>Reference artefacts</strong>: cheat sheets, comparison tables, sequence diagrams, and KPI snapshots that persist in the session for as long as you need them.</li>
 </ul>
 <hr />
 <h2 id="how-it-works">How it works</h2>
-<p>Widget tasks are routed to a dedicated <code>st-widget-builder</code> sub-agent. The root agent hands off the request — along with any data it has already gathered — and the widget appears in the timeline the moment the sub-agent submits it. No intervention required.</p>
+<p>Widget tasks are routed to a dedicated <code>st-widget-builder</code> sub-agent. The root agent hands off the request (along with any data it has already gathered), and the widget appears in the timeline the moment the sub-agent submits it. No intervention required.</p>
 <div class="admonition note">
 <p class="admonition-title">Token cost</p>
 <p>The sub-agent runs in its own context, extending the session's token budget. Overhead is modest: the sub-agent draws from a pre-built component library rather than generating code from scratch.</p>
 </div>
 <hr />
 <h2 id="sandboxed-and-persistent">Sandboxed and persistent</h2>
-<p>Widgets run entirely in the browser inside an isolated Web Worker — no server execution, no network access, no shared state with the console or other widgets. An error in one widget cannot affect your session.</p>
-<p>All data is baked in at build time from values the agent has already collected. No live calls are made after the widget loads. Because the state file is written to disk at creation, <strong>widgets you built in a previous session are still there when you come back</strong> — an exact snapshot of what the data showed at that moment. Ask for a fresh widget when the underlying data changes.</p>
+<p>Widgets run entirely in the browser inside an isolated Web Worker. There is no server execution, no network access, and no shared state with the console or other widgets. An error in one widget cannot affect your session.</p>
+<p>All data is baked in at build time from values the agent has already collected. No live calls are made after the widget loads. Because the state file is written to disk at creation, <strong>widgets you built in a previous session are still there when you come back</strong>, an exact snapshot of what the data showed at that moment. Ask for a fresh widget when the underlying data changes.</p>
 <hr />
 <h2 id="component-library">Component library</h2>
-<p>The sub-agent picks from a built-in library of ready-made components — repo cards, search-result cards, stock tickers, PlantUML diagrams, and more. The library follows a drop-in convention: add a new component file to the plugin's <code>examples/components/</code> directory and the agent discovers it at the start of the next session, no configuration required.</p>
+<p>The sub-agent picks from a built-in library of ready-made components: repo cards, search-result cards, stock tickers, PlantUML diagrams, and more. The library follows a drop-in convention: add a new component file to the plugin's <code>examples/components/</code> directory and the agent discovers it at the start of the next session, no configuration required.</p>
 <div class="admonition tip">
 <p class="admonition-title">Custom component libraries</p>
 <p>Teams can maintain a private library of branded cards, domain-specific layouts, or internal visualisations. Because the convention is purely file-based, onboarding a new component is a single file drop.</p>
 </div>
 <hr />
 <h2 id="availability">Availability</h2>
-<p>Widgets are exclusive to the <strong>Mewbo Console</strong>. The console signals widget support to the API on each request; sessions from the CLI, REST API, email, and chat adapters will not see the widget-builder. The feature is on by default — no configuration needed.</p>
+<p>Widgets are exclusive to the <strong>Mewbo Console</strong>. The console signals widget support to the API on each request; sessions from the CLI, REST API, email, and chat adapters will not see the widget-builder. The feature is on by default. No configuration needed.</p>
 <div class="admonition note">
 <p class="admonition-title">Going deeper</p>
 <p>See <a href="../features-plugins/">Plugins &amp; Marketplace</a> for the capability model that gates the feature per surface, and <a href="../core-orchestration/">Architecture Overview</a> for the session-tool protocol and component authoring contract.</p>
@@ -1772,6 +1835,67 @@
 
         
         Email
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+        </ul>
+    </div>
+</div>
+
+
+
+<div data-slot="sidebar-group" data-sidebar="group" class="mewbo-sidebar-group relative flex w-full min-w-0 flex-col p-2">
+    <div data-slot="sidebar-group-label" data-sidebar="group-label"
+        class="mewbo-sidebar-group-label flex h-8 shrink-0 items-center rounded-md px-2 text-xs ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-200 ease-linear focus-visible:ring-2 group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0 font-medium text-foreground tracking-tight">
+        Knowledge & Discovery</div>
+    <div data-slot="sidebar-group-content" data-sidebar="group-content" class="w-full text-sm">
+        <ul data-slot="sidebar-menu" data-sidebar="menu" class="flex w-full min-w-0 flex-col gap-1">
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-wiki/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 2v8l3-3l3 3V2"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></g></svg>
+
+        
+        Agentic Wiki
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="/main/features-search/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
+
+        
+        Agentic Search
         
 
         
@@ -2530,6 +2654,14 @@
   
     
     
+    
+      
+    
+  
+
+  
+    
+    
       
         
           
@@ -2628,6 +2760,8 @@
         
         <li><a href="/main/clients-cli/">Use</a></li>
         
+        <li><a href="/main/features-wiki/">Knowledge & Discovery</a></li>
+        
         <li><a href="/main/deployment-docker/">Deploy</a></li>
         
         <li><a href="/main/core-orchestration/">Develop</a></li>
@@ -2655,6 +2789,14 @@
   </div>
 </footer>
     </div>
+     
+
+<script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
+
+     
+
+<script src="../assets/carousel.js"></script>
+
      
 
 <script src="../search/main.js"></script>

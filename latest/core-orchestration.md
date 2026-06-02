@@ -115,7 +115,7 @@ The skill registry checks file modification times and reloads changed files betw
 
 ## Capability overlay {#capability-overlay}
 
-Capabilities are opaque string ids advertised by the client (e.g. `stlite`). They gate which agents and skills are visible to a given session. The model never sees a gated entry — the tool schema is not bound, the agent definition does not enter the spawn catalog, and the skill catalog line is omitted.
+Capabilities are opaque string ids advertised by the client (e.g. `stlite`). They gate which agents and skills are visible to a given session. The model never sees a gated entry. The tool schema is not bound, the agent definition does not enter the spawn catalog, and the skill catalog line is omitted.
 
 ### Data flow
 
@@ -139,7 +139,7 @@ flowchart LR
 
 ### Filter implementation
 
-`packages/mewbo_core/src/mewbo_core/capabilities.py::filter_by_capabilities` is the single filter. An item whose `requires_capabilities` tuple is a subset of the session's set is included; an empty `requires_capabilities` is always included. Ordering and duplication of `session_capabilities` do not matter — comparison uses set semantics.
+`packages/mewbo_core/src/mewbo_core/capabilities.py::filter_by_capabilities` is the single filter. An item whose `requires_capabilities` tuple is a subset of the session's set is included; an empty `requires_capabilities` is always included. Ordering and duplication of `session_capabilities` do not matter, as comparison uses set semantics.
 
 | Function | Purpose |
 |---|---|
@@ -161,7 +161,7 @@ Plugin-level declarations are applied via `overlay_capabilities()` during discov
 
 ### Tool gating
 
-Session tools bound to a gated agent are also hidden. When a session does not advertise `stlite`, the `st-widget-builder` agent is not in the spawn catalog, so the `submit_widget` session tool is never instantiated. No tool-schema filtering is required at the `filter_specs()` level for this path — the agent gate is upstream of binding.
+Session tools bound to a gated agent are also hidden. When a session does not advertise `stlite`, the `st-widget-builder` agent is not in the spawn catalog, so the `submit_widget` session tool is never instantiated. No tool-schema filtering is required at the `filter_specs()` level for this path. The agent gate is upstream of binding.
 
 ---
 
@@ -484,7 +484,7 @@ See [Session tools](#session-tools) for plugin-contributed per-agent stateful to
 
 ### Built-in plugin scan path
 
-A fourth scan source sits alongside the registry-driven paths: the directory `packages/mewbo_core/src/mewbo_core/builtin_plugins/`. Any plugin checked in under this path is discovered through the **same** pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin — manifest, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`, `session_tools` — with no `installed_plugins.json` entry required.
+A fourth scan source sits alongside the registry-driven paths: the directory `packages/mewbo_core/src/mewbo_core/builtin_plugins/`. Any plugin checked in under this path is discovered through the **same** pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin (manifest, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`, `session_tools`) with no `installed_plugins.json` entry required.
 
 The path is resolved at runtime via `importlib.resources.files("mewbo_core") / "builtin_plugins"` so discovery works identically for editable installs (`pip install -e .`), wheels, and zipapps. The scanner iterates every immediate subdirectory that contains a `.claude-plugin/plugin.json`.
 
@@ -492,7 +492,7 @@ Currently bundled: `widget_builder/` (declares `requires-capabilities: ["stlite"
 
 ### Path substitution
 
-Plugin-owned agent bodies and skill bodies can reference three placeholders. Substitution is a single linear `str.replace` pass per placeholder — there is no template engine, no expression language, and bodies with no placeholders are byte-identical after the pass.
+Plugin-owned agent bodies and skill bodies can reference three placeholders. Substitution is a single linear `str.replace` pass per placeholder. There is no template engine, no expression language, and bodies with no placeholders are byte-identical after the pass.
 
 | Placeholder | Resolved at | Value |
 |---|---|---|
@@ -506,7 +506,7 @@ Plugin-owned agent bodies and skill bodies can reference three placeholders. Sub
 
 ## Session tools {#session-tools}
 
-A **session tool** is a per-agent stateful tool — a tool whose lifecycle is coupled to one specific agent instance rather than the global `ToolRegistry`. The handler holds state (accumulated across calls within the agent's run), declares its own OpenAI function schema, and can signal clean loop termination independently of the model's final text response. The core `ExitPlanModeTool` is a session tool. The widget-builder's `SubmitWidgetTool` is a session tool contributed by a plugin.
+A **session tool** is a per-agent stateful tool whose lifecycle is coupled to one specific agent instance rather than the global `ToolRegistry`. The handler holds state (accumulated across calls within the agent's run), declares its own OpenAI function schema, and can signal clean loop termination independently of the model's final text response. The core `ExitPlanModeTool` is a session tool. The widget-builder's `SubmitWidgetTool` is a session tool contributed by a plugin.
 
 Session tools are defined in `packages/mewbo_core/src/mewbo_core/session_tools.py`.
 
@@ -525,14 +525,14 @@ class SessionTool(Protocol):
 | Member | Role |
 |---|---|
 | `tool_id` | Dispatch key. Must match the name the LLM sees in the bound schema. |
-| `schema` | OpenAI function schema — identical shape to any other bound tool. |
+| `schema` | OpenAI function schema (identical shape to any other bound tool). |
 | `modes` | Frozenset of orchestration modes (`"plan"` / `"act"`) the tool is valid in. Plugin tools default to `DEFAULT_SESSION_TOOL_MODES` = `{"act"}`; `ExitPlanModeTool` overrides to `{"plan"}`. |
 | `handle(action_step)` | Executes the call, returns a `MockSpeaker` with the tool result (consumed like any `ToolMessage`). |
 | `should_terminate_run()` | Returns `True` (once, consuming the flag) when the loop should exit cleanly after the current step. |
 
 ### Registry and factories
 
-`SessionToolRegistry` holds one `SessionToolFactory` per `tool_id`. A factory is `Callable[[session_id, event_logger], SessionTool]` — construction is cheap and happens per agent.
+`SessionToolRegistry` holds one `SessionToolFactory` per `tool_id`. A factory is `Callable[[session_id, event_logger], SessionTool]`. Construction is cheap and happens per agent.
 
 ```mermaid
 sequenceDiagram
@@ -570,11 +570,11 @@ Plugins contribute session tools via a `session_tools` array in `plugin.json`:
 }
 ```
 
-`SessionToolRegistry.load_entry()` imports the class at session start and registers a factory. `build_for(allowed_tools, …)` instantiates one per-agent instance when an agent spawns with a matching `tool_id` in its `allowed_tools`. A broken plugin (missing fields, import error, constructor raises) is logged and skipped — it never crashes the host session.
+`SessionToolRegistry.load_entry()` imports the class at session start and registers a factory. `build_for(allowed_tools, …)` instantiates one per-agent instance when an agent spawns with a matching `tool_id` in its `allowed_tools`. A broken plugin (missing fields, import error, constructor raises) is logged and skipped. It never crashes the host session.
 
 ### Loop integration
 
-Inside `ToolUseLoop`, schema injection, dispatch, and termination all iterate a single `list[SessionTool]` — core's built-in session tools and plugin-contributed ones are handled by the same three call sites. There is no widget-specific branch; the only asymmetry is the built-in set (just `ExitPlanModeTool` today) versus the plugin-loaded set. Gated agents (see [Capability overlay](#capability-overlay)) never reach `build_for`, so a plugin session tool on a hidden agent is never instantiated.
+Inside `ToolUseLoop`, schema injection, dispatch, and termination all iterate a single `list[SessionTool]`. Core's built-in session tools and plugin-contributed ones are handled by the same three call sites. There is no widget-specific branch; the only asymmetry is the built-in set (just `ExitPlanModeTool` today) versus the plugin-loaded set. Gated agents (see [Capability overlay](#capability-overlay)) never reach `build_for`, so a plugin session tool on a hidden agent is never instantiated.
 
 ---
 

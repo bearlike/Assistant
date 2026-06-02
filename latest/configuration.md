@@ -210,6 +210,20 @@ Sub-agent hypervisor settings.
     | `max_iters` | integer | `30` | Deprecated. The tool-use loop now runs until natural completion (model returns text without tool calls). This field is retained for API backward compatibility but is not enforced. |
     | `sub_agent_max_steps` | integer | `10` | Deprecated. Sub-agents now run until natural completion. This field is retained for API backward compatibility but is not enforced. Safety is provided by session_step_budget, stall detection, and LLM timeouts. |
 
+## WikiConfig
+
+Top-level key: `wiki`
+
+Operator-facing knobs for the wiki subsystem.
+
+| Key | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `default_model` | string | `""` | Model the wiki picker pre-selects for indexing (the wizard). Overrides ``llm.default_model`` for the wizard. Empty string means: fall back to ``llm.default_model``. |
+| `default_qa_model` | string | `""` | Model the Q&A composer pre-selects. Typically smaller/faster than ``default_model`` because Q&A is a tight read-only loop where latency matters more than depth. Empty string means: fall back to ``default_model``, then to ``llm.default_model``. |
+| `default_depth` | string | `""` | Indexing depth the wizard pre-selects. Empty string means: use the wizard's own default (``comprehensive``). |
+| `default_language` | string | `""` | Language code the wizard pre-selects (e.g. ``en``, ``es``). Empty string means: use the wizard's own default. |
+| `embedding` | WikiEmbeddingConfig |  |  |
+
 ## HooksConfig
 
 Top-level key: `hooks`
