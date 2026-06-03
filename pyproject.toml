@@ -33,7 +33,7 @@ dev = [
   "pandas>=2.3.3",
   "pre-commit==3.8.0",
   "pylint==3.3.9",
-  "pytest==8.4.2",
+  "pytest==9.0.3",
   "pytest-cov==7.1.0",
   "ruff==0.15.8",
   "streamlit>=1.56.0",
@@ -59,7 +59,7 @@ docs = [
   # commit-<sha> release URL surfaced in the corresponding workflow run.
   "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.0.0-py3-none-any.whl",
   "mkdocstrings[python]",
-  "pymdown-extensions>=10.20.1",
+  "pymdown-extensions>=10.21.3",
 ]
 
 [tool.uv.workspace]
