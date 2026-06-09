@@ -85,6 +85,26 @@ export type AgentSummary = {
   ts: string;
 };
 
+/**
+ * 202 response from ``POST /api/sessions/<id>/recover``. The server chooses
+ * one of two shapes; the client detects by field presence:
+ *   - generic: carries ``run_id`` — monitor via the session's event stream.
+ *   - wiki-indexing dispatch: carries ``job_id`` (+ ``slug`` + ``status``), no
+ *     ``run_id`` — navigate to the wiki indexing screen for ``job_id``. The
+ *     ``slug`` is required so the indexing screen shows the real repo name and
+ *     can navigate to its wiki on completion (without it, it falls back to a
+ *     hardcoded placeholder).
+ */
+export type RecoverResponse = {
+  session_id: string;
+  action: "retry" | "continue";
+  accepted: true;
+  run_id?: string;
+  job_id?: string;
+  slug?: string;
+  status?: string;
+};
+
 export type ApiClient = {
   listSessions: (includeArchived?: boolean) => Promise<SessionSummary[]>;
   createSession: (context?: SessionContext) => Promise<string>;
@@ -124,7 +144,7 @@ export type ApiClient = {
     fromTs?: string,
     editedText?: string,
     model?: string
-  ) => Promise<void>;
+  ) => Promise<RecoverResponse>;
   forkSession: (
     sessionId: string,
     opts?: { fromTs?: string; model?: string; compact?: boolean; tag?: string }

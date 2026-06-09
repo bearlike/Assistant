@@ -58,6 +58,20 @@ class WikiBuildGraphTool(WikiSessionTool):
 
         emit_phase(ctx, "graph")
 
+        # Checkpoint-aware resume (Gitea #54): the persisted graph is reused
+        # as-is when an interrupted index already built it (graph + enrich are
+        # the ~6-min expensive idempotent phases). Done-detection lives ONLY in
+        # ResumePlan (DRY); this is the single-line short-circuit. Still advance
+        # the phase to ``enrich`` so progress reflects the (also-skipped) window.
+        rp = ctx.resume_plan
+        if rp is not None and rp.should_skip("graph"):
+            emit_log(ctx, f"Graph already built ({rp.node_count} nodes) — skipped on resume")
+            emit_phase(ctx, "enrich")
+            return MockSpeaker(content=str({
+                "nodeCount": rp.node_count,
+                "skipped": "graph already built — reused on resume",
+            }))
+
         # 1. Walk the clone dir.
         repo_root = ctx.clone_dir
         if not repo_root.exists():
@@ -124,6 +138,15 @@ class WikiBuildGraphTool(WikiSessionTool):
             result["embeddingWarning"] = (
                 "Embeddings unavailable — retrieval will use BM25 + graph only."
             )
+
+        # Graph is built; advance the phase to ``enrich`` so progress reflects
+        # the entity-enrichment fan-out that immediately follows. build_graph is
+        # the last tool the indexer calls before spawning the wiki-enricher
+        # sub-agents — without this the snapshot sits at ``graph`` for the whole
+        # enrich window and then jumps straight to ``plan`` (the ~2-minute
+        # "graph plateau" users see). enrich emits no tool of its own, so this
+        # is the single deterministic place to mark the transition.
+        emit_phase(ctx, "enrich")
         return MockSpeaker(content=str(result))
 
 

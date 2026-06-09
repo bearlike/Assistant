@@ -500,3 +500,31 @@ def test_find_session_isolated_per_slug_mongo() -> None:
     # sessions don't cross-contaminate
     assert store.find_job_by_session("sess-2") != "job-A"
     assert store.find_job_by_session("sess-1") != "job-B"
+
+
+# ── 14. Repository credential CRUD ─────────────────────────────────────────────
+
+
+def test_mongo_credential_crud() -> None:
+    store = _store()
+    assert store.get_credentials("org/repo") is None
+    store.save_credentials("org/repo", {"kind": "token", "value": "ghp_x", "username": None})
+    assert store.get_credentials("org/repo") == {
+        "kind": "token", "value": "ghp_x", "username": None,
+    }
+    assert store.delete_credentials("org/repo") is True
+    assert store.delete_credentials("org/repo") is False
+    assert store.get_credentials("org/repo") is None
+
+
+# ── 15. Slug-keyed recovery counter ────────────────────────────────────────────
+
+
+def test_mongo_recovery_counter() -> None:
+    store = _store()
+    assert store.get_recovery_attempts("org/repo") == 0
+    assert store.bump_recovery_attempts("org/repo") == 1
+    assert store.bump_recovery_attempts("org/repo") == 2
+    assert store.get_recovery_attempts("org/repo") == 2
+    # Per-slug isolation.
+    assert store.get_recovery_attempts("org/other") == 0

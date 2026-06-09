@@ -31,6 +31,7 @@ from mewbo_core.components import (
     build_langfuse_handler,
     langfuse_propagate,
     langfuse_trace_span,
+    record_span_exception,
 )
 from mewbo_core.config import get_config_value, get_version
 from mewbo_core.context import ContextSnapshot, render_event_lines
@@ -62,7 +63,7 @@ from mewbo_core.tool_registry import (
     ToolSpec,
     is_deferred,
 )
-from mewbo_core.types import Event
+from mewbo_core.types import Event, RecoveryHaltPayload
 
 logging = get_logger(name="core.tool_use_loop")
 
@@ -169,6 +170,7 @@ class ToolUseLoop:
         cwd: str | None = None,
         session_id: str | None = None,
         session_capabilities: tuple[str, ...] = (),
+        extra_session_tools: list[SessionTool] | None = None,
     ) -> None:
         """Initialize the tool-use loop.
 
@@ -196,6 +198,9 @@ class ToolUseLoop:
                 context event). Used to filter capability-gated agents and
                 skills out of the system-prompt catalogs and ``activate_skill``
                 / ``spawn_agent`` lookups.
+            extra_session_tools: Caller-injected ``SessionTool`` instances
+                appended to ``self._session_tools`` without a plugin manifest
+                (e.g. the structured-response ``emit_result`` tool).
         """
         self._ctx = agent_context
         self._tool_registry = tool_registry
@@ -262,6 +267,11 @@ class ToolUseLoop:
                     event_logger=agent_context.event_logger,
                 )
             )
+        # Caller-injected session tools (e.g. the structured-response emit
+        # tool) — no plugin manifest needed. They terminate / dispatch through
+        # the same machinery as plugin tools.
+        if extra_session_tools:
+            self._session_tools.extend(extra_session_tools)
 
     # ------------------------------------------------------------------
     # Public API
@@ -436,13 +446,20 @@ class ToolUseLoop:
                         except Exception:
                             pass
 
-                    # Ref: [AgentCgroup §4.2] Graduated enforcement — NL feedback, not kill.
-                    # Inject budget warning so the agent can adapt its strategy.
+                    # Graduated enforcement: warn as the budget nears, then HARD-STOP
+                    # at exhaustion so an unbounded fan-out (#62) can't run away.
                     if self._ctx.registry.budget_exhausted():
+                        state.done = True
+                        state.done_reason = "halted_no_progress"
+                        break
+                    if self._ctx.registry.budget_warning():
                         messages.append(
                             SystemMessage(
-                                content="BUDGET WARNING: Session step budget exhausted. "
-                                "Summarize your current findings and return results immediately."
+                                content=(
+                                    "BUDGET WARNING: Session step budget nearly exhausted. "
+                                    "Summarize your current findings and return results "
+                                    "immediately."
+                                )
                             )
                         )
 
@@ -502,6 +519,14 @@ class ToolUseLoop:
                                 )
                             except Exception:
                                 pass
+                        record_span_exception(
+                            span,
+                            exhausted.last_error,
+                            attributes={
+                                "errortype": exhausted.last_error_type or "",
+                                "reason": exhausted.reason or "",
+                            },
+                        )
                         raise
                     _step_usage = getattr(response, "usage_metadata", None)
                     _h_ref = await self._ctx.registry.get(self._ctx.agent_id)
@@ -604,20 +629,17 @@ class ToolUseLoop:
                         _repeated = response.tool_calls[0].get("name", "tool")
                         last_error = (
                             f"Halted: model repeated '{_repeated}' "
-                            f"{doom_guard.threshold}x with identical input (no progress)."
+                            f"{doom_guard.threshold}x with identical input and result "
+                            "(no progress)."
                         )
-                        self._emit_event(
-                            {
-                                "type": "recovery",
-                                "payload": {
-                                    "action": "halt_no_progress",
-                                    "agent_id": self._ctx.agent_id,
-                                    "depth": self._ctx.depth,
-                                    "step": turns,
-                                    "tool": _repeated,
-                                },
-                            }
-                        )
+                        halt_payload: RecoveryHaltPayload = {
+                            "action": "halt_no_progress",
+                            "agent_id": self._ctx.agent_id,
+                            "depth": self._ctx.depth,
+                            "step": turns,
+                            "tool": _repeated,
+                        }
+                        self._emit_event({"type": "recovery", "payload": halt_payload})
                         state.done = True
                         state.done_reason = "halted_no_progress"
                         break
@@ -651,6 +673,11 @@ class ToolUseLoop:
                             result = await self._safe_execute(batch.calls[0], tool_specs)
                             results.append(result)
 
+                    # Feed results back to the doom guard so "no progress" means
+                    # same input AND same outcome — a call whose result advances
+                    # (e.g. check_agents as children finish) is healthy progress.
+                    doom_guard.record_result(results)
+
                     for tool_call, result in zip(response.tool_calls, results):
                         messages.append(
                             ToolMessage(
@@ -673,10 +700,15 @@ class ToolUseLoop:
                     # SessionRuntime. Materialise the list so every tool's
                     # flag is consumed — ``any`` short-circuits and would
                     # leave a second tool's flag set for the next turn.
-                    term_flags = [t.should_terminate_run() for t in self._session_tools]
-                    if any(term_flags):
+                    # ``terminal_reason()`` lets each tool declare the right
+                    # done_reason (default: "awaiting_approval"; emit tool: "completed").
+                    term_tools = [
+                        (t, t.should_terminate_run()) for t in self._session_tools
+                    ]
+                    terminating = [t for t, flag in term_tools if flag]
+                    if terminating:
                         state.done = True
-                        state.done_reason = "awaiting_approval"
+                        state.done_reason = terminating[0].terminal_reason()
                         break
 
                     # Update registry step count.
@@ -1404,10 +1436,15 @@ class ToolUseLoop:
         """
 
         async def _invoke(model_name: str, is_fallback: bool) -> AIMessage:
+            # ``primary_model`` is pre-bound to the CONFIGURED primary. Key the
+            # reuse off the model NAME, not ``is_fallback``: sticky escalation
+            # reorders a pinned rescue model to idx 0 (so ``is_fallback`` is
+            # False) — reusing ``primary_model`` there would silently call the
+            # dead primary every subsequent turn and the rescue never rescues.
             bound = (
-                build_chat_model(model_name=model_name).bind_tools(tool_schemas)
-                if is_fallback
-                else primary_model
+                primary_model
+                if not is_fallback and model_name == self._ctx.model_name
+                else build_chat_model(model_name=model_name).bind_tools(tool_schemas)
             )
             return await bound.ainvoke(messages, config=invoke_config or None)
 

@@ -13,7 +13,29 @@ from mewbo_graph.wiki.types import Frontmatter, IndexingJob, WikiPage
 
 
 def _store(tmp_path: Path) -> JsonWikiStore:
-    return JsonWikiStore(root_dir=tmp_path)
+    store = JsonWikiStore(root_dir=tmp_path)
+    # finalize now enforces the completion-correctness gate (empty graph ⇒
+    # failure). A real finalize always runs after graph-building, so seed one
+    # node for every slug these tests finalize — keeping them faithful to a
+    # real run. Error-path tests that bail before the graph check are unaffected.
+    for _slug in ("org/repo", "org/bare", "bearlike/Grove"):
+        _seed_graph(store, _slug)
+    return store
+
+
+def _seed_graph(store: JsonWikiStore, slug: str) -> None:
+    """Persist one code-graph node so finalize's empty-graph guard passes."""
+    from mewbo_graph.wiki.types import GraphNode
+
+    store.upsert_nodes(
+        slug,
+        [
+            GraphNode(
+                slug=slug, node_id=f"{slug}:n1", type="File",
+                name="a.py", file="a.py", range=(0, 0),
+            )
+        ],
+    )
 
 
 def _job(job_id: str = "job-fin", slug: str = "org/repo") -> IndexingJob:
@@ -404,3 +426,143 @@ def test_finalize_keeps_existing_desc_when_refresh_lacks_token(tmp_path: Path) -
     project = store.get_project("org/repo")
     assert project is not None
     assert project.desc == "The old description from a token-authed first index"
+
+
+# ── Completion correctness: empty graph ⇒ failure ────────────────────────────
+
+
+def test_finalize_fails_when_graph_is_empty(tmp_path: Path) -> None:
+    """A run that reaches finalize with NO graph nodes is a failure, not complete.
+
+    'completed without creating the graph' must surface as failed — the graph is
+    the substrate Q&A/search/entities read.
+    """
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
+
+    # Bare store WITHOUT the _store graph seed → empty knowledge graph.
+    store = JsonWikiStore(root_dir=tmp_path)
+    store.create_job(_job("job-nograph", "org/repo"))
+    store.attach_job_session("job-nograph", "sess-nograph")
+    _seed_submission(store, "job-nograph", slug="org/repo")
+    _save_page(store, "org/repo", "home")
+
+    runtime = _fake_runtime(store)
+    tool = WikiFinalizeTool(session_id="sess-nograph")
+    with patch.object(mod, "_resolve_runtime", return_value=runtime):
+        result = asyncio.run(tool.handle(_make_action_step({"landingPageId": "home"})))
+
+    # Refused: validation error, job marked failed, NO project, NO complete event.
+    assert "validation" in result.content
+    assert store.get_project("org/repo") is None
+    updated = store.get_job("job-nograph")
+    assert updated is not None and updated.status == "failed"
+    events = store.load_job_events("job-nograph")
+    assert not any(e["type"] == "complete" for e in events)
+
+
+def test_finalize_supersedes_stale_nonterminal_sibling_jobs(tmp_path: Path) -> None:
+    """Completing an index marks sibling non-terminal jobs failed (un-hide gallery)."""
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
+
+    store = _store(tmp_path)  # seeds org/repo graph
+    # A zombie from an earlier halted run: non-terminal, same slug.
+    store.create_job(
+        IndexingJob(
+            job_id="job-zombie",
+            slug="org/repo",
+            status="interrupted",
+            scanned_count=10,
+            total_count=10,
+            current_file=None,
+        )
+    )
+    # A historical terminal job that must NOT be touched.
+    store.create_job(
+        IndexingJob(
+            job_id="job-old-complete",
+            slug="org/repo",
+            status="complete",
+            scanned_count=10,
+            total_count=10,
+            current_file=None,
+        )
+    )
+    store.create_job(_job("job-winner", "org/repo"))
+    store.attach_job_session("job-winner", "sess-winner")
+    _seed_submission(store, "job-winner", slug="org/repo")
+    _save_page(store, "org/repo", "home")
+
+    runtime = _fake_runtime(store)
+    tool = WikiFinalizeTool(session_id="sess-winner")
+    with patch.object(mod, "_resolve_runtime", return_value=runtime):
+        result = asyncio.run(tool.handle(_make_action_step({"landingPageId": "home"})))
+
+    assert "error" not in result.content
+    assert store.get_job("job-winner").status == "complete"
+    # The zombie is retired to terminal failed; the pre-existing complete is untouched.
+    assert store.get_job("job-zombie").status == "failed"
+    assert store.get_job("job-old-complete").status == "complete"
+
+
+# ── Terminal SessionTool contract (Gitea #58) ─────────────────────────────────
+
+
+def test_finalize_should_terminate_run_after_success(tmp_path: Path) -> None:
+    """A successful finalize sets should_terminate_run() so the loop exits immediately.
+
+    This is the Gitea #58 primary fix: WikiFinalizeTool must signal loop
+    termination on success (mirror EmitStructuredResponseTool) so no extra
+    post-finalize LLM turn is taken — eliminating the wedge that prevented
+    the terminal events from being emitted.
+    """
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
+
+    store = _store(tmp_path)
+    store.create_job(_job("job-term", "org/repo"))
+    store.attach_job_session("job-term", "sess-term")
+    _seed_submission(store, "job-term", slug="org/repo")
+    _save_page(store, "org/repo", "home")
+
+    runtime = _fake_runtime(store)
+    tool = WikiFinalizeTool(session_id="sess-term")
+
+    # Before handle: flag is clear.
+    assert tool.should_terminate_run() is False
+
+    with patch.object(mod, "_resolve_runtime", return_value=runtime):
+        result = asyncio.run(tool.handle(_make_action_step({"landingPageId": "home"})))
+
+    assert "error" not in result.content
+    # After a successful handle: should_terminate_run() returns True ONCE.
+    assert tool.should_terminate_run() is True
+    # The flag auto-resets — a second call returns False.
+    assert tool.should_terminate_run() is False
+    # terminal_reason() is "completed", not "awaiting_approval".
+    assert tool.terminal_reason() == "completed"
+
+
+def test_finalize_no_terminate_run_on_failure(tmp_path: Path) -> None:
+    """A failed finalize (e.g. unknown landingPageId) does NOT set should_terminate_run()."""
+    import mewbo_graph.plugins.wiki.finalize as mod
+    from mewbo_graph.plugins.wiki.finalize import WikiFinalizeTool
+
+    store = _store(tmp_path)
+    store.create_job(_job("job-no-term", "org/repo"))
+    store.attach_job_session("job-no-term", "sess-no-term")
+    _seed_submission(store, "job-no-term", slug="org/repo")
+    _save_page(store, "org/repo", "intro")
+
+    runtime = _fake_runtime(store)
+    tool = WikiFinalizeTool(session_id="sess-no-term")
+
+    with patch.object(mod, "_resolve_runtime", return_value=runtime):
+        result = asyncio.run(
+            tool.handle(_make_action_step({"landingPageId": "does-not-exist"}))
+        )
+
+    assert "validation" in result.content
+    # Failure path must NOT terminate the run — the loop should continue.
+    assert tool.should_terminate_run() is False

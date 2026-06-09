@@ -83,7 +83,7 @@ Rules live in a JSON or TOML policy file pointed to by `permissions.policy_path`
 }
 ```
 
-See [configuration.md](configuration.md#permissionsconfig) for field descriptions.
+See [configuration.md](configuration.md#permissions) for field descriptions.
 
 ---
 

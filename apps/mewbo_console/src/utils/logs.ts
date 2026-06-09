@@ -674,6 +674,7 @@ export function buildLogs(events: EventRecord[]): LogEntry[] {
         fallbackReason: typeof p.reason === "string" ? p.reason : undefined,
         fallbackPreviousErrorType:
           typeof p.previous_error_type === "string" ? p.previous_error_type : undefined,
+        fallbackSticky: typeof p.sticky === "boolean" ? p.sticky : undefined,
       });
     }
     if (event.type === "recovery" && event.payload?.action === "halt_no_progress") {

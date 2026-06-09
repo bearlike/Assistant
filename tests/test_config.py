@@ -74,6 +74,58 @@ def test_llm_validate_models_reports_missing_models(monkeypatch):
     assert result.metadata.get("missing_models") == ["gpt-5.2"]
 
 
+class TestResolveAvailableModel:
+    """``LLMConfig.resolve_available_model`` guards a stale/persisted model id
+    against a model the proxy has since retired (e.g. a wiki reindex replaying an
+    old submission). Best-effort: trust the model when the list can't be fetched."""
+
+    def _cfg(self, monkeypatch, available):
+        # Patch at the class level — pydantic BaseModel rejects setattr of a
+        # non-field attribute on an instance (see validate_models test above).
+        monkeypatch.setattr(LLMConfig, "list_models", lambda *_a, **_k: available)
+        return LLMConfig(api_base="http://example/v1", api_key="key")
+
+    def test_keeps_model_when_available(self, monkeypatch):
+        llm = self._cfg(monkeypatch, ["gemini-3.5-flash", "openai/claude-sonnet-4-6"])
+        assert (
+            llm.resolve_available_model("gemini-3.5-flash", fallback="fb")
+            == "gemini-3.5-flash"
+        )
+
+    def test_falls_back_when_model_retired(self, monkeypatch):
+        llm = self._cfg(monkeypatch, ["gemini-3.5-flash"])
+        assert (
+            llm.resolve_available_model(
+                "gemini-3-flash-preview", fallback="openai/gpt-5.4-mini"
+            )
+            == "openai/gpt-5.4-mini"
+        )
+
+    def test_provider_prefix_is_ignored_on_both_sides(self, monkeypatch):
+        # The proxy advertises bare ids; build_chat_model sends an ``openai/``
+        # prefix. Stripping the provider on both sides matches them.
+        llm = self._cfg(monkeypatch, ["gemini-3.5-flash"])
+        assert (
+            llm.resolve_available_model("openai/gemini-3.5-flash", fallback="fb")
+            == "openai/gemini-3.5-flash"
+        )
+
+    def test_best_effort_keeps_model_when_listing_fails(self, monkeypatch):
+        def _boom(*_a, **_k):
+            raise ValueError("Model listing failed: HTTP 503")
+
+        monkeypatch.setattr(LLMConfig, "list_models", _boom)
+        llm = LLMConfig(api_base="http://example/v1", api_key="key")
+        assert (
+            llm.resolve_available_model("gemini-3-flash-preview", fallback="fb")
+            == "gemini-3-flash-preview"
+        )
+
+    def test_empty_model_returns_fallback(self, monkeypatch):
+        llm = self._cfg(monkeypatch, ["gemini-3.5-flash"])
+        assert llm.resolve_available_model("", fallback="fb") == "fb"
+
+
 def test_preflight_disables_failed_integrations(monkeypatch):
     """Disable optional integrations when preflight checks fail."""
     set_mcp_config_path("")

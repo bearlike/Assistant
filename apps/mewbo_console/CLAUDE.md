@@ -1,4 +1,6 @@
 <!-- mewbo:noload -->
+> ↑ [root /CLAUDE.md](../../CLAUDE.md) · children: [wiki](src/components/wiki/CLAUDE.md) · [agentic_search](src/components/agentic_search/CLAUDE.md)
+
 # Mewbo Console — Frontend Engineering Guide
 
 **Subsystem docs (read the deepest one that applies):**
@@ -384,6 +386,9 @@ When rendering InputBar in detail mode, pass `sessionContext={session.context}` 
 
 ### Data ordering must be explicit
 Never rely on storage enumeration order for user-facing lists. UUIDs sort randomly; filesystem `readdir`/`os.listdir` order is undefined. Sort by `created_at` (or the appropriate field) at the data source — not in the UI layer — so all consumers get correct order (DRY). The backend `session_runtime.list_sessions()` sorts descending by `created_at`.
+
+### Session list — provenance filter & the `managed:<uuid>` label trap
+The landing page hides internally-spawned sessions by default. Each `SessionSummary` carries an `origin` (`user|wiki|search|channel`) computed in **core** (`session_provenance`, not the FE). `HomeView` filters client-side over the already-fetched list via a per-origin `DropdownMenu` (default visible = `user`+`channel`; **wiki/search sit behind the filter** — they're the wiki-indexing / ask-question clutter); `SessionOriginBadge` (composes the shared `Badge`, no new primitive) chips every row beside the timestamp. Separately: the console persists `context.project` as `managed:<uuid>`, and `SessionItem` used to render `context.project || context.repo` — so managed *and worktree* sessions showed a raw UUID (worktree `repo`/`branch` were set but lost to the `project` precedence). Resolve display names through `ProjectLabel` (atomic class, fed by `useProjects()`, built once and threaded down): `managed:<id>` → project name; worktree → **parent repo name + branch**. No backend change — `/api/projects` already returns `is_worktree`/`parent_project_id`/`branch`.
 
 ### Don't hand-roll what an external library already gives you
 The single largest source of churn in this codebase has been hand-rolled versions of solved problems: custom popovers, custom click-outside hooks, custom routers, custom data caches, custom dropdown keyboard handlers. Every one of these has now been deleted in favor of shadcn / Radix / TanStack Query / wouter / react-hook-form. Before writing a `useEffect` for any of the following, stop and use the library:

@@ -56,6 +56,14 @@ class WikiSubmitInsightArgs(BaseModel):
         description="propositional = a fact; prescriptive = a rule/should-do",
     )
     labels: list[str] = Field(default_factory=list, description="free-form topic tags")
+    entity_recommendations: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Optional abstract-entity resolution PRIORS the next pass consults"
+            " (never a hard mutation): [{action, subjects, type?, rationale}]"
+            " where action is merge|distinct|retype|create"
+        ),
+    )
 
 
 def _resolve_runtime() -> Any:
@@ -123,8 +131,34 @@ class WikiSubmitInsightTool(WikiSessionTool):
             if claim is not None:
                 emit_log(job_ctx, f"Insight {claim.action}: {claim.content[:80]}")
 
-        payload = {"ok": result.ok, "claims": [c.model_dump() for c in result.claims]}
+        # Persist any abstract-entity recommendations as resolution priors. The
+        # EntityResolver consults them on its next pass; a malformed rec is
+        # non-fatal — skip it rather than fail the whole insight submission.
+        saved_recs = self._save_entity_recommendations(ctx, args.entity_recommendations)
+
+        payload = {
+            "ok": result.ok,
+            "claims": [c.model_dump() for c in result.claims],
+            "entity_recommendations_saved": saved_recs,
+        }
         return MockSpeaker(content=json.dumps(payload))
+
+    @staticmethod
+    def _save_entity_recommendations(ctx: Any, raw_recs: list[dict[str, Any]]) -> int:
+        """Persist valid ``EntityRecommendation`` priors; skip malformed ones."""
+        if not raw_recs:
+            return 0
+        from mewbo_graph.entities.types import EntityRecommendation  # noqa: PLC0415
+
+        saved = 0
+        for raw in raw_recs:
+            try:
+                rec = EntityRecommendation.model_validate(raw)
+            except Exception:  # noqa: BLE001 — a malformed rec is non-fatal
+                continue
+            ctx.store.save_entity_recommendation(ctx.slug, rec)
+            saved += 1
+        return saved
 
 
 __all__ = ["WikiSubmitInsightArgs", "WikiSubmitInsightTool"]

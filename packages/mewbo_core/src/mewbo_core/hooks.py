@@ -43,6 +43,7 @@ class HookManager:
     on_agent_stop: list[Callable[[AgentHandle], None]] = field(default_factory=list)
     on_session_start: list[Callable[[str], None]] = field(default_factory=list)
     on_session_end: list[Callable[[str, str | None], None]] = field(default_factory=list)
+    on_event: list[Callable[[str, EventRecord], None]] = field(default_factory=list)
     on_compact: list[Callable[..., None]] = field(default_factory=list)
 
     def run_pre_tool_use(self, action_step: ActionStep) -> ActionStep:
@@ -146,6 +147,19 @@ class HookManager:
             except Exception:
                 logger.warning("on_session_end hook failed", exc_info=True)
 
+    def run_on_event(self, session_id: str, event: EventRecord) -> None:
+        """Notify hooks that an event was appended to a session transcript.
+
+        Runs on the event-append hot path (via the ``SessionEventBus``
+        observer), so every registered hook is itself fire-and-forget; this
+        loop only dispatches and is failure-isolated per hook.
+        """
+        for hook in self.on_event:
+            try:
+                hook(session_id, event)
+            except Exception:
+                logger.warning("on_event hook failed", exc_info=True)
+
     def run_on_compact(
         self,
         session_id: str,
@@ -176,6 +190,7 @@ class HookManager:
         post_map = {"command": _make_post_tool_hook, "http": _make_http_post_tool_hook}
         start_map = {"command": _make_session_hook, "http": _make_http_session_hook}
         end_map = {"command": _make_session_end_hook, "http": _make_http_session_end_hook}
+        event_map = {"command": _make_event_command_hook, "http": _make_http_event_hook}
         for entry in hooks_config.pre_tool_use:
             manager.pre_tool_use.append(pre_map.get(entry.type, _make_command_hook)(entry))
         for entry in hooks_config.post_tool_use:
@@ -184,6 +199,8 @@ class HookManager:
             manager.on_session_start.append(start_map.get(entry.type, _make_session_hook)(entry))
         for entry in hooks_config.on_session_end:
             manager.on_session_end.append(end_map.get(entry.type, _make_session_end_hook)(entry))
+        for entry in hooks_config.on_event:
+            manager.on_event.append(event_map.get(entry.type, _make_event_command_hook)(entry))
         return manager
 
 
@@ -296,6 +313,47 @@ def _make_session_end_hook(entry: HookEntry) -> Callable[[str, str | None], None
     return hook
 
 
+def _run_event_command(session_id: str, event: EventRecord, entry: HookEntry) -> None:
+    """Run an ``on_event`` command hook subprocess (called on a daemon thread).
+
+    The event is handed to the subprocess as JSON on stdin, with
+    ``MEWBO_SESSION_ID`` and ``MEWBO_EVENT_TYPE`` in the environment.
+    """
+    env = _session_env(session_id)
+    env["MEWBO_EVENT_TYPE"] = str(event.get("type", ""))
+    try:
+        subprocess.run(
+            entry.command,
+            shell=True,
+            timeout=entry.timeout,
+            capture_output=True,
+            text=True,
+            input=json.dumps(event),
+            env=env,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        logger.warning("Event hook timed out or failed: %s", entry.command)
+
+
+def _make_event_command_hook(entry: HookEntry) -> Callable[[str, EventRecord], None]:
+    """Create a non-blocking ``on_event`` command hook from a config entry.
+
+    Fires the subprocess on a daemon thread so a slow hook never blocks the
+    event-append hot path. The ``matcher`` fnmatches the event ``type``.
+    """
+
+    def hook(session_id: str, event: EventRecord) -> None:
+        if not _matches(entry.matcher, str(event.get("type", ""))):
+            return
+        threading.Thread(
+            target=_run_event_command,
+            args=(session_id, event, entry),
+            daemon=True,
+        ).start()
+
+    return hook
+
+
 # ---------------------------------------------------------------------------
 # HTTP hook factories (fire-and-forget POST to external URLs)
 # ---------------------------------------------------------------------------
@@ -386,6 +444,26 @@ def _make_http_session_end_hook(entry: HookEntry) -> Callable[[str, str | None],
     return hook
 
 
+def _make_http_event_hook(entry: HookEntry) -> Callable[[str, EventRecord], None]:
+    """Create a fire-and-forget ``on_event`` HTTP hook from a config entry.
+
+    POSTs ``{"event": "session_event", "session_id": ..., "record": event}``.
+    The ``matcher`` fnmatches the event ``type``.
+    """
+
+    def hook(session_id: str, event: EventRecord) -> None:
+        if not _matches(entry.matcher, str(event.get("type", ""))):
+            return
+        payload: dict[str, Any] = {
+            "event": "session_event",
+            "session_id": session_id,
+            "record": event,
+        }
+        _fire_http(entry.url, payload, entry.headers, entry.timeout)
+
+    return hook
+
+
 def default_hook_manager() -> HookManager:
     """Create a hook manager with no custom hooks registered.
 
@@ -400,6 +478,7 @@ _PLUGIN_HOOK_MAP: dict[str, tuple[str, Callable]] = {
     "PostToolUse": ("post_tool_use", _make_post_tool_hook),
     "SessionStart": ("on_session_start", _make_session_hook),
     "SessionEnd": ("on_session_end", _make_session_end_hook),
+    "SessionEvent": ("on_event", _make_event_command_hook),
 }
 
 

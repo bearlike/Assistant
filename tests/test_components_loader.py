@@ -34,6 +34,7 @@ from mewbo_core.components import (
     langfuse_propagate,
     langfuse_session_context,
     langfuse_trace_span,
+    record_span_exception,
     resolve_home_assistant_status,
     resolve_langfuse_status,
 )
@@ -423,6 +424,54 @@ class TestLangfuseTraceSpan:
         with pytest.raises(RuntimeError, match="test error"):
             with langfuse_trace_span("test-span"):
                 raise RuntimeError("test error")
+
+
+class TestRecordSpanException:
+    """``record_span_exception`` records an OTel ``exception`` event so Langfuse
+    error tooling (which queries those events) is not blind (#65)."""
+
+    def test_records_exception_with_attributes(self):
+        otel = MagicMock()
+        otel.is_recording.return_value = True
+        span = MagicMock()
+        span._otel_span = otel
+        exc = ValueError("boom")
+
+        record_span_exception(span, exc, attributes={"errortype": "x"})
+
+        otel.record_exception.assert_called_once_with(exc, attributes={"errortype": "x"})
+
+    def test_records_message_when_no_exc(self):
+        otel = MagicMock()
+        otel.is_recording.return_value = True
+        span = MagicMock()
+        span._otel_span = otel
+
+        record_span_exception(span, message="exhausted", attributes={"reason": "r"})
+
+        assert otel.record_exception.call_count == 1
+        recorded_exc = otel.record_exception.call_args.args[0]
+        assert isinstance(recorded_exc, RuntimeError)
+        assert "exhausted" in str(recorded_exc)
+
+    def test_no_op_when_span_is_none(self):
+        # Must not raise — graceful when there is no active span.
+        record_span_exception(None, ValueError("x"))
+
+    def test_no_op_when_otel_not_recording(self):
+        otel = MagicMock()
+        otel.is_recording.return_value = False
+        span = MagicMock()
+        span._otel_span = otel
+
+        record_span_exception(span, ValueError("x"))
+
+        otel.record_exception.assert_not_called()
+
+    def test_no_op_when_no_otel_span(self):
+        span = MagicMock(spec=[])  # no _otel_span attribute
+        # Must not raise.
+        record_span_exception(span, ValueError("x"))
 
 
 # ---------------------------------------------------------------------------

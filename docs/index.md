@@ -255,6 +255,8 @@ Mewbo reads the configuration you already have. Point it at a project and it pic
 <ul class="ms-card__list">
   <li><a href="features-plan-mode/">Plan mode</a>: review before execution</li>
   <li><a href="features-permissions-hooks/">Permissions and hooks</a></li>
+  <li><a href="features-policies/">Policies</a>: semantic gate-checks on tool calls</li>
+  <li><a href="features-monitors/">Monitors</a>: session-wide behavioural guardrails</li>
   <li><a href="troubleshooting/">Troubleshooting guide</a></li>
 </ul>
 </div>

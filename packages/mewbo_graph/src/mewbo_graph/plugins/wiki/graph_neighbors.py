@@ -245,7 +245,11 @@ class WikiGraphNeighborsTool(WikiSessionTool):
         args = self._parse_args(WikiGraphNeighborsArgs, action_step)
         if isinstance(args, MockSpeaker):
             return args
-        return MockSpeaker(content=str(view.traverse(args)))
+        result = view.traverse(args)
+        self._record_qa_access(
+            self._qa_ctx(), [f"graph:{n['node_id']}" for n in result.get("nodes", [])]
+        )
+        return MockSpeaker(content=str(result))
 
 
 __all__ = [

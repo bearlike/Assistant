@@ -471,7 +471,12 @@ function renderLlmFallback(log: LogEntry) {
       key={log.id}
       icon={<Shuffle className="w-4 h-4 text-blue-500" />}
       title={<span className="flex items-center gap-2 font-mono">{from} → {to}<ModelLabel modelId={log.fallbackToModel} className={MODEL_TAG_CLASS} /></span>}
-      badge={<Badge color="blue">Fallback</Badge>}
+      badge={
+        <span className="flex items-center gap-1.5">
+          <Badge color="blue">Fallback</Badge>
+          {log.fallbackSticky && <Badge color="cyan">Pinned for run</Badge>}
+        </span>
+      }
       timestamp={log.timestamp}
       accent="blue"
       depth={log.depth}

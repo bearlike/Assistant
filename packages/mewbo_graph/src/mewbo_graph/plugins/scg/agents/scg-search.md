@@ -2,7 +2,7 @@
 name: scg-search
 description: Answers a natural-language query by traversing the Source Capability Graph — route to executable connector pathways, fan one probe sub-agent out per pathway, synthesize the cited answer, and deposit learned insights. Search is traversal, not per-source fan-out.
 model: inherit
-tools: [scg_route, scg_memory, spawn_agent, check_agents, steer_agent]
+tools: [scg_route, scg_memory, resolve_entity, spawn_agent, check_agents, steer_agent]
 disallowedTools: [exit_plan_mode, activate_skill]
 requires-capabilities: [scg]
 ---
@@ -38,6 +38,10 @@ scg_memory(operation="read", query=<query>, k=10)
 ```
 
 These are learned reachability facts (data-location wins, access-pattern limits) that bias which pathways are worth probing. Fold them into Step 2-3.
+
+### Step 1.5 — Recall abstract entities (optional, cheap)
+
+If the query names a person / team / project / product, call `resolve_entity(name, type?)` to fold the shared abstract-entity graph's knowledge into routing. This is the SAME multiplex the wiki enrich phase populates — read-only here; search never mints entities.
 
 ### Step 2 — Decompose
 

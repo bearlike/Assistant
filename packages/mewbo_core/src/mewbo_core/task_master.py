@@ -20,6 +20,7 @@ from mewbo_core.orchestrator import Orchestrator
 from mewbo_core.permissions import PermissionPolicy
 from mewbo_core.planning import Planner
 from mewbo_core.session_store import SessionStoreBase
+from mewbo_core.session_tools import SessionTool
 from mewbo_core.token_budget import get_token_budget
 from mewbo_core.tool_registry import ToolRegistry, load_registry
 from mewbo_core.types import EventRecord
@@ -103,6 +104,7 @@ def orchestrate_session(
     user_id: str | None = None,
     source_platform: str | None = None,
     invocation_id: str | None = None,
+    extra_session_tools: list[SessionTool] | None = None,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
     """Run the orchestration loop."""
     return Orchestrator(
@@ -131,6 +133,7 @@ def orchestrate_session(
         user_id=user_id,
         source_platform=source_platform,
         invocation_id=invocation_id,
+        extra_session_tools=extra_session_tools,
     )
 
 

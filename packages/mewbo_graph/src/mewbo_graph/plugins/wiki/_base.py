@@ -76,6 +76,17 @@ class WikiSessionTool:
         """Wiki tools never request loop termination (no tool sets a flag)."""
         return False
 
+    def terminal_reason(self) -> str:
+        """done_reason when a wiki terminal tool stops the run.
+
+        Both wiki terminal tools (``wiki_finalize`` and the ``wiki_emit_block``
+        sources accept-state) signal a *successful* terminal state, so the base
+        default is ``"completed"`` — never the exit_plan_mode approval gate. A
+        terminal tool can no longer override ``should_terminate_run`` while
+        lacking a ``terminal_reason`` (the #61 contract violation).
+        """
+        return "completed"
+
     # ── Resolution helpers (shared) ─────────────────────────────────────
 
     def _runtime(self) -> Any | None:
@@ -98,6 +109,27 @@ class WikiSessionTool:
         """Resolve the QA ctx for this session, or ``None``."""
         runtime = self._runtime()
         return resolve_qa_ctx(self._session_id, runtime) if runtime is not None else None
+
+    @staticmethod
+    def _record_qa_access(ctx: Any, refs: list[str]) -> None:
+        """Record the graph nodes / files / pages a QA probe touched.
+
+        The deterministic provenance trail (vs the LLM's hand-picked citations):
+        each retrieval tool reports the refs it returned and the finalizer folds
+        them into ``QaAnswer.accessed_sources``. A no-op outside a QA ctx (an
+        indexing job ctx has no ``answer_id``) and best-effort — telemetry never
+        breaks a retrieval call. Refs use the citation id grammar:
+        ``graph:<node_id>`` / ``<path>#L<a>-<b>`` (or bare ``<path>``) / ``wiki:<page_id>``.
+        """
+        answer_id = getattr(ctx, "answer_id", None)
+        store = getattr(ctx, "store", None)
+        clean = [r for r in refs if r]
+        if not answer_id or store is None or not clean:
+            return
+        try:
+            store.append_qa_event(answer_id, {"type": "access", "refs": clean})
+        except Exception:  # pragma: no cover — provenance is best-effort
+            pass
 
     # ── Arg parsing + result serialisation (shared) ─────────────────────
 

@@ -16,6 +16,7 @@ const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({
 const IdeLoader = lazy(() => import('./components/IdeLoader'));
 const AgenticSearchView = lazy(() => import('./components/agentic_search/AgenticSearchView'));
 const WikiApp = lazy(() => import('./components/wiki/WikiApp'));
+const DraftPanel = lazy(() => import('./components/DraftPanel').then(m => ({ default: m.DraftPanel })));
 import {
   createShare,
   exportSession,
@@ -118,6 +119,7 @@ export function App() {
   const [isPlugins] = useRoute('/plugins');
   const [isProjects] = useRoute('/projects');
   const [isSearch] = useRoute('/search');
+  const [isDraft] = useRoute('/draft');
   const [isWikiRoot] = useRoute('/wiki');
   const [isWikiSub] = useRoute('/wiki/*');
   const isWiki = isWikiRoot || isWikiSub;
@@ -258,6 +260,10 @@ export function App() {
     setActionError(null);
     setLocation('/wiki');
   }, [setLocation]);
+  const handleDraftClick = useCallback(() => {
+    setActionError(null);
+    setLocation('/draft');
+  }, [setLocation]);
   const handleShareSession = useCallback(async (sessionId: string) => {
     try {
       const record = await createShare(sessionId);
@@ -302,6 +308,8 @@ export function App() {
       document.title = 'Projects | Mewbo';
     } else if (isSearch) {
       document.title = 'Agentic Search | Mewbo';
+    } else if (isDraft) {
+      document.title = 'Draft stream | Mewbo';
     } else if (isWiki) {
       // WikiApp manages its own title; leave the default here.
     } else if (isIdeLoader) {
@@ -312,7 +320,7 @@ export function App() {
     } else {
       document.title = 'Home | Mewbo';
     }
-  }, [isSettings, isApiKeys, isPlugins, isProjects, isSearch, isWiki, isIdeLoader, isSessionRoute, activeSession]);
+  }, [isSettings, isApiKeys, isPlugins, isProjects, isSearch, isDraft, isWiki, isIdeLoader, isSessionRoute, activeSession]);
 
   // The IDE loader is a standalone full-screen page with no chrome — render
   // it outside the AppLayout so it can't be mistaken for a session view.
@@ -362,6 +370,7 @@ export function App() {
       onPluginsClick={handlePluginsClick}
       onProjectsClick={handleProjectsClick}
       onSearchClick={handleSearchClick}
+      onDraftClick={handleDraftClick}
       landingNav={landingNav}
       onTasksClick={handleTasksClick}
       onWikiClick={handleWikiClick}
@@ -395,6 +404,11 @@ export function App() {
         <Route path="/search">
           <Suspense fallback={<SuspenseFallback />}>
             <AgenticSearchView />
+          </Suspense>
+        </Route>
+        <Route path="/draft">
+          <Suspense fallback={<SuspenseFallback />}>
+            <DraftPanel />
           </Suspense>
         </Route>
         <Route path="/wiki/*?">

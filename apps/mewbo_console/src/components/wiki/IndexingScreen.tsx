@@ -14,7 +14,7 @@
  *     user can see exactly what the indexer is doing right now.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import {
   AlertTriangle,
@@ -22,15 +22,24 @@ import {
   Dot,
   Info,
   Loader2,
+  RotateCcw,
+  TriangleAlert,
 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { ModelBrandIcon } from "@/components/ModelBrandIcon";
 import { cn } from "@/lib/utils";
 import { formatModelName } from "@/utils/model";
 
 import { BrandMark } from "./BrandMark";
 import { WikiTopBar } from "./WikiTopBar";
-import { useCancelIndexing, useIndexingJob, useIndexingStream } from "./api/hooks";
+import {
+  useCancelIndexing,
+  useIndexingJob,
+  useIndexingStream,
+  useResumeIndexing,
+} from "./api/hooks";
+import type { IndexingStatus } from "./api/types";
 import type { PlatformId } from "./router";
 import { buildHref } from "./router";
 import { IndexingProgress, PHASE_ORDER } from "./progress";
@@ -50,8 +59,12 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
     }
   }, [jobId, navigate]);
 
-  const stream = useIndexingStream(jobId ?? null);
+  // Bumped after a successful resume to re-open the SSE stream in place
+  // (same jobId) without unmounting the screen.
+  const [resubscribeKey, setResubscribeKey] = useState(0);
+  const stream = useIndexingStream(jobId ?? null, resubscribeKey);
   const cancel = useCancelIndexing();
+  const resume = useResumeIndexing();
   const snapshot = useIndexingJob(jobId ?? null);
   const effectivePlatform: PlatformId | undefined =
     platform ?? (snapshot.data?.platform as PlatformId | undefined);
@@ -121,6 +134,35 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
     Boolean(fromSnap && fromSnap.pct > 0) ||
     Boolean(snapshot.data && snapshot.data.status !== "queued");
 
+  // Terminal-but-incomplete: the run stopped (failed / interrupted /
+  // cancelled) without finishing. We show a recovery panel instead of a
+  // stuck-at-X% bar. The SSE stream surfaces a terminal ``error`` (folded
+  // into ``stream.error``) or a ``cancelled`` status; the snapshot poll is
+  // authoritative for ``failed``/``interrupted``. ``complete`` is excluded —
+  // that path auto-navigates away above.
+  const FAILED: ReadonlySet<IndexingStatus> = useMemo(
+    () => new Set<IndexingStatus>(["failed", "interrupted", "cancelled"]),
+    [],
+  );
+  const terminalStatus: IndexingStatus | null =
+    snapshot.data && FAILED.has(snapshot.data.status)
+      ? snapshot.data.status
+      : job && FAILED.has(job.status)
+        ? job.status
+        : null;
+  const isIncomplete = Boolean(terminalStatus) || Boolean(stream.error);
+  const incompleteError =
+    stream.error?.message ?? snapshot.data?.error?.message ?? null;
+
+  const resumeIndexing = () => {
+    if (!jobId || resume.isPending) return;
+    resume.mutate(jobId, {
+      // Same job resumes in place — re-open the stream so the screen
+      // tracks the resumed run live again.
+      onSuccess: () => setResubscribeKey((k) => k + 1),
+    });
+  };
+
   // Pin the log timeline to the bottom on each new entry so the user
   // always sees the latest milestone without manual scroll. Earlier
   // entries remain accessible by scrolling up.
@@ -137,11 +179,17 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
         <div className="w-full max-w-[720px] rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-[0_8px_28px_rgba(0,0,0,0.16)] p-5 sm:p-6">
           {/* Header — brand, slug, current phase line, model, percent */}
           <div className="flex items-center gap-3.5">
-            <span className="text-[hsl(var(--primary))]">
-              <BrandMark size={28} spin />
+            <span className={isIncomplete ? "text-amber-500" : "text-[hsl(var(--primary))]"}>
+              {isIncomplete ? (
+                <TriangleAlert size={28} />
+              ) : (
+                <BrandMark size={28} spin />
+              )}
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold">{label}</div>
+              <div className="text-sm font-semibold">
+                {isIncomplete ? "Indexing stopped" : label}
+              </div>
               <div className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))] truncate">
                 <span className="font-mono">{displaySlug}</span>
                 {statusLine && (
@@ -150,10 +198,16 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
                     {statusLine}
                   </>
                 )}
-                {etaLabel && (
+                {!isIncomplete && etaLabel && (
                   <>
                     <span className="opacity-50 mx-1.5">·</span>
                     <span className="tabular-nums">{etaLabel}</span>
+                  </>
+                )}
+                {isIncomplete && (
+                  <>
+                    <span className="opacity-50 mx-1.5">·</span>
+                    <span>reached {IndexingProgress.label(phase)}</span>
                   </>
                 )}
               </div>
@@ -167,15 +221,26 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
                 </div>
               )}
             </div>
-            <div className="text-[hsl(var(--primary))] text-lg font-semibold font-mono tabular-nums">
+            <div
+              className={cn(
+                "text-lg font-semibold font-mono tabular-nums",
+                isIncomplete ? "text-amber-500" : "text-[hsl(var(--primary))]",
+              )}
+            >
               {pct}%
             </div>
           </div>
 
-          {/* Progress bar */}
+          {/* Progress bar — amber + frozen when the run stopped incomplete,
+              so the fill reads as "what completed" rather than live progress. */}
           <div className="mt-3 h-1 rounded-full bg-[hsl(var(--muted))]/60 overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-[hsl(var(--primary))] to-[hsl(var(--primary))]/70 transition-[width] duration-500"
+              className={cn(
+                "h-full transition-[width] duration-500",
+                isIncomplete
+                  ? "bg-amber-500/70"
+                  : "bg-gradient-to-r from-[hsl(var(--primary))] to-[hsl(var(--primary))]/70",
+              )}
               style={{ width: `${pct}%` }}
             />
           </div>
@@ -197,6 +262,55 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
               );
             })}
           </div>
+
+          {/* Recovery panel — terminal-but-incomplete run. Surfaces the
+              error and a Resume button instead of a stuck progress bar; the
+              percent above already shows what completed. Resume re-drives the
+              same job and re-opens the stream in place. */}
+          {isIncomplete && (
+            <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3.5">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-amber-600">
+                    {terminalStatus === "cancelled"
+                      ? "Indexing was cancelled"
+                      : terminalStatus === "interrupted"
+                        ? "Indexing was interrupted"
+                        : "Indexing failed"}
+                  </p>
+                  <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+                    {incompleteError ? (
+                      <span className="font-mono break-words text-amber-600/90">
+                        {incompleteError}
+                      </span>
+                    ) : (
+                      "Resume to continue from where it stopped — completed pages and the knowledge graph are reused."
+                    )}
+                  </p>
+                </div>
+                {jobId && (
+                  <Button
+                    type="button"
+                    variant="neutral"
+                    size="sm"
+                    tone="info"
+                    disabled={resume.isPending}
+                    onClick={resumeIndexing}
+                    leadingIcon={
+                      resume.isPending ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <RotateCcw className="h-3 w-3" />
+                      )
+                    }
+                    className="shrink-0"
+                  >
+                    Resume indexing
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Log timeline — real milestone lines from the BE.
               Renders all logs (not a rolling last-N) so refreshing the
@@ -244,7 +358,7 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
               Indexing typically takes a few minutes to half an hour. The page
               you'll land on opens automatically when ready.
             </div>
-            {jobId && job?.status !== "complete" && job?.status !== "cancelled" && (
+            {jobId && !isIncomplete && job?.status !== "complete" && job?.status !== "cancelled" && (
               <button
                 type="button"
                 onClick={() =>

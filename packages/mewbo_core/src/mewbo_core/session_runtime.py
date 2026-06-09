@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from mewbo_core.classes import Plan, TaskQueue
+from mewbo_core.session_provenance import SessionOrigin
 from mewbo_core.session_store import SessionStoreBase, create_session_store
+from mewbo_core.session_tools import SessionTool
 from mewbo_core.task_master import orchestrate_session
 from mewbo_core.types import EventRecord
 
@@ -36,6 +38,13 @@ def _derive_core_commands() -> set[str]:
 CORE_COMMANDS = _derive_core_commands()
 
 RecoveryAction = Literal["retry", "continue"]
+
+# Context-event keys that gate capability-scoped behaviour (e.g. wiki/QA
+# AgentDef visibility, structured-workspace grounding). On recovery the
+# orchestrator reads the MOST-RECENT context event, so these must be carried
+# forward or a recovered run silently loses its capability. Kept generic — we
+# preserve whatever the session already had, never an origin→capability map.
+_RECOVERY_GATING_KEYS: tuple[str, ...] = ("client_capabilities", "structured_workspace")
 
 
 def _build_continue_recovery_query() -> str:
@@ -231,6 +240,16 @@ class SessionRuntime:
             return
         self._session_store.append_event(session_id, {"type": "context", "payload": context})
 
+    def append_event(self, session_id: str, event: dict[str, object]) -> None:
+        """Append a raw transcript event verbatim.
+
+        Unlike :meth:`append_context_event` (which wraps payloads as
+        ``{"type": "context", ...}``), this writes the event as-is, so a
+        ``completion`` event reaches :meth:`summarize_session` — the single
+        status authority — instead of being hidden inside a context payload (#40).
+        """
+        self._session_store.append_event(session_id, event)
+
     def summarize_session(
         self,
         session_id: str,
@@ -288,6 +307,21 @@ class SessionRuntime:
             created_at = None
         if not title:
             title = f"Session {session_id[:8]}"
+        merged_context = context or {}
+        origin = SessionOrigin.classify(
+            self._session_store.tags_for_session(session_id), merged_context
+        )
+        # ``recoverable`` = the FE/CLI may offer a Continue/Restart affordance.
+        # True when the session is not running, did not complete successfully,
+        # and has a prior user turn (so ``resolve_recovery_query`` won't raise).
+        # The crucial case is a session that died mid-call with NO ``completion``
+        # event at all (process killed) — status stays ``idle`` but a user turn
+        # exists, so it must be recoverable.
+        # ``awaiting_approval`` is recoverable: a plan-mode proposal (or a wiki QA
+        # answer) parks here with no active run and no auto-exit. Recovery
+        # ``continue`` re-engages it through the one loop, mirroring send_followup —
+        # the only other way out. Only ``completed`` is genuinely terminal (#66).
+        recoverable = not running and status != "completed" and has_user_event
         return {
             "session_id": session_id,
             "title": title,
@@ -295,7 +329,9 @@ class SessionRuntime:
             "status": status,
             "done_reason": done_reason,
             "running": running,
-            "context": context or {},
+            "recoverable": recoverable,
+            "context": merged_context,
+            "origin": origin.value,
             "archived": self._session_store.is_archived(session_id),
         }
 
@@ -345,12 +381,23 @@ class SessionRuntime:
         user_id: str | None = None,
         source_platform: str | None = None,
         invocation_id: str | None = None,
-    ) -> bool:
+        extra_session_tools: list[SessionTool] | None = None,
+    ) -> str:
         """Start an asynchronous orchestration run for the session.
 
         ``fallback_models`` (when provided) opts this run into cross-model
         fallback; ``None`` defers to the resolved config policy.
+
+        Returns a storeless per-run handle ``run_id`` of the form
+        ``"<session_id>:r<seq>"`` where *seq* is the 1-based count of runs
+        started on this session so far (so one session can host many runs).
+        The run_id is resolvable back to the session id by splitting on the
+        first ``:`` — no new store or index is required. When the run
+        registry refuses the start (a run is already active for this
+        session), an empty string is returned so existing ``if not started``
+        callers still detect the refusal.
         """
+        run_id = self._mint_run_id(session_id)
         msg_queue: queue.Queue[str] = queue.Queue()
         interrupt_event = threading.Event()
 
@@ -378,14 +425,32 @@ class SessionRuntime:
                 user_id=user_id,
                 source_platform=source_platform,
                 invocation_id=invocation_id,
+                extra_session_tools=extra_session_tools,
             )
 
-        return self._run_registry.start(
+        started = self._run_registry.start(
             session_id,
             target=_run,
             message_queue=msg_queue,
             interrupt_step=interrupt_event,
         )
+        return run_id if started else ""
+
+    def _mint_run_id(self, session_id: str) -> str:
+        """Mint ``"<session_id>:r<seq>"`` for a run about to start.
+
+        *seq* is 1-based and counts this run: it is one more than the number
+        of ``user`` events already in the transcript (each prior run appended
+        exactly one, and runs are serialized — the registry refuses a
+        concurrent start). A fresh session has zero prior user events → ``r1``.
+        Storeless: derived from the transcript, no separate counter to persist.
+        """
+        try:
+            events = self._session_store.load_transcript(session_id)
+            prior_runs = sum(1 for e in events if e.get("type") == "user")
+        except Exception:  # pragma: no cover - defensive; never block a start
+            prior_runs = 0
+        return f"{session_id}:r{prior_runs + 1}"
 
     def run_sync(
         self,
@@ -412,6 +477,7 @@ class SessionRuntime:
         user_id: str | None = None,
         source_platform: str | None = None,
         invocation_id: str | None = None,
+        extra_session_tools: list[SessionTool] | None = None,
     ) -> TaskQueue:
         """Run an orchestration request synchronously."""
         return orchestrate_session(
@@ -438,6 +504,7 @@ class SessionRuntime:
             user_id=user_id,
             source_platform=source_platform,
             invocation_id=invocation_id,
+            extra_session_tools=extra_session_tools,
         )
 
     def cancel(self, session_id: str) -> bool:
@@ -568,6 +635,40 @@ class SessionRuntime:
             )
 
         return query_text
+
+    def reinject_recovery_context(self, session_id: str) -> None:
+        """Re-emit capability-gating fields so a recovered run keeps them.
+
+        The orchestrator reads the *most-recent* ``context`` event when it
+        builds the system prompt and resolves capability-gated AgentDefs.
+        After a recovery turn the latest context event may be a plain
+        ``mode``/``model`` update that does NOT carry the original
+        ``client_capabilities`` / ``structured_workspace`` — so a recovered
+        wiki/QA/structured session would silently lose its capability and
+        ``spawn_agent`` lookups for the gated AgentDefs would fail.
+
+        This scans the transcript for the latest value of each gating key
+        (preserving exactly what the session already had — no origin→capability
+        map) and appends a single fresh ``context`` event carrying them, so the
+        most-recent context event after recovery still gates correctly. A no-op
+        when the session never declared any gating field.
+
+        Shared by BOTH the API recover endpoint and the CLI recovery command —
+        the single source of truth for recovery capability re-injection.
+        """
+        events = self._session_store.load_transcript(session_id)
+        gating: dict[str, object] = {}
+        for event in events:
+            if event.get("type") != "context":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            for key in _RECOVERY_GATING_KEYS:
+                if key in payload:
+                    gating[key] = payload[key]
+        if gating:
+            self.append_context_event(session_id, gating)
 
     def enqueue_message(self, session_id: str, text: str) -> bool:
         """Enqueue a steering message for the root agent of a running session.

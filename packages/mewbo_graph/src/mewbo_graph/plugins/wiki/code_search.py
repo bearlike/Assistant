@@ -109,6 +109,7 @@ class WikiCodeSearchTool(WikiSessionTool):
             for h in hits
             if h.kind == "node"
         ]
+        self._record_qa_access(ctx, [f"graph:{h.id}" for h in hits if h.kind == "node"])
         return MockSpeaker(content=str({"hits": results}))
 
 

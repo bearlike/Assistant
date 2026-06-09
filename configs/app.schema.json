@@ -79,8 +79,8 @@
           "type": "number"
         },
         "llm_call_retries": {
-          "default": 3,
-          "description": "Maximum attempts for the primary model before cascading to fallback models. Each fallback model gets retry.fallback_retries attempts. Backoff/budget/circuit-breaker live under agent.retry.",
+          "default": 2,
+          "description": "Maximum attempts for the primary model before cascading to fallback models (default 2 = one try + one retry). Each fallback model gets retry.fallback_retries attempts. A rescue model that wins is pinned for the rest of the run. Backoff/budget/circuit-breaker live under agent.retry.",
           "title": "Llm Call Retries",
           "type": "integer"
         },
@@ -410,6 +410,14 @@
             "$ref": "#/$defs/HookEntry"
           },
           "title": "On Session End",
+          "type": "array"
+        },
+        "on_event": {
+          "description": "Hooks executed (fire-and-forget) for every event appended to a session transcript. The matcher fnmatches the event type.",
+          "items": {
+            "$ref": "#/$defs/HookEntry"
+          },
+          "title": "On Event",
           "type": "array"
         }
       },

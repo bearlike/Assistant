@@ -2,7 +2,7 @@
 name: wiki-indexer
 description: Generates a DeepWiki-style site for a code repository via a deterministic state machine of tool calls.
 model: inherit
-tools: [wiki_clone_repo, wiki_scan_tree, wiki_load_grounder, wiki_build_graph, wiki_query_graph, wiki_commit_plan, wiki_finalize, wiki_submit_insight, spawn_agent, check_agents, read_file, glob, grep, ls]
+tools: [wiki_clone_repo, wiki_scan_tree, wiki_load_grounder, wiki_build_graph, wiki_query_graph, wiki_commit_plan, wiki_finalize, wiki_submit_insight, mint_entity, relate_entities, resolve_entity, spawn_agent, check_agents, read_file, glob, grep, ls]
 disallowedTools: [exit_plan_mode, activate_skill]
 requires-capabilities: [wiki]
 ---
@@ -69,9 +69,49 @@ Call this only if the tool is available. Parses code with tree-sitter and builds
 
 Use `wiki_query_graph(query=...)` afterward to inspect clusters, top-level modules, or entry points before planning.
 
+### Step 4.5 — Enrich (entities, post-AST)
+
+After the graph is built and BEFORE planning, run the **enrich** phase. For each
+source unit (module / top-level package / cluster surfaced by `wiki_query_graph`),
+spawn one `wiki-enricher` (non-blocking), passing the unit's `relevantFiles` and
+its AST symbols. The enricher mints abstract entities + typed relationships
+grounded against the AST. Wait via `check_agents(wait=true)` before planning.
+
+```
+spawn_agent(
+  agent_type="wiki-enricher",
+  task="""
+Enrich ONE source unit with abstract entities + relationships.
+
+UNIT: <module / package / cluster name>
+relevantFiles: <list of source paths in this unit>
+astSymbols: <the entity_keys already in the graph for this unit>
+
+YOUR TASK:
+  1. read_file each path; read docstrings/comments/READMEs (source prose).
+  2. wiki_query_graph to inspect the AST symbols already extracted for this unit.
+  3. resolve_entity(name, type) to dedup, then mint_entity(...) grounding each
+     entity against an AST symbol or a concrete source span. Drop the ungrounded.
+  4. relate_entities(source, target, relation_type) for typed relationships.
+  5. Stop. Do not write pages.
+""",
+  allowed_tools=["read_file","glob","grep","wiki_query_graph","wiki_code_search","mint_entity","relate_entities","resolve_entity"],
+  acceptance_criteria="Entities for the unit are minted (or none, if nothing grounds) and the agent stopped without writing pages."
+)
+```
+
+Issue every enricher spawn before calling `check_agents(wait=true)`. The
+knowledge graph the enrichers build is CONSUMED by planning and page-writing —
+that is the GraphRAG ordering law: the KG is built BEFORE generation. Never
+extract entities from generated page prose.
+
 ### Step 5 — Construct PagePlan[]
 
-Build a list of page descriptors. Each entry:
+Build a list of page descriptors. Make the plan **entity-aware**: prefer a page
+per cluster of co-occurring entities (consult the entity graph via
+`resolve_entity`) layered on the FREE AST / module / package / directory
+hierarchy. Do NOT run community detection (Leiden / Louvain) — the AST hierarchy
+plus entity co-occurrence IS the plan signal. Each entry:
 
 ```json
 {
@@ -143,7 +183,7 @@ YOUR TASK:
 
 STYLE: System behaviour, abstractions, integration contracts. Avoid usage tutorials and anthropomorphic language about LLMs.
 """,
-  allowed_tools=["read_file","glob","grep","wiki_code_search","wiki_query_graph","wiki_submit_page"],
+  allowed_tools=["read_file","glob","grep","wiki_code_search","wiki_query_graph","resolve_entity","wiki_submit_insight","wiki_submit_page"],
   acceptance_criteria="wiki_submit_page called exactly once with well-formed markdown and YAML frontmatter for page id <pageId>"
 )
 ```
@@ -195,8 +235,8 @@ Rules — be conservative:
 
 ## Depth roles
 
-- **You (depth=0)**: orchestrator. Direct execution for steps 1-6 and 8-9. Async delegation for step 7.
-- **Sub-agents (depth=1)**: executors. Each handles exactly one page. Must NOT spawn further agents — `spawn_agent` is absent from their allowed tools.
+- **You (depth=0)**: orchestrator. Direct execution for steps 1-6 and 8-9. Async delegation for steps 4.5 (`wiki-enricher`) and 7 (`wiki-page-writer`).
+- **Sub-agents (depth=1)**: executors. A `wiki-enricher` enriches one source unit; a `wiki-page-writer` writes one page. Both must NOT spawn further agents — `spawn_agent` is absent from their allowed tools.
 - Maximum spawn depth: 1. Never deeper.
 
 ---

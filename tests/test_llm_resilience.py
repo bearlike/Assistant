@@ -9,6 +9,7 @@ tool-call-pairing repair — no live model or network.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import litellm.exceptions as lx
 import pytest
@@ -112,6 +113,19 @@ class TestClassifyLlmError:
         assert d.action is RetryAction.FATAL
         assert d.reason == "bad_request"
 
+    def test_bad_request_invalid_model_switches(self):
+        # An unknown/retired model id surfaces as a 400 — hopeless on THIS model,
+        # recoverable on a fallback, so it must switch, not die fatally.
+        d = RetryStrategy.classify(
+            _mk(
+                lx.BadRequestError,
+                "Invalid model name passed in model=gemini-3-flash-preview. "
+                "Call /v1/models to view available models for your key.",
+            )
+        )
+        assert d.action is RetryAction.SWITCH_MODEL
+        assert d.reason == "invalid_model"
+
 
 class TestBackoff:
     @staticmethod
@@ -210,6 +224,71 @@ class TestDoomLoopGuard:
         a = DoomLoopGuard.signature([{"name": "t", "args": {"x": 1, "y": 2}, "id": "1"}])
         b = DoomLoopGuard.signature([{"name": "t", "args": {"y": 2, "x": 1}, "id": "2"}])
         assert a == b  # id excluded; arg key order normalised
+
+    # -- progress-aware (result-sensitive) detection -----------------------
+    # A doom loop is "same action, same OUTCOME, repeated" — not merely the
+    # same input. Identical input whose RESULT advances is progress and must
+    # not be halted (this is the bug that killed a healthy wiki index: the
+    # root polled check_agents while children finished one by one).
+
+    def test_advancing_results_break_no_progress(self):
+        """Identical input but a CHANGING result = the world advanced → not stuck."""
+        g = DoomLoopGuard(threshold=3)
+        tc = [{"name": "wiki_query_graph", "args": {"q": "x"}, "id": "1"}]
+        for i in range(4):
+            g.observe(tc)
+            g.record_result(
+                [SimpleNamespace(tool_id="wiki_query_graph", success=True, content=f"{i} done")]
+            )
+        assert not g.is_stuck()
+
+    def test_identical_input_and_result_is_stuck(self):
+        """Identical input AND identical result repeated = a genuine doom loop."""
+        g = DoomLoopGuard(threshold=3)
+        tc = [{"name": "read", "args": {"path": "a"}, "id": "1"}]
+        for _ in range(3):
+            g.observe(tc)
+            g.record_result([SimpleNamespace(tool_id="read", success=True, content="same")])
+        assert g.is_stuck()
+
+    def test_check_agents_is_exempt(self):
+        """check_agents is a wait/sync primitive; polling it (even with an unchanged
+        'still running' result) is the intended epoll pattern, never a doom loop."""
+        g = DoomLoopGuard(threshold=3)
+        for _ in range(5):
+            g.observe([{"name": "check_agents", "args": {"wait": True}, "id": "1"}])
+            g.record_result(
+                [SimpleNamespace(tool_id="check_agents", success=True, content="1 running")]
+            )
+        assert not g.is_stuck()
+
+    def test_mixed_batch_detects_on_non_exempt_component(self):
+        """[check_agents, read(same)] repeated trips on the read; check_agents (and
+        its possibly-advancing result) is dropped from both signatures."""
+        g = DoomLoopGuard(threshold=3)
+        for i in range(3):
+            g.observe(
+                [
+                    {"name": "check_agents", "args": {"wait": True}, "id": "a"},
+                    {"name": "read", "args": {"path": "a"}, "id": "b"},
+                ]
+            )
+            g.record_result(
+                [
+                    SimpleNamespace(tool_id="check_agents", success=True, content=f"{i} running"),
+                    SimpleNamespace(tool_id="read", success=True, content="same-file"),
+                ]
+            )
+        assert g.is_stuck()
+
+    def test_legacy_input_only_falls_back_to_identity(self):
+        """Backward-compat: callers that never record results keep input-identity
+        detection (the in-loop driver always records, so this is the unit path)."""
+        g = DoomLoopGuard(threshold=3)
+        tc = [{"name": "read", "args": {"path": "a"}, "id": "1"}]
+        for _ in range(3):
+            g.observe(tc)
+        assert g.is_stuck()
 
 
 class TestRepairToolPairing:
@@ -351,6 +430,102 @@ class TestRetryStrategy:
         with pytest.raises(LlmResilienceExhausted) as ei:
             self._run(self._strategy(turn_deadline=10.0, clock=clock), ["p"], invoke, [])
         assert ei.value.reason == "deadline"
+
+    # A1 — retry cap of 2: one try + one retry, then advance (never a 3rd).
+    def test_cap_two_advances_on_second_transient_failure(self):
+        calls: list = []
+
+        async def invoke(model, is_fb):
+            calls.append(model)
+            if model == "p":
+                raise asyncio.TimeoutError()  # transient -> RETRY_SAME
+            return _SENTINEL
+
+        events: list = []
+        resp, model = self._run(
+            self._strategy(primary_retries=2), ["p", "f"], invoke, events
+        )
+        # Primary tried exactly twice (1 try + 1 retry), then the fallback.
+        assert calls == ["p", "p", "f"]
+        assert resp is _SENTINEL and model == "f"
+        # Exactly one llm_retry was emitted before the cap tripped (no 3rd try).
+        assert sum(1 for e in events if e["type"] == "llm_retry") == 1
+
+    def test_default_primary_retries_is_two(self):
+        # The configured cap default is 2 (one try + one retry).
+        from mewbo_core.llm_resilience import DEFAULT_PRIMARY_RETRIES
+
+        assert DEFAULT_PRIMARY_RETRIES == 2
+
+    # A3 — fallback payload: retries_exhausted + previous_error_type + sticky.
+    def test_fallback_payload_on_transient_exhaustion(self):
+        async def invoke(model, is_fb):
+            if model == "p":
+                raise asyncio.TimeoutError()
+            return _SENTINEL
+
+        events: list = []
+        self._run(self._strategy(primary_retries=2), ["p", "f"], invoke, events)
+        fb = next(e for e in events if e["type"] == "llm_fallback")["payload"]
+        assert fb["reason"] == "retries_exhausted"
+        assert fb["previous_error_type"] == "TimeoutError"
+        assert fb["sticky"] is True
+        assert fb["from_model"] == "p" and fb["to_model"] == "f"
+
+    def test_fallback_payload_preserves_switch_reason(self):
+        async def invoke(model, is_fb):
+            if model == "p":
+                raise _mk(lx.RateLimitError, "No deployments available for selected model")
+            return _SENTINEL
+
+        events: list = []
+        self._run(self._strategy(), ["p", "f"], invoke, events)
+        fb = next(e for e in events if e["type"] == "llm_fallback")["payload"]
+        # SWITCH_MODEL classifier reason is preserved, not overwritten.
+        assert fb["reason"] == "no_deployments"
+        assert fb["sticky"] is True
+
+    # A2 — sticky escalation: the rescue model is pinned for the rest of the run.
+    def test_sticky_pin_tries_rescue_model_first_next_run(self):
+        strategy = self._strategy(primary_retries=2)
+        calls: list = []
+
+        async def invoke(model, is_fb):
+            calls.append(model)
+            if model == "p":
+                raise asyncio.TimeoutError()  # primary always dead
+            return _SENTINEL
+
+        # First run: primary fails, escalates to fallback "f" which succeeds.
+        _, m1 = self._run(strategy, ["p", "f"], invoke, [])
+        assert m1 == "f"
+        assert strategy._pinned_model == "f"
+
+        # Second run with the SAME chain: "f" is tried FIRST and the dead
+        # primary "p" is never re-invoked.
+        calls.clear()
+        _, m2 = self._run(strategy, ["p", "f"], invoke, [])
+        assert m2 == "f"
+        assert calls == ["f"]
+        assert "p" not in calls
+
+    def test_no_pin_when_primary_wins(self):
+        strategy = self._strategy()
+
+        async def invoke(model, is_fb):
+            return _SENTINEL  # primary succeeds immediately
+
+        _, m = self._run(strategy, ["p", "f"], invoke, [])
+        assert m == "p"
+        assert strategy._pinned_model is None
+
+    def test_order_models_reorders_pinned_first(self):
+        strategy = self._strategy()
+        strategy._pinned_model = "f"
+        assert strategy._order_models(["p", "f", "g"]) == ["f", "p", "g"]
+        # Pin no longer in the chain -> order unchanged.
+        strategy._pinned_model = "gone"
+        assert strategy._order_models(["p", "f"]) == ["p", "f"]
 
 
 def test_exhausted_exception_carries_fields():

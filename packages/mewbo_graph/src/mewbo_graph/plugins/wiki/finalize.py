@@ -48,11 +48,34 @@ class WikiFinalizeArgs(BaseModel):
 
 
 class WikiFinalizeTool(WikiSessionTool):
-    """SessionTool: finalize indexing — persist Project record, emit complete event."""
+    """SessionTool: finalize indexing — persist Project record, emit complete event.
+
+    Terminates the run on success (mirrors ``EmitStructuredResponseTool``):
+    ``should_terminate_run()`` returns ``True`` the step after a successful
+    ``handle()``, so the loop breaks immediately — no extra post-finalize LLM
+    turn, no wasted tokens, and the terminal events are emitted while the
+    session is still coherent.
+    """
 
     tool_id = "wiki_finalize"
     args_cls = WikiFinalizeArgs
     schema: dict[str, Any] = pydantic_to_openai_tool(WikiFinalizeArgs, name="wiki_finalize")
+
+    def __init__(self, session_id: str, event_logger: Any = None) -> None:
+        """Initialise with a pending-terminate flag."""
+        super().__init__(session_id, event_logger)
+        self._terminate_run_pending: bool = False
+
+    def should_terminate_run(self) -> bool:
+        """Return True once after a successful finalize; resets the flag."""
+        if self._terminate_run_pending:
+            self._terminate_run_pending = False
+            return True
+        return False
+
+    def terminal_reason(self) -> str:
+        """Return the done_reason emitted when the loop terminates."""
+        return "completed"
 
     async def handle(self, action_step: ActionStep) -> MockSpeaker:
         """Execute a ``wiki_finalize`` tool call."""
@@ -141,6 +164,26 @@ class WikiFinalizeTool(WikiSessionTool):
         commit_short = commit_sha[:7] if commit_sha else None
         maintainer_edited = _detect_grounder(ctx.clone_dir)
 
+        # 5b. Completion correctness (GraphRAG ordering law, Gitea #35): the
+        # knowledge graph is the substrate every downstream feature (Q&A,
+        # search, entities) reads. A run that reaches finalize with an EMPTY
+        # graph "completed without creating the graph" — that is a FAILURE, not
+        # a success. Refuse to finalize and mark the job failed so it surfaces
+        # as a real error (distinct from "error after the graph was built",
+        # which already lands as failed with a populated graph). Soft-gated:
+        # a graph-less install (no backend) is not blocked here.
+        if not _graph_is_populated(ctx):
+            err = (
+                "cannot finalize: knowledge graph is empty — the graph build "
+                "did not run or produced no nodes"
+            )
+            ctx.store.append_job_event(ctx.job_id, {
+                "type": "error",
+                "error": {"code": "validation", "message": err},
+            })
+            ctx.store.update_job(ctx.job_id, status="failed", current_file=None)
+            return _err_result("validation", err)
+
         # 6. Build and persist the Project record (upsert).
         from mewbo_graph.wiki.types import Project  # noqa: PLC0415
 
@@ -172,6 +215,15 @@ class WikiFinalizeTool(WikiSessionTool):
             current_file=None,
         )
 
+        # 7b. Supersede older non-terminal jobs for this slug. Earlier attempts
+        # that halted or were interrupted stay non-terminal (scanning /
+        # finalizing / interrupted) forever and keep the project pinned in the
+        # "Indexing now" active-jobs list — which HIDES the finished wiki from
+        # the gallery (the FE suppresses a completed tile while its slug has an
+        # active job). A completed index makes those attempts moot; mark them
+        # terminally failed so the completed project surfaces immediately.
+        _supersede_stale_jobs(ctx)
+
         # 8. Emit finalize phase + complete event.
         emit_phase(ctx, "finalize")
         emit_log(ctx, f"Wiki ready: {page_count} pages, landing on {args.landingPageId}")
@@ -185,6 +237,9 @@ class WikiFinalizeTool(WikiSessionTool):
         from mewbo_graph.wiki.tokens import CloneTokenCache  # noqa: PLC0415
 
         CloneTokenCache.forget(ctx.job_id)
+
+        # Signal the loop to terminate: no post-finalize LLM turn needed.
+        self._terminate_run_pending = True
 
         return MockSpeaker(content=str({
             "complete": True,
@@ -327,6 +382,53 @@ def _detect_grounder(clone_dir: Any) -> bool:
         return False
 
 
+def _graph_is_populated(ctx: Any) -> bool:
+    """True iff the code graph holds at least one node for ``ctx.slug``.
+
+    The completion-correctness gate: "completed without creating the graph" is
+    a failure. Soft signal — if the graph backend is absent (a graph-less
+    install raises ``NotImplementedError``) or the query errors transiently, do
+    NOT block finalize (the wiki can still serve BM25 pages). Only a
+    present-but-EMPTY graph fails the run.
+    """
+    try:
+        return bool(ctx.store.query_graph(ctx.slug))
+    except NotImplementedError:
+        return True  # graph backend absent by design — don't block finalize
+    except Exception as exc:  # pragma: no cover — never fail finalize on a glitch
+        logging.info("wiki_finalize: graph check failed for %s (%s); allowing", ctx.slug, exc)
+        return True
+
+
+def _supersede_stale_jobs(ctx: Any) -> None:
+    """Mark sibling non-terminal jobs for ``ctx.slug`` as failed (superseded).
+
+    A completed index retires earlier stuck attempts so they drop out of the
+    active-jobs surface and stop hiding the finished project. Best-effort: a
+    store hiccup must never undo the just-finished index.
+    """
+    terminal = {"complete", "failed", "cancelled"}
+    try:
+        siblings = ctx.store.list_jobs(ctx.slug)
+    except Exception as exc:  # pragma: no cover — best-effort cleanup
+        logging.info("wiki_finalize: list_jobs for supersede failed (%s)", exc)
+        return
+    for job in siblings:
+        if job.job_id == ctx.job_id or job.status in terminal:
+            continue
+        try:
+            ctx.store.update_job(job.job_id, status="failed")
+            ctx.store.append_job_event(job.job_id, {
+                "type": "error",
+                "error": {
+                    "code": "internal",
+                    "message": "superseded by a newer completed index",
+                },
+            })
+        except Exception as exc:  # pragma: no cover — best-effort
+            logging.info("wiki_finalize: supersede %s failed (%s)", job.job_id, exc)
+
+
 __all__ = [
     "WikiFinalizeArgs",
     "WikiFinalizeTool",
@@ -334,5 +436,7 @@ __all__ = [
     "_split_owner_repo",
     "_fetch_description",
     "_detect_grounder",
+    "_graph_is_populated",
+    "_supersede_stale_jobs",
     "_load_submission",
 ]

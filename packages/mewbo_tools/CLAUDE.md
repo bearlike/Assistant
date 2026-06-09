@@ -1,3 +1,5 @@
+> ↑ [root /CLAUDE.md](../../CLAUDE.md)
+
 # Mewbo Tools — Integrations Guidance
 
 Scope: `packages/mewbo_tools/src/mewbo_tools/` — the package that

@@ -14,13 +14,15 @@ AtomicRAG) rather than concatenating them.
 """
 from __future__ import annotations
 
-import datetime as _dt
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
+
+from mewbo_graph._util import utc_now_iso as _utc_now_iso
+from mewbo_graph.entities.resolver import ResolutionLadder
 
 from .embedder import Embedder, EmbedderProtocol
 from .memory_types import (
@@ -64,15 +66,15 @@ class AnchorResolver(Protocol):
 
 _CFG = ConfigDict(extra="forbid", populate_by_name=True)
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+# Keeps a clamped cosine strictly below the merge threshold so cosine alone can
+# only reach the flag (LLM) band — never an auto-merge (legacy dedup invariant).
+_CLAMP_EPS = 1e-9
 
 
-def utc_now_iso() -> str:
-    """Return the current UTC time as an ISO-8601 ``...Z`` string.
-
-    The single clock used to stamp memory provenance and refresh timestamps;
-    imported by ``refresh.py`` so both layers agree on the format.
-    """
-    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+# The single clock for memory provenance + refresh timestamps; re-exported from
+# the dependency-free shared util so the entity layer and wiki agree on the
+# format without either re-implementing it. ``refresh.py`` imports this name.
+utc_now_iso = _utc_now_iso
 
 
 def _tokens(text: str, min_len: int) -> set[str]:
@@ -207,36 +209,95 @@ class InsightDeduper:
         near-duplicate is also an embedding near-duplicate, so scoping fuzzy
         to the kNN set never misses one.) Only when no embedding is available
         (BM25-only) does it fall back to a bounded full scan.
+
+        DRY: tiers 2+3 delegate the block→score→decide step to the ONE generic
+        ``ResolutionLadder`` shared with entity resolution. The injected
+        strategies reproduce the legacy thresholds EXACTLY — ``fuzzy_jaccard``
+        ⇒ the merge band, ``dedup_cosine`` ⇒ the LLM (flag) band, NONE-default
+        ⇒ NEW — so this stays behavior-preserving (see ``_build_ladder``).
         """
         # Tier 1 — exact: identical normalized content ⇒ identical node_id
-        # (indexed point lookup, never a scan).
+        # (indexed point lookup, never a scan). Kept inline — the ladder is for
+        # the *similarity* tiers; an exact id hit is a cheaper short-circuit.
         if self._store.get_memory_node(slug, candidate.node_id) is not None:
             return DedupDecision("merge", candidate.node_id, tier="exact")
 
-        ranked = self._nearest(slug, candidate, candidate_vec)
-        candidates = [n for n, _ in ranked]
+        ladder, by_id = self._build_ladder(slug, candidate, candidate_vec)
+        decision = ladder.decide(candidate.node_id)
 
-        # Tier 2 — fuzzy: high lexical overlap among the kNN candidates.
-        cand_tokens = _tokens(candidate.content, self._min_token_len)
-        if cand_tokens:
-            for node in candidates:
-                if node.node_id == candidate.node_id:
-                    continue
-                other = _tokens(node.content, self._min_token_len)
-                if _jaccard(cand_tokens, other) >= self._fuzzy_jaccard:
-                    return DedupDecision("merge", node.node_id, tier="fuzzy")
+        # A merge-band verdict ⇒ the legacy tier-2 fuzzy merge (jaccard band).
+        if decision.action == "merge" and decision.target_id:
+            return DedupDecision("merge", decision.target_id, tier="fuzzy")
 
-        # Tier 3 — LLM over the nearest candidate above the cosine floor.
-        if candidate_vec is not None and self._llm is not None:
-            above = [(n, c) for n, c in ranked if c >= self._dedup_cosine]
-            if above:
-                target = above[0][0]
-                verdict = self._decide(candidate, target)
-                if verdict == "merge":
-                    return DedupDecision("merge", target.node_id, tier="llm")
-                if verdict == "link":
-                    return DedupDecision("link", target.node_id, tier="llm")
+        # A flag-band verdict ⇒ the legacy tier-3 LLM call over the nearest
+        # candidate above the cosine floor (only when a vector + LLM exist).
+        if (
+            decision.action == "flag"
+            and decision.target_id
+            and candidate_vec is not None
+            and self._llm is not None
+        ):
+            target, _cos = by_id[decision.target_id]
+            verdict = self._decide(candidate, target)
+            if verdict == "merge":
+                return DedupDecision("merge", target.node_id, tier="llm")
+            if verdict == "link":
+                return DedupDecision("link", target.node_id, tier="llm")
         return DedupDecision("new", tier="new")
+
+    def _build_ladder(
+        self, slug: str, candidate: MemoryNode, candidate_vec: list[float] | None
+    ) -> tuple[ResolutionLadder, dict[str, tuple[MemoryNode, float]]]:
+        """Build the shared ``ResolutionLadder`` over the cosine-kNN candidate set.
+
+        The injected strategies reproduce the legacy tiers EXACTLY:
+
+        - **block**: the kNN set from ``_nearest`` (bounded ANN seam), in cosine
+          order — so flag-band ties break to the nearest, matching tier-3's
+          ``above[0]`` selection.
+        - **score**: ``max(jaccard_promoted, cosine_clamped)`` where a jaccard
+          ``>= fuzzy_jaccard`` promotes to the auto band (tier-2: jaccard ALONE
+          merges) and cosine is clamped strictly below the auto threshold so a
+          high cosine can only ever reach the flag band (tier-3: cosine NEVER
+          auto-merges — it routes to the LLM). Cosine below ``dedup_cosine``
+          stays below the flag threshold ⇒ NEW.
+        - **identity**: node_id (dedup consults no recommendation priors).
+
+        Thresholds map ``auto_merge = fuzzy_jaccard`` and ``flag = dedup_cosine``.
+        Returns the ladder plus the ``node_id -> (node, cosine)`` index the
+        LLM-band branch needs to recover the target node.
+        """
+        ranked = self._nearest(slug, candidate, candidate_vec)
+        by_id: dict[str, tuple[MemoryNode, float]] = {
+            n.node_id: (n, c) for n, c in ranked if n.node_id != candidate.node_id
+        }
+        cand_tokens = _tokens(candidate.content, self._min_token_len)
+        # Clamp cosine strictly below the auto-merge threshold so cosine alone
+        # can reach the flag band but NEVER the merge band (legacy invariant).
+        cosine_cap = self._fuzzy_jaccard - _CLAMP_EPS
+
+        def block(_key: str) -> list[tuple[str, str]]:
+            return [(nid, node.content) for nid, (node, _c) in by_id.items()]
+
+        def score(_key: str, nid: str) -> float:
+            node, cos = by_id[nid]
+            jac = (
+                self._fuzzy_jaccard
+                if cand_tokens
+                and _jaccard(cand_tokens, _tokens(node.content, self._min_token_len))
+                >= self._fuzzy_jaccard
+                else 0.0
+            )
+            return max(jac, min(cos, cosine_cap))
+
+        ladder = ResolutionLadder(
+            block=block,
+            score=score,
+            identity=lambda nid: nid,
+            auto_merge=self._fuzzy_jaccard,
+            flag=self._dedup_cosine,
+        )
+        return ladder, by_id
 
     def _nearest(
         self, slug: str, candidate: MemoryNode, candidate_vec: list[float] | None

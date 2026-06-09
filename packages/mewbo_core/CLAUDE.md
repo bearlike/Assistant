@@ -1,10 +1,11 @@
+> ↑ [root /CLAUDE.md](../../CLAUDE.md)
+
 # Mewbo Core — Engine Guidance
 
 Scope: `packages/mewbo_core/src/mewbo_core/` — the async tool-use engine,
-hypervisor, session runtime, hooks, plugins, and the built-in plugin
-suite (including the wiki tools). The root `CLAUDE.md` covers the
-architectural invariants; this file captures the engineering decisions
-that aren't obvious from the code in this package.
+hypervisor, session runtime, hooks, plugins, and the built-in plugin suite.
+This file captures the engineering decisions + orchestration invariants that
+aren't obvious from the code. For cross-cutting layering rules see root CLAUDE.md.
 
 **Layering (see root CLAUDE.md → "Monorepo layering"):** core is the lean
 base of the dependency DAG — it imports DOWN from nothing and must never
@@ -23,11 +24,7 @@ Talk all import from here. If a behavior belongs in "the assistant
 itself" (as opposed to "the API server" or "the CLI display"), it
 lives in this package.
 
-## Orchestration invariants — read root CLAUDE.md first
-
-The full list lives in the root `CLAUDE.md` under "Orchestration
-invariants". Don't restate it here. Highlights specific to this
-package:
+## Orchestration invariants (key decisions)
 
 - `tool_use_loop.py:ToolUseLoop.run()` is the only execution engine.
   No separate planner/executor/synthesizer.
@@ -41,19 +38,54 @@ package:
   FULL and PARTIAL modes share the same `<analysis>`/`<summary>`
   prompt structure.
 - `llm_resilience.py` models retry/fallback as atomic objects: `RetryStrategy`
-  (per-run; holds the retry budget + circuit breaker + knobs, `from_config()`,
-  injected `invoke`/`emit`/`compact`; its methods incl. `classify`/`backoff`
-  describe the behaviour over that state) and `DoomLoopGuard` (no-progress
-  detection). `tool_use_loop` is a thin driver — don't reinline retries into
-  the loop. See the root CLAUDE.md "LLM call resilience" invariant for the
-  decision model and the append-after-success idempotency rule. A cross-model
-  fallback emits a separate `llm_fallback` event carrying `to_model`;
+  (per-run; holds the retry budget + circuit breaker + `_pinned_model` + knobs,
+  `from_config()`, injected `invoke`/`emit`/`compact`; methods incl.
+  `classify`/`backoff` describe behaviour over that state) and `DoomLoopGuard`
+  (no-progress detection — **progress-aware**: halts only on identical tool input
+  AND identical result across N turns, fed by `record_result`; wait/sync tools
+  like `check_agents` are exempt via `DOOM_LOOP_EXEMPT_TOOLS`). `tool_use_loop` is
+  a thin driver — don't reinline retries. See the root CLAUDE.md "LLM call
+  resilience" invariant for the decision model + append-after-success idempotency.
+  **Policy (Gitea #54):** a model gets **2 attempts** (`agent.llm_call_retries` =
+  1 try + 1 retry) then the run escalates down `[primary, *fallback_models]` —
+  never a 3rd attempt on a dead model. The **autoheal/rescue model is simply the
+  last entry of the fallback ladder** (no dedicated key; opt-in by schema default,
+  turned on in deployed config). Escalation is **sticky**: a non-primary model that
+  wins is pinned (`_pinned_model` reorders the chain) for the rest of the run, so a
+  dead primary is never re-probed turn after turn. Cross-model fallback lives HERE,
+  **not** LiteLLM Router (a deployment-pool LB — orthogonal, and routing through it
+  would lose the compact-then-retry seam). A switch emits a separate `llm_fallback`
+  event carrying `to_model` + `sticky` + `reason` (`retries_exhausted` for a
+  transient-cap escalation vs the classifier reason for a `switch_model` decision);
   `token_budget` reads the successful model from THAT event (not `llm_retry`), so
-  `models_used` captures fallbacks — rename the event/field in lockstep with that
-  reader or fallback models silently vanish from usage.
+  `models_used` captures fallbacks — keep that reader in lockstep or fallbacks
+  silently vanish from usage.
 - `session_runtime.py:SessionRuntime` is the only place a session is
   created, resumed, forked, or archived. Channels, the API, and the
   CLI all go through it — no parallel session implementations.
+- `session_provenance.py:SessionOrigin` is the single classifier for *who
+  spawned a session*. The session record stores **no** origin field — every
+  session is created identically — so origin is reconstructed from two durable
+  signals: the session's **tags** (`wiki:job:`/`wiki:qa:` → wiki,
+  `agentic_search:` → search, channel `:room:`/`:thread:` → channel) and, as
+  fallback, the first context event's `client_capabilities`/`source_platform`.
+  Tags win (they survive even when a job stored empty context).
+  `summarize_session` attaches it as `origin`; the console badges + filters the
+  landing page on it. `SessionStore.tags_for_session` is the concrete reverse of
+  `resolve_tag` (one impl over `list_tags`, shared by every backend).
+- **Universal recovery (Gitea #54).** Any non-complete session is recoverable —
+  `summarize_session.recoverable` is true when a run ended not-successfully (incl.
+  killed mid-call with NO completion event). `resolve_recovery_query` yields the
+  re-drive query (`continue` = resume the SAME session, memory/transcript intact;
+  `retry` = restart the last turn), then `start_async`/`run_sync` re-runs the one
+  loop — so recovery inherits automatic model-heal for every task type (all share
+  the loop + `fallback_models`). Non-obvious trap: `reinject_recovery_context` MUST
+  re-emit the session's gating context (`client_capabilities`,
+  `structured_workspace`) on recovery, else a recovered capability-gated session
+  (wiki/qa/structured) silently loses its AgentDefs because the most-recent context
+  event no longer advertises them. The API `/recover` dispatches **origin-aware**:
+  a session backing a recoverable wiki indexing job → checkpoint `WikiResume`
+  (skip-if-done), everything else → generic continue/retry.
 
 ## Built-in plugins
 
@@ -96,6 +128,29 @@ embedding model names — see `apps/mewbo_api/src/mewbo_api/wiki/embedder.py`.
 If you find yourself adding a `langchain-<provider>` dependency, stop
 and check whether LiteLLM already does the job.
 
+**Cross-model tool-calling is a REQUEST/RESPONSE NORMALIZATION concern — never
+patch it in the loop.** If a provider's tool call doesn't appear in
+`response.tool_calls`, the fix lives at the LiteLLM / response-parse seam or the
+request config — NOT by detecting a model's text format (e.g. Gemini's
+`default_api:<tool>{...}`) in `tool_use_loop` and re-prompting. That is brittle,
+the wrong layer, and fights the abstraction we chose LiteLLM *for*. LiteLLM
+already maps provider-native calls → OpenAI `tool_calls` (Gemini `functionCall`
+via `VertexGeminiConfig._transform_parts`); routing `openai/<model>` to the proxy
+does **not** bypass that transform. When a call looks "missing": (1) check the
+other structured slots on the `AIMessage` — `additional_kwargs.tool_calls` /
+`additional_kwargs.function_call` (legacy) — and normalize them into
+`.tool_calls` (this is opencode's `from*Response` pattern); (2) ensure the
+*request* forces structured calls (tools declared + `tool_choice` /
+`functionCallingConfig`) so the provider returns a `functionCall` part instead of
+narrating it as text (gemini-cli's approach). Mature multi-model agents
+(opencode, gemini-cli) rely on structured calls + a normalization layer; **none**
+string-match text-leaked calls. (Empirical: `gemini-3-flash-preview` through the
+proxy returns clean structured `tool_calls` in the simple single-turn case;
+tool-call ids carry an embedded `__thought__<signature>` for round-tripping —
+LiteLLM's `THOUGHT_SIGNATURE_SEPARATOR`. So a multi-turn "leak" is a
+serialization/normalization bug to fix at the adapter, never a model quirk to
+detect-and-re-prompt.)
+
 ## Skills, plugins, and the agent registry
 
 Three discovery surfaces, all driven from this package:
@@ -111,6 +166,63 @@ Three discovery surfaces, all driven from this package:
   built-in agents + plugins. Wiki AgentDefs (`wiki-indexer`,
   `wiki-page-writer`, `wiki-qa`) are capability-gated — they only
   appear when the session advertises `client_capabilities: ["wiki"]`.
+
+## Structured responses (`structured_response.py`)
+
+Schema-constrained agentic output = a terminal `SessionTool` whose function
+parameters ARE the caller's JSON Schema. `EmitStructuredResponseTool` reuses the
+`ExitPlanModeTool` termination pattern (`should_terminate_run()` polled at
+`tool_use_loop.py:676`) and validates `tool_input` with `jsonschema` inside
+`handle()`. Validate-or-reask lives **in the emit tool** via the normal
+tool-result feedback loop — on a `ValidationError` it returns a "fix these
+fields" `MockSpeaker` (bounded by `reask_cap`); on success it emits a
+`structured_output` event and terminates. So schema-constrained output needs
+**zero new control loop and no `tool_choice` plumbing**. Prefer this tool-call
+route over native `response_format` whenever other tools are bound (mixing a
+strict `json_schema` with non-strict MCP tools throws an `additionalProperties`
+400). Non-object/union schema roots are wrapped as `{"result": <schema>}` and
+validated against the *wrapped* params (so what the model sees == what we
+check), then unwrapped on the way out. `StructuredResponder` drives one bounded
+session via `run_sync(strict_tool_scope=True, approval_callback=auto_approve,
+extra_session_tools=[emit])` — the `extra_session_tools` param is the
+plugin-manifest-free seam for injecting a `SessionTool` (threaded `run_sync →
+orchestrate_session → Orchestrator → ToolUseLoop`). The emit tool's `operation`
+infers to `"set"` → default policy `ASK`, so the auto-approve callback is
+**required**, not optional.
+
+**Force the emit (#40 fix), prompt-side not loop-side.** Nothing was *blocking*
+the emit — the model just wasn't *forced* to call it and would finish in prose
+→ `payload is None` → 422. Fix: inject `FORCE_EMIT_DIRECTIVE` via the existing
+`skill_instructions` seam, and in `run()` do ONE bounded re-drive (a sharper
+`SystemMessage`, reusing the emit tool's own reask machinery) when `payload`
+is still `None` — only then raise. No `tool_choice`, no new control loop;
+consistent with the structured-output invariant above. `StructuredResponder.run`
+and `.start_async` share one `_prepare()` builder (DRY). `start_async` exists so
+`/v1/structured` is async-recoverable: `SessionRuntime.start_async` now MINTS and
+RETURNS a storeless per-run `run_id = "<session_id>:r<seq>"` (was `bool`; `""`
+still means "refused, busy" so `if not started:` callers are unbroken). The
+session transcript IS the run record — no parallel run store.
+
+**`done_reason` on success = `"completed"`, not `"awaiting_approval"`.** The loop
+reads `SessionTool.terminal_reason()` (default `"awaiting_approval"` — the
+`ExitPlanModeTool` pattern) from the terminating tool's class; `EmitStructuredResponseTool`
+overrides it to `"completed"`. Without that override a successful structured emit
+looked like a parked approval gate, so `GET /v1/structured` never settled (#40
+reopen). Don't add a hardcoded literal at the `should_terminate_run()` break —
+override `terminal_reason()` on the tool class instead.
+
+**`start_async` drives through `runtime.start_command`** (the `RunRegistry` seam)
+— a managed background run, serialized per session and cancellable — NOT a raw
+daemon thread. `SessionRuntime` stays the only place a session runs.
+
+**Two no-loop synthesis primitives** reuse the emit machinery without a
+`ToolUseLoop`: `StructuredSynthesizer` (one schema-constrained round-trip + one
+reask, reusing `build_emit_schema` + `EmitStructuredResponseTool.handle`) and
+`DraftStreamer` (one **tool-light** `.astream()` of token deltas — NO
+`bind_tools`). Retrieval grounding is injected via the `GroundingProvider`
+Protocol so **core stays graph-free** (the concrete `WikiGroundingProvider`
+lives in the app). `model_name None → config default` (build_chat_model
+requires a `str`).
 
 ## Capability gating
 
@@ -135,11 +247,29 @@ When you add a new capability:
 All invocations are try/excepted — a failing hook logs a warning and
 never blocks the session.
 
+`on_event` is a fourth slot fired from `append_event` on BOTH store backends
+(the universal choke-point, a superset of the orchestrator's event_logger).
+Hooks registered here are **fire-and-forget in a daemon thread even for the
+command factory** — unlike `on_session_end` (sync, once) — because they run
+on the append hot path. The API wires one bus observer here at startup so the
+`SessionEventBus` and command/http hooks share a single publish choke-point.
+
 The wiki finalize tool uses an `on_session_end` hook indirectly: the
 completion callback in `channels/routes.py` reads `source_platform`
 from a transcript context event and dispatches a reply via the channel
 adapter. Don't add session-end behavior inline in tools — put it in a
 hook so it survives unrelated tool refactors.
+
+## Session event bus (push SSE)
+
+`session_event_bus.py:SessionEventBus` — per-session in-process pub/sub, fired
+from `append_event`. Publish is **non-blocking** off the hot path (bounded
+drop-oldest queue). Single-process is correct (gunicorn `--workers 1`); a
+`RedisSessionEventBus` subclass is a **documented seam, deliberately NOT built
+(YAGNI)**. The API SSE generator subscribes → emits backlog once → drains the
+queue, applying content-key dedup against the subscribe↔backlog race and
+**draining completely before `stream_end`** so the terminal `completion` event
+(published during the close-race window) is never dropped.
 
 ## Compaction
 

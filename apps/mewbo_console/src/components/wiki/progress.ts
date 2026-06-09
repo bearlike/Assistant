@@ -35,8 +35,9 @@ export interface IndexingStreamSnapshot {
 const PHASE_RANGE: Record<IndexingPhase, [number, number]> = {
   clone: [0, 5],
   scan: [5, 20],
-  graph: [20, 35],
-  plan: [35, 45],
+  graph: [20, 32],
+  enrich: [32, 40],
+  plan: [40, 45],
   pages: [45, 95],
   finalize: [95, 100],
 };
@@ -45,6 +46,7 @@ const PHASE_LABEL: Record<IndexingPhase, string> = {
   clone: "Cloning repository",
   scan: "Scanning files",
   graph: "Building knowledge graph",
+  enrich: "Extracting entities",
   plan: "Planning wiki structure",
   pages: "Writing wiki pages",
   finalize: "Finalizing",
@@ -54,6 +56,7 @@ export const PHASE_ORDER: readonly IndexingPhase[] = [
   "clone",
   "scan",
   "graph",
+  "enrich",
   "plan",
   "pages",
   "finalize",
@@ -68,6 +71,7 @@ const PHASE_BUDGET_S: Record<IndexingPhase, number> = {
   clone: 30,
   scan: 60,
   graph: 90,
+  enrich: 90,
   plan: 60,
   pages: 60, // per-page; multiplied by remaining pages
   finalize: 20,

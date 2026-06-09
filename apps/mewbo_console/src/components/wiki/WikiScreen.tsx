@@ -120,6 +120,7 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
         repo={repoSlug}
         platform={platform}
         maintainerEdited={snapshot?.maintainerEdited ?? false}
+        badgePageId={projectQuery.data?.landingPageId ?? pageId}
         showEditWiki
         showBackToAll
       />

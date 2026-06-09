@@ -24,6 +24,7 @@ from mewbo_cli.cli_master import (
     _maybe_warn_missing_configs,
     _model_basename,
     _parse_verbosity,
+    _print_resilience_events,
     _print_usage_footer,
     _render_preflight_warnings,
     _render_results_with_registry,
@@ -407,56 +408,194 @@ def test_render_results_mcp_spec_label():
 # ---------------------------------------------------------------------------
 
 
-def test_maybe_print_recovery_hint_error(tmp_path):
-    """Print recovery panel for 'error' completion."""
+def _store_with_user_turn(tmp_path, done_reason: str | None = None) -> tuple:
+    """Helper: create a store+session with a user event and optional completion."""
     store = SessionStore(root_dir=str(tmp_path))
     session_id = store.create_session()
-    store.append_event(
-        session_id,
-        {
-            "type": "completion",
-            "payload": {"done_reason": "error", "error": "LLM timeout", "last_error": None},
-        },
-    )
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hello"}})
+    if done_reason is not None:
+        store.append_event(
+            session_id, {"type": "completion", "payload": {"done_reason": done_reason}}
+        )
+    return store, session_id
+
+
+def test_maybe_print_recovery_hint_error(tmp_path):
+    """Print concise dim-cyan hint for 'error' completion."""
+    store, session_id = _store_with_user_turn(tmp_path, "error")
     console = Console(record=True)
     _maybe_print_recovery_hint(console, store, session_id)
     output = console.export_text()
-    assert "Recovery" in output
+    assert "/continue" in output
     assert "/retry" in output
-    assert "LLM timeout" in output
+    # New format: single-line dim cyan text, not a Panel titled "Recovery"
+    assert "Recovery" not in output
 
 
 def test_maybe_print_recovery_hint_max_steps(tmp_path):
-    """Print recovery panel for 'max_steps_reached' completion."""
-    store = SessionStore(root_dir=str(tmp_path))
-    session_id = store.create_session()
-    store.append_event(
-        session_id,
-        {"type": "completion", "payload": {"done_reason": "max_steps_reached"}},
-    )
+    """Print concise hint for 'max_steps_reached' completion."""
+    store, session_id = _store_with_user_turn(tmp_path, "max_steps_reached")
     console = Console(record=True)
     _maybe_print_recovery_hint(console, store, session_id)
     output = console.export_text()
-    assert "step limit" in output
+    assert "/continue" in output
+    assert "/retry" in output
+
+
+def test_maybe_print_recovery_hint_canceled(tmp_path):
+    """Print concise hint for 'canceled' completion (new recoverable state)."""
+    store, session_id = _store_with_user_turn(tmp_path, "canceled")
+    console = Console(record=True)
+    _maybe_print_recovery_hint(console, store, session_id)
+    output = console.export_text()
+    assert "/continue" in output
+
+
+def test_maybe_print_recovery_hint_halted_no_progress(tmp_path):
+    """Print concise hint for 'halted_no_progress' completion (new recoverable state)."""
+    store, session_id = _store_with_user_turn(tmp_path, "halted_no_progress")
+    console = Console(record=True)
+    _maybe_print_recovery_hint(console, store, session_id)
+    output = console.export_text()
+    assert "/continue" in output
 
 
 def test_maybe_print_recovery_hint_no_hint_for_completed(tmp_path):
-    """No recovery panel for clean 'completed' runs."""
-    store = SessionStore(root_dir=str(tmp_path))
-    session_id = store.create_session()
-    store.append_event(session_id, {"type": "completion", "payload": {"done_reason": "completed"}})
+    """No recovery hint for clean 'completed' runs."""
+    store, session_id = _store_with_user_turn(tmp_path, "completed")
     console = Console(record=True)
     _maybe_print_recovery_hint(console, store, session_id)
-    assert "Recovery" not in console.export_text()
+    assert console.export_text().strip() == ""
 
 
 def test_maybe_print_recovery_hint_no_events(tmp_path):
-    """No output when transcript is empty."""
+    """No output when transcript has no user event."""
     store = SessionStore(root_dir=str(tmp_path))
     session_id = store.create_session()
     console = Console(record=True)
     _maybe_print_recovery_hint(console, store, session_id)
     assert console.export_text().strip() == ""
+
+
+def test_maybe_print_recovery_hint_suppressed_when_halt_printed(tmp_path):
+    """Skip hint when halt_printed=True — the halt line already mentions /retry,/continue."""
+    store, session_id = _store_with_user_turn(tmp_path, "error")
+    console = Console(record=True)
+    _maybe_print_recovery_hint(console, store, session_id, halt_printed=True)
+    assert console.export_text().strip() == ""
+
+
+def test_maybe_print_recovery_hint_no_user_turn_no_hint(tmp_path):
+    """No hint when session has a completion but no prior user turn."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(
+        session_id, {"type": "completion", "payload": {"done_reason": "error"}}
+    )
+    console = Console(record=True)
+    _maybe_print_recovery_hint(console, store, session_id)
+    assert console.export_text().strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# _print_resilience_events — E-cli: sticky-pin indicator
+# ---------------------------------------------------------------------------
+
+
+def test_print_resilience_events_fallback_non_sticky(tmp_path):
+    """Non-sticky fallback omits [pinned for run]."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "q"}})
+    store.append_event(
+        session_id,
+        {
+            "type": "llm_fallback",
+            "payload": {
+                "from_model": "openai/gpt-4o",
+                "to_model": "openai/gpt-4o-mini",
+                "reason": "retries_exhausted",
+                "sticky": False,
+            },
+        },
+    )
+    console = Console(record=True)
+    halt = _print_resilience_events(console, store, session_id)
+    output = console.export_text()
+    assert "gpt-4o-mini" in output
+    assert "retries_exhausted" in output
+    assert "pinned" not in output
+    assert halt is False
+
+
+def test_print_resilience_events_fallback_sticky(tmp_path):
+    """Sticky fallback appends [pinned for run] to the fallback line."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "q"}})
+    store.append_event(
+        session_id,
+        {
+            "type": "llm_fallback",
+            "payload": {
+                "from_model": "openai/gpt-4o",
+                "to_model": "openai/gpt-4o-mini",
+                "reason": "quota_exhausted",
+                "sticky": True,
+            },
+        },
+    )
+    console = Console(record=True)
+    halt = _print_resilience_events(console, store, session_id)
+    output = console.export_text()
+    assert "gpt-4o-mini" in output
+    assert "quota_exhausted" in output
+    assert "pinned for run" in output
+    assert halt is False
+
+
+def test_print_resilience_events_halt_returns_true(tmp_path):
+    """Doom-loop halt event returns True so caller can suppress the generic hint."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "q"}})
+    store.append_event(
+        session_id,
+        {
+            "type": "recovery",
+            "payload": {"action": "halt_no_progress", "tool": "bash_tool"},
+        },
+    )
+    console = Console(record=True)
+    halt = _print_resilience_events(console, store, session_id)
+    output = console.export_text()
+    assert "Halted" in output
+    assert "/retry" in output
+    assert halt is True
+
+
+def test_print_resilience_events_no_halt_returns_false(tmp_path):
+    """No halt event → returns False."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "q"}})
+    store.append_event(
+        session_id,
+        {
+            "type": "llm_retry",
+            "payload": {
+                "model": "openai/gpt-4o",
+                "error_type": "timeout",
+                "attempt": 1,
+                "max_attempts": 3,
+                "delay": 5,
+            },
+        },
+    )
+    console = Console(record=True)
+    halt = _print_resilience_events(console, store, session_id)
+    assert "Retrying" in console.export_text()
+    assert halt is False
 
 
 # ---------------------------------------------------------------------------

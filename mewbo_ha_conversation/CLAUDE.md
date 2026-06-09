@@ -1,3 +1,5 @@
+> ↑ [root /CLAUDE.md](../CLAUDE.md)
+
 # Mewbo HA Conversation - Project Guidance
 
 Scope: this file applies to `mewbo_ha_conversation/` (home automation integration).

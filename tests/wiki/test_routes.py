@@ -501,3 +501,100 @@ def test_post_index_rate_limit(client, monkeypatch):
     assert body["code"] == "rate_limited"
     assert "Retry-After" in resp.headers
     assert resp.headers["Retry-After"] == "60.0"
+
+
+def test_delete_project_also_deletes_credential(client):
+    """DELETE /projects/<slug> drops the durable credential, not just the project."""
+    from mewbo_graph.wiki.credentials import CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    c, store = client
+    _seed_project(store, slug="org/repo")
+    CredentialStore.save(store, "org/repo", RepoCredential(kind="token", value="s", username=None))
+
+    resp = c.delete("/v1/wiki/projects/org%2Frepo", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 200
+    assert CredentialStore.load(store, "org/repo") is None
+
+
+# ── Checkpoint-aware resume (Gitea #54, Part B) ──────────────────────────────────
+
+
+def _seed_resumable_job(store, *, job_id="rj1", slug="org/repo", status="interrupted"):
+    """A job interrupted at pages: graph built + plan committed + 2/3 pages written."""
+    from mewbo_graph.wiki.types import GraphNode, IndexingJob
+
+    store.create_job(IndexingJob(
+        jobId=job_id, slug=slug, status=status,
+        scannedCount=0, totalCount=0, currentFile=None,
+        model="anthropic/claude-sonnet-4-6", commitSha="deadbeef",
+    ))
+    store.upsert_nodes(slug, [
+        GraphNode(slug=slug, node_id="n1", type="Function", name="f", file="a.py", range=(0, 1)),
+    ])
+    store.save_job_plan(job_id, [{"id": p, "title": p} for p in ("a", "b", "c")])
+    _seed_page(store, slug=slug, page_id="a")
+    _seed_page(store, slug=slug, page_id="b")
+    return job_id
+
+
+def test_jobs_recoverable_lists_jobs_with_artifacts(client):
+    """GET /jobs/recoverable returns only non-complete jobs with reusable work."""
+    c, store = client
+    _seed_resumable_job(store, job_id="rj1", slug="org/repo", status="interrupted")
+    # A failed job with NO artifacts (empty graph, no plan) is NOT recoverable.
+    _seed_job(store, job_id="rj-empty", slug="org/empty")
+    store.update_job("rj-empty", status="failed")
+    # A complete job is excluded outright.
+    _seed_job(store, job_id="rj-done", slug="org/done")
+    store.update_job("rj-done", status="complete")
+
+    resp = c.get("/v1/wiki/jobs/recoverable", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    ids = {j["jobId"] for j in body}
+    assert ids == {"rj1"}
+    job = body[0]
+    assert job["status"] == "interrupted"
+    assert set(job["recoverable"]["skip"]) == {"graph", "plan"}
+    assert job["recoverable"]["pagesDone"] == 2
+    assert job["recoverable"]["pagesRemaining"] == 1
+
+
+def test_resume_index_returns_session_and_runs(client, runtime_stub):
+    """POST /index/<id>/resume drives WikiResume + returns {jobId,sessionId,status}."""
+    c, store = client
+    job_id = _seed_resumable_job(store)
+
+    resp = c.post(f"/v1/wiki/index/{job_id}/resume", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 202
+    body = resp.get_json()
+    assert body["jobId"] == job_id  # SAME id reused
+    assert body["sessionId"] == "sess-stub"
+    assert body["status"] == "scanning"
+    assert store.get_job(job_id).status == "scanning"
+    # Capability re-advertised + indexer started.
+    runtime_stub.start_async.assert_called_once()
+
+
+def test_resume_index_unknown_job_404(client):
+    c, _ = client
+    resp = c.post("/v1/wiki/index/nope/resume", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 404
+    assert resp.get_json()["code"] == "not_found"
+
+
+def test_resume_index_complete_job_is_validation_error(client):
+    c, store = client
+    _seed_job(store, job_id="cj", slug="org/repo")
+    store.update_job("cj", status="complete")
+    resp = c.post("/v1/wiki/index/cj/resume", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 400
+    assert resp.get_json()["code"] == "validation"
+
+
+def test_resume_index_requires_auth(client):
+    c, store = client
+    job_id = _seed_resumable_job(store)
+    resp = c.post(f"/v1/wiki/index/{job_id}/resume")
+    assert resp.status_code == 401

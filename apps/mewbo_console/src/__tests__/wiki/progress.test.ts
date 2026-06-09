@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { IndexingProgress } from "@/components/wiki/progress";
+import { IndexingProgress, PHASE_ORDER } from "@/components/wiki/progress";
 import type { IndexingJob } from "@/components/wiki/api/types";
 
 const baseJob: IndexingJob = {
@@ -74,6 +74,33 @@ describe("IndexingProgress.fromJob", () => {
     // 5/20 = 25% of [45..95] = 12.5 above 45 → ~57
     expect(v.pct).toBeGreaterThanOrEqual(57);
     expect(v.pct).toBeLessThanOrEqual(58);
+  });
+});
+
+describe("enrich phase", () => {
+  it("is ordered between graph and plan", () => {
+    const gi = PHASE_ORDER.indexOf("graph");
+    const ei = PHASE_ORDER.indexOf("enrich");
+    const pi = PHASE_ORDER.indexOf("plan");
+    expect(gi).toBeLessThan(ei);
+    expect(ei).toBeLessThan(pi);
+  });
+
+  it("renders a label and a monotonic pct for enrich", () => {
+    const v = IndexingProgress.fromJob({
+      ...baseJob,
+      status: "scanning",
+      phase: "enrich",
+    });
+    expect(v.label.length).toBeGreaterThan(0);
+    expect(v.pct).toBeGreaterThan(0);
+    expect(v.pct).toBeLessThan(100);
+  });
+
+  it("places enrich pct inside the [32,40] bracket", () => {
+    const v = IndexingProgress.fromJob({ ...baseJob, status: "scanning", phase: "enrich" });
+    expect(v.pct).toBeGreaterThanOrEqual(32);
+    expect(v.pct).toBeLessThan(40);
   });
 });
 

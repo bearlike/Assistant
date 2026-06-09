@@ -1,3 +1,5 @@
+> ↑ [root /CLAUDE.md](../../CLAUDE.md)
+
 # Mewbo CLI - UI/Terminal Guidance
 
 Scope: this file applies to the `apps/mewbo_cli/` package only. It covers the terminal UI (renderer + dialog toolkit) and how CLI output is produced.
@@ -40,8 +42,19 @@ sees them. `_print_resilience_events` (in `cli_master.py`) replays them after
 each run as concise dim lines, scoped to events after the last `user` event so
 multi-turn sessions don't re-print prior turns:
 - `llm_retry` → `↻ Retrying {model} after {error_type} ({attempt}/{max}, {delay}s)` (dim yellow).
-- `llm_fallback` → `⤳ Falling back: {from} → {to} ({reason})` (dim yellow).
+- `llm_fallback` → `⤳ Falling back: {from} → {to} ({reason})` (dim yellow). When the payload carries `sticky: true` (the destination model is pinned for the rest of the run), the line also appends ` [pinned for run]`.
 - `recovery` halt → `⊘ Halted: repeated '{tool}' with no progress — /retry or /continue to recover` (dim red).
+
+`_print_resilience_events` returns `bool` (whether a halt line was printed) so
+the caller can suppress the generic recovery hint below when the halt line
+already mentions those commands.
+
+After the resilience notices, `_maybe_print_recovery_hint` prints a single concise
+dim-cyan line when the run ended in a recoverable terminal state (`error`,
+`max_steps_reached`, `halted_no_progress`, `canceled`) **and** a prior user turn
+exists. Skipped on a clean `completed` run, on `halt_printed=True`, and when no
+user turn is present.
+- hint line → `↩ This session can be recovered — /continue to resume with context intact, or /retry to redo the last step.` (dim cyan).
 
 Fallback is opt-in per run via flags (parsed in `run_cli`): `--fallback-models`
 (comma-split) with singular alias `--fallback-model`, and `--no-fallback`

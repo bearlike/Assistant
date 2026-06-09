@@ -9,9 +9,10 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import queue
 import subprocess
-import time
 import uuid
+from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,11 +49,14 @@ from mewbo_core.session_runtime import SessionRuntime, parse_core_command
 from mewbo_core.session_store import SessionStoreBase, create_session_store
 from mewbo_core.share_store import ShareStore
 from mewbo_core.tool_registry import ToolSpec, load_registry
+from mewbo_core.types import EventRecord
 from mewbo_core.worktree import WorktreeBranchInUseError, WorktreeManager
 from pydantic import ValidationError
+from werkzeug.exceptions import NotFound
 from werkzeug.utils import secure_filename
 
 from mewbo_api.config_view import ConfigSchemaView
+from mewbo_api.repo_identity import RepoIdentity
 
 # ``done_reason`` taxonomy — the orchestrator and /command paths share these
 # canonical values so every consumer (notifications, status badge,
@@ -223,8 +227,17 @@ if _config.runtime.preflight_enabled:
 
 # Load hooks from config so API sessions run with configured hooks
 from mewbo_core.hooks import HookManager as _HookManager  # noqa: E402
+from mewbo_core.session_event_bus import (  # noqa: E402
+    SessionEventBus,
+    Subscription,
+    get_session_event_bus,
+)
 
 _hook_manager = _HookManager.load_from_config(_config.hooks)
+# Bridge the append-time event bus to the hook manager: every appended event
+# fires the configured ``on_event`` hooks. This is the ONLY place the bus and
+# hook manager connect (the SSE stream subscribes to the same bus directly).
+get_session_event_bus().register_observer(_hook_manager.run_on_event)
 
 # Create Flask application
 app = Flask(__name__)
@@ -239,6 +252,11 @@ def _auto_cleanup_worktree_on_session_end(session_id: str, error: str | None) ->
     Mirrors the Claude Code default: when a worktree-bound session ends and
     leaves no uncommitted changes / unpushed commits behind, drop the
     worktree. Otherwise keep it so the user can resume or recover work.
+
+    After reaping the child worktree, also reaps the auto-promoted parent if it
+    now has no remaining worktree children (the #53 orphan-parent symptom). An
+    auto-promoted parent is identified by ``path_source == "provided"`` — it was
+    lifted from a config project and is system-owned, not user-created.
 
     Failures are swallowed — this is best-effort housekeeping, never blocking.
     """
@@ -260,9 +278,23 @@ def _auto_cleanup_worktree_on_session_end(session_id: str, error: str | None) ->
     proj = project_store.get_project(vpid)
     if proj is None or not proj.is_worktree:
         return
+    parent_project_id = proj.parent_project_id
     try:
         if WorktreeManager.is_clean(proj.path):
             project_store.delete_worktree(vpid)
+            # Reap the orphan auto-promoted parent when it has no remaining
+            # worktree children. ``path_source == "provided"`` distinguishes
+            # system-promoted parents (reapable) from user-created managed
+            # projects (keep). Never raises — best-effort only.
+            if parent_project_id:
+                parent = project_store.get_project(parent_project_id)
+                if (
+                    parent is not None
+                    and not parent.is_worktree
+                    and parent.path_source == "provided"
+                    and not project_store.list_worktrees(parent_project_id)
+                ):
+                    project_store.delete_project(parent_project_id)
     except Exception:
         # Never let auto-cleanup raise from the hook chain.
         pass
@@ -288,6 +320,72 @@ api = Api(
 )
 
 ns = api.namespace("api", description="Mewbo operations")
+
+
+@app.errorhandler(NotFound)
+def _handle_not_found(exc: NotFound) -> tuple[dict, int]:
+    """Return JSON for any unmatched route (no raw Werkzeug HTML leak).
+
+    A request that matches no route (e.g. a ``project`` containing a ``/``
+    that splits the path) would otherwise render Werkzeug's HTML 404 page.
+    One app-level handler keeps every endpoint's 404 a JSON contract.
+    """
+    return {"error": {"code": 404, "reason": exc.description}}, 404
+
+
+def _session_not_found(session_id: str) -> tuple[dict, int]:
+    """Canonical JSON 404 envelope for an unknown session id (#64).
+
+    Matches the ``@app.errorhandler(NotFound)`` shape so the MCP ``_enveloped``
+    not-found mapping reads it identically whether the route or Werkzeug raised.
+    """
+    return {"error": {"code": 404, "reason": f"session {session_id} not found"}}, 404
+
+
+def _session_exists(session_id: str) -> bool:
+    """True iff *session_id* is a real stored session (the canonical guard)."""
+    return session_id in runtime.session_store.list_sessions()
+
+
+# Free-text payload fields that can carry full prompts / tool dumps (uncapped
+# upstream). ``summary`` is already capped at the source (``max_result_chars``),
+# so it is deliberately NOT in this set.
+_EVENT_FREETEXT_FIELDS = ("result", "tool_input", "detail", "error")
+_EVENT_FIELD_CAP = 2000
+
+
+def _cap_freetext(value: object) -> object:
+    """Cap a single free-text string at ``_EVENT_FIELD_CAP``; pass through others."""
+    if isinstance(value, str) and len(value) > _EVENT_FIELD_CAP:
+        return value[:_EVENT_FIELD_CAP]
+    return value
+
+
+def _truncate_event_freetext(events: list[dict]) -> list[dict]:
+    """Cap large free-text payload fields (full prompts / tool dumps).
+
+    Opt-in via ?truncate=1 so the console's full-result view is unaffected (#42).
+    """
+    out = []
+    for event in events:
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            out.append(event)
+            continue
+        new_payload = dict(payload)
+        for field in _EVENT_FREETEXT_FIELDS:
+            value = new_payload.get(field)
+            if isinstance(value, str) and len(value) > _EVENT_FIELD_CAP:
+                new_payload[field] = value[:_EVENT_FIELD_CAP]
+                new_payload[f"{field}_truncated"] = True
+            elif isinstance(value, (dict, list)):
+                blob = json.dumps(value)
+                if len(blob) > _EVENT_FIELD_CAP:
+                    new_payload[field] = blob[:_EVENT_FIELD_CAP]
+                    new_payload[f"{field}_truncated"] = True
+        out.append({**event, "payload": new_payload})
+    return out
+
 
 # Web IDE (code-server) namespace. Actually initialized further down, once
 # ``_require_api_key`` is defined.
@@ -448,6 +546,22 @@ from mewbo_api.agentic_search import init_agentic_search  # noqa: E402
 
 init_agentic_search(api, _require_api_key, runtime=runtime)
 logging.info("agentic_search namespace registered at /api")
+
+
+# -- Structured-response namespace ----------------------------------------
+# Schema-constrained, tool-using synthesis over the core StructuredResponder
+# (down-only compose). POST /v1/structured returns a JSON-Schema-validated
+# object after a bounded agentic session.
+from mewbo_api.structured import init_structured  # noqa: E402
+
+init_structured(api, _require_api_key, runtime=runtime)
+logging.info("structured namespace registered at /v1/structured")
+
+# Retrieval-only fast grounded synthesis (POST /v1/structured/fast) — #50.
+from mewbo_api.realtime import init_realtime  # noqa: E402
+
+init_realtime(api, _require_api_key, runtime=runtime)
+logging.info("realtime fast-structured endpoint registered at /v1/structured/fast")
 
 
 def _handle_slash_command(session_id: str, user_query: str) -> tuple[dict, int] | None:
@@ -645,7 +759,10 @@ init_channels(app, runtime, _hook_manager, _config)
 # Wiki backend (opt-in via mewbo-api[wiki] extras).
 from mewbo_api.wiki import init_wiki  # noqa: E402
 
-init_wiki(app, runtime)
+# Pass the shared hook manager so the wiki-qa hypervisor's session-end finalizer
+# can emit the terminal ``complete`` event + reconcile the answer snapshot
+# (the QA counterpart to indexing's wiki_finalize tool).
+init_wiki(app, runtime, hook_manager=_hook_manager)
 
 
 key_create_model = api.model(
@@ -732,42 +849,66 @@ class Models(Resource):
         }, 200
 
 
+def _enrich_project_identity(entry: dict) -> dict:
+    """Add ``repo`` + ``aliases`` to a project dict from its git remotes.
+
+    Mutates and returns *entry*. The canonical ``{host, owner, name}`` comes
+    from the first remote; ``aliases`` unions every remote's addressable forms
+    (``host/owner/repo``, host-less ``owner/repo``, bare ``repo``). A project
+    with no git remotes is left untouched (keys absent, not present-but-null).
+    """
+    path = entry.get("path")
+    if not isinstance(path, str) or not path:
+        return entry
+    identities = RepoIdentity.for_path(path)
+    if not identities:
+        return entry
+    primary = identities[0]
+    entry["repo"] = {"host": primary.host, "owner": primary.owner, "name": primary.repo}
+    entry["aliases"] = RepoIdentity.aliases_for_path(path)
+    return entry
+
+
 @ns.route("/projects")
 class Projects(Resource):
     """List all projects (config-defined + managed)."""
 
     @api.doc(security="apikey")
     def get(self) -> tuple[dict, int]:
-        """Return unified project list for the UI."""
+        """Return unified project list for the UI, enriched with repo identity."""
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
         # Config-defined projects
         result: list[dict] = [
-            {
-                "name": name,
-                "path": cfg.path,
-                "description": cfg.description,
-                "available": os.path.isdir(cfg.path),
-                "source": "config",
-            }
+            _enrich_project_identity(
+                {
+                    "name": name,
+                    "path": cfg.path,
+                    "description": cfg.description,
+                    "available": os.path.isdir(cfg.path),
+                    "source": "config",
+                }
+            )
             for name, cfg in get_config().projects.items()
             if cfg.path
         ]
         # Managed (virtual) projects (includes worktrees as child entries).
         for vp in project_store.list_projects():
             result.append(
-                {
-                    "name": vp.name,
-                    "project_id": vp.project_id,
-                    "path": vp.path,
-                    "description": vp.description,
-                    "available": os.path.isdir(vp.path),
-                    "source": "managed",
-                    "is_worktree": vp.is_worktree,
-                    "parent_project_id": vp.parent_project_id,
-                    "branch": vp.branch,
-                }
+                _enrich_project_identity(
+                    {
+                        "name": vp.name,
+                        "project_id": vp.project_id,
+                        "path": vp.path,
+                        "description": vp.description,
+                        "available": os.path.isdir(vp.path),
+                        "source": "managed",
+                        "is_worktree": vp.is_worktree,
+                        "parent_project_id": vp.parent_project_id,
+                        "branch": vp.branch,
+                    }
+                )
             )
         return {"projects": result}, 200
 
@@ -907,10 +1048,57 @@ def _promote_config_project(name: str, path: str, description: str) -> VirtualPr
     return project_store.create_project(name=name, description=description, path=path)
 
 
+def _resolve_repo_by_identity(
+    project_key: str,
+) -> tuple[_RepoTarget | None, tuple[dict, int] | None]:
+    """Match *project_key* against every managed project's git identity.
+
+    Returns ``(target, None)`` on a unique alias match, ``(None, error)`` when
+    a bare name is ambiguous (≥2 repos share it), or ``(None, None)`` when no
+    project's canonical identity / alias set contains the key.
+    """
+    matches: list[VirtualProject] = []
+    candidates: list[str] = []
+    for vp in project_store.list_projects():
+        if vp.is_worktree:
+            continue
+        aliases = RepoIdentity.aliases_for_path(vp.path) if vp.path else []
+        if project_key in aliases:
+            matches.append(vp)
+            for identity in RepoIdentity.for_path(vp.path):
+                candidates.append(identity.canonical())
+    if not matches:
+        return None, None
+    if len(matches) > 1:
+        return None, (
+            {
+                "message": (
+                    f"Ambiguous project '{project_key}' matches multiple "
+                    "repositories. Disambiguate with a full host/owner/repo key."
+                ),
+                "candidates": sorted(set(candidates)),
+            },
+            409,
+        )
+    vp = matches[0]
+    return _RepoTarget(
+        project_id=vp.project_id,
+        name=vp.name,
+        path=vp.path,
+        source="managed",
+    ), None
+
+
 def _resolve_repo_or_404(
     project_key: str, *, promote: bool = False
 ) -> tuple[_RepoTarget | None, tuple[dict, int] | None]:
-    """Resolve a managed UUID OR a configured project name to a repo target.
+    """Resolve a managed UUID, a configured name, OR a git identity to a target.
+
+    Resolution order: managed project_id/name → configured project name →
+    git repo identity/alias (the canonical ``host/owner/repo`` or any of its
+    ``owner/repo`` / bare-``repo`` aliases). An ambiguous bare name that maps
+    to two different repos raises a clear candidates error (409), never a
+    silent wrong match.
 
     When ``promote=True`` and the key is a config-defined project, ensures a
     managed VirtualProject exists for the path so worktree creation can
@@ -931,6 +1119,10 @@ def _resolve_repo_or_404(
     cfg_projects = get_config().projects
     cfg = cfg_projects.get(project_key)
     if cfg is None or not cfg.path:
+        # Fall back to git-identity matching before declaring a miss.
+        target, err = _resolve_repo_by_identity(project_key)
+        if target is not None or err is not None:
+            return target, err
         return None, ({"message": f"Project '{project_key}' not found"}, 404)
 
     if not promote:
@@ -1152,7 +1344,10 @@ class VirtualProjectWorktree(Resource):
         force = _parse_bool(request.args.get("force"))
         wt = project_store.get_project(worktree_id)
         if wt is None or not wt.is_worktree:
-            return {"message": f"Worktree '{worktree_id}' not found"}, 404
+            # Idempotent: if already absent return 200 instead of 404 so
+            # callers (on_session_end hook, FE) can safely call delete multiple
+            # times without treating a second call as an error.
+            return {"status": "already_absent"}, 200
         # Allow either the managed parent UUID or a configured project name
         # whose promoted parent matches the worktree's parent_project_id.
         owns = wt.parent_project_id == project_id
@@ -1311,19 +1506,124 @@ class SessionEvents(Resource):
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
+        # Unknown id must 404, not synthesize a phantom idle (#64): without this
+        # guard ``load_events`` returns [] and ``summarize_session`` fabricates a
+        # placeholder ``{status:"idle", title:"Session <id>"}`` → a false 200.
+        if not _session_exists(session_id):
+            return _session_not_found(session_id)
         after_ts = request.args.get("after")
         events = runtime.load_events(session_id, after_ts)
+        # Opt-in payload cap (#42): the console renders full ``result`` by design,
+        # so only a caller (the MCP) that asks via ?truncate=1 gets the smaller
+        # transcript — default behaviour is byte-identical.
+        if request.args.get("truncate") in ("1", "true"):
+            events = _truncate_event_freetext(events)
         notification_service.emit_completion(session_id)
+        # Authoritative terminal-state + title for polling consumers (the MCP
+        # facade reads these). ``summarize_session`` already computes
+        # status/done_reason from the full transcript and resolves the stored
+        # title; reuse it rather than recompute. ``after_ts`` only narrows the
+        # returned event window, never the status — so summarize the full log.
+        summary = runtime.summarize_session(session_id)
         return {
             "session_id": session_id,
             "events": events,
             "running": runtime.is_running(session_id),
+            "status": summary["status"],
+            "done_reason": summary["done_reason"],
+            "title": summary["title"],
+            # F2: lets a polling consumer (console/CLI) show a Continue/Restart
+            # affordance without re-deriving recoverability from the timeline.
+            "recoverable": summary["recoverable"],
         }, 200
 
 
 @ns.route("/sessions/<string:session_id>/stream")
 class SessionStream(Resource):
-    """Stream session events via Server-Sent Events."""
+    r"""Stream session events via Server-Sent Events (push-based, #46).
+
+    Subscribes to the in-process ``SessionEventBus`` so an appended event wakes
+    the stream immediately — no 0.5s poll and no per-event full-transcript
+    re-read. The backlog is loaded exactly once; live events arrive on the
+    subscription queue. Wire format is unchanged (``data: <json>\n\n`` plus a
+    terminal ``stream_end``) so the console consumer is unaffected.
+    """
+
+    # Block on the queue for at most this long before emitting an SSE comment
+    # keepalive (or re-checking run liveness).
+    HEARTBEAT_S = 15.0
+    # Close an idle stream after this long with no events (preserves the old
+    # 5-minute auto-close).
+    IDLE_CLOSE_S = 300.0
+
+    @staticmethod
+    def _stream_events(
+        session_id: str,
+        session_runtime: SessionRuntime,
+        bus: SessionEventBus,
+        *,
+        heartbeat_s: float = HEARTBEAT_S,
+        idle_close_s: float = IDLE_CLOSE_S,
+        _sub: Subscription | None = None,
+    ) -> Iterator[str]:
+        """Yield SSE frames for a session: backlog once, then live + heartbeats.
+
+        Subscribes BEFORE loading the backlog so the queue is a superset of all
+        post-subscribe events; the overlap with the backlog (events appended in
+        the subscribe↔load race window) is dropped by exact content key.
+        ``_sub`` is a test seam for injecting a pre-seeded subscription.
+        """
+        sub = _sub if _sub is not None else bus.subscribe(session_id)
+        try:
+            backlog = session_runtime.session_store.load_transcript(session_id)
+            backlog_keys = {json.dumps(e, sort_keys=True) for e in backlog}
+            for event in backlog:
+                yield f"data: {json.dumps(event)}\n\n"
+
+            def emit(event: EventRecord) -> str | None:
+                """Dedup an event against the backlog; return its SSE frame or None."""
+                key = json.dumps(event, sort_keys=True)
+                if key in backlog_keys:
+                    # Already emitted from the backlog — drop the race-window dup.
+                    # Assumes at-most-one race-window duplicate per content key;
+                    # if a future change ever double-publishes, the safe
+                    # direction is "delivered, not dropped" (so only discard once).
+                    backlog_keys.discard(key)
+                    return None
+                return f"data: {json.dumps(event)}\n\n"
+
+            idle_elapsed = 0.0
+            while True:
+                try:
+                    event = sub.queue.get(timeout=heartbeat_s)
+                except queue.Empty:
+                    if not session_runtime.is_running(session_id):
+                        # Close race: the run thread publishes its terminal
+                        # event (e.g. completion) right before is_running flips
+                        # False. Drain the queue before closing so that final
+                        # event is delivered, not dropped.
+                        while True:
+                            try:
+                                pending = sub.queue.get_nowait()
+                            except queue.Empty:
+                                break
+                            frame = emit(pending)
+                            if frame is not None:
+                                yield frame
+                        yield 'data: {"type": "stream_end"}\n\n'
+                        break
+                    idle_elapsed += heartbeat_s
+                    if idle_elapsed >= idle_close_s:
+                        break
+                    yield ": heartbeat\n\n"
+                    continue
+                idle_elapsed = 0.0
+                frame = emit(event)
+                if frame is not None:
+                    yield frame
+        finally:
+            if _sub is None:
+                bus.unsubscribe(session_id, sub)
 
     @api.doc(security="apikey")
     def get(self, session_id: str) -> Response:
@@ -1336,31 +1636,9 @@ class SessionStream(Resource):
                 mimetype="application/json",
             )
 
-        def generate():
-            last_count = 0
-            idle_cycles = 0
-            while True:
-                events = runtime.session_store.load_transcript(session_id)
-                new_events = events[last_count:]
-                if new_events:
-                    for event in new_events:
-                        yield f"data: {json.dumps(event)}\n\n"
-                    last_count = len(events)
-                    idle_cycles = 0
-                else:
-                    idle_cycles += 1
-
-                running = runtime.is_running(session_id)
-                if not running and not new_events:
-                    yield 'data: {"type": "stream_end"}\n\n'
-                    break
-                # Auto-close after 5 min of inactivity
-                if idle_cycles > 600:
-                    break
-                time.sleep(0.5)
-
+        bus = get_session_event_bus()
         return Response(
-            stream_with_context(generate()),
+            stream_with_context(self._stream_events(session_id, runtime, bus)),
             mimetype="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -1372,11 +1650,20 @@ class SessionStream(Resource):
 
 @ns.route("/sessions/<string:session_id>/message")
 class SessionMessage(Resource):
-    """Enqueue a user steering message into a running session."""
+    """Steer a running session, or re-engage an idle/finished one."""
 
     @api.doc(security="apikey")
     def post(self, session_id: str) -> tuple[dict, int]:
-        """Send a message to a running session."""
+        """Send a message to a session.
+
+        While a run is active the text is enqueued as a steering message
+        (``202 {"enqueued": true}``). On an idle OR finished session there is
+        no run to steer, so the message RE-ENGAGES the session: a fresh async
+        run is started with the message as its query — the same
+        ``start_async`` path ``POST .../query`` uses. Returns
+        ``200 {"enqueued": true, "run_id": <new run id>}``. Only a
+        terminated/deleted session (which ``start_async`` refuses) rejects.
+        """
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
@@ -1384,10 +1671,26 @@ class SessionMessage(Resource):
         text = payload.get("text")
         if not text or not isinstance(text, str):
             return {"message": "'text' is required"}, 400
-        ok = runtime.enqueue_message(session_id, text)
-        if not ok:
-            return {"message": "No active run for this session."}, 404
-        return {"session_id": session_id, "enqueued": True}, 202
+        if runtime.enqueue_message(session_id, text):
+            return {"session_id": session_id, "enqueued": True}, 202
+        # No active run → re-engage: start a fresh run with this message.
+        model = get_config_value("llm", "default_model", default="unknown")
+        runtime.append_context_event(session_id, {"model": model})
+        budget = int(get_config_value("agent", "session_step_budget", default=0))
+        max_iters = int(get_config_value("agent", "max_iters", default=30))
+        run_id = runtime.start_async(
+            session_id=session_id,
+            user_query=text,
+            model_name=str(model) or None,
+            approval_callback=auto_approve,
+            hook_manager=_hook_manager,
+            cwd=session_temp_dir(session_id),
+            max_iters=max_iters,
+            session_step_budget=budget,
+        )
+        if not run_id:
+            return {"message": "Session is already running."}, 409
+        return {"session_id": session_id, "enqueued": True, "run_id": run_id}, 200
 
 
 @ns.route("/sessions/<string:session_id>/interrupt")
@@ -1396,14 +1699,78 @@ class SessionInterrupt(Resource):
 
     @api.doc(security="apikey")
     def post(self, session_id: str) -> tuple[dict, int]:
-        """Interrupt the current step of a running session."""
+        """Interrupt the current step of a running session.
+
+        Interrupting an idle session is an idempotent no-op: there is nothing
+        to interrupt, so this returns ``200 {"interrupted": false}`` rather
+        than a 404 — the caller's intent ("ensure this session isn't running")
+        is already satisfied.
+        """
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
         ok = runtime.interrupt_step(session_id)
         if not ok:
-            return {"message": "No active run for this session."}, 404
+            return {"session_id": session_id, "interrupted": False}, 200
         return {"session_id": session_id, "interrupted": True}, 202
+
+
+def _try_wiki_indexing_resume(session_id: str, action: str) -> dict | None:
+    """Dispatch to the wiki checkpoint resume when *session_id* is an indexing job.
+
+    A wiki **indexing** session's "Continue" must route to the checkpoint
+    :class:`WikiResume` (Gitea #54, Part B) — re-cloning at the recorded commit
+    and skipping already-done phases — not the generic resolve_recovery_query
+    path. This keeps clients agnostic: one endpoint handles every origin.
+
+    Returns the recover-response dict (``{session_id, action, accepted, job_id,
+    status}`` — the checkpoint path is monitored via the wiki SSE stream keyed by
+    ``job_id``, not the generic ``run_id``) when the session maps to a
+    *recoverable* indexing job; ``None`` when it does not (so the caller falls
+    through to the generic path). A wiki **Q&A** session has no indexing job, so
+    it returns ``None`` and re-runs generically.
+
+    Guarded import: ``runtime.wiki_store`` is only set when the ``wiki`` extra is
+    installed (see ``init_wiki``); a graph-less install or any failure degrades
+    to the generic path rather than crashing.
+    """
+    store = getattr(runtime, "wiki_store", None)
+    if store is None:
+        return None
+    try:
+        from mewbo_api.wiki.resume import WikiResume
+
+        job_id = store.find_job_by_session(session_id)
+        if not job_id:
+            return None
+        job = store.get_job(job_id)
+        if job is None or not WikiResume.is_resumable(job):
+            return None
+        # ``continue`` = checkpoint resume (skip done phases); ``retry`` =
+        # restart this index from scratch (no-skip rebuild, same job_id) — the
+        # user's "Restart" intent, honoured rather than silently down-graded to
+        # a continue.
+        result = WikiResume.resume(
+            store, runtime, job_id, hook_manager=_hook_manager,
+            restart=(action == "retry"),
+        )
+    except Exception as exc:  # pragma: no cover - defensive; fall back to generic
+        logging.warning("wiki indexing resume dispatch failed for %s: %s", session_id, exc)
+        return None
+    # Adapt the WikiResume result ({job_id, session_id, status}) to the recover
+    # response shape. The wiki checkpoint path re-drives the indexer AgentDef
+    # via its own seam; callers monitor it via the wiki SSE stream
+    # (``GET /v1/wiki/index/<job_id>/stream``), keyed by ``job_id`` — so the
+    # generic ``run_id`` is not the monitoring handle here. ``slug`` lets the
+    # client deep-link the indexing screen to the right repo.
+    return {
+        "session_id": result.get("session_id", session_id),
+        "action": action,
+        "accepted": True,
+        "job_id": result.get("job_id"),
+        "slug": job.slug,
+        "status": result.get("status"),
+    }
 
 
 @ns.route("/sessions/<string:session_id>/recover")
@@ -1436,6 +1803,17 @@ class SessionRecovery(Resource):
         model_override: str | None = body.get("model")
         if runtime.is_running(session_id):
             return {"message": "Session is already running."}, 409
+
+        # Origin-aware dispatch (Gitea #54, Part F4): a wiki INDEXING session's
+        # recovery must route to the checkpoint ``WikiResume`` (re-clone at the
+        # recorded commit + skip done phases), not the generic stitch. Server-
+        # side so clients stay agnostic — one endpoint handles every origin. A
+        # wiki Q&A session has no indexing job, so this returns None and the
+        # generic path re-runs it.
+        wiki_resumed = _try_wiki_indexing_resume(session_id, action)
+        if wiki_resumed is not None:
+            return wiki_resumed, 202
+
         try:
             user_query = runtime.resolve_recovery_query(
                 session_id,
@@ -1467,9 +1845,15 @@ class SessionRecovery(Resource):
         model_name = model_override or str(last_context.get("model", "")) or None
         if model_override:
             runtime.append_context_event(session_id, {"model": model_override})
+        # Re-inject capability-gating context (client_capabilities /
+        # structured_workspace) so a recovered wiki/QA/structured session keeps
+        # its capability — the orchestrator reads the MOST-RECENT context event,
+        # and the model-override append above (or the recovery audit) would
+        # otherwise leave a gating-less event as the latest one (Gitea #54, F1).
+        runtime.reinject_recovery_context(session_id)
         budget = int(get_config_value("agent", "session_step_budget", default=0))
         max_iters = int(get_config_value("agent", "max_iters", default=30))
-        started = runtime.start_async(
+        run_id = runtime.start_async(
             session_id=session_id,
             user_query=user_query,
             model_name=model_name,
@@ -1481,12 +1865,13 @@ class SessionRecovery(Resource):
             max_iters=max_iters,
             session_step_budget=budget,
         )
-        if not started:
+        if not run_id:
             return {"message": "Session is already running."}, 409
         return {
             "session_id": session_id,
             "action": action,
             "accepted": True,
+            "run_id": run_id,
         }, 202
 
 
@@ -1657,7 +2042,9 @@ class SessionAgents(Resource):
                 "depth": e.get("payload", {}).get("depth"),
                 "model": e.get("payload", {}).get("model"),
                 "action": e.get("payload", {}).get("action"),
-                "detail": e.get("payload", {}).get("detail"),
+                # Cap the free-text ``detail`` so the agent tree can't regrow the
+                # transcript bloat #42 caps on the events route.
+                "detail": _cap_freetext(e.get("payload", {}).get("detail")),
                 "status": e.get("payload", {}).get("status"),
                 "steps_completed": e.get("payload", {}).get("steps_completed", 0),
                 "input_tokens": e.get("payload", {}).get("input_tokens", 0),
@@ -1668,14 +2055,27 @@ class SessionAgents(Resource):
             if e.get("type") == "sub_agent"
         ]
         running = runtime.is_running(session_id)
-        stop_agents = [a for a in agents if a.get("action") == "stop"]
-        total_input_tokens = sum(a.get("input_tokens", 0) for a in stop_agents)
-        total_output_tokens = sum(a.get("output_tokens", 0) for a in stop_agents)
+        # Token totals delegate to the same usage builder the /usage endpoint
+        # uses, so a root-only session (no sub_agent stop events) still reports
+        # its real root (depth==0) tokens instead of 0.
+        # ``total_input_tokens`` = PEAK (root_peak + sum-of-per-agent-peaks) —
+        # the same "context pressure" number the history overview and console
+        # badge show. The cumulative billed sum (which re-counts the growing
+        # prefix on every call and is ~2× the real peak) is exposed separately
+        # under ``total_input_tokens_billed`` for cost accounting.
+        from mewbo_core.token_budget import build_usage_numbers
+
+        usage = build_usage_numbers(events, None)
+        total_input_tokens = (
+            usage["root_peak_input_tokens"] + usage["sub_peak_input_tokens"]
+        )
+        total_output_tokens = usage["total_output_tokens"]
         return {
             "agents": agents,
             "running": running,
             "total_steps": total_steps,
             "total_input_tokens": total_input_tokens,
+            "total_input_tokens_billed": usage["total_input_tokens_billed"],
             "total_output_tokens": total_output_tokens,
         }, 200
 

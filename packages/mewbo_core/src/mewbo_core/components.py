@@ -298,6 +298,27 @@ def langfuse_trace_span(
                 pass
 
 
+def record_span_exception(span, exc=None, *, message=None, attributes=None):
+    """Record an OTel ``exception`` event on a Langfuse span.
+
+    ERROR status is set by the caller's ``span.update``; this bridges the
+    failure-metadata seam to Langfuse's exception tooling, which queries OTel
+    ``exception`` events — ``span.update(level="ERROR")`` only sets span
+    *status*. Fully graceful: no span / no otel / disabled → no-op.
+    """
+    if span is None:
+        return
+    otel = getattr(span, "_otel_span", None)
+    try:
+        if otel is not None and otel.is_recording():
+            if exc is not None:
+                otel.record_exception(exc, attributes=attributes or None)
+            elif message is not None:
+                otel.record_exception(RuntimeError(message), attributes=attributes or None)
+    except Exception:  # pragma: no cover - never disrupt the run
+        logging.debug("Langfuse record_exception failed.", exc_info=True)
+
+
 def _ensure_langfuse_client(config) -> None:
     if config is None:
         return
@@ -360,6 +381,7 @@ __all__ = [
     "langfuse_propagate",
     "langfuse_session_context",
     "langfuse_trace_span",
+    "record_span_exception",
     "resolve_home_assistant_status",
     "resolve_langfuse_status",
 ]

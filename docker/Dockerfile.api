@@ -72,6 +72,28 @@ RUN --mount=type=cache,target=/root/.cache/uv \
             -e "apps/mewbo_api[wiki]"; \
     fi
 
+# Pin the tree-sitter parser cache to a fixed, shared path so the build (root)
+# and the runtime (uid 1000) resolve the SAME directory — tree_sitter_language_pack
+# honours XDG_CACHE_HOME. Without this, a build-time pre-warm under /root/.cache
+# would be invisible to the runtime user's ~/.cache and re-downloaded at runtime.
+ENV XDG_CACHE_HOME=/opt/mewbo-cache
+
+# Pre-warm the tree-sitter parser bundle at BUILD time. The language pack (1.x)
+# fetches a per-platform parser archive from a GitHub release on first use; a
+# transient 504 there would otherwise abort a live indexing run. Baking the
+# bundle into the image removes that runtime GitHub dependency entirely (it
+# survives container restarts because it lives in the image layer, not a
+# volume). One download warms every language — the archive is the whole pack.
+# Best-effort: a transient blip at build time must not break the image; the
+# runtime path retries (mewbo_graph/wiki/graph.py:_download_with_retry) as the
+# safety net.
+RUN if [ "$WIKI_EXTRAS" = "1" ]; then \
+        mkdir -p /opt/mewbo-cache && \
+        ( python -c "import tree_sitter_language_pack as t; t.download(['python','javascript','typescript','go','rust'])" \
+          || echo 'WARN: tree-sitter parser pre-warm failed; runtime will retry-download on first index' ) && \
+        chown -R 1000:1000 /opt/mewbo-cache; \
+    fi
+
 # Pre-create plan-mode scratch directory with correct ownership.
 # Named volumes copy permissions from the image on first mount, so
 # ``plans-data:/tmp/mewbo/plans`` inherits mewbo ownership

@@ -401,6 +401,30 @@ def test_cmd_continue_success(monkeypatch, tmp_path):
     assert "Response" in output
 
 
+def test_cmd_continue_reinjects_capability_context(monkeypatch, tmp_path):
+    """F1: /continue re-injects capability-gating context before run_sync so a
+    recovered wiki/QA/structured CLI session keeps its capability.
+    """
+    ctx = _make_context(tmp_path)
+    registry = get_registry()
+    sid = ctx.state.session_id
+    ctx.runtime.append_context_event(sid, {"client_capabilities": ["wiki"]})
+    ctx.runtime.append_context_event(sid, {"model": "gpt-4o"})  # later gating-less event
+
+    monkeypatch.setattr(ctx.runtime, "resolve_recovery_query", lambda *a, **kw: "recover")
+    observed = {}
+
+    def fake_run_sync(*a, **kw):
+        events = ctx.store.load_transcript(sid)
+        last_ctx = next((e for e in reversed(events) if e.get("type") == "context"), None)
+        observed["caps"] = last_ctx["payload"].get("client_capabilities") if last_ctx else None
+        return _DummyQueue(result="ok")
+
+    monkeypatch.setattr(ctx.runtime, "run_sync", fake_run_sync)
+    assert registry.execute("/continue", ctx, []) is True
+    assert observed["caps"] == ["wiki"]
+
+
 def test_cmd_retry_resolve_raises(monkeypatch, tmp_path):
     """/retry handles ValueError from resolve_recovery_query."""
     ctx = _make_context(tmp_path)

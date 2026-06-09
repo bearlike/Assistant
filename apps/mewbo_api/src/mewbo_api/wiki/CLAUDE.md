@@ -1,3 +1,5 @@
+> ↑ [apps/mewbo_api/CLAUDE.md](../../../CLAUDE.md) · [root](../../../../../CLAUDE.md)
+
 # MewboWiki — API Subsystem Guidance
 
 Scope: this file applies to `apps/mewbo_api/src/mewbo_api/wiki/` (the thin
@@ -13,21 +15,43 @@ Everything that can be read straight from the code is left out.
 ## What MewboWiki is
 
 A DeepWiki-style auto-generated wiki for code repositories. Pipeline is
-a fixed six-phase state machine running inside a normal Mewbo session
+a fixed seven-phase state machine running inside a normal Mewbo session
 (not a separate service): an agent owns the run, the wiki built-in
 tools persist state, and SSE streams progress to the FE.
 
-Phases, in order, are the source of truth for progress everywhere:
+Phases, in order, are the source of truth for progress everywhere
+(`enrich` is inserted post-AST):
 
 ```
-clone → scan → graph → plan → pages → finalize
+clone → scan → graph → enrich → plan → pages → finalize
 ```
+
+**GraphRAG ordering law (Gitea #35).** The knowledge graph is built BEFORE
+generation and generation CONSUMES it. The `enrich` phase (a `wiki-enricher`
+fan-out, mirroring `wiki-page-writer`) mints abstract entities from AST symbols +
+SOURCE prose (docstrings/comments/READMEs) — never from generated page prose —
+grounding each LLM-proposed entity against the high-confidence AST symbols
+(precision; anything that can't attach to a symbol/span is dropped). `plan` is
+entity-aware; `pages` query the entity graph via `resolve_entity` instead of
+re-extracting. We SKIP Leiden/Louvain community detection (over-engineering,
+non-reproducible on low-degree code graphs) — pages are planned by the free
+AST/module/package/directory hierarchy + entity co-occurrence. The entity
+substrate itself lives down in `mewbo_graph.entities` (one multiplex store,
+deterministic-id upsert, one `ResolutionLadder` shared with insight dedup).
 
 `emit_phase(ctx, name)` is the one and only writer of the current
 phase. It writes the SSE event AND updates the persisted job snapshot
 in the same call — that's why the landing-page card and the indexing
 page can never drift apart (they read the same write through two
 different transports).
+
+Each phase has exactly one emitter at its boundary tool — EXCEPT `enrich`,
+which has no tool of its own (it's a `wiki-enricher` fan-out). So `enrich` is
+emitted at the **tail of `wiki_build_graph`** (`build_graph.py`, right after the
+graph is built): the snapshot advances into the enrichment window the moment the
+graph is done, instead of sitting at `graph` until `plan` lands (the old
+~2-minute "graph plateau" that read as a stall). If you add another tool-less
+logical phase, emit it from the tail of the tool that precedes it.
 
 ## Single source of truth for progress
 
@@ -52,17 +76,43 @@ a `phase` event, but new code MUST emit `phase`.
 
 ## Wiki capability gating
 
-Wiki agent definitions (`wiki-indexer`, `wiki-page-writer`, `wiki-qa`)
-are loaded by `agent_registry.py` only when the session advertises the
-`"wiki"` capability. `WikiIndexingJob.start` and `WikiQaSession.start`
-append `{"client_capabilities": ["wiki"]}` as a context event right
-after creating the session. Without that line, `spawn_agent` cannot
-look up the wiki-* AgentDefs and the run will appear "stuck after
-scan" — the parent agent finishes scan but has no child it can hand
-the rest off to.
+Wiki agent definitions (`wiki-indexer`, `wiki-enricher`, `wiki-page-writer`,
+`wiki-qa`, `wiki-qa-probe`) are loaded by `agent_registry.py` only when the
+session advertises the `"wiki"` capability. `WikiIndexingJob.start` and
+`WikiQaSession.start` append `{"client_capabilities": ["wiki"]}` as a context
+event right after creating the session. Without that line, `spawn_agent` cannot
+look up the wiki-* AgentDefs and the run will appear "stuck after scan" — the
+parent agent finishes scan but has no child it can hand the rest off to.
 
 If you ever rename a wiki capability or add a new one, update both
 `jobs.py` (capability advertisement) and `agent_registry.py` (gate).
+
+## Non-git catalog ingestion
+
+`CatalogIngestor` (`mewbo_graph.wiki.catalog`) — direct write (no agent/tree-sitter):
+each doc → `WikiPage` (BM25) + a content-addressed graph node (embeddings, guarded →
+BM25-only) → honest `complete` Project (non-empty graph). Catalog nodes reuse
+`type=File` with `file="catalog/"` prefix (`doc_total` counts by that prefix; a
+dedicated `"Document"` node type + FE Record-map update is a deferred follow-up).
+Refresh rejects catalog projects (`repo_url is None` AND no git submission).
+
+## Q&A model default + snapshot terminal status (#41)
+
+`post_qa` makes `model` genuinely optional via `_resolve_qa_model()` (the one
+helper for the `wiki.default_qa_model → wiki.default_model → llm.default_model`
+chain, reused by `get_meta`/`get_wiki_defaults`/`_build_condense_model` — don't
+re-inline it). The route accepts `project` OR `slug` in the body but reports
+validation against the PUBLIC `project` name.
+
+`QaAnswer.status` (`mewbo_graph.wiki.types`, default `"running"`,
+`QA_TERMINAL_STATUSES = {complete, cancelled, error}`) is the terminal flag a
+NON-streaming consumer needs (the MCP `ask_wiki` poll over `GET /v1/wiki/qa/<id>`
+— the SSE stream already had its `complete` event). It is set at each accept
+state: the terminal `sources` block (`emit_block._finalize_snapshot` →
+`status="complete"`) and `WikiQaSession.cancel` (`status="cancelled"`). Set it
+through `store.save_qa(answer)` so both store backends round-trip it onto the
+snapshot. Any NEW QA terminal path MUST set the status too, or a snapshot poller
+waits out its timeout.
 
 ## SSE plumbing — proxy buffer + resume
 
@@ -113,6 +163,220 @@ goes BEFORE the `forget`.
 
 Never log the token. Never echo it into a tool result. Never include it
 in `submission.model_dump()` output.
+
+## Repository credential persistence (durable, redacted in-flight)
+
+The ephemeral `CloneTokenCache` dies with the process — so re-index used to
+reconstruct a `token=None` submission and the clone failed with
+`fatal: could not read Username for '<host>'`. Credentials are now **persisted
+per-slug** in an isolated store, separate from job submissions:
+
+- `RepoCredential` (`mewbo_graph.wiki.types`) — `{kind: token|ssh_key, value,
+  username?}`. Supports git tokens AND SSH/deploy private keys.
+- `CredentialStore` (`mewbo_graph.wiki.credentials`) — the single read/write
+  chokepoint, keyed by **slug** (durable identity, not job_id). Plaintext-now
+  behind an identity `_encode`/`_decode` seam — encryption-at-rest is a one-line
+  swap there, nothing else changes.
+- Store: `save_credentials`/`get_credentials`/`delete_credentials` on
+  `WikiStoreBase`; JSON driver writes `credentials/<slug>.json` at mode `0600`,
+  Mongo uses the `wiki_credentials` collection.
+- **Plaintext-at-rest ≠ plaintext-in-flight**: NEVER log `RepoCredential.value`,
+  echo it into an SSE event, a transcript, or a tool result. The clone error
+  scrubber + the credential store are the only places it appears.
+
+Clone credential resolution order: **LLM arg → `CloneTokenCache` (warm) →
+`CredentialStore.load(slug)` (durable source of truth)**. Token → URL injection
+(`x-access-token`). SSH key → temp file (`0600`) + `GIT_SSH_COMMAND="ssh -i
+<tmp> -o StrictHostKeyChecking=accept-new"`, deleted in a `finally`.
+
+Onboard (`jobs.start`) saves the credential BEFORE stripping the token; refresh
+(`jobs.refresh`) restores it onto the reconstructed submission (THE line that
+fixes token-less re-index); finalize keeps `CloneTokenCache.forget` but NEVER
+deletes the persisted credential (re-index needs it); project-delete drops it.
+
+## Restart durability is checkpoint-aware resume (Gitea #54, Part B)
+
+`init_wiki` no longer marks interrupted jobs failed. `JobRecovery`
+(`recovery.py`) finds recoverable jobs on startup (`_RECOVERABLE` =
+`queued|scanning|finalizing|interrupted`), marks the non-`interrupted` ones
+`interrupted`, and re-drives **`WikiResume.resume`** ONCE per distinct slug —
+the restored credential authenticates the re-clone. `interrupted` is itself in
+the recoverable set: if the API died after marking a job `interrupted` but
+before recovery re-drove it, the next restart must still retry it. A SLUG-KEYED
+retry cap (`JobRecovery.MAX_RETRIES`, on its own persistent surface via
+`store.{get,bump,reset}_recovery_attempts` — `recovery/<slug>.json` /
+`wiki_recovery` collection, NOT the submission sidecar) bounds the AUTOMATIC
+re-drives across recovery generations / new job_ids and stops a job that keeps
+dying from looping the API. `interrupted` is a NON-terminal status (it shows in
+the "Indexing now" active-jobs surface).
+
+**Checkpoint-aware resume, not full refresh (the #54 reversal of the old
+"recovery == refresh" rule).** `WikiResume` (`resume.py`) reuses the SAME job_id
+(continuous event log), re-clones at the recorded `commit_sha` (NOT latest HEAD,
+so the reused graph stays consistent — re-indexing at HEAD is the distinct
+`/refresh` path), and SKIPS the expensive idempotent phases whose store artifacts
+already exist. The "what's done" decision is the atomic `ResumePlan`
+(`mewbo_graph.wiki.resume`): `build(store, job)` computes `skip ⊆ {graph, enrich,
+plan}` (graph non-empty → skip graph; entities exist → skip enrich; committed
+plan → skip plan) + `pages_done`/`pages_remaining` (plan minus persisted pages).
+`clone`/`scan` ALWAYS run (cheap; the page-writers need the source on disk);
+`finalize` always runs (idempotent). It is computed ONCE at resume time and
+persisted via `store.save_resume_plan(job_id, …)`; `resolve_job_ctx` rebuilds it
+cheaply per tool call (`ResumePlan.from_persisted` — a tiny dict, no graph
+re-query) onto `WikiJobCtx.resume_plan`. The phase tools (`build_graph`,
+`commit_plan`) consult it with a ONE-LINE `ctx.resume_plan.should_skip(...)` guard
+and short-circuit (still `emit_phase`, return a cached-summary result); done-
+detection lives ONLY in `ResumePlan` (DRY). The enrich fan-out has no tool, so the
+agent skips it via `ResumePlan.summary()` injected into the indexer instruction.
+The shared "create wiki session + advertise the `wiki` capability + start the
+indexer with INDEXER_TOOLS" sequence is the `_start_indexer_session` seam in
+`jobs.py` — used by BOTH `start()` and `resume()` so the capability advertisement
+and tool allowlist can never drift. User-initiated resume
+(`POST /v1/wiki/index/<job_id>/resume`) is exempt from / resets the per-slug cap
+(`reset_recovery_attempts`); the AUTOMATIC `JobRecovery` path keeps it
+(`user_initiated=False`). `GET /v1/wiki/jobs/recoverable` lists non-complete jobs
+whose `ResumePlan` has reusable work. (`submit_page` is already idempotent, so a
+re-submitted done page is harmless.)
+
+When a slug **exhausts** `JobRecovery.MAX_RETRIES`, recovery now moves its job to
+terminal **`failed`** (`_mark_failed`) instead of leaving it `interrupted`
+forever — a job that keeps dying must stop being a perpetual zombie in the
+active-jobs surface (that ghost is what made a completed project keep showing
+"Indexing now" — the FE suppresses a completed tile while its slug has any active
+job, `LandingScreen` `activeSlugs`).
+
+## Terminal accept-state for indexing (Gitea #58)
+
+`wiki_finalize` is a **terminal `SessionTool`** (overrides `should_terminate_run()` /
+`terminal_reason()`). On a successful `handle()` it sets `_terminate_run_pending = True`;
+the loop polls this at `tool_use_loop.py:689-696` and breaks immediately —
+`done_reason = "completed"` — with **no extra post-finalize LLM turn**. This is
+the primary fix for the hanging session: before this, the loop always took one
+more turn after finalize (the model had to produce a text response to exit
+naturally), which consumed ~100K tokens per successful index AND created a window
+where a stuck child could wedge `asyncio.run(loop.run(...))` before terminal events
+were ever written.
+
+**Mirror this pattern** for any new wiki tool that signals end-of-index (if you
+add a `wiki_publish` or similar). The base `WikiSessionTool.should_terminate_run()`
+always returns `False` — override it only where the tool IS the terminal accept state.
+
+## Infra-failure recovery net (Gitea #56)
+
+`WikiIndexingSessionEndHook` (registered in `routes.register()` alongside
+`QaSessionEndHook`) fires on every session end. If the backing wiki job is
+non-terminal (status not in `{complete, failed, cancelled}`) when the session ends,
+it marks the job `interrupted` — handing off to `JobRecovery` on next restart via
+the existing checkpoint-aware `WikiResume` path.
+
+This catches tool-internal infra failures (network/IO/timeout inside a phase tool)
+where the LLM catches the error, reports it, and exits cleanly (`done_reason =
+"completed"` with an error field). Without this hook the job would stay in its
+last phase status forever, invisible to `JobRecovery` and un-resumable without
+a manual re-submit.
+
+Happy-path invariant: `wiki_finalize` sets job status to `complete` before the
+session ends, so the hook always sees a terminal status and no-ops. The hook only
+fires for error/interrupted paths.
+
+## Honest terminal job state (no zombie "still indexing")
+
+The wiki job status is only advanced by the tools the indexer calls (`clone`→
+`scanning`, `commit_plan`→`finalizing`, `finalize`→`complete`); a session that
+ends WITHOUT reaching `wiki_finalize` (e.g. `halted_no_progress`) leaves the job
+non-terminal. Two guards keep state honest:
+
+- **Supersede at finalize** (`finalize.py:_supersede_stale_jobs`): a `complete`
+  index marks every *other* non-terminal job for the same slug `failed`
+  (superseded) — so older stuck attempts drop out of `/jobs/active` and stop
+  hiding the finished wiki.
+- **Completion correctness** (`finalize.py:_graph_is_populated`): finalize
+  REFUSES to mark `complete` when the knowledge graph is empty ("completed
+  without creating the graph" ⇒ `failed`, code `validation`) — soft-gated so a
+  graph-less install isn't blocked. "Error AFTER the graph was built" stays a
+  distinct `failed`-with-populated-graph state.
+
+The `on_session_end` seam is now WIRED (the real `hook_manager` threads
+`backend.py` → `init_wiki` → `register` → `WikiQaSession.start` → `start_async`).
+Q&A uses it as its terminal net (see below); indexing still advances status via its
+own tools (`wiki_finalize`) + the supersede/recovery guards above, so a halted index
+is covered without an indexing-side session-end reconciler.
+
+## Grounded-structured slug resolution (#51)
+
+`resolve_qa_ctx` falls back to the `structured_workspace` context event → a slug-only
+`WikiQaCtx` (`answer_id` Optional — retrieval tools need only `slug`; emit/QA tools
+guard on `answer_id`). The session store is reached via a **process-singleton in
+`_ctx`**, NEVER `create_session_store()` per tool call (that leaked a Mongo connection
+pool and added per-call latency against the sub-1.5s budget).
+
+## Q&A — agentic probe fan-out + terminal submission
+
+`wiki-qa` is a **hypervisor, not a flat retrieval agent**. The old design was one
+capped agent that read a couple of pages and stopped — it never touched the graph or
+embeddings the index built (a `halted_no_progress`/page-only-citation smell). Now the
+root decomposes the question and fans out `wiki-qa-probe` sub-agents (the existing
+`spawn_agent`/`check_agents` hypervisor — NO new control loop), fuses their grounded
+findings, and emits one cited answer. The ANN multi-probe intuition (diverse seeds →
+best-first beam over typed edges → consensus → early-stop) is instrumented **in the
+probe prompt**, not a deterministic engine — the orchestrator IS the prober. Durable
+decisions:
+
+- **Root has NO retrieval tools by design** (`QA_TOOLS` = list_pages/emit/insight +
+  spawn/check). That's what FORCES delegation; giving the root the retrieval surface is
+  exactly how it regressed to read-one-page-and-stop. The probe leaf
+  (`wiki-qa-probe.md`) owns the read-only retrieval surface.
+- **`approval_callback` is inherited parent→child**, so `_approve_qa_tool` must admit
+  `QA_APPROVED_TOOLS` = root tools ∪ the probe's retrieval tools ∪ `steer_agent`. Admit
+  only the root set and every probe call falls ASK→DENY — the fan-out silently does
+  nothing. This is the non-obvious gotcha.
+- **The terminal `sources` block IS the accept state** (the `EmitStructuredResponseTool`
+  pattern): `wiki_emit_block` of a `sources` block drives `QaFinalizer.close` (reconcile
+  snapshot + `complete`) and sets `should_terminate_run()`. So completion is a clean
+  LLM-native submission, not a hook reconstruction. `QaSessionEndHook` (on_session_end)
+  is the NET for a run that halts before the sources block (+ stamps `models_used`).
+- **`QaFinalizer` lives DOWN in `mewbo_graph.wiki.qa`** (with `QaAnswer` + the store),
+  so both the terminal emit (same layer) and the API net (imports down) call it. It
+  rebuilds `blocks` + `summary_sources` from the append-only log — previously NOTHING
+  did, so a reloaded/shared answer came back empty (`blocks=[]`) and the SSE stream only
+  ended by idle-timeout.
+- **Two kinds of citation, captured deterministically.** `summary_sources` = the LLM's
+  curated sources block. `accessed_sources` = the full trail of every graph node / file
+  / page a probe TOUCHED — each retrieval tool records a compact `access` event
+  (`WikiSessionTool._record_qa_access`); the finalizer folds + de-dups them. `models_used`
+  is the only provenance needing the transport layer (the transcript's `llm_call` model),
+  so `QaSessionEndHook` reads it and `QaFinalizer.enrich` stamps it post-close.
+
+## Q&A answer depth + cited-sources viewer
+
+Answer depth is **prompt-controlled, not code-controlled** — `QaFinalizer` never
+truncates; it passes blocks straight from the event log. Two recurring-regression
+guards live in the prompts (`mewbo_graph/.../agents/wiki-qa.md`,
+`wiki-qa-probe.md`):
+
+- **Structured-output floor.** `wiki-qa.md` MANDATES minimum structure (a lead
+  `p` direct answer + ≥1 `h2` facet section + ≥2 supporting `p`, then the
+  `sources` block) for non-trivial questions; only a yes/no or single-value
+  lookup may be one paragraph. Without an explicit floor the model reads "quick +
+  authoritative" as "be brief" and emits one paragraph + `sources` — the
+  DeepWiki-parity regression. "Quick" means LATENCY (don't spawn marginal extra
+  probes), never answer brevity. The probe contract was un-capped (the old
+  "2–5 terse claims" starved the fused answer). Only emit kinds in the
+  `types.py` block union (`p/h2/h3/hr/ul/accordion/sources/table/diagram` — NO
+  `ol`; express ordered lists as markdown prefixes inside a `ul`/`p`).
+- **Inline citations = `src:` links.** The prompt emits
+  `[path:line](src:path#L<a>-<b>)`; probes MUST pass `start_line`/`end_line` to
+  `wiki_read_file` so the citation carries a precise range (a bare path can't open
+  the right lines). The console renders these as chips + a source card.
+
+**Source-blob endpoint** `GET /v1/wiki/projects/<slug>/source?path=&start=&end=`
+→ `{path,startLine,endLine,totalLines,content}` (`routes.py:get_project_source`).
+Backs the FE cited-sources viewer: the console parses each `path#L<a>-<b>`
+citation and fetches its excerpt LAZILY per card — excerpts are deliberately NOT
+carried on the SSE wire (keeps stream payloads small + the `sources` block shape
+unchanged). Reuses `WikiSourceAccess._safe_path` (the load-bearing traversal
+guard — absolute/`..`/symlink escapes 403) + `resolve_qa_clone_dir`; whole-file
+reads cap at `_SOURCE_MAX_LINES` while `totalLines` still reports the true count.
 
 ## Embeddings — LiteLLM, not LangChain
 
@@ -186,6 +450,24 @@ class so adding a new node/edge attribute only touches one file.
 The FE renderer (`KnowledgeGraphRenderer` in the console) follows the
 same atomic-class shape — both halves of the contract are explicit
 instead of leaking through anonymous dicts.
+
+**The view is the multiplex ASSEMBLER (not AST-only).** `for_slug` reads all
+three store families — AST (`query_graph`/`list_edges`), entities
+(`query_entities`/`list_entity_edges`), memory (`query_memory`/`list_memory_edges`)
+— and tags every node/edge `layer ∈ ast|entity|memory|cross`. Cross-layer
+`ANCHORS` edges are reconciled IN-VIEW via the EXISTING resolvers
+(`CodeStructureProvider.resolve_many` for `path#Name` keys,
+`EntityAnchorResolver.resolve_many` for `entity:<id>`): pre-split the key kinds
+(mixing them defeats `resolve_many`'s early-exit), classify an edge target by
+SET-MEMBERSHIP against the loaded id-sets (NEVER id hex-length), drop the
+unresolvable (no dangling edges). Cross-file AST edges re-point to real in-repo
+nodes or converge on ONE shared NAMED `External` view-node (synthesized, never
+persisted) — that is what fixed the "disconnected File-stars": the old view
+dropped cross-file edges whose synthetic `<external>` target wasn't a real node.
+`node_limit` degree-prunes the AST layer ONLY; `truncated`/`totalEdges` count
+post-resolution reals. Open-vocab entity-relation verbs ride the edge `label`;
+`kind` stays a closed union (`RELATES`/`ANCHORS`) so the FE `Record` maps stay
+exhaustive.
 
 ## SessionRuntime session tags
 
@@ -269,8 +551,13 @@ graph. Non-obvious decisions only (full spec + research refs: Gitea #13):
   orchestrator is actually wired (an earlier `mode` param was deleted because all
   branches did the same full re-index); wire it and reintroduce `mode` together.
 - **Flywheel**: the indexer deposits a few atomic insights *while indexing*
-  (A-MEM notes-at-ingest), QA deposits one per answer — so memory is useful
-  from day one, not only after Q&A.
+  (A-MEM notes-at-ingest), and QA deposits one per answer — so memory is useful
+  from day one. The QA half is `QaMemoryDepositor` (`mewbo_graph.wiki.qa`, beside
+  `QaFinalizer`), fired from `QaSessionEndHook` (post-delivery → OFF the user's
+  latency path), best-effort, idempotent (content-addressed node id), skips an
+  empty slug. It reuses `InsightIngestor.ingest(condense=True)` — no second
+  fan-out, no new memory writer — anchoring the distilled answer to the cited
+  code entities from `accessed_sources`/`summary_sources`.
 - **REST insights returns 200 (`ok:false`), NOT 422**, on a fully-rejected
   well-formed request — so the MCP `RestClient` facade doesn't raise.
 - **Config**: `wiki.memory.*` / `wiki.refresh.*` (typed `WikiMemoryConfig` /

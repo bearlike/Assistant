@@ -14,6 +14,8 @@ import { readRuntimeConfig } from "../../../runtimeConfig";
 import { sseStream as genericSseStream } from "../../../api/sse";
 
 import type {
+  CatalogDocument,
+  CatalogIngestReport,
   IndexingEvent,
   IndexingJob,
   KnowledgeGraph,
@@ -22,6 +24,9 @@ import type {
   Project,
   QaAnswer,
   QaEvent,
+  RecoverableJob,
+  ResumeIndexingResponse,
+  SourceExcerpt,
   WikiError,
   WikiPage,
   WizardSubmission,
@@ -147,6 +152,31 @@ export async function getKnowledgeGraph(
   return http<KnowledgeGraph>("GET", path);
 }
 
+/**
+ * Fetch a file-source excerpt for a cited Q&A source card. ``start``/``end``
+ * are 1-based and optional — when omitted the backend returns the whole file
+ * (the caller should still cap rendering). Reuses the same slug encoding as
+ * the other per-project routes.
+ *
+ * ``GET /v1/wiki/projects/<slug>/source?path=<path>&start=<int>&end=<int>``
+ */
+export async function getSourceExcerpt(
+  slug: string,
+  path: string,
+  start?: number | null,
+  end?: number | null,
+): Promise<SourceExcerpt> {
+  if (!slug) throw makeError("validation", "slug is required");
+  if (!path) throw makeError("validation", "path is required");
+  const params = new URLSearchParams({ path });
+  if (start != null) params.set("start", String(start));
+  if (end != null) params.set("end", String(end));
+  return http<SourceExcerpt>(
+    "GET",
+    `/v1/wiki/projects/${encodeURIComponent(slug)}/source?${params.toString()}`,
+  );
+}
+
 // ── Catalogue ─────────────────────────────────────────────────────────────
 
 export async function listPlatforms(): Promise<Platform[]> {
@@ -230,6 +260,33 @@ export async function cancelIndexingJob(jobId: string): Promise<IndexingJob> {
   return http<IndexingJob>("DELETE", `/v1/wiki/index/${encodeURIComponent(jobId)}`);
 }
 
+/**
+ * List failed / interrupted / cancelled-but-incomplete jobs that still have
+ * reusable work (a graph, some pages). Powers the landing-page "Incomplete
+ * indexes" section. Until the backend route ships this gracefully returns
+ * []; the FE never throws.
+ */
+export async function listRecoverableJobs(): Promise<RecoverableJob[]> {
+  try {
+    return await http<RecoverableJob[]>("GET", "/v1/wiki/jobs/recoverable");
+  } catch {
+    return []; // any error (route absent, transient) → empty; the FE never throws
+  }
+}
+
+/**
+ * Resume a recoverable indexing job in place, reusing the work it already
+ * committed. ``POST /v1/wiki/index/<job_id>/resume`` (empty body) → 202.
+ * Errors: 404 not_found, 400 validation (complete / cancelled).
+ */
+export async function resumeIndexingJob(jobId: string): Promise<ResumeIndexingResponse> {
+  if (!jobId) throw makeError("validation", "jobId is required");
+  return http<ResumeIndexingResponse>(
+    "POST",
+    `/v1/wiki/index/${encodeURIComponent(jobId)}/resume`,
+  );
+}
+
 export async function* subscribeToIndexing(
   jobId: string,
   options: { signal?: AbortSignal } = {},
@@ -294,6 +351,28 @@ export async function askQuestion(
 ): Promise<QaAnswer> {
   const { answerId } = await startAnswer({ question, ...ctx });
   return getAnswer(answerId);
+}
+
+// ── Catalog (non-git workspace) ───────────────────────────────────────────
+
+/**
+ * Ingest one or more documents into a non-git catalog workspace.
+ * Creates the project if it does not exist yet (no git URL required).
+ *
+ * ``POST /v1/wiki/projects/<slug>/documents``
+ * Returns 201 with a ``CatalogIngestReport`` on success.
+ */
+export async function uploadCatalogDocuments(
+  slug: string,
+  documents: CatalogDocument[],
+): Promise<CatalogIngestReport> {
+  if (!slug) throw makeError("validation", "slug is required");
+  if (!documents.length) throw makeError("validation", "at least one document is required");
+  return http<CatalogIngestReport>(
+    "POST",
+    `/v1/wiki/projects/${encodeURIComponent(slug)}/documents`,
+    { documents },
+  );
 }
 
 // ── Wizard ────────────────────────────────────────────────────────────────

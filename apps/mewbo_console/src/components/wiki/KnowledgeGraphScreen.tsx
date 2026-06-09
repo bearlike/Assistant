@@ -19,11 +19,12 @@ import {
   ZoomOut,
 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { WikiTopBar } from "./WikiTopBar";
 import { useKnowledgeGraph } from "./api/hooks";
-import type { GraphEdgeKind, GraphNodeKind } from "./api/types";
+import type { GraphEdgeKind, GraphLayer, GraphNodeKind } from "./api/types";
 import {
   KnowledgeGraphRenderer,
   type EdgeInfo,
@@ -41,9 +42,13 @@ interface SelectedNode {
   id: string;
   label: string;
   kind: GraphNodeKind;
+  layer: GraphLayer;
   file: string;
   range: [number, number];
   docstring: string;
+  entityType?: string;
+  labels?: string[];
+  snippet?: string;
   degree: number;
   inEdges: EdgeInfo[];
   outEdges: EdgeInfo[];
@@ -57,6 +62,9 @@ const ALL_NODE_KINDS: GraphNodeKind[] = [
   "Function",
   "Method",
   "Interface",
+  "External",
+  "Entity",
+  "Memory",
 ];
 
 const ALL_EDGE_KINDS: GraphEdgeKind[] = [
@@ -65,6 +73,8 @@ const ALL_EDGE_KINDS: GraphEdgeKind[] = [
   "CALLS",
   "EXTENDS",
   "REFERENCES",
+  "ANCHORS",
+  "RELATES",
 ];
 
 const KIND_DOT: Record<GraphNodeKind, string> = {
@@ -74,6 +84,9 @@ const KIND_DOT: Record<GraphNodeKind, string> = {
   Function: "bg-[hsl(var(--graph-function))]",
   Method: "bg-[hsl(var(--graph-method))]",
   Interface: "bg-[hsl(var(--graph-interface))]",
+  External: "bg-[hsl(var(--graph-external))]",
+  Entity: "bg-[hsl(var(--graph-entity))]",
+  Memory: "bg-[hsl(var(--graph-memory))]",
 };
 
 const EDGE_DOT: Record<GraphEdgeKind, string> = {
@@ -82,6 +95,26 @@ const EDGE_DOT: Record<GraphEdgeKind, string> = {
   CALLS: "bg-[hsl(var(--graph-function))]",
   EXTENDS: "bg-[hsl(var(--graph-class))]",
   REFERENCES: "bg-[hsl(var(--graph-edge-soft))]",
+  ANCHORS: "bg-[hsl(var(--graph-edge-anchor))]",
+  RELATES: "bg-[hsl(var(--graph-edge-relates))]",
+};
+
+// Per-layer segmented toggle config. Bulk-setting a layer's node kinds in
+// ``hiddenKinds`` cascades to its edges (endpoint-hidden rule in the
+// renderer), so the toggle never enumerates edge kinds — a thin wrapper
+// over the existing kind machinery.
+const LAYER_ORDER: GraphLayer[] = ["ast", "entity", "memory"];
+
+const LAYER_LABEL: Record<GraphLayer, string> = {
+  ast: "Code",
+  entity: "Entities",
+  memory: "Memory",
+};
+
+const LAYER_DOT: Record<GraphLayer, string> = {
+  ast: "bg-[hsl(var(--graph-file))]",
+  entity: "bg-[hsl(var(--graph-entity))]",
+  memory: "bg-[hsl(var(--graph-memory))]",
 };
 
 export function KnowledgeGraphScreen({ slug }: KnowledgeGraphScreenProps) {
@@ -154,6 +187,32 @@ export function KnowledgeGraphScreen({ slug }: KnowledgeGraphScreenProps) {
     [kindCounts],
   );
 
+  // Per-layer node tallies. Prefer the v2 ``perLayer`` stat; fall back to
+  // summing per-kind counts so legacy AST-only graphs still light up the
+  // segmented control.
+  const layerCounts = useMemo(() => {
+    const out: Record<GraphLayer, number> = { ast: 0, entity: 0, memory: 0 };
+    for (const layer of LAYER_ORDER) {
+      const fromStat = stats?.perLayer?.[layer];
+      if (typeof fromStat === "number") {
+        out[layer] = fromStat;
+        continue;
+      }
+      out[layer] = KnowledgeGraphRenderer.kindsForLayer(layer).reduce(
+        (sum, k) => sum + (kindCounts[k] ?? 0),
+        0,
+      );
+    }
+    return out;
+  }, [stats, kindCounts]);
+
+  // Only surface the segmented control once the graph actually spans more
+  // than one layer — a pure AST graph keeps the toolbar uncluttered.
+  const presentLayers = useMemo(
+    () => LAYER_ORDER.filter((l) => layerCounts[l] > 0),
+    [layerCounts],
+  );
+
   const toggleKind = (k: GraphNodeKind): void => {
     setHiddenKinds((prev) => {
       const next = new Set(prev);
@@ -168,6 +227,26 @@ export function KnowledgeGraphScreen({ slug }: KnowledgeGraphScreenProps) {
       const next = new Set(prev);
       if (next.has(k)) next.delete(k);
       else next.add(k);
+      return next;
+    });
+  };
+
+  // A layer counts as "shown" if any of its node kinds is visible. Toggling
+  // bulk-sets every kind in the layer — a thin wrapper over the same
+  // ``hiddenKinds`` machinery the per-kind chips drive. Edges follow via the
+  // renderer's endpoint-hidden cascade, so no edge kinds are enumerated here.
+  const layerShown = (layer: GraphLayer): boolean =>
+    KnowledgeGraphRenderer.kindsForLayer(layer).some((k) => !hiddenKinds.has(k));
+
+  const toggleLayer = (layer: GraphLayer): void => {
+    const kinds = KnowledgeGraphRenderer.kindsForLayer(layer);
+    const hide = layerShown(layer); // currently visible → hide it
+    setHiddenKinds((prev) => {
+      const next = new Set(prev);
+      for (const k of kinds) {
+        if (hide) next.add(k);
+        else next.delete(k);
+      }
       return next;
     });
   };
@@ -305,6 +384,54 @@ export function KnowledgeGraphScreen({ slug }: KnowledgeGraphScreenProps) {
                   </div>
                 </PopoverContent>
               </Popover>
+
+              {presentLayers.length > 1 && (
+                <>
+                  <span className="opacity-30">|</span>
+                  <div
+                    role="group"
+                    aria-label="Toggle graph layers"
+                    className="inline-flex items-center rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden"
+                  >
+                    {presentLayers.map((layer, i) => {
+                      const shown = layerShown(layer);
+                      return (
+                        <Button
+                          key={layer}
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => toggleLayer(layer)}
+                          aria-pressed={shown}
+                          title={
+                            shown
+                              ? `Hide ${LAYER_LABEL[layer]} layer`
+                              : `Show ${LAYER_LABEL[layer]} layer`
+                          }
+                          className={cn(
+                            "h-6 gap-1.5 px-2.5 rounded-none text-[11px]",
+                            i > 0 && "border-l border-[hsl(var(--border))]",
+                            shown
+                              ? "bg-[hsl(var(--muted))]/40 text-[hsl(var(--foreground))]"
+                              : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/20",
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "w-2 h-2 rounded-full",
+                              LAYER_DOT[layer],
+                              !shown && "opacity-40",
+                            )}
+                          />
+                          <span>{LAYER_LABEL[layer]}</span>
+                          <span className="font-mono text-[hsl(var(--muted-foreground))]">
+                            {layerCounts[layer]}
+                          </span>
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -409,6 +536,11 @@ export function KnowledgeGraphScreen({ slug }: KnowledgeGraphScreenProps) {
                 <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
                   {selected.kind}
                 </span>
+                {selected.layer !== "ast" && (
+                  <span className="text-[9px] uppercase tracking-wide px-1.5 py-px rounded-full bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))]">
+                    {LAYER_LABEL[selected.layer]}
+                  </span>
+                )}
                 <span className="text-xs font-mono truncate flex-1">
                   {selected.label}
                 </span>
@@ -422,17 +554,58 @@ export function KnowledgeGraphScreen({ slug }: KnowledgeGraphScreenProps) {
                 </button>
               </header>
               <div className="px-3 py-3 space-y-3 overflow-y-auto text-xs">
-                <div>
-                  <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
-                    File
+                {selected.file ? (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+                      File
+                    </div>
+                    <code className="font-mono break-all">{selected.file}</code>
+                    <div className="text-[hsl(var(--muted-foreground))] mt-1">
+                      bytes {selected.range[0]}–{selected.range[1]} ·{" "}
+                      <span className="font-mono">{selected.degree}</span>{" "}
+                      connections
+                    </div>
                   </div>
-                  <code className="font-mono break-all">{selected.file}</code>
-                  <div className="text-[hsl(var(--muted-foreground))] mt-1">
-                    bytes {selected.range[0]}–{selected.range[1]} ·{" "}
-                    <span className="font-mono">{selected.degree}</span>{" "}
-                    connections
+                ) : (
+                  <div className="text-[hsl(var(--muted-foreground))]">
+                    <span className="font-mono">{selected.degree}</span> connections
                   </div>
-                </div>
+                )}
+                {selected.entityType && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+                      Type
+                    </div>
+                    <code className="font-mono">{selected.entityType}</code>
+                  </div>
+                )}
+                {selected.labels && selected.labels.length > 0 && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+                      Labels
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {selected.labels.map((l) => (
+                        <span
+                          key={l}
+                          className="px-1.5 py-px rounded-full text-[10px] bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))] font-mono"
+                        >
+                          {l}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selected.snippet && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+                      Memory
+                    </div>
+                    <p className="whitespace-pre-wrap text-[hsl(var(--muted-foreground))]">
+                      {selected.snippet}
+                    </p>
+                  </div>
+                )}
                 {selected.docstring && (
                   <div>
                     <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">

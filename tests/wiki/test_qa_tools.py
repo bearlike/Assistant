@@ -168,3 +168,97 @@ def test_emit_block_rejects_duplicate_index(qa_setup):
         asyncio.run(tool.handle(step))
         result = asyncio.run(tool.handle(step))
     assert "validation" in str(result.content) or "already" in str(result.content)
+
+
+# ---------------------------------------------------------------------------
+# Terminal status on the snapshot (#41) — the MCP poll's done-signal
+# ---------------------------------------------------------------------------
+
+
+def test_qa_answer_defaults_to_running_status():
+    """A freshly-minted QaAnswer reports ``status='running'`` (serialized)."""
+    ans = QaAnswer(
+        answerId="a-status",
+        fromPageId="overview",
+        summarySources=[],
+        model="m",
+        blocks=[],
+        slug="x/y",
+    )
+    assert ans.status == "running"
+    # Serialized snapshot (what GET /v1/wiki/qa/<id> returns) carries the field.
+    assert ans.model_dump(by_alias=True)["status"] == "running"
+
+
+def test_inprogress_snapshot_reports_running(qa_setup):
+    """A non-terminal block (``p``) leaves the persisted snapshot ``running``."""
+    store, sid = qa_setup
+    tool = WikiEmitBlockTool(session_id=sid)
+    step = MagicMock(tool_input={"index": 0, "block": {"kind": "p", "text": "Hi."}})
+    with patch.object(emit_block_mod, "_resolve_runtime", return_value=_runtime(store)):
+        asyncio.run(tool.handle(step))
+    assert store.get_qa("a1").status == "running"
+
+
+def test_terminal_sources_block_sets_complete_on_snapshot(qa_setup):
+    """The accept-state ``sources`` block flips the persisted status to ``complete``."""
+    store, sid = qa_setup
+    tool = WikiEmitBlockTool(session_id=sid)
+    step = MagicMock(tool_input={
+        "index": 0,
+        "block": {"kind": "sources", "items": ["src/main.py"]},
+    })
+    with patch.object(emit_block_mod, "_resolve_runtime", return_value=_runtime(store)):
+        result = asyncio.run(tool.handle(step))
+    assert "ok" in str(result.content)
+    # The reloaded snapshot — exactly what the GET route serializes — is terminal.
+    reloaded = store.get_qa("a1")
+    assert reloaded is not None
+    assert reloaded.status == "complete"
+    assert reloaded.model_dump(by_alias=True)["status"] == "complete"
+
+
+# ---------------------------------------------------------------------------
+# Terminal-tool loop contract (#61) — should_terminate_run → terminal_reason
+# ---------------------------------------------------------------------------
+
+
+def test_emit_block_terminal_reason_is_completed():
+    """``WikiEmitBlockTool`` inherits ``terminal_reason() == "completed"``.
+
+    Regression guard for #61: the tool overrides ``should_terminate_run`` but
+    declared no ``terminal_reason``, so ``tool_use_loop`` raised AttributeError
+    when it selected the terminating tool. The reason now lives on the shared
+    ``WikiSessionTool`` base — this test fails if that base method is removed,
+    because the base IS the body under test (the tool defines no own override).
+    """
+    tool = WikiEmitBlockTool(session_id="sess-qa-1")
+    assert tool.terminal_reason() == "completed"
+
+
+def test_emit_block_terminate_then_reason_matches_loop_selector(qa_setup):
+    """Drive the real ``should_terminate_run → terminal_reason`` selector contract.
+
+    Mirrors the ``tool_use_loop`` step: a non-terminal block leaves the tool
+    NOT terminating; the accept-state ``sources`` block flips
+    ``should_terminate_run()`` True and ``terminal_reason()`` resolves to
+    ``"completed"`` WITHOUT raising — the exact pair the loop reads at the
+    terminating-tool seam.
+    """
+    store, sid = qa_setup
+    tool = WikiEmitBlockTool(session_id=sid)
+    with patch.object(emit_block_mod, "_resolve_runtime", return_value=_runtime(store)):
+        # Non-terminal block: the tool does not request termination.
+        non_terminal = MagicMock(tool_input={
+            "index": 0, "block": {"kind": "p", "text": "Hi."},
+        })
+        asyncio.run(tool.handle(non_terminal))
+        assert tool.should_terminate_run() is False
+
+        # Accept-state sources block: termination requested, reason completed.
+        terminal = MagicMock(tool_input={
+            "index": 1, "block": {"kind": "sources", "items": ["src/main.py"]},
+        })
+        asyncio.run(tool.handle(terminal))
+    assert tool.should_terminate_run() is True
+    assert tool.terminal_reason() == "completed"

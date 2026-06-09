@@ -39,10 +39,15 @@ class RestClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         """Build the client. ``transport`` is injectable for testing (no live server)."""
+        # Structured timeout: keep the ``timeout`` read budget for individual fast
+        # calls but bound connect to 10s. The aggregate long-running-tool runtime
+        # risk is handled upstream by the lowered poll budgets (#41) — each is held
+        # strictly under this read ceiling so the tool returns a resumable handle
+        # before any transport/proxy timeout.
         self._client = httpx.AsyncClient(
             base_url=base_url,
             headers={"X-API-Key": token},
-            timeout=timeout,
+            timeout=httpx.Timeout(timeout, connect=10.0),
             transport=transport,
         )
 
@@ -118,16 +123,53 @@ class RestClient:
 
 
 def _error_message(resp: httpx.Response) -> str:
-    """Best-effort extraction of an API error message from a failed response."""
-    detail: str = ""
-    try:
-        body = resp.json()
-        if isinstance(body, dict):
-            detail = str(body.get("message") or body.get("error") or "")
-    except ValueError:
-        detail = resp.text.strip()
+    """Best-effort extraction of an API error message from a failed response.
+
+    Never leaks a raw HTML body (e.g. Werkzeug's default 404 page): a non-JSON
+    body is capped to a short hint and an HTML page is dropped entirely, so a
+    consuming agent gets an actionable reason instead of a kilobyte of markup.
+    """
+    detail = _error_detail(resp)
     suffix = f": {detail}" if detail else ""
     return f"REST API returned {resp.status_code}{suffix}"
+
+
+def _error_detail(resp: httpx.Response) -> str:
+    """Pull a clean reason from a failed response; a terse hint when none is available.
+
+    Priority:
+    1. Structured ``{"error": {"reason": ...}}`` or ``{"message": ...}`` body.
+    2. Short plain-text body (capped, never HTML).
+    3. Terse ``"<method> <path>"`` hint so the caller knows which call failed
+       (better than a bare status code with no context).
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        # Structured envelope ``{"error": {"reason": ...}}`` (the API's contract).
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("reason"):
+            return str(err["reason"])
+        if isinstance(err, str) and err:
+            return err
+        if isinstance(body.get("message"), str) and body["message"]:
+            return str(body["message"])
+        # Structured JSON but no useful reason field — fall through to the hint.
+    else:
+        # Non-JSON body: never dump raw HTML; short plain text is ok.
+        text = (resp.text or "").strip()
+        if text:
+            head = text[:200].lower()
+            if "<html" not in head and "<!doctype" not in head:
+                return text[:200]
+    # Empty body or HTML page: emit a terse, actionable transport hint.
+    try:
+        url = str(resp.url)
+    except RuntimeError:
+        url = ""
+    return f"no error body (check connectivity to {url})" if url else "no error body"
 
 
 __all__ = ["RestClient", "RestError"]

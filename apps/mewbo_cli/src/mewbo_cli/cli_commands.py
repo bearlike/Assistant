@@ -181,6 +181,11 @@ def _run_recovery(context: CommandContext, action: str) -> bool:
     except (ValueError, RuntimeError) as exc:
         context.console.print(f"Cannot {action}: {exc}", style="yellow")
         return True
+    # Re-inject capability-gating context (client_capabilities /
+    # structured_workspace) so a recovered wiki/QA/structured session keeps its
+    # capability — the orchestrator reads the most-recent context event (Gitea
+    # #54, F1). Shared with the API recover endpoint via this one runtime method.
+    context.runtime.reinject_recovery_context(context.state.session_id)
     label = "Retrying last query" if action == "retry" else "Continuing"
     context.console.print(f"{label}...", style="cyan")
     task_queue = context.runtime.run_sync(

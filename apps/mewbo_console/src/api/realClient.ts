@@ -12,7 +12,7 @@ import {
   SessionUsage,
   ShareRecord
 } from "../types";
-import { AgentSummary, ApiClient, ApiConfig, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
+import { AgentSummary, ApiClient, ApiConfig, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, RecoverResponse, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
 
 function withBase(baseUrl: string, path: string) {
   if (!baseUrl) {
@@ -278,7 +278,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
       fromTs?: string,
       editedText?: string,
       model?: string
-    ): Promise<void> {
+    ): Promise<RecoverResponse> {
       const body: Record<string, unknown> = { action };
       if (fromTs) body.from_ts = fromTs;
       if (editedText) body.edited_text = editedText;
@@ -291,7 +291,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
           body: JSON.stringify(body)
         }
       );
-      await handleJson(response);
+      return handleJson<RecoverResponse>(response);
     },
 
     async forkSession(

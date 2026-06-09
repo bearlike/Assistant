@@ -70,6 +70,21 @@ Chat platform adapters (Nextcloud Talk, etc.) create standard sessions via the r
 
 Channel sessions are indistinguishable from console/CLI sessions in listings, event streams, and Langfuse traces. A `context` event with `source_platform` metadata is injected at creation so the LLM and completion callback know the session origin.
 
+## Session Provenance
+
+Every session has an **origin**: the surface or subsystem that created it. Origin is classified automatically from session tags and context at creation time; it is never set manually. The console uses the origin to display a badge on each session card and to power the origin filter on the session list.
+
+| Origin | Classified when |
+|--------|-----------------|
+| `wiki` | Session is tagged `wiki:job` (indexing run) or `wiki:qa` (Q&A query) |
+| `search` | Session is tagged `agentic_search` |
+| `channel` | Session carries a channel tag such as `nextcloud-talk:<thread_id>` |
+| `user` | Everything else: direct console, CLI, or API sessions |
+
+The **origin filter** on the session list lets you hide background sessions (wiki indexing jobs, search runs) and show only the surfaces you care about. By default the console shows `user` and `channel` sessions and hides `wiki` and `search` work. You can toggle any origin in or out independently.
+
+**Badge display.** Each session card shows a small origin badge (`wiki`, `search`, `channel`, or `user`) so you can tell at a glance which surface created the session. Channel sessions additionally surface the room or thread name where space allows.
+
 ## Design goals
 - Keep the core orchestration engine centralized.
 - Make interface layers thin and easy to extend.

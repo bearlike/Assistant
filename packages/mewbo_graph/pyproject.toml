@@ -21,9 +21,19 @@ dependencies = [
 # Tree-sitter code-graph extraction (the `code` graph + KG view). Absent →
 # graph build is skipped and retrieval degrades to BM25-only, never a crash
 # (import-guarded at the call site).
+#
+# Pins track the API the code actually uses, not just "something installable":
+#   * tree-sitter >=0.25 — graph.py uses ``QueryCursor`` (0.25+).
+#   * tree-sitter-language-pack >=1.8,<2 — the 1.x line is a Rust-native rewrite
+#     that fetches parsers at runtime and exposes ``cache_dir()``/``download()``
+#     (graph.py:_load_ts_language depends on both). The old ``>=0.3`` floor was
+#     unbounded: a rebuild silently jumped 0.x (bundled parser wheels, no
+#     network) to 1.x (runtime GitHub download), which is what introduced the
+#     "Download error: ... 504" indexing failure. Cap below 2.0 so the next
+#     major can't repeat that behavioural break without an explicit bump.
 treesitter = [
-  "tree-sitter>=0.21",
-  "tree-sitter-language-pack>=0.3",
+  "tree-sitter>=0.25",
+  "tree-sitter-language-pack>=1.8,<2",
 ]
 # Hybrid dense+sparse retrieval. Embeddings ride litellm (already a
 # mewbo-core dependency) against the LiteLLM proxy — no extra embedding
@@ -31,6 +41,7 @@ treesitter = [
 retrieval = [
   "rank-bm25>=0.2.2",
   "numpy>=1.26",
+  "rapidfuzz>=3.0",
 ]
 # Everything the wiki + search products need at full strength.
 full = [

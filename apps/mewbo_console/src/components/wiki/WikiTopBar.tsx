@@ -4,7 +4,7 @@
  * card-shaped header instead.)
  *
  * Left: MewboWiki brand + repo slug + optional "Maintainer Edited" pill.
- * Right: optional Edit Wiki popover + Copy-link button.
+ * Right: optional Edit Wiki popover + Copy-badge popover + Copy-link button.
  *
  * Theme toggle lives in the main NavBar — not duplicated here.
  */
@@ -14,6 +14,7 @@ import { useLocation } from "wouter";
 import {
   ArrowLeft,
   BadgeCheck,
+  BadgePlus,
   Check,
   Copy,
   FileText,
@@ -29,10 +30,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { CopyButton } from "@/components/CopyButton";
+import { copyText } from "@/utils/clipboard";
 import { cn } from "@/lib/utils";
 
 import { BrandMark } from "./BrandMark";
 import { RepoLink } from "./RepoLink";
+import { WikiBadge } from "./badge";
 import { buildHref, type PlatformId } from "./router";
 
 interface WikiTopBarProps {
@@ -45,6 +49,10 @@ interface WikiTopBarProps {
   maintainerEdited?: boolean;
   showEditWiki?: boolean;
   showBackToAll?: boolean;
+  /** Page the README badge should link to — usually the repo's
+   *  ``landingPageId`` (falls back to the current page upstream). Absent
+   *  → the Copy-badge affordance is hidden (no resolvable wiki to badge). */
+  badgePageId?: string;
 }
 
 export function WikiTopBar({
@@ -54,6 +62,7 @@ export function WikiTopBar({
   maintainerEdited,
   showEditWiki,
   showBackToAll,
+  badgePageId,
 }: WikiTopBarProps) {
   const [, navigate] = useLocation();
   const [copied, setCopied] = useState(false);
@@ -65,27 +74,11 @@ export function WikiTopBar({
   }, [copied]);
 
   const onCopyLink = async () => {
-    const url = window.location.href;
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      // execCommand fallback for non-secure contexts
-      const ta = document.createElement("textarea");
-      ta.value = url;
-      ta.setAttribute("readonly", "");
-      ta.style.position = "absolute";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand("copy");
-      } catch {
-        // give up silently
-      }
-      document.body.removeChild(ta);
-    }
+    await copyText(window.location.href);
     setCopied(true);
   };
+
+  const badge = WikiBadge.forPage({ slug: repo, pageId: badgePageId, platform });
 
   return (
     <div className="border-b border-[hsl(var(--border))] bg-[hsl(var(--card))]/60 backdrop-blur-sm">
@@ -194,8 +187,67 @@ export function WikiTopBar({
             </Button>
           )}
 
+          {badge && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  leadingIcon={<BadgePlus className="h-3.5 w-3.5" />}
+                  aria-label="Copy README badge"
+                  title="Copy README badge"
+                >
+                  <span className="hidden sm:inline">Copy badge</span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="end"
+                sideOffset={6}
+                className="w-80 p-0 rounded-lg border-[hsl(var(--border-strong))] bg-[hsl(var(--card))]"
+              >
+                <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-[hsl(var(--border))]">
+                  <BadgePlus className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
+                  <span className="text-sm font-medium">Add the wiki badge</span>
+                </div>
+                <div className="px-3.5 py-3 space-y-3">
+                  <p className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed">
+                    Drop this into your README so visitors can browse — and ask
+                    questions about — your codebase.
+                  </p>
+                  {/* Live preview of the actual artwork; click-testable. */}
+                  <a
+                    href={badge.linkUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open the wiki page in a new tab"
+                    className="flex items-center justify-center rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 py-4 transition-colors hover:bg-[hsl(var(--muted))]/70"
+                  >
+                    <img src={WikiBadge.IMAGE_URL} alt={WikiBadge.ALT} className="h-6" />
+                  </a>
+                  {/* Copyable README snippet. */}
+                  <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40">
+                    <div className="flex items-center justify-between pl-2.5 pr-1 py-1 border-b border-[hsl(var(--border))]">
+                      <span className="text-[10px] uppercase tracking-wider font-medium text-[hsl(var(--muted-foreground))]">
+                        Markdown
+                      </span>
+                      <CopyButton
+                        text={badge.markdown}
+                        className="h-6 px-2 text-[11px]"
+                      >
+                        Copy
+                      </CopyButton>
+                    </div>
+                    <code className="block px-2.5 py-2 font-mono text-[11px] leading-relaxed text-[hsl(var(--foreground))] break-all select-all">
+                      {badge.markdown}
+                    </code>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
+
           <Button
-            variant={copied ? "primary" : "primary"}
+            variant="primary"
             size="sm"
             onClick={onCopyLink}
             aria-live="polite"

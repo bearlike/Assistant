@@ -1,3 +1,5 @@
+> ↑ [root /CLAUDE.md](../CLAUDE.md)
+
 # Tests - Project Guidance
 
 Scope: this file applies to the root `tests/` suite and shared test patterns.
@@ -28,6 +30,7 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 - Avoid pulling in real MCP servers or external HTTP.
 
 ## Pitfalls / gotchas
+- **Full-suite ordering failures = global-state leak.** A test that passes in isolation but fails under full-suite ordering has a leaked singleton (namespace, event loop, config). Route tests must NOT re-register a Flask-RESTX namespace on the shared backend app — `add_url_rule` after the app handled its first request raises (Flask setup frozen); rely on `backend.py`'s import-time wiring. Async unit tests use `asyncio.run` (fresh loop per call), never a shared `get_event_loop()` a prior test may have closed.
 - Over-mocking hides real behavior. Mock only the LLM call boundary and tool execution boundary.
 - Schema mismatches must be exercised (string tool_input, dict tool_input, invalid schema, required fields).
 - Missing-tool tests should assert `last_error` and follow the same path as production.

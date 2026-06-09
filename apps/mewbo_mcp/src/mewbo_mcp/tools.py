@@ -20,6 +20,7 @@ class.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -49,6 +50,76 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+async def bounded_poll(
+    fetch: Callable[[], Awaitable[Any]],
+    is_terminal: Callable[[Any], bool],
+    *,
+    timeout_s: float,
+    interval_s: float,
+) -> tuple[Any, bool]:
+    """Poll ``fetch`` until ``is_terminal`` or the deadline; return (last, terminal).
+
+    The one bounded-await every long-running tool shares — search, wiki ``ask``,
+    and ``structured_query`` — so a non-streaming caller gets the settled result
+    or a clean ``running`` partial instead of hanging. Fetches immediately, then
+    every ``interval_s`` until terminal or ``timeout_s`` elapses.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while True:
+        snapshot = await fetch()
+        if is_terminal(snapshot):
+            return snapshot, True
+        if asyncio.get_running_loop().time() >= deadline:
+            return snapshot, False
+        await asyncio.sleep(interval_s)
+
+
+# Long-running-tool budget invariant (#41): every inline poll budget
+# (``WikiTools``/``SearchTools``/``StructuredQueryTools`` ``timeout_s``) MUST be
+# strictly below the transport/proxy timeout (httpx read 30s, and the shorter
+# ``mcp.hurricane.home`` front-proxy ceiling). The budget is the tightest ceiling
+# so :func:`poll_or_handle` ALWAYS returns the resumable handle as
+# ``status:"running"`` before any layer cuts the connection — a raw
+# ``httpx.ReadTimeout`` mid-poll can never strand the caller without an id.
+PROXY_CEILING_S: float = 30.0
+
+
+async def poll_or_handle(
+    run_id: str | None,
+    fetch: Callable[[], Awaitable[Any]],
+    is_terminal: Callable[[Any], bool],
+    shape: Callable[[Any, bool], dict[str, Any]],
+    *,
+    timeout_s: float,
+    interval_s: float,
+) -> dict[str, Any]:
+    """Bounded-poll a started run; degrade to the resumable handle on timeout.
+
+    On budget OR transport timeout, return the resumable handle as
+    ``status:'running'`` instead of raising (#41). ``run_id`` is obtained before
+    polling, so a slow API / short proxy can't strand the caller.
+
+    Only a *transport-level* failure (``RestError.status_code is None`` — a
+    proxy/read timeout where the run's true state is unknown) degrades to the
+    running handle. A definitive server response (a 4xx/5xx with a status code,
+    e.g. a 422 "model did not emit") is re-raised so the ``_enveloped`` decorator
+    surfaces the real reason — masking it as ``running`` would make the caller
+    poll a terminally-failed run forever.
+    """
+    if not run_id:
+        snapshot = await fetch()
+        return shape(snapshot, is_terminal(snapshot))
+    try:
+        snapshot, terminal = await bounded_poll(
+            fetch, is_terminal, timeout_s=timeout_s, interval_s=interval_s
+        )
+        return shape(snapshot, terminal)
+    except RestError as exc:
+        if exc.status_code is not None:
+            raise
+        return shape({}, False)
+
+
 # ---------------------------------------------------------------------------
 # A + B. Sessions — create & control, discover & read (tiered)
 # ---------------------------------------------------------------------------
@@ -70,7 +141,18 @@ class SessionTools:
     # Truncation budget for user/assistant text in the ``turns`` tier so a long
     # conversation stays cheap for the consuming agent.
     TURN_TEXT_TRUNC: ClassVar[int] = 500
+    # ``full`` tier caps (#42): page the step list and bound each inlined field so
+    # a single fat turn can't blow the token cap. ``STEP_FIELD_TRUNC`` is a backstop
+    # — the API ``?truncate=1`` already trims oversized fields at the source; we
+    # keep the MCP cap ≥ the API cap so MCP only trims if the API didn't.
+    FULL_STEPS_PAGE: ClassVar[int] = 20
+    STEP_FIELD_TRUNC: ClassVar[int] = 4000
     LEVELS: ClassVar[frozenset[str]] = frozenset({"overview", "turns", "steps", "full"})
+    # Mirrors core's ``tool_use_loop._NO_CONTENT_PLACEHOLDER`` (duplicated, never
+    # imported — same HTTP/process boundary rule as ``SearchTools``). A pure
+    # tool-call turn's content is sanitized to this upstream; we render such a
+    # turn from its steps instead of surfacing the sentinel.
+    NO_CONTENT_SENTINEL: ClassVar[str] = "(no content)"
 
     # -- create & control -------------------------------------------------
 
@@ -85,27 +167,29 @@ class SessionTools:
         integrations: list[str] | None = None,
         mode: str | None = None,
         title: str | None = None,
-        tags: list[str] | None = None,
+        tag: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Create a session, optionally provisioning a worktree, then run *prompt*.
 
         Default behavior auto-provisions a fresh worktree+branch off the base in
-        the target project (``repo``/``project``). When ``branch`` or
-        ``worktree`` is supplied, the existing one is targeted instead.
-        ``integrations`` maps to the session's ``context.mcp_tools`` allowlist.
+        the target project — ``repo``/``project`` is a registered project name OR
+        its git identity (``host/owner/repo`` / ``owner/repo``; see
+        ``list_projects``). When ``branch`` or ``worktree`` is supplied, the
+        existing one is targeted instead. ``integrations`` maps to the session's
+        ``context.mcp_tools`` allowlist.
 
-        ``tags``: the API supports a SINGLE ``session_tag`` per session, so at
-        most one tag may be given. Passing more than one raises ``ValueError``
-        rather than silently dropping the rest.
+        ``tag`` is a single optional session tag (the API stores ONE
+        ``session_tag``). ``idempotency_key`` tags the session so a client retry
+        is identifiable/reapable (used as the tag when no explicit ``tag`` given).
+
+        Returns ``{session_id, status, title?}`` — the minimal shape. Worktree
+        lifecycle is system-owned; the API's ``on_session_end`` hook is the sole
+        authoritative reaper, so worktree ids are not surfaced here (Fix 2).
 
         Wires: ``POST /api/v_projects/<id>/worktrees`` (create-from-base) →
         ``POST /api/sessions`` → ``POST /api/sessions/<id>/query``.
         """
-        if tags and len(tags) > 1:
-            raise ValueError(
-                "create accepts at most one tag (the API stores a single "
-                f"session_tag); got {len(tags)}."
-            )
         target_project = repo or project
         project_ref: str | None = None
 
@@ -113,16 +197,13 @@ class SessionTools:
             if worktree:
                 # Caller pinned an existing managed worktree by its project id.
                 project_ref = f"managed:{worktree}"
-            elif branch:
-                # Target an existing branch — create (idempotent) a worktree for it.
-                wt = await self._provision_worktree(target_project, branch, base=None)
-                project_ref = f"managed:{wt['project_id']}"
             else:
-                # Default: fresh worktree+branch off the repo's current base.
-                base = await self._current_branch(target_project)
-                new_branch = self._auto_branch_name(title or prompt)
+                # ``branch`` set → target it; else a fresh worktree off the base.
+                base = None if branch else await self._current_branch(target_project)
+                new_branch = branch or self._auto_branch_name(title or prompt)
                 wt = await self._provision_worktree(target_project, new_branch, base=base)
-                project_ref = f"managed:{wt['project_id']}"
+                worktree_project_id = str(wt["project_id"])
+                project_ref = f"managed:{worktree_project_id}"
 
         context: dict[str, Any] = {}
         if integrations:
@@ -133,9 +214,10 @@ class SessionTools:
             session_body["project"] = project_ref
         if context:
             session_body["context"] = context
-        # ``POST /api/sessions`` accepts a single ``session_tag`` (>1 rejected above).
-        if tags:
-            session_body["session_tag"] = tags[0]
+        # ``POST /api/sessions`` accepts a single ``session_tag``.
+        session_tag = tag or idempotency_key
+        if session_tag:
+            session_body["session_tag"] = session_tag
 
         created = await self.client.post("/api/sessions", json=session_body)
         session_id = _as_dict(created).get("session_id")
@@ -161,20 +243,30 @@ class SessionTools:
         return {"session_id": session_id, "status": "running"}
 
     async def send_followup(self, *, session_id: str, message: str) -> dict[str, Any]:
-        """Send a steering message to a running session.
+        """Send a steering message to a session, re-engaging it if idle.
 
-        Wires ``POST /api/sessions/<id>/message``.
+        Wires ``POST /api/sessions/<id>/message``. The API queues the message
+        into a running session, or starts a fresh run when the session is idle
+        or finished (only a terminated session rejects). Surfaces the new
+        ``run_id`` when a run was (re)started so the caller can poll it.
         """
-        result = await self.client.post(
-            f"/api/sessions/{session_id}/message", json={"text": message}
+        result = _as_dict(
+            await self.client.post(f"/api/sessions/{session_id}/message", json={"text": message})
         )
-        enqueued = bool(_as_dict(result).get("enqueued"))
-        return {"session_id": session_id, "status": "enqueued" if enqueued else "unknown"}
+        enqueued = bool(result.get("enqueued"))
+        out: dict[str, Any] = {
+            "session_id": session_id,
+            "status": "enqueued" if enqueued else "unknown",
+        }
+        if result.get("run_id"):
+            out["run_id"] = result["run_id"]
+        return out
 
     async def interrupt(self, *, session_id: str) -> dict[str, Any]:
-        """Interrupt the current step of a running session.
+        """Interrupt the current step of a session (graceful no-op when idle).
 
-        Wires ``POST /api/sessions/<id>/interrupt``.
+        Wires ``POST /api/sessions/<id>/interrupt``; an idle session is a 200
+        no-op (``interrupted: false``), never an error.
         """
         result = await self.client.post(f"/api/sessions/{session_id}/interrupt")
         ok = bool(_as_dict(result).get("interrupted"))
@@ -188,31 +280,22 @@ class SessionTools:
         project: str | None = None,
         status: str | None = None,
         since: str | None = None,
+        limit: int = 20,
     ) -> dict[str, Any]:
-        """List sessions, applying client-side filters the API does not.
+        """List sessions (newest-first, capped), projected compact.
 
-        Wires ``GET /api/sessions``. The API returns summaries with ``status``,
-        ``created_at``, and ``context``; we filter by ``project``/``status``/
-        ``since`` locally. (No tag filter — the list endpoint does not return
-        per-session tags.)
+        Wires ``GET /api/sessions``, filters by ``project``/``status``/``since``
+        locally, returns at most ``limit`` rows (default 20, newest-first) so the
+        default response stays small. Each row is projected to
+        ``{session_id, title, project, status, done_reason, created_at, origin?,
+        archived?}`` — dropping the redundant ``running`` flag and the verbose raw
+        ``context`` while SURFACING the ``project`` the filter matches on.
 
-        ``project`` matches the *underlying repo name*. This is intentionally
-        robust to worktree sessions: when :meth:`create` auto-provisions a
-        worktree, the API stores ``context.project`` as ``managed:<worktree_id>``
-        and ``context.repo`` as the parent repo name. So a session matches when
-        ``project`` equals ``context.repo`` OR ``context.project`` (the latter
-        for plain config-project sessions, with any ``managed:`` prefix stripped).
+        ``project`` matches the underlying repo name/identity: a session matches
+        when ``project`` equals ``context.repo`` OR ``context.project`` (any
+        ``managed:`` prefix stripped — see :meth:`_row_project`).
         """
         sessions = _dict_list(await self.client.get("/api/sessions"), "sessions")
-
-        def _project_matches(ctx: dict[str, Any]) -> bool:
-            # ``repo`` is the parent repo name for worktree sessions; ``project``
-            # is the raw ref (a plain name for config projects, ``managed:<id>``
-            # for managed/worktree ones). Match either, stripping the prefix.
-            repo = str(ctx.get("repo") or "")
-            proj = str(ctx.get("project") or "")
-            proj_bare = proj[len("managed:") :] if proj.startswith("managed:") else proj
-            return project in {repo, proj, proj_bare}
 
         def _keep(s: dict[str, Any]) -> bool:
             if status and str(s.get("status")) != status:
@@ -221,28 +304,66 @@ class SessionTools:
                 return False
             if project:
                 ctx = s.get("context")
-                if not isinstance(ctx, dict) or not _project_matches(ctx):
+                if not isinstance(ctx, dict):
+                    return False
+                repo = str(ctx.get("repo") or "")
+                proj = str(ctx.get("project") or "")
+                proj_bare = proj[len("managed:") :] if proj.startswith("managed:") else proj
+                if project not in {repo, proj, proj_bare}:
                     return False
             return True
 
-        return {"sessions": [s for s in sessions if _keep(s)]}
+        kept = [s for s in sessions if _keep(s)]
+        kept.sort(key=lambda s: str(s.get("created_at") or ""), reverse=True)
+        if isinstance(limit, int) and limit > 0:
+            kept = kept[:limit]
+        return {"sessions": [self._shape_session(s) for s in kept], "count": len(kept)}
+
+    @staticmethod
+    def _row_project(s: dict[str, Any]) -> str | None:
+        """The session's project identity from its context (repo or bare project)."""
+        ctx = s.get("context")
+        if not isinstance(ctx, dict):
+            return None
+        repo = str(ctx.get("repo") or "")
+        proj = str(ctx.get("project") or "")
+        proj_bare = proj[len("managed:") :] if proj.startswith("managed:") else proj
+        return repo or proj_bare or None
+
+    @classmethod
+    def _shape_session(cls, s: dict[str, Any]) -> dict[str, Any]:
+        """Compact projection of one ``GET /api/sessions`` summary row."""
+        out: dict[str, Any] = {
+            "session_id": s.get("session_id"),
+            "title": s.get("title"),
+            "project": cls._row_project(s),
+            "status": s.get("status"),
+            "done_reason": s.get("done_reason"),
+            "created_at": s.get("created_at"),
+        }
+        for key in ("origin", "archived"):
+            if s.get(key) is not None:
+                out[key] = s.get(key)
+        return out
 
     async def history(
-        self, *, session_id: str, level: str, turn: int | None = None
+        self, *, session_id: str, level: str, turn: int | None = None, step_offset: int = 0
     ) -> dict[str, Any]:
         """Tiered read of a session's history.
 
         ``level`` is one of ``overview`` | ``turns`` | ``steps`` | ``full``. The
         ``steps`` and ``full`` tiers require ``turn`` (1-based). The consuming
-        agent picks the tier so it controls its own context spend.
+        agent picks the tier so it controls its own context spend. The ``full``
+        tier pages its steps (``FULL_STEPS_PAGE`` per call from ``step_offset``)
+        so a fat turn can't blow the token cap (#42).
         """
         if level not in self.LEVELS:
             raise ValueError(f"Invalid level '{level}'. Use overview|turns|steps|full.")
 
-        turns, running = await self._load_turns(session_id)
+        turns, meta = await self._load_turns(session_id)
 
         if level == "overview":
-            return self._overview(session_id, turns, running)
+            return self._overview(session_id, turns, meta)
         if level == "turns":
             return {"session_id": session_id, "turns": [self._turn_summary(t) for t in turns]}
 
@@ -259,24 +380,37 @@ class SessionTools:
                 "turn": selected.index,
                 "steps": [self._step_summary(e) for e in selected.steps],
             }
-        # full
-        agents = await self._safe_agent_tree(session_id)
-        return {
+        # full — references the sub-agent tree rather than inlining it (it is a
+        # duplicate of ``get_agent_tree`` and the heaviest payload otherwise).
+        # Page the (potentially huge) step list so one fat turn stays bounded.
+        all_steps = selected.steps
+        offset = max(step_offset, 0)
+        page = all_steps[offset : offset + self.FULL_STEPS_PAGE]
+        out: dict[str, Any] = {
             "session_id": session_id,
             "turn": selected.index,
             "user_text": selected.user_text,
-            "assistant_text": selected.assistant_text,
+            "assistant_text": self._clean_summary(selected),
             "done_reason": selected.done_reason,
-            "steps": [self._step_full(e) for e in selected.steps],
-            "agents": agents,
+            "steps": [self._step_full(e) for e in page],
+            "step_count": len(all_steps),
+            "step_offset": offset,
+            "agents": "call get_agent_tree(session_id) for the sub-agent tree",
         }
+        if offset + self.FULL_STEPS_PAGE < len(all_steps):
+            out["next_step_offset"] = offset + self.FULL_STEPS_PAGE
+        return out
 
     async def agent_tree(self, *, session_id: str) -> dict[str, Any]:
         """Return the sub-agent tree with lifecycle state.
 
-        Wires ``GET /api/sessions/<id>/agents``.
+        Wires ``GET /api/sessions/<id>/agents``. During the post-create spin-up
+        window the API may be briefly unreachable; rather than leak a raw
+        transport error we return ``{"status": "initializing"}`` so a caller can
+        retry — the same guard :meth:`_safe_agent_tree` gives the ``full`` tier.
         """
-        return _as_dict(await self.client.get(f"/api/sessions/{session_id}/agents"))
+        tree = await self._safe_agent_tree(session_id)
+        return tree if tree is not None else {"status": "initializing"}
 
     # -- internals: behavior over the atomic state ------------------------
 
@@ -309,11 +443,25 @@ class SessionTools:
             raise RestError("Worktree creation did not return a project_id.")
         return wt
 
-    async def _load_turns(self, session_id: str) -> tuple[list[Turn], bool]:
-        """Fetch a session's events and reconstruct turns. Returns (turns, running)."""
-        payload = _as_dict(await self.client.get(f"/api/sessions/{session_id}/events"))
+    async def _load_turns(self, session_id: str) -> tuple[list[Turn], dict[str, Any]]:
+        """Fetch a session's events and reconstruct turns.
+
+        Returns ``(turns, meta)`` where ``meta`` is the raw ``/events`` payload —
+        it carries the API's authoritative ``status``/``done_reason``/``title``/
+        ``running`` so the overview never has to reconstruct them from the
+        timeline tail (the old source of the ``status: null`` / title bugs).
+
+        ``?truncate=1`` opts into the API's field-capping so oversized
+        ``result``/``tool_input`` fields are trimmed at the source for every tier
+        (only ``full`` inlines them) — the first half of the #42 token-cap fix.
+        """
+        payload = _as_dict(
+            await self.client.get(
+                f"/api/sessions/{session_id}/events", params={"truncate": "1"}
+            )
+        )
         events = _dict_list(payload, "events")
-        return build_timeline(events), bool(payload.get("running"))
+        return build_timeline(events), payload
 
     async def _safe_agent_tree(self, session_id: str) -> dict[str, Any] | None:
         """Fetch the agent tree, returning ``None`` if the call fails."""
@@ -339,8 +487,10 @@ class SessionTools:
                 return t
         return None
 
-    @staticmethod
-    def _overview(session_id: str, turns: list[Turn], running: bool) -> dict[str, Any]:
+    @classmethod
+    def _overview(
+        cls, session_id: str, turns: list[Turn], meta: dict[str, Any]
+    ) -> dict[str, Any]:
         """Build the cheapest tier: counts + token totals, no per-turn detail."""
         first = turns[0] if turns else None
         last = turns[-1] if turns else None
@@ -353,20 +503,45 @@ class SessionTools:
                 continue
             total_input += usage.input_tokens + usage.sub_input_tokens
             total_output += usage.output_tokens + usage.sub_output_tokens
-        # Title is derived from the FIRST user message so it stays stable as the
-        # conversation grows; the summary tracks the latest assistant reply.
-        title = first.user_text[:120] if first else ""
+        running = bool(meta.get("running"))
+        # Prefer the API's authoritative status/title/done_reason; reconstruct
+        # from the timeline only when the events payload omits them.
+        status = meta.get("status") or (
+            "running" if running else (last.done_reason if last else None)
+        )
+        title = meta.get("title") or (first.user_text[:120] if first else "")
         return {
             "session_id": session_id,
             "title": title,
-            "summary": last.assistant_text if last else "",
-            "status": "running" if running else (last.done_reason if last else None),
+            "summary": cls._clean_summary(last) if last else "",
+            "status": status,
+            "done_reason": meta.get("done_reason") or (last.done_reason if last else None),
             "running": running,
             "turn_count": len(turns),
             "step_count": total_steps,
             "total_input_tokens": total_input,
             "total_output_tokens": total_output,
         }
+
+    @classmethod
+    def _clean_summary(cls, turn: Turn) -> str:
+        """Readable assistant text for *turn*, robust to tool-call-only turns.
+
+        A pure tool-call turn has its content sanitized upstream to the
+        ``(no content)`` placeholder; rather than surface that sentinel (or any
+        serialized/text-leaked tool call trailing it) we render the turn from its
+        tool steps. Keyed on OUR placeholder, NEVER on a model's text-leak format
+        — that leak is a response-normalization concern, not a display one.
+        """
+        text = turn.assistant_text or ""
+        if not text.startswith(cls.NO_CONTENT_SENTINEL):
+            return text
+        tools = [
+            tid
+            for tid in (cls._event_payload(e).get("tool_id") for e in turn.steps)
+            if isinstance(tid, str) and tid
+        ]
+        return "→ called " + ", ".join(dict.fromkeys(tools)) if tools else ""
 
     @classmethod
     def _truncate(cls, text: str) -> str:
@@ -381,7 +556,7 @@ class SessionTools:
         return {
             "index": turn.index,
             "user_text": cls._truncate(turn.user_text),
-            "assistant_text": cls._truncate(turn.assistant_text),
+            "assistant_text": cls._truncate(cls._clean_summary(turn)),
             "done_reason": turn.done_reason,
             "step_count": turn.step_count,
             "tokens": usage.to_dict() if usage else None,
@@ -407,13 +582,17 @@ class SessionTools:
 
     @classmethod
     def _step_full(cls, event: dict[str, Any]) -> dict[str, Any]:
-        """Full per-step log: inputs, result, and error for the ``full`` tier."""
+        """Full per-step log: inputs, result, and error for the ``full`` tier.
+
+        ``tool_input``/``result`` are capped to :attr:`STEP_FIELD_TRUNC` as a
+        backstop in case the API's ``?truncate=1`` didn't trim them (#42).
+        """
         payload = cls._event_payload(event)
         return {
             "tool_id": payload.get("tool_id"),
             "operation": payload.get("operation"),
-            "tool_input": payload.get("tool_input"),
-            "result": payload.get("result"),
+            "tool_input": cls._cap_field(payload.get("tool_input")),
+            "result": cls._cap_field(payload.get("result")),
             "success": payload.get("success"),
             "summary": payload.get("summary"),
             "error": payload.get("error"),
@@ -421,6 +600,31 @@ class SessionTools:
             "model": payload.get("model"),
             "ts": event.get("ts"),
         }
+
+    @classmethod
+    def _cap_field(cls, value: Any) -> Any:
+        """Cap a step's ``tool_input``/``result`` to :attr:`STEP_FIELD_TRUNC`.
+
+        A dict/list is JSON-stringified before measuring so an oversized nested
+        payload is trimmed too; an over-budget value becomes a string with a
+        ``…(truncated, N chars)`` marker. Small / non-string values pass through.
+        """
+        import json
+
+        if value is None:
+            return value
+        if isinstance(value, str):
+            text = value
+        elif isinstance(value, (dict, list)):
+            text = json.dumps(value, default=str)
+            if len(text) <= cls.STEP_FIELD_TRUNC:
+                return value  # within budget — keep the structured value as-is
+        else:
+            return value
+        if len(text) <= cls.STEP_FIELD_TRUNC:
+            return text if isinstance(value, str) else value
+        full_len = len(text)
+        return f"{text[: cls.STEP_FIELD_TRUNC]}…(truncated, {full_len} chars)"
 
 
 # ---------------------------------------------------------------------------
@@ -440,24 +644,95 @@ class WikiTools:
 
     client: RestClient
     # How long ``ask`` polls before returning a partial "still running" answer
-    # rather than hanging (bounded per the design spec, §8 risks).
-    timeout_s: float = 90.0
+    # rather than hanging. Kept strictly under :data:`PROXY_CEILING_S` (#41) so
+    # the tool always returns the resumable ``answer_id`` before any transport/
+    # proxy timeout can strand the caller.
+    timeout_s: float = 25.0
     poll_interval_s: float = 1.5
+    # Terminal QA snapshot statuses (the snapshot's ``status`` starts "running").
+    TERMINAL_QA: ClassVar[frozenset[str]] = frozenset({"complete", "cancelled", "error"})
 
     # -- behaviors --------------------------------------------------------
+
+    @staticmethod
+    def _data(el: dict[str, Any]) -> dict[str, Any]:
+        """Cytoscape element payload — fields live under ``data`` (API wire shape).
+
+        Falls back to the element itself so a flat/legacy node still resolves.
+        """
+        inner = el.get("data")
+        return inner if isinstance(inner, dict) else el
 
     async def list_projects(self) -> list[Any]:
         """List indexed wiki projects. Wires ``GET /v1/wiki/projects``."""
         result = await self.client.get("/v1/wiki/projects")
         return result if isinstance(result, list) else []
 
-    async def read_structure(self, *, project: str) -> dict[str, Any]:
-        """Return a wiki project's page list and knowledge graph.
+    async def read_structure(
+        self,
+        *,
+        project: str,
+        detail: str = "stats",
+        layer: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Return a wiki project's structure at a chosen detail tier.
 
-        Wires ``GET /v1/wiki/projects/<slug>/graph`` (nodes/edges) — the graph's
-        nodes double as the project's structure for navigation.
+        Wires ``GET /v1/wiki/projects/<slug>/graph``. The full multiplex graph
+        can be hundreds of KB, so the DEFAULT tier is the compact ``stats`` block
+        — a caller opts into more:
+        - ``stats`` (default) — counts only (node/edge/kind/per-layer).
+        - ``nodes`` — ``stats`` + the node list (optionally one ``layer``, capped
+          by ``limit``).
+        - ``full`` — ``nodes`` + the edges among the returned nodes.
         """
-        return _as_dict(await self.client.get(f"/v1/wiki/projects/{project}/graph"))
+        if detail not in {"stats", "nodes", "full"}:
+            raise ValueError(f"Invalid detail '{detail}'. Use stats|nodes|full.")
+        graph = _as_dict(await self.client.get(f"/v1/wiki/projects/{project}/graph"))
+        return self._project_structure(graph, detail, layer, limit)
+
+    @classmethod
+    def _project_structure(
+        cls, graph: dict[str, Any], detail: str, layer: str | None, limit: int | None
+    ) -> dict[str, Any]:
+        """Project a raw KG into a ``stats`` / ``nodes`` / ``full`` tier."""
+        nodes = [n for n in _as_list(graph.get("nodes")) if isinstance(n, dict)]
+        edges = [e for e in _as_list(graph.get("edges")) if isinstance(e, dict)]
+        stats = graph.get("stats")
+        out: dict[str, Any] = {
+            "project": graph.get("project") or graph.get("slug"),
+            "stats": stats if isinstance(stats, dict) else cls._derive_stats(nodes, edges),
+        }
+        if detail == "stats":
+            return out
+        if layer:
+            # Nodes are Cytoscape-shaped — ``layer`` lives under ``data`` (#63).
+            nodes = [n for n in nodes if cls._data(n).get("layer") == layer]
+        if isinstance(limit, int) and limit > 0:
+            nodes = nodes[:limit]
+        out["nodes"] = nodes
+        out["node_count"] = len(nodes)
+        if detail == "full":
+            keep = {cls._data(n).get("id") for n in nodes}
+            out["edges"] = [
+                e
+                for e in edges
+                if cls._data(e).get("source", cls._data(e).get("from")) in keep
+                or cls._data(e).get("target", cls._data(e).get("to")) in keep
+            ]
+            out["edge_count"] = len(out["edges"])
+        return out
+
+    @classmethod
+    def _derive_stats(
+        cls, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Compact counts when the graph carries no ``stats`` block."""
+        per_layer: dict[str, int] = {}
+        for node in nodes:
+            key = str(cls._data(node).get("layer") or "unknown")
+            per_layer[key] = per_layer.get(key, 0) + 1
+        return {"nodeCount": len(nodes), "edgeCount": len(edges), "perLayer": per_layer}
 
     async def read_page(self, *, project: str, page_id: str) -> dict[str, Any]:
         """Return a single wiki page (markdown body, nav, toc).
@@ -505,24 +780,19 @@ class WikiTools:
     async def ask(
         self, *, project: str, question: str, model: str | None = None
     ) -> dict[str, Any]:
-        """Ask the wiki a question and return the rendered answer once ready.
+        """Ask the wiki a question and return the rendered answer once settled.
 
-        ``POST /v1/wiki/qa`` is an SSE-only endpoint: it streams events for the
-        whole run and never returns a JSON body. We therefore *stream* the POST,
-        read frames only until the first ``meta`` event (emitted synchronously at
-        start) to recover the ``answerId``, then disconnect and poll
-        ``GET /v1/wiki/qa/<answer_id>`` until the answer snapshot has rendered
-        blocks (or :attr:`timeout_s` elapses). On timeout we return the partial
-        answer with ``status: "running"`` rather than hanging (design spec §8).
+        ``POST /v1/wiki/qa`` is SSE-only: we stream it only until the first
+        ``meta`` event (emitted synchronously at start) to recover the
+        ``answerId``, then bounded-poll ``GET /v1/wiki/qa/<id>`` until the
+        snapshot is terminal — its ``status`` reaches a terminal value, or
+        (defensively, for snapshots without one) a ``sources`` accept-block is
+        present — or :attr:`timeout_s` elapses. A timeout returns the partial
+        with ``status: "running"`` AND a real ``answer_id``; call
+        :meth:`get_answer` (the ``get_wiki_answer`` tool) to resume it.
 
-        The snapshot's ``blocks`` are written incrementally and carry no terminal
-        flag, so we treat the answer as settled once ``blocks`` is non-empty AND
-        unchanged across two consecutive polls — a best-effort "rendering has
-        stopped" signal rather than a guaranteed completion.
-
-        ``model`` defaults to ``None``; when omitted the body carries no
-        ``model`` so the server picks its configured default QA model (an empty
-        string is rejected by the route with a 400).
+        ``model`` is optional — when omitted the body carries no ``model`` and the
+        server defaults it (an empty string is never sent).
         """
         body: dict[str, Any] = {"slug": project, "question": question}
         if model:
@@ -532,28 +802,61 @@ class WikiTools:
         if not answer_id:
             raise RestError("Wiki QA did not emit a meta event with an answer id.")
 
-        deadline = asyncio.get_running_loop().time() + self.timeout_s
-        snapshot: dict[str, Any] = {}
-        status = "running"
-        prev_blocks: list[Any] | None = None
-        while True:
-            snapshot = _as_dict(await self.client.get(f"/v1/wiki/qa/{answer_id}"))
-            blocks = snapshot.get("blocks")
-            blocks = blocks if isinstance(blocks, list) else []
-            if blocks and blocks == prev_blocks:
-                # Non-empty and unchanged since the last poll — rendering settled.
-                # (The snapshot fills in incrementally, so a single non-empty read
-                # can be a partial answer; requiring stability avoids returning it
-                # mislabelled as complete.)
-                status = "complete"
-                break
-            if asyncio.get_running_loop().time() >= deadline:
-                status = "running"
-                break
-            prev_blocks = blocks
-            await asyncio.sleep(self.poll_interval_s)
+        # ``answer_id`` is captured BEFORE polling, so a transport/proxy timeout
+        # mid-poll degrades to the resumable handle (#41), never strands.
+        return await poll_or_handle(
+            answer_id,
+            lambda: self._fetch_answer(answer_id),
+            self._is_answer_terminal,
+            lambda s, t: self._shape_answer(answer_id, s, t),
+            timeout_s=self.timeout_s,
+            interval_s=self.poll_interval_s,
+        )
 
-        answer, citations = self._render_qa_blocks(snapshot.get("blocks"))
+    async def get_answer(self, *, answer_id: str, detail: str = "answer") -> dict[str, Any]:
+        """Fetch a wiki answer by id — resume a timed-out :meth:`ask`, or replay.
+
+        Wires ``GET /v1/wiki/qa/<answer_id>``; the companion that consumes the
+        ``answer_id`` :meth:`ask` returns, mirroring ``get_search_run``. ``detail``
+        ``full`` also returns the raw ``blocks`` + ``models_used``.
+        """
+        snapshot = await self._fetch_answer(answer_id)
+        out = self._shape_answer(answer_id, snapshot, self._is_answer_terminal(snapshot))
+        if detail == "full":
+            out["blocks"] = snapshot.get("blocks")
+            out["models_used"] = snapshot.get("modelsUsed") or snapshot.get("models_used")
+        return out
+
+    async def _fetch_answer(self, answer_id: str) -> dict[str, Any]:
+        """Return the QA answer snapshot dict for ``answer_id``."""
+        return _as_dict(await self.client.get(f"/v1/wiki/qa/{answer_id}"))
+
+    @classmethod
+    def _is_answer_terminal(cls, snapshot: dict[str, Any]) -> bool:
+        """True once the snapshot has settled.
+
+        The snapshot ``status`` is AUTHORITATIVE when present — a ``running``
+        snapshot is never terminal even if a (premature) ``sources`` block is
+        already there (the exact truncation bug). Only when ``status`` is absent
+        (an older snapshot) do we fall back to the terminal ``sources`` accept-block.
+        """
+        status = snapshot.get("status")
+        if isinstance(status, str) and status:
+            return status in cls.TERMINAL_QA
+        return any(
+            isinstance(b, dict) and b.get("kind") == "sources"
+            for b in _as_list(snapshot.get("blocks"))
+        )
+
+    @classmethod
+    def _shape_answer(
+        cls, answer_id: str, snapshot: dict[str, Any], terminal: bool
+    ) -> dict[str, Any]:
+        """Render a QA snapshot into the MCP answer shape (answer + citations)."""
+        status = snapshot.get("status")
+        if not (isinstance(status, str) and status):
+            status = "complete" if terminal else "running"
+        answer, citations = cls._render_qa_blocks(snapshot.get("blocks"))
         return {
             "answer_id": answer_id,
             "answer": answer,
@@ -629,7 +932,19 @@ class WikiTools:
 
     @classmethod
     def _block_text(cls, block: dict[str, Any]) -> str:
-        """Best-effort plain text for a single answer block."""
+        """Best-effort Markdown rendering for a single answer block.
+
+        All real block kinds emit renderable text; unknown kinds return ``""``
+        (silent no-op, forward-compatible with schema additions).
+
+        Block shapes (reference: ``mewbo_graph.wiki.types``):
+        - ``p/h2/h3`` — ``{text: InlineNode}``
+        - ``ul`` — ``{items: list[InlineNode]}``
+        - ``accordion`` — ``{title: str, items: list[str]}``
+        - ``table`` — ``{head: list[str], rows: list[list[InlineNode]]}``
+        - ``diagram`` — ``{id: str}``
+        - ``hr`` — (no extra fields)
+        """
         kind = block.get("kind")
         if kind in ("p", "h2", "h3"):
             return cls._inline_text(block.get("text"))
@@ -641,17 +956,65 @@ class WikiTools:
             items = block.get("items")
             body = "\n".join(str(i) for i in items) if isinstance(items, list) else ""
             return f"{block.get('title', '')}\n{body}".strip()
+        if kind == "table":
+            return cls._render_table(block)
+        if kind == "diagram":
+            diagram_id = block.get("id", "")
+            return f"```mermaid\n%% diagram {diagram_id}\n```"
+        if kind == "hr":
+            return "---"
         return ""
 
     @classmethod
+    def _render_table(cls, block: dict[str, Any]) -> str:
+        """Render a ``table`` block as a Markdown table.
+
+        ``head`` is a list of plain-string column headers; ``rows`` is a list of
+        rows, each being a list of ``InlineNode`` values (coerced via
+        :meth:`_inline_text`).
+        """
+        head = block.get("head")
+        rows = block.get("rows")
+        if not isinstance(head, list) or not isinstance(rows, list):
+            return ""
+        header = "| " + " | ".join(str(h) for h in head) + " |"
+        separator = "| " + " | ".join("---" for _ in head) + " |"
+        data_rows = [
+            "| " + " | ".join(cls._inline_text(cell) for cell in row) + " |"
+            for row in rows
+            if isinstance(row, list)
+        ]
+        return "\n".join([header, separator] + data_rows)
+
+    @classmethod
     def _inline_text(cls, node: Any) -> str:
-        """Coerce an inline node (string, or rich-text dict/list) to plain text."""
+        """Coerce an inline node (string, or rich-text dict/list) to plain text.
+
+        Handles all ``InlineNode`` shapes from ``mewbo_graph.wiki.types``:
+        - ``str`` → returned as-is
+        - ``list[InlineNode]`` → concatenated
+        - ``{"text": InlineNode}`` → recurse on ``text`` (used by ``p`` / link)
+        - ``{"code": str}`` → `` `code` `` span
+        - ``{"link": str, "text": str}`` → ``[text](link)`` Markdown link
+        - ``{"kind": "src", "path": str, "lines"?: str}`` → ``path`` or ``path:lines``
+        """
         if isinstance(node, str):
             return node
         if isinstance(node, list):
             return "".join(cls._inline_text(n) for n in node)
         if isinstance(node, dict):
-            # Rich inline nodes carry their visible text under ``text``.
+            # Inline code span: {"code": "..."}
+            if "code" in node and isinstance(node["code"], str):
+                return f"`{node['code']}`"
+            # Hyperlink: {"link": "...", "text": "..."}
+            if "link" in node and "text" in node:
+                return f"[{cls._inline_text(node['text'])}]({node['link']})"
+            # Source reference: {"kind": "src", "path": "...", "lines"?: "..."}
+            if node.get("kind") == "src" and isinstance(node.get("path"), str):
+                path = node["path"]
+                lines = node.get("lines")
+                return f"{path}:{lines}" if isinstance(lines, str) and lines else path
+            # Generic rich inline node: carries visible text under "text".
             if isinstance(node.get("text"), (str, list)):
                 return cls._inline_text(node["text"])
         return ""
@@ -673,22 +1036,69 @@ class IntegrationTools:
 
     client: RestClient
 
-    async def discover(self, *, project: str | None = None) -> dict[str, Any]:
-        """Return available tools and installed plugins for capability discovery.
+    async def discover(
+        self,
+        *,
+        project: str | None = None,
+        kind: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        """Return available tools + installed plugins, compact, for discovery.
 
         Wires ``GET /api/tools`` (optionally scoped to ``project``) +
-        ``GET /api/plugins``.
+        ``GET /api/plugins``. Each tool is projected to ``{tool_id, name, kind?,
+        enabled?}`` — dropping the auto-generated ``"MCP tool X from Y"``
+        boilerplate description that carries zero signal — and each plugin to
+        ``{name, version?, enabled?}`` (dropping the long marketplace blurb).
+        ``kind``/``enabled`` filter the tool list.
         """
         params = {"project": project} if project else None
         tools_payload = await self.client.get("/api/tools", params=params)
         plugins_payload = await self.client.get("/api/plugins")
-        tools = tools_payload.get("tools") if isinstance(tools_payload, dict) else tools_payload
-        plugins = (
+        raw_tools = tools_payload.get("tools") if isinstance(tools_payload, dict) else tools_payload
+        raw_plugins = (
             plugins_payload.get("plugins")
             if isinstance(plugins_payload, dict)
             else plugins_payload
         )
-        return {"tools": tools or [], "plugins": plugins or []}
+        tools: list[dict[str, Any]] = []
+        for t in _as_list(raw_tools):
+            if not isinstance(t, dict):
+                continue
+            shaped = self._shape_tool(t)
+            if self._keep_tool(shaped, kind, enabled):
+                tools.append(shaped)
+        plugins = [self._shape_plugin(p) for p in _as_list(raw_plugins) if isinstance(p, dict)]
+        return {"tools": tools, "tool_count": len(tools), "plugins": plugins}
+
+    @staticmethod
+    def _shape_tool(t: dict[str, Any]) -> dict[str, Any]:
+        """Compact tool row — the only fields a caller needs to pick ``integrations``."""
+        tid = t.get("tool_id") or t.get("id") or t.get("name")
+        out: dict[str, Any] = {"tool_id": tid, "name": t.get("name") or tid}
+        if t.get("kind") is not None:
+            out["kind"] = t.get("kind")
+        if t.get("enabled") is not None:
+            out["enabled"] = bool(t.get("enabled"))
+        return out
+
+    @staticmethod
+    def _keep_tool(t: dict[str, Any], kind: str | None, enabled: bool | None) -> bool:
+        """Apply the optional ``kind`` / ``enabled`` filters."""
+        if kind and t.get("kind") != kind:
+            return False
+        if enabled is not None and bool(t.get("enabled", True)) != enabled:
+            return False
+        return True
+
+    @staticmethod
+    def _shape_plugin(p: dict[str, Any]) -> dict[str, Any]:
+        """Compact plugin row (drop the long marketplace description)."""
+        out: dict[str, Any] = {"name": p.get("name")}
+        for key in ("version", "enabled"):
+            if p.get(key) is not None:
+                out[key] = p.get(key)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -716,7 +1126,10 @@ class SearchTools:
     """
 
     client: RestClient
-    timeout_s: float = 120.0  # bounded await for an async run (see :meth:`search`)
+    # Bounded await for an async run (see :meth:`search`). Held strictly under
+    # :data:`PROXY_CEILING_S` (#41) so a slow run returns the resumable ``run_id``
+    # as ``status:"running"`` before any transport/proxy timeout strands it.
+    timeout_s: float = 25.0
     poll_interval_s: float = 1.5
 
     # Stateless shared config. ``TERMINAL_STATUSES`` mirrors the contract's
@@ -771,10 +1184,29 @@ class SearchTools:
         payload = _as_dict(created.get("run"))
         status = str(created.get("status") or payload.get("status") or "running")
         run_id = str(created.get("run_id") or payload.get("run_id") or "")
+        ws_name = ws.get("name")
 
-        if status not in self.TERMINAL_STATUSES and run_id:
-            payload, status = await self._await_run(run_id)
-        return self._shape_run(payload, status, ws.get("name"), detail)
+        # Fast path: the start response is already terminal — shape immediately.
+        if status in self.TERMINAL_STATUSES or not run_id:
+            return self._shape_run(payload, status, ws_name, detail)
+
+        # ``run_id`` captured below so even an EMPTY snapshot (transport timeout
+        # degraded to the handle, #41) still surfaces the resumable id + running.
+        def _shape(record: dict[str, Any], terminal: bool) -> dict[str, Any]:
+            rec = _as_dict(record)
+            rec_status = str(rec.get("status") or "running")
+            payload = _as_dict(rec.get("payload"))
+            payload.setdefault("run_id", run_id)
+            return self._shape_run(payload, rec_status, ws_name, detail)
+
+        return await poll_or_handle(
+            run_id,
+            lambda: self._load_record(run_id),
+            lambda rec: str(_as_dict(rec).get("status") or "running") in self.TERMINAL_STATUSES,
+            _shape,
+            timeout_s=self.timeout_s,
+            interval_s=self.poll_interval_s,
+        )
 
     async def get_run(self, *, run_id: str, detail: str = "answer") -> dict[str, Any]:
         """Fetch a prior run's snapshot (replay / deep-link; no re-run).
@@ -821,19 +1253,6 @@ class SearchTools:
         if not matches:
             raise ValueError(f"No workspace matches '{ref}'. Available: {names or 'none'}.")
         raise ValueError(f"Workspace name '{ref}' is ambiguous — use its id. Names: {names}.")
-
-    async def _await_run(self, run_id: str) -> tuple[dict[str, Any], str]:
-        """Poll the snapshot until terminal or :attr:`timeout_s`; return (payload, status)."""
-        deadline = asyncio.get_running_loop().time() + self.timeout_s
-        record = await self._load_record(run_id)
-        status = str(record.get("status") or "running")
-        while status not in self.TERMINAL_STATUSES:
-            if asyncio.get_running_loop().time() >= deadline:
-                break
-            await asyncio.sleep(self.poll_interval_s)
-            record = await self._load_record(run_id)
-            status = str(record.get("status") or "running")
-        return _as_dict(record.get("payload")), status
 
     @staticmethod
     def _shape_workspace(ws: dict[str, Any]) -> dict[str, Any]:
@@ -923,9 +1342,151 @@ class SearchTools:
         return out
 
 
+# ---------------------------------------------------------------------------
+# F. Structured query — schema-constrained, tool-using synthesis
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredQueryTools:
+    """Schema-constrained structured-response surface over the REST API.
+
+    Holds the injected :attr:`client` and the bounded-await config. Wires the
+    async ``POST /v1/structured`` + ``GET /v1/structured/<run_id>`` run-handle:
+    the server runs an agentic session that may call grounding tools, then emits
+    a JSON-Schema-validated object — and we await it the same kick-off-then-poll
+    way as ``search`` (with a ``get_structured_run`` companion).
+    """
+
+    client: RestClient
+    # Held strictly under :data:`PROXY_CEILING_S` (#41) so a slow run returns the
+    # resumable ``run_id`` as ``status:"running"`` before any transport/proxy
+    # timeout strands the caller.
+    timeout_s: float = 25.0
+    poll_interval_s: float = 2.0
+    TERMINAL: ClassVar[frozenset[str]] = frozenset({"completed", "failed", "cancelled"})
+
+    async def query(
+        self,
+        *,
+        query: str,
+        schema: dict[str, Any],
+        workspace: str | None = None,
+        tools: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Run a schema-constrained synthesis and await the validated object.
+
+        Wires ``POST /v1/structured`` (async run-handle). If the run settles fast
+        the object comes straight back; otherwise we bounded-poll
+        ``GET /v1/structured/<run_id>`` until terminal or :attr:`timeout_s`,
+        returning ``status: "running"`` + the ``run_id`` so the caller can resume
+        via :meth:`get_run` (``get_structured_run``). Mirrors ``search`` +
+        ``get_search_run``.
+        """
+        body: dict[str, Any] = {"query": query, "schema": schema}
+        if workspace:
+            body["workspace"] = workspace
+        if tools:
+            body["tools"] = tools
+        created = _as_dict(await self.client.post("/v1/structured", json=body))
+        run_id = str(created.get("run_id") or "")
+        # Fast path: the start response already settled — shape immediately.
+        if self._is_settled(created) or not run_id:
+            return self._shape(created, run_id)
+        # ``run_id`` captured before polling, so a transport/proxy timeout
+        # mid-poll degrades to the resumable handle (#41), never strands.
+        return await poll_or_handle(
+            run_id,
+            lambda: self._fetch_run(run_id),
+            self._is_settled,
+            lambda s, t: self._shape(s, run_id),
+            timeout_s=self.timeout_s,
+            interval_s=self.poll_interval_s,
+        )
+
+    async def get_run(self, *, run_id: str) -> dict[str, Any]:
+        """Fetch a structured run by id — resume a ``running`` query, or replay.
+
+        Wires ``GET /v1/structured/<run_id>``.
+        """
+        return self._shape(await self._fetch_run(run_id), run_id)
+
+    async def _fetch_run(self, run_id: str) -> dict[str, Any]:
+        """Return the structured run snapshot dict for ``run_id``."""
+        return _as_dict(await self.client.get(f"/v1/structured/{run_id}"))
+
+    @classmethod
+    def _is_settled(cls, snapshot: Any) -> bool:
+        """Terminal when the object is present, an error is set, or status terminal."""
+        d = _as_dict(snapshot)
+        if d.get("output") is not None or d.get("error") is not None:
+            return True
+        return str(d.get("status") or "running") in cls.TERMINAL
+
+    @staticmethod
+    def _shape(snapshot: Any, run_id: str) -> dict[str, Any]:
+        """Project a structured run snapshot into the MCP result."""
+        d = _as_dict(snapshot)
+        status = str(
+            d.get("status") or ("completed" if d.get("output") is not None else "running")
+        )
+        out: dict[str, Any] = {"run_id": d.get("run_id") or run_id or None, "status": status}
+        for key in ("output", "workspace", "error"):
+            if d.get(key) is not None:
+                out[key] = d.get(key)
+        return out
+
+
+# ---------------------------------------------------------------------------
+# G. Projects — discovery
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectTools:
+    """Project-discovery surface — one atomic unit.
+
+    Wraps ``GET /api/projects`` so a caller can discover the registered project
+    names + git identities to pass to :meth:`SessionTools.create` (closing the
+    "undiscoverable project ids" gap).
+    """
+
+    client: RestClient
+
+    async def list_projects(self) -> dict[str, Any]:
+        """List registered projects (config + managed worktrees), compact.
+
+        Each row carries the resolvable identifiers — ``name`` and, for managed
+        worktrees, ``project_id`` — plus the canonical git ``repo: {host, owner,
+        name}`` and ``aliases`` so ANY of them resolves in ``create_session``.
+        """
+        payload = await self.client.get("/api/projects")
+        raw = payload.get("projects") if isinstance(payload, dict) else payload
+        return {"projects": [self._shape(p) for p in _as_list(raw) if isinstance(p, dict)]}
+
+    @staticmethod
+    def _shape(p: dict[str, Any]) -> dict[str, Any]:
+        """Keep only the discovery-relevant, resolvable fields of a project row."""
+        out: dict[str, Any] = {"name": p.get("name"), "source": p.get("source")}
+        for key in (
+            "project_id",
+            "repo",
+            "aliases",
+            "is_worktree",
+            "branch",
+            "available",
+            "parent_project_id",
+        ):
+            if p.get(key) is not None:
+                out[key] = p.get(key)
+        return out
+
+
 __all__ = [
     "IntegrationTools",
+    "ProjectTools",
     "SearchTools",
     "SessionTools",
+    "StructuredQueryTools",
     "WikiTools",
 ]

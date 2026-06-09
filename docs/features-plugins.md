@@ -113,7 +113,7 @@ Open the **Plugins** view from the left-hand navigation. The view shows all inst
 
 ## Configuration
 
-Plugin system settings live under `plugins` in [`configs/app.json`](configuration.md#pluginsconfig).
+Plugin system settings live under `plugins` in [`configs/app.json`](configuration.md#plugins).
 
 | Key | Type | Default | Description |
 |---|---|---|---|

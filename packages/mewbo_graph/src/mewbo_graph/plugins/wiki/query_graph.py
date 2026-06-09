@@ -80,6 +80,7 @@ class WikiQueryGraphTool(WikiSessionTool):
             # sees in source / page references.
             nodes = [n for n in nodes if fnmatch.fnmatch(n.file or "", args.file_glob)]
         nodes = nodes[:args.limit]
+        self._record_qa_access(ctx, [f"graph:{n.node_id}" for n in nodes])
         return MockSpeaker(content=str({
             "count": len(nodes),
             "nodes": [n.model_dump() for n in nodes],

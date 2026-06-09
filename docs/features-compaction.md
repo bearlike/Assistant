@@ -122,7 +122,7 @@ Each compaction appears as a distinct pill in the web console timeline. The cont
 | `llm.compact_models` | `["default"]` | Priority-ordered model list for compaction. `"default"` = agent's own model. |
 | `compaction.caveman_mode` | `false` | Enable terse summarization prompt (~30–60% fewer output tokens). |
 
-See [configuration.md](configuration.md#tokenbudgetconfig) for the full schema.
+See [configuration.md](configuration.md#token-budget) for the full schema.
 
 > [!NOTE] How it works internally
 > See [Architecture Overview → Compaction pipeline](core-orchestration.md#compaction).

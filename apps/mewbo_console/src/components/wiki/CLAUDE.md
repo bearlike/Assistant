@@ -1,3 +1,5 @@
+> ↑ [apps/mewbo_console/CLAUDE.md](../../../CLAUDE.md) · [root](../../../../../CLAUDE.md)
+
 # MewboWiki — Console Subsystem Guidance
 
 Scope: this file applies to `apps/mewbo_console/src/components/wiki/`.
@@ -50,8 +52,9 @@ The phase weight table inside `progress.ts`:
 ```
 clone   [ 0,  5]
 scan    [ 5, 20]
-graph   [20, 35]
-plan    [35, 45]
+graph   [20, 32]
+enrich  [32, 40]
+plan    [40, 45]
 pages   [45, 95]
 finalize [95,100]
 ```
@@ -60,6 +63,14 @@ Calibrated to real run shape — clone/scan are fast, page generation is
 the LLM-bound long tail. Don't widen `pages` past 95 — the 5% headroom
 at the end is what stops the bar from looking stuck at "100% but not
 done yet".
+
+**Adding a phase is a lock-step edit (Gitea #35 added `enrich`).** A new phase
+must land in `IndexingPhase` (`api/types.ts`) AND all four `progress.ts` lookup
+tables (`PHASE_RANGE`/`PHASE_LABEL`/`PHASE_ORDER`/`PHASE_BUDGET_S`) in the same
+change — each is a `Record<IndexingPhase, …>`, so `tsc` enforces exhaustiveness
+and fails the build if any table misses the new key. `enrich` sits post-AST
+(graph narrowed to `[20,32]`, plan to `[40,45]`) to honour the GraphRAG ordering
+law — the entity KG is built before pages are written.
 
 ## ETA is extrapolated from `phaseStartedAt`
 
@@ -137,6 +148,19 @@ Cytoscape types miss `cytoscape-fcose` — handled by a one-line
 ambient declaration in `vite-env.d.ts`. Do not import internals from
 fcose; just call `layout({ name: "fcose", ... })`.
 
+**Multiplex layers (not AST-only).** Each node carries `data.layer ∈
+ast|entity|memory` with `kind` widened by `External|Entity|Memory`; edges add
+`ANCHORS|RELATES` + `layer …|cross`. The `kind` unions stay CLOSED so every
+`Record<Kind,…>` map (`ICON_PATHS`/`KIND_VAR`/`EDGE_VAR`/`KIND_DOT`/`EDGE_DOT`/
+`KIND_LAYER`) is exhaustive and `tsc` flags a missing row — never loosen to
+`string` (the open-vocab entity verb rides the edge `label`, not `kind`). Layers
+differ by SHAPE+colour (entity=rect, memory=hexagon, external=diamond vs AST
+discs); cross-layer `ANCHORS` are dashed. The per-layer toggle is a thin wrapper
+over the existing `hiddenKinds` chip machinery via `static kindsForLayer` —
+hiding a layer's kinds cascades to its edges through the renderer's
+endpoint-hidden rule (no separate edge enumeration). New layer tokens go in BOTH
+`:root` and `.light`.
+
 ## Route additions go through `router.ts`
 
 `router.ts` exposes `buildHref({ kind, ... })` and `useWikiRoute()` for
@@ -161,6 +185,28 @@ inline — that scatters route knowledge across the component tree.
   brand.
 
 Never add a third icon library. Never hand-roll provider SVGs.
+
+## Repository badge ("Copy badge")
+
+`badge.ts:WikiBadge` is the atomic class behind the `WikiTopBar` "Copy
+badge" popover — the snippet a maintainer pastes into their README. Two
+non-obvious facts to keep:
+
+- **Artwork is a single static external CDN SVG** (`WikiBadge.IMAGE_URL`,
+  `cdn.thekrishna.in`), shared by every repo; only the *link* is per-repo.
+  That's why the feature is pure-FE (no backend). This is a remote image
+  asset — NOT an exception to the "no bespoke provider SVG glyphs" rule
+  above (we render `<img>`, we don't hand-author a glyph).
+- **The link target is the repo's `landingPageId`**, not a fixed page id.
+  `landingPageId` (on `Project`, set at finalize, validated to exist) is
+  the canonical "enter this wiki" target — `LandingScreen` tile-click uses
+  it too. There is NO universal `landing-page` sentinel; never hardcode a
+  page id for a repo-level deep link. `WikiScreen` passes
+  `landingPageId ?? pageId` (current page is the always-valid fallback);
+  the affordance is gated by `WikiBadge.forPage(...)` returning non-null.
+
+`WikiTopBar`'s copy actions go through `@/utils/clipboard:copyText` and the
+shared `@/components/CopyButton` — don't re-inline an execCommand fallback.
 
 ## Service worker — stale-deploy resilience
 
@@ -188,6 +234,15 @@ reload in `UpdatePrompt.handleReload` is the consistent fix.
       did I check the primitive itself doesn't already accept the
       `className` / `asChild` I needed?
 
+## Catalog wizard + draft stream (SideStage FE)
+
+`ConfigureWizard` has a `git|catalog` toggle; the catalog branch renders
+`CatalogDocsForm` and submits via `POST /v1/wiki/projects/{slug}/documents`
+(no git URL, no clone token). `DraftPanel` + `useDraftStream` consume
+`POST /v1/draft/stream` via the shared `sseStream` — render tokens on arrival,
+no synthetic timer. Route variant: `/draft` added to `WikiRoute` union +
+`router.ts` + `WikiApp.tsx` in lockstep.
+
 ## Q&A vs Indexing — distinct streams
 
 `useIndexingStream` and `useQaStream` look similar but have distinct
@@ -198,3 +253,62 @@ stream is one-shot per job, the Q&A stream is one-shot per question.
 (the run keeps going server-side). Cancel = `DELETE /v1/wiki/index/<id>`.
 Q&A doesn't have an explicit cancel endpoint — unmount = subscriber
 gone, server stops streaming when the connection closes.
+
+## Q&A answer rendering — cited-sources viewer (one renderer, one citation grammar)
+
+The answer area is one slot, not two parallel components. The skeleton resolves
+to the answer via `hasBlocks ? answer : error ? error : stream.done ? empty :
+skeleton` — the `stream.done` branch (on BOTH columns; left guards
+`summarySources !== null || stream.done`) is what stops the skeleton dangling
+forever on a zero-block completion. `hasBlocks` excludes `sources`/`accordion`
+blocks so a sources-only stream still hits the terminal branch.
+
+- **One renderer.** `markdownComponents.tsx:buildMarkdownComponents()` + the
+  shared `SrcChip` is the SINGLE markdown component map; both `LiveBlocks`
+  (streaming prose) and `MarkdownBlock` (wiki pages) consume it
+  (`remarkGfm + rehypeHighlight + rehypeSlug`). The old `LiveBlocks` was a
+  reduced renderer that silently dropped `ol`/`table`/`blockquote`, had no code
+  highlighting, and rendered citations as plain links — never reintroduce a
+  second divergent renderer. `LiveBlocks` does NOT render the `sources` block
+  (it feeds the right panel).
+- **One citation grammar.** `citations.ts:CitationRef` is the single parser for
+  `path`, `path#L<a>-<b>`, `path:line`, `graph:<id>`, `wiki:<id>`.
+  `CitationRef.domId` is the load-bearing chip↔card identity: the inline chip
+  and the `SourceCard` derive the SAME id, so chip→card scroll-nav is
+  `getElementById(domId).scrollIntoView()` + transient `src-card-flash` — no
+  prop threading. `fileCitations()` builds the card set (file refs only, deduped,
+  `graph:`/`wiki:` dropped).
+- **Inline citations are chips via the `src:` href scheme.** The generation
+  prompt emits `[path:line](src:path#L<a>-<b>)`; the shared link renderer detects
+  `href^="src:"` → accent chip (`bg-[hsl(var(--primary))]/10`, monospace). This
+  is a BE↔FE contract — keep both ends in sync.
+- **Right panel = `SourceCard` per cited file** (`SourceCard.tsx`), native
+  `<details open>` (KISS — there is no vendored Collapsible; don't add one),
+  lazily fetching the line-numbered excerpt via `useSourceExcerpt` →
+  `GET /v1/wiki/projects/<slug>/source` and highlighting the cited range.
+  Accessed-files + model are demoted to a small secondary footer (kept — they're
+  appreciated provenance — just not the primary content).
+
+## Recovery UI (Gitea #54)
+
+A failed/interrupted index is **resumable from the last good checkpoint**, not
+restart-only. `LandingScreen` shows a collapsible **"Incomplete indexes"** section
+(the in-repo `useState`+chevron idiom — there is no vendored Collapsible
+primitive; don't add one) fed by `useRecoverableJobs()` (`GET
+/v1/wiki/jobs/recoverable`); each row's **Resume** → `useResumeIndexing(jobId)`
+(`POST /v1/wiki/index/<id>/resume`) → navigate to the indexing screen. When a job
+is **terminal-but-incomplete** (failed/interrupted/cancelled), `IndexingScreen`
+swaps the frozen progress bar for a recovery panel (reached % via the existing
+`IndexingProgress` class — never local fractions) + **Resume indexing**. Re-open
+trick: `useIndexingStream` takes a `resubscribeKey`; bump it after resume to
+re-open the SSE **in place**, and `useResumeIndexing` invalidates the per-job
+snapshot query so the terminal-status poll re-fetches and clears the panel once
+the resumed job is live (else the snapshot poll stays frozen on the terminal
+status). Wire casing is camelCase here (`jobId`, `pagesSubmitted`) — distinct from
+the snake_case generic session API.
+
+Generic session recovery is **cross-cutting, not wiki-specific**: `SessionItem` +
+`SessionDetailView` show Continue/Restart on any `recoverable` session via the
+shared `useRecoverSession` hook; a wiki-indexing `/recover` response carries
+`job_id` and routes back into this indexing screen (the server dispatches; the
+client just follows `job_id`).

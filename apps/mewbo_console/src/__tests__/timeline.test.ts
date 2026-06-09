@@ -583,6 +583,23 @@ describe("LLM resilience events — retry / fallback / halt in buildLogs", () =>
       fallbackReason: "rate_limit",
       fallbackPreviousErrorType: "RateLimitError",
     });
+    // No ``sticky`` field on this payload → fallbackSticky stays undefined.
+    expect(fallbacks[0].fallbackSticky).toBeUndefined();
+  });
+
+  test("llm_fallback carries the sticky pin flag through verbatim", () => {
+    const logs = buildLogs([
+      ev("2026-06-05T10:00:05Z", "llm_fallback", {
+        from_model: "openai/gpt-4o-mini",
+        to_model: "anthropic/claude-3-5-sonnet",
+        reason: "quota_exhausted",
+        sticky: true,
+        depth: 0,
+      }),
+    ]);
+    const fallbacks = logs.filter((l) => l.type === "llm_fallback");
+    expect(fallbacks).toHaveLength(1);
+    expect(fallbacks[0].fallbackSticky).toBe(true);
   });
 
   test("recovery halt_no_progress maps to a recovery_halt log entry", () => {
