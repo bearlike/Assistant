@@ -2,25 +2,35 @@
  * Q&A screen — DeepWiki's faithful two-column streaming layout.
  *
  *   Left  (sticky)  : back link · question · "Generated with [model]" pill ·
- *                     summary card (skeleton → resolved)
- *   Right            : skeleton stack → typewriter answer with caret
+ *                     summary card · cited-source cards (lazy file excerpts) ·
+ *                     demoted retrieval-details footer (accessed + models)
+ *   Right            : skeleton stack → streamed markdown answer
  *
  * The model in the URL is authoritative; if it differs from the local
  * persisted one we sync to the URL value so a shared link always shows the
  * same authoring badge.
+ *
+ * Source cards: the card set is the unique FILE citations from the terminal
+ * ``sources`` block + the LLM-curated ``summarySources``. Inline citation
+ * chips in the answer scroll to the matching card via the shared
+ * ``CitationRef.domId``. The ``sources`` block is therefore NOT rendered
+ * inline in the answer column — LiveBlocks paints prose only.
  */
 
 import { useEffect, useMemo } from "react";
+import type { ReactNode } from "react";
 import { useLocation } from "wouter";
-import { ArrowLeft, Github, Sparkles } from "lucide-react";
+import { ArrowLeft, ChevronRight, Cpu, FileText, Route, Sparkles } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 import { LiveBlocks } from "./LiveBlocks";
 import { ModelChip } from "./ModelPicker";
 import { QADock } from "./QADock";
+import { SourceCard } from "./SourceCard";
 import { WikiTopBar } from "./WikiTopBar";
-import { useQaStream, useWikiPage } from "./api/hooks";
+import { fileCitations } from "./citations";
+import { useQaAnswerSnapshot, useQaStream, useWikiPage } from "./api/hooks";
 import { buildHref } from "./router";
 import { useStoredModel } from "./useStoredModel";
 
@@ -58,14 +68,34 @@ export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenPr
     model: answeringModel,
     slug: repoSlug,
   });
-  const leftReady = stream.summarySources !== null;
-  const hasBlocks = stream.blocks.length > 0;
+  // Terminal-aware readiness: the summary card resolves once
+  // `summary_ready` lands, OR once the stream finishes (so it can't dangle
+  // a skeleton forever on a zero-source answer).
+  const leftReady = stream.summarySources !== null || stream.done;
+  const hasBlocks = stream.blocks.some((b) => b.kind !== "sources" && b.kind !== "accordion");
+
+  // The deterministic provenance trail + per-probe model set live only on
+  // the answer snapshot (the stream's internal ``access`` events are
+  // ignored). Fetch it once the stream has settled with an id.
+  const snapshot = useQaAnswerSnapshot(stream.answerId, stream.done);
+  const accessedSources = snapshot.data?.accessedSources ?? [];
+  const modelsUsed = snapshot.data?.modelsUsed ?? [];
 
   const fromPageTitle = fromPageQuery.data?.title ?? pageId;
-  const sources = stream.summarySources ?? [
-    "docs/core-orchestration.md",
-    "CLAUDE.md",
-  ];
+
+  // The cited-source card set: unique FILE citations from the terminal
+  // ``sources`` block + the curated ``summarySources`` (graph:/wiki: refs
+  // are dropped — they aren't file cards). Deduped + first-seen ordered by
+  // ``fileCitations``.
+  const cards = useMemo(() => {
+    const sourceBlock = stream.blocks.find(
+      (b): b is Extract<typeof b, { kind: "sources" }> => b.kind === "sources",
+    );
+    return fileCitations([
+      ...(sourceBlock?.items ?? []),
+      ...(stream.summarySources ?? []),
+    ]);
+  }, [stream.blocks, stream.summarySources]);
 
   const onAsk = (q: string) => {
     navigate(
@@ -84,7 +114,7 @@ export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenPr
       <div id="wiki-scroller" className="flex-1 overflow-y-auto pb-32">
         <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8 grid grid-cols-1 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] gap-8">
           {/* Left column */}
-          <div className="lg:sticky lg:top-6 self-start">
+          <div className="lg:sticky lg:top-6 self-start max-h-[calc(100vh-3rem)] overflow-y-auto pr-1">
             <button
               type="button"
               onClick={() =>
@@ -119,17 +149,6 @@ export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenPr
                   </code>{" "}
                   and related sources.
                 </p>
-                <div className="mt-2.5 flex flex-wrap gap-1.5">
-                  {sources.map((s) => (
-                    <span
-                      key={s}
-                      className="inline-flex items-center gap-1 px-1.5 py-px rounded font-mono text-[10px] bg-[hsl(var(--muted))]/60 text-[hsl(var(--muted-foreground))]"
-                    >
-                      <Github className="h-2.5 w-2.5" />
-                      {s}
-                    </span>
-                  ))}
-                </div>
               </div>
             ) : (
               <div className="mt-5 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3.5 space-y-2">
@@ -138,9 +157,30 @@ export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenPr
                 ))}
               </div>
             )}
+
+            {/* Cited sources — the primary right-panel content. */}
+            {cards.length > 0 && (
+              <div className="mt-5">
+                <div className="inline-flex items-center gap-1.5 mb-2.5 text-[10px] uppercase tracking-wide font-medium text-[hsl(var(--muted-foreground))]">
+                  <FileText className="h-3 w-3" />
+                  Cited sources
+                </div>
+                <div className="space-y-2.5">
+                  {cards.map((c) => (
+                    <SourceCard key={c.raw} citation={c} slug={repoSlug} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <ProvenanceFooter
+              accessedSources={accessedSources}
+              modelsUsed={modelsUsed}
+            />
           </div>
 
-          {/* Right column */}
+          {/* Right column — answer prose. Skeleton, answer, error, and the
+              terminal empty-state all occupy the same slot. */}
           <div>
             {hasBlocks ? (
               <article className="prose-wiki">
@@ -154,6 +194,10 @@ export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenPr
             ) : stream.error ? (
               <div className="text-sm text-[hsl(var(--destructive))]">
                 {stream.error.message}
+              </div>
+            ) : stream.done ? (
+              <div className="text-sm text-[hsl(var(--muted-foreground))]">
+                No answer was generated for this question.
               </div>
             ) : (
               <div className="space-y-2.5">
@@ -187,4 +231,93 @@ function SkeletonLine({ width }: { width: number }) {
       style={{ width: `${width}%` }}
     />
   );
+}
+
+/**
+ * Secondary provenance / telemetry block, demoted BELOW the cited-source
+ * cards. Shows the deterministic retrieval trail (``accessedSources``) and
+ * the distinct models that ran (``modelsUsed``) — both from the answer
+ * snapshot. A collapsed ``<details>`` (the wiki's established collapsible) so
+ * it never competes with the answer or the source cards. Renders nothing
+ * when both trails are empty.
+ */
+export function ProvenanceFooter({
+  accessedSources,
+  modelsUsed,
+}: {
+  accessedSources: string[];
+  modelsUsed: string[];
+}) {
+  if (accessedSources.length === 0 && modelsUsed.length === 0) return null;
+
+  return (
+    <details className="group mt-4 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]/40 overflow-hidden">
+      <summary className="flex items-center gap-1.5 px-3 py-2 cursor-pointer select-none list-none text-[11px] font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/30">
+        <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
+        Retrieval details
+      </summary>
+      <div className="border-t border-[hsl(var(--border))] px-3 py-2.5 space-y-3">
+        {accessedSources.length > 0 && (
+          <ProvenanceGroup
+            icon={<Route className="h-3 w-3" />}
+            label="Accessed"
+          >
+            {accessedSources.map((s) => (
+              <span
+                key={s}
+                title={s}
+                className="inline-flex items-center px-1.5 py-px rounded font-mono text-[10px] bg-[hsl(var(--muted))]/60 text-[hsl(var(--muted-foreground))]"
+              >
+                {shortenCitation(s)}
+              </span>
+            ))}
+          </ProvenanceGroup>
+        )}
+        {modelsUsed.length > 0 && (
+          <ProvenanceGroup icon={<Cpu className="h-3 w-3" />} label="Models">
+            {modelsUsed.map((m) => (
+              <ModelChip
+                key={m}
+                modelId={m}
+                className="px-1.5 py-px rounded bg-[hsl(var(--muted))]/60 [&_span]:text-[10px] [&_span]:text-[hsl(var(--muted-foreground))]"
+              />
+            ))}
+          </ProvenanceGroup>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function ProvenanceGroup({
+  icon,
+  label,
+  children,
+}: {
+  icon: ReactNode;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <div className="inline-flex items-center gap-1 mb-1.5 text-[10px] uppercase tracking-wide font-medium text-[hsl(var(--muted-foreground))]">
+        {icon}
+        {label}
+      </div>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * Trim the citation-id grammar to a readable label while keeping it
+ * unambiguous: ``graph:<id>`` / ``wiki:<id>`` drop their scheme prefix
+ * (the icon + group already mark them as provenance ids); plain
+ * ``<path>#L<a>-<b>`` source refs pass through verbatim. The full id is
+ * preserved in the chip's ``title`` for hover.
+ */
+function shortenCitation(id: string): string {
+  if (id.startsWith("graph:")) return id.slice("graph:".length);
+  if (id.startsWith("wiki:")) return id.slice("wiki:".length);
+  return id;
 }

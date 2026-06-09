@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 
 # ── Shared config ──────────────────────────────────────────────────────────────
 
@@ -280,11 +280,18 @@ DepthMode = Literal["comprehensive", "concise"]
 
 
 class WizardSubmission(BaseModel):
-    """Wizard POST body for triggering a new indexing job."""
+    """Wizard POST body for triggering a new indexing job.
+
+    ``repo_url`` is optional: a NON-git "catalog" workspace (programmatic
+    document ingestion via ``CatalogIngestor`` / ``POST .../documents``) has no
+    clone URL. The git indexing pipeline still requires it — its own validation
+    rejects a clone with an empty URL — but the model itself no longer forces
+    one so the same submission shape carries a repo-less catalog project.
+    """
 
     model_config = _CFG
 
-    repo_url: str = Field(alias="repoUrl")
+    repo_url: str | None = Field(default=None, alias="repoUrl")
     slug: str
     platform: PlatformId
     token: str | None = None
@@ -296,15 +303,87 @@ class WizardSubmission(BaseModel):
     files: list[str]
 
 
+# ── Catalog document ingestion (non-git StructureProvider) ──────────────────
+
+
+class CatalogDocument(BaseModel):
+    """One programmatically-ingested catalog record (a product, FAQ, doc, …).
+
+    The wire shape ``POST /v1/wiki/projects/{slug}/documents`` accepts. Each
+    record becomes BOTH a ``WikiPage`` (BM25 + ``wiki_search_pages``) AND a
+    graph node carrying the text (embeddings + ``wiki_code_search``) so the
+    existing :class:`HybridRetriever` grounds it with no pipeline change.
+    """
+
+    model_config = _CFG
+
+    id: str = Field(..., min_length=1, description="stable document id (idempotent upsert)")
+    title: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, description="full body — the grounding corpus")
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class CatalogIngestReport(BaseModel):
+    """Outcome of a :class:`CatalogIngestor.ingest` call."""
+
+    model_config = _CFG
+
+    slug: str
+    ingested: int = Field(description="number of documents written this call")
+    embedded: int = Field(default=0, description="documents whose node was embedded")
+    total_documents: int = Field(
+        default=0, alias="totalDocuments", description="catalog size after this call"
+    )
+    bm25_only: bool = Field(
+        default=False,
+        alias="bm25Only",
+        description="True when the embedder was absent → lexical-only grounding",
+    )
+    landing_page_id: str = Field(alias="landingPageId")
+
+
+# ── RepoCredential ─────────────────────────────────────────────────────────────
+
+
+class RepoCredential(BaseModel):
+    """A persisted repository credential — a git token OR an SSH/deploy key.
+
+    Stored per-slug in the isolated credential store so re-index can
+    authenticate after the in-process ``CloneTokenCache`` dies with the
+    process. Plaintext-at-rest behind the store's ``_encode``/``_decode``
+    seam; ALWAYS redacted in-flight (SSE / transcript / logs).
+    """
+
+    model_config = _CFG
+
+    kind: Literal["token", "ssh_key"]
+    value: str
+    username: str | None = None
+
+    @field_validator("value")
+    @classmethod
+    def _value_not_empty(cls, v: str) -> str:
+        """Reject an empty credential — an empty token/key is never useful."""
+        if not v.strip():
+            raise ValueError("credential value must not be empty")
+        return v
+
+
 # ── IndexingJob ────────────────────────────────────────────────────────────────
 
 IndexingStatus = Literal[
-    "queued", "scanning", "finalizing", "complete", "cancelled", "failed"
+    "queued",
+    "scanning",
+    "finalizing",
+    "interrupted",
+    "complete",
+    "cancelled",
+    "failed",
 ]
 
 # Fine-grained progress phase (defined alongside ``IndexingStatus`` so
 # ``IndexingJob`` can reference it).
-IndexingPhase = Literal["clone", "scan", "graph", "plan", "pages", "finalize"]
+IndexingPhase = Literal["clone", "scan", "graph", "enrich", "plan", "pages", "finalize"]
 
 
 class IndexingJob(BaseModel):
@@ -526,6 +605,16 @@ class IndexingEventUnion(RootModel[_IndexingEventAnnotated]):
 
 # ── QaAnswer ───────────────────────────────────────────────────────────────────
 
+# Lifecycle of a Q&A run as seen on the *snapshot* (``GET /v1/wiki/qa/<id>``).
+# ``running`` until the run finalizes; the three terminal values mirror the
+# terminal QA SSE events (``complete`` / ``cancelled`` / ``error``). A
+# non-streaming consumer (the MCP ``ask_wiki`` poll) reads this top-level field
+# as the authoritative done-signal instead of guessing from block churn.
+QaStatus = Literal["running", "complete", "cancelled", "error"]
+
+# Terminal values — the run is finished iff its status is in this set.
+QA_TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "cancelled", "error"})
+
 
 class QaAnswer(BaseModel):
     """Complete Q&A answer returned after streaming finishes."""
@@ -537,6 +626,20 @@ class QaAnswer(BaseModel):
     summary_sources: list[str] = Field(alias="summarySources")
     model: str
     blocks: list[BlockUnion]
+    # Deterministic provenance of the answer (NOT the LLM's hand-picked
+    # citations). ``accessed_sources`` is the de-duplicated trail of every graph
+    # node + source file + page the probes actually touched (the probe tools
+    # record an ``access`` event per call; the finalizer folds them). ``models_used``
+    # is the distinct set of models that ran across the hypervisor + its probes.
+    # Both surface so the UI can show "what was read" + "which models" alongside
+    # the answer. Defaulted so older persisted answers validate unchanged.
+    accessed_sources: list[str] = Field(default_factory=list, alias="accessedSources")
+    models_used: list[str] = Field(default_factory=list, alias="modelsUsed")
+    # Run lifecycle on the persisted snapshot — ``running`` until a terminal
+    # event finalizes the run. ``QaFinalizer.close`` sets ``complete``;
+    # ``WikiQaSession.cancel`` sets ``cancelled``. This is the field the MCP
+    # ``ask_wiki`` poll keys off of (no fragile "blocks unchanged" guess).
+    status: QaStatus = Field(default="running")
     # Project slug that owns this answer. Persisted so ``resolve_qa_ctx``
     # can recover it after a process restart or any read-back path —
     # previously this field was ``exclude=True`` to keep it off the wire,
@@ -658,7 +761,14 @@ class PagePlan(BaseModel):
     parent: str | None = None
 
 
-GraphNodeType = Literal["File", "Module", "Class", "Function", "Method", "Interface"]
+# ``External`` is a VIEW-only node kind (synthesized by ``KnowledgeGraphView``
+# to converge multiple cross-file references to an unresolved out-of-repo
+# symbol). It never lands in the persisted node table — the extractor only
+# emits the in-repo kinds — but it shares ``GraphNode`` so the view can reuse
+# the same serialiser, so the Literal must admit it.
+GraphNodeType = Literal[
+    "File", "Module", "Class", "Function", "Method", "Interface", "External"
+]
 GraphEdgeType = Literal["CONTAINS", "IMPORTS", "CALLS", "EXTENDS", "REFERENCES"]
 
 
@@ -685,6 +795,12 @@ class GraphEdge(BaseModel):
     source: str  # node_id
     target: str  # node_id
     type: GraphEdgeType
+    # Carry for cross-file IMPORTS/CALLS/EXTENDS whose target is NOT an in-repo
+    # node. ``target`` then holds a synthetic external id and ``target_name`` the
+    # raw symbol name, so the view can converge every reference to one named
+    # ``External`` node (a view concern — the persisted node table stays
+    # real-in-repo-symbols only). ``None`` for ordinary in-repo edges.
+    target_name: str | None = None
 
 
 class Embedding(BaseModel):

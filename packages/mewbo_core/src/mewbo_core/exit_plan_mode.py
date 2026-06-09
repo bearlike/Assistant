@@ -349,6 +349,10 @@ class ExitPlanModeTool:
             return True
         return False
 
+    def terminal_reason(self) -> str:
+        """Plan-mode exit awaits user approval — always ``"awaiting_approval"``."""
+        return "awaiting_approval"
+
     async def handle(self, action_step: ActionStep) -> _HandlerResult:
         """Execute an ``exit_plan_mode`` tool call.
 

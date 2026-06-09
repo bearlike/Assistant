@@ -94,11 +94,28 @@
       "tool_id": "wiki_submit_insight",
       "module": "mewbo_graph.plugins.wiki.submit_insight",
       "class": "WikiSubmitInsightTool"
+    },
+    {
+      "tool_id": "mint_entity",
+      "module": "mewbo_graph.plugins.wiki.mint_entity",
+      "class": "MintEntityTool"
+    },
+    {
+      "tool_id": "relate_entities",
+      "module": "mewbo_graph.plugins.wiki.mint_entity",
+      "class": "RelateEntitiesTool"
+    },
+    {
+      "tool_id": "resolve_entity",
+      "module": "mewbo_graph.plugins.wiki.mint_entity",
+      "class": "ResolveEntityTool"
     }
   ],
   "agents": [
     { "path": "agents/wiki-indexer.md" },
+    { "path": "agents/wiki-enricher.md" },
     { "path": "agents/wiki-page-writer.md" },
-    { "path": "agents/wiki-qa.md" }
+    { "path": "agents/wiki-qa.md" },
+    { "path": "agents/wiki-qa-probe.md" }
   ]
 }

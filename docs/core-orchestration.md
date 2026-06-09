@@ -253,6 +253,40 @@ Matching uses `fnmatch` glob patterns on both `tool_id` and `operation`. If no r
 
 ---
 
+## Policies {#policies}
+
+Policies hook into the **pre-execution gate** inside the tool-use loop: after MCP input coercion and the permission check, but before the pre-tool hook fires and before the tool itself executes. This is the single authoritative intercept point: no tool can execute without passing through it.
+
+When a resolved tool call matches an active policy's greylist, the loop:
+
+1. Captures the fully-resolved tool call.
+2. Starts an **isolated single-turn LLM invocation** with minimal context: the policy body and only the exception-structure tool are available. The checker cannot see the session's conversation history.
+3. If the checker returns nothing, the call proceeds normally. If it calls the exception tool, the call is blocked and the exception text is returned to the agent as the tool result.
+4. If `isTerminal: true` and a violation fires, the session ends immediately after the exception is delivered.
+
+Multiple policies matching the same call run concurrently. A policy violation from any one of them is sufficient to block the call; all concurrent checks must clear for execution to proceed.
+
+`PolicyRegistry` mirrors `SkillRegistry` in structure: a catalog is advertised at session start, and individual policy bodies are loaded lazily. Policy files live alongside skill files and are discovered through the same scan paths.
+
+---
+
+## Monitors {#monitors}
+
+Monitors are spawned in the `on_session_start` hook and torn down in `on_session_end`. Each monitor is a **restricted tool-use loop session** tracked by the hypervisor as a peer of regular sub-agents: it has its own `AgentHandle`, lifecycle states, and token accounting. Monitors never appear in the agent tree visible to the root agent.
+
+The monitor's tool set is hard-restricted at the tool-registry level before the session is constructed. Only `inject_message`, `interrupt_session`, and any tools listed in the monitor definition's `allowed-tools` are registered. The periodic invocation loop receives a read-only snapshot of the full agent tree at each tick as a structured `SystemMessage`.
+
+| Tool | Mechanism |
+|------|-----------|
+| `inject_message` | Routes through `AgentHypervisor.send_message()` to the target agent's queue; drained between tool steps |
+| `interrupt_session` | Sets a checked signal on the target loop's step boundary; never interrupts an in-flight tool call |
+
+Crashed monitors are automatically respawned by the hypervisor after a short backoff. A monitor that crashes repeatedly is marked `failed` and not retried for the remainder of the session.
+
+`MonitorRegistry` mirrors `PolicyRegistry` and `SkillRegistry`. Monitor definitions ship as files in the standard scan paths and are loaded at session init.
+
+---
+
 ## Hook manager {#hook-manager}
 
 `HookManager` dispatches hooks at lifecycle points and around individual tool calls. Every invocation is wrapped in `try/except`. A failing hook logs a warning and never blocks execution. `HookManager.load_from_config()` wires external hooks declared in `HooksConfig` into the manager. The API server calls this at startup and passes `hook_manager` to every `start_async()` call.

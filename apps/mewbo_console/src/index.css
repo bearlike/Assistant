@@ -117,6 +117,13 @@
     --graph-method: 195 70% 55%;        /* cyan — bound method */
     --graph-interface: 320 65% 62%;     /* magenta — interface/trait */
     --graph-edge-soft: 48 5% 57%;       /* default edge tint (matches --muted-foreground) */
+    /* ── Multiplex layers (wire contract v2) ── distinct hues so the AST,
+       entity and memory layers read apart at a glance. */
+    --graph-external: 210 12% 55%;      /* steel-grey — resolved cross-file/import target */
+    --graph-entity: 45 80% 60%;         /* gold — abstract entity layer */
+    --graph-memory: 168 55% 52%;        /* teal — memory-orchestration layer */
+    --graph-edge-anchor: 210 12% 60%;   /* dashed cross-layer ANCHORS tie */
+    --graph-edge-relates: 45 70% 58%;   /* entity/memory RELATES edge */
   }
 
   .light {
@@ -225,6 +232,13 @@
     --graph-method: 195 70% 45%;
     --graph-interface: 320 65% 50%;
     --graph-edge-soft: 45 3% 52%;       /* default edge tint (matches --muted-foreground) */
+    /* ── Multiplex layers (wire contract v2) — darker discs for the
+       near-white light canvas, mirroring the dark block. */
+    --graph-external: 210 14% 45%;
+    --graph-entity: 42 82% 48%;
+    --graph-memory: 168 55% 40%;
+    --graph-edge-anchor: 210 14% 50%;
+    --graph-edge-relates: 42 72% 48%;
   }
 }
 
@@ -802,6 +816,16 @@
   from { transform: scale(0.85); opacity: 0; }
   to   { transform: scale(1);    opacity: 1; }
 }
+/* Transient flash applied to a SourceCard when an inline citation chip
+   scrolls to it. Ring + glow fade out over the class lifetime (~1.2s). */
+@keyframes src-card-flash {
+  0%   { box-shadow: 0 0 0 2px hsl(var(--primary) / 0.7); }
+  100% { box-shadow: 0 0 0 2px hsl(var(--primary) / 0); }
+}
+.src-card-flash {
+  animation: src-card-flash 1.2s ease-out;
+}
 @media (prefers-reduced-motion: reduce) {
   [class*="animate-[wiki-"] { animation: none !important; }
+  .src-card-flash { animation: none !important; }
 }

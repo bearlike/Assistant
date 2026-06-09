@@ -10,9 +10,26 @@ from mewbo_core.common import get_logger
 
 logging = get_logger(name="api.wiki")
 
+# Restart-recovery façade. Imported behind a guard so a graph-less
+# ``mewbo-api`` install (no ``wiki`` extra) still imports this package cleanly —
+# ``recovery`` pulls ``mewbo_graph`` transitively. ``None`` means the feature is
+# absent; ``_run_recovery`` then no-ops. Bound at module level so it's a
+# patchable attribute (tests monkeypatch ``recover_interrupted``).
+try:
+    from .recovery import JobRecovery
+except ImportError:  # pragma: no cover — graph-less install
+    JobRecovery = None  # type: ignore[assignment,misc]
 
-def init_wiki(app, runtime) -> bool:
-    """Mount /v1/wiki/* on the Flask app. Returns False if wiki extras are absent."""
+
+def init_wiki(app, runtime, hook_manager=None) -> bool:
+    """Mount /v1/wiki/* on the Flask app. Returns False if wiki extras are absent.
+
+    ``hook_manager`` (the API's shared :class:`HookManager`) is threaded through
+    so the QA session-end finalizer can register on ``on_session_end`` AND the
+    same instance is handed to ``WikiQaSession.start`` — the wiki-qa hypervisor
+    has no terminal tool of its own, so its ``complete`` event + snapshot
+    reconciliation ride this hook. ``None`` keeps the legacy (hookless) behaviour.
+    """
     try:
         from mewbo_graph.wiki.store import create_wiki_store, set_wiki_store
     except ImportError as exc:
@@ -30,35 +47,20 @@ def init_wiki(app, runtime) -> bool:
     runtime.wiki_store = store
     from .routes import register
 
-    register(app, runtime)
-    # Reap jobs that were running when the previous process died: their
-    # sessions are gone, so they can never finish. Without this they'd
-    # linger forever in the landing page's "Indexing now" surface.
-    _reap_stranded_jobs(runtime.wiki_store)
+    register(app, runtime, hook_manager=hook_manager)
+    # Restart durability: re-drive jobs that were running when the previous
+    # process died. Their sessions are gone, but credentials are persisted
+    # per-slug, so the existing refresh path rebuilds them from clone.
+    _run_recovery(runtime.wiki_store, runtime)
     logging.info("wiki routes mounted at /v1/wiki/*")
     return True
 
 
-def _reap_stranded_jobs(store) -> None:
-    """Mark non-terminal jobs as failed on startup — their sessions are gone."""
-    NON_TERMINAL = ("queued", "scanning", "finalizing")
+def _run_recovery(store, runtime) -> None:
+    """Re-drive interrupted indexing jobs via the refresh path on startup."""
+    if JobRecovery is None:  # pragma: no cover — graph-less install
+        return
     try:
-        stranded = [j for j in store.list_jobs() if j.status in NON_TERMINAL]
-    except Exception as exc:
-        logging.warning("wiki: list_jobs failed during reap (%s); skipping", exc)
-        return
-    if not stranded:
-        return
-    for job in stranded:
-        try:
-            store.update_job(job.job_id, status="failed")
-            store.append_job_event(job.job_id, {
-                "type": "error",
-                "error": {
-                    "code": "internal",
-                    "message": "Indexing session was lost on API restart.",
-                },
-            })
-        except Exception as exc:
-            logging.warning("wiki: failed to reap job %s: %s", job.job_id, exc)
-    logging.info("wiki: reaped %d stranded job(s) on startup", len(stranded))
+        JobRecovery.recover_interrupted(store, runtime)
+    except Exception as exc:  # pragma: no cover — recovery is best-effort
+        logging.warning("wiki: startup recovery failed (%s); skipping", exc)

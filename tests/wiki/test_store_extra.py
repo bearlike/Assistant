@@ -142,6 +142,15 @@ def store(request, tmp_path):
         ("list_file_manifest", ("org/repo",)),
         ("delete_file_manifest", ("org/repo", "a.py")),
         ("_live_anchored_ids", ("org/repo",)),
+        # Abstract-entity overlay (default-raise on the base, like memory).
+        ("upsert_entities", ("org/repo", [])),
+        ("get_entity", ("org/repo", "eid")),
+        ("query_entities", ("org/repo",)),
+        ("upsert_entity_embeddings", ("org/repo", [])),
+        ("entity_vector_search", ("org/repo", [1.0])),
+        ("upsert_entity_edges", ("org/repo", [])),
+        ("list_entity_edges", ("org/repo",)),
+        ("get_entity_recommendations", ("org/repo",)),
     ],
 )
 def test_base_raises_not_implemented(method: str, args: tuple) -> None:
@@ -174,7 +183,13 @@ def test_base_raises_not_implemented(method: str, args: tuple) -> None:
         def increment_job_submitted_count(self, jid): ...  # type: ignore[override]
         def save_job_submission(self, jid, sub): ...  # type: ignore[override]
         def get_job_submission(self, jid): ...  # type: ignore[override]
+        def save_credentials(self, slug, blob): ...  # type: ignore[override]
+        def get_credentials(self, slug): ...  # type: ignore[override]
+        def delete_credentials(self, slug): ...  # type: ignore[override]
+        def get_recovery_attempts(self, slug): ...  # type: ignore[override]
+        def bump_recovery_attempts(self, slug): ...  # type: ignore[override]
         def save_qa(self, qa): ...  # type: ignore[override]
+        def update_qa_fields(self, qa): ...  # type: ignore[override]
         def get_qa(self, aid): ...  # type: ignore[override]
         def attach_qa_session(self, aid, sid): ...  # type: ignore[override]
         def get_qa_session(self, aid): ...  # type: ignore[override]
@@ -821,3 +836,30 @@ def test_mongo_list_jobs_filtered_by_slug() -> None:
     assert jobs_a[0].job_id == "job-a"
     all_jobs = store.list_jobs()
     assert len(all_jobs) == 2
+
+
+# ── Resume sidecar + recovery-cap reset (Gitea #54, both backends) ─────────────
+
+
+def test_resume_plan_roundtrips(store) -> None:
+    """save_resume_plan / get_resume_plan round-trip on both backends; absent → None."""
+    store.create_job(_job("job-resume", slug="org/repo"))
+    assert store.get_resume_plan("job-resume") is None
+    blob = {"skip": ["graph", "plan"], "pages_done": ["a"], "pages_remaining": ["b"]}
+    store.save_resume_plan("job-resume", blob)
+    assert store.get_resume_plan("job-resume") == blob
+    # Overwrite replaces, never merges.
+    store.save_resume_plan("job-resume", {"skip": []})
+    assert store.get_resume_plan("job-resume") == {"skip": []}
+
+
+def test_reset_recovery_attempts_clears_counter(store) -> None:
+    """A user-initiated resume resets the slug-keyed auto-recovery cap to 0."""
+    store.bump_recovery_attempts("org/repo")
+    store.bump_recovery_attempts("org/repo")
+    assert store.get_recovery_attempts("org/repo") == 2
+    store.reset_recovery_attempts("org/repo")
+    assert store.get_recovery_attempts("org/repo") == 0
+    # Idempotent on an already-clear slug.
+    store.reset_recovery_attempts("org/repo")
+    assert store.get_recovery_attempts("org/repo") == 0

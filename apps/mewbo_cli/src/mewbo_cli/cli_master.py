@@ -725,11 +725,13 @@ def _run_query(
     # Replay LLM resilience notices (retry / fallback / no-progress halt)
     # from the run just completed — the core emits these to the transcript
     # rather than through hooks, so the live display never showed them.
-    _print_resilience_events(console, store, state.session_id)
+    _halt_printed = _print_resilience_events(console, store, state.session_id)
 
     # Surface recovery hint when the run ended in a recoverable failure so
     # users can type ``/retry`` or ``/continue`` at the next prompt.
-    _maybe_print_recovery_hint(console, store, state.session_id)
+    # Pass halt_printed so we skip the generic hint when the halt line (which
+    # already mentions both commands) was just shown.
+    _maybe_print_recovery_hint(console, store, state.session_id, halt_printed=_halt_printed)
 
 
 def _print_usage_footer(
@@ -794,12 +796,18 @@ def _model_basename(model: object) -> str:
     return str(model).rsplit("/", 1)[-1]
 
 
-def _print_resilience_events(console: Console, store: SessionStoreBase, session_id: str) -> None:
+def _print_resilience_events(
+    console: Console, store: SessionStoreBase, session_id: str
+) -> bool:
     """Surface LLM retry / fallback / no-progress-halt events from the last run.
 
     The core emits these to the transcript (not via hooks), so we replay
     them after the run completes. Scoped to events after the last ``user``
     event so a multi-turn session never re-prints prior turns' notices.
+
+    Returns ``True`` if a doom-loop halt line was printed so the caller can
+    suppress a redundant generic recovery hint (which would duplicate the
+    already-visible /retry,/continue guidance in the halt line).
     """
     transcript = store.load_transcript(session_id)
     last_user_ts = ""
@@ -807,6 +815,7 @@ def _print_resilience_events(console: Console, store: SessionStoreBase, session_
         if event.get("type") == "user":
             last_user_ts = str(event.get("ts", ""))
 
+    halt_printed = False
     for event in transcript:
         if str(event.get("ts", "")) < last_user_ts:
             continue
@@ -827,9 +836,10 @@ def _print_resilience_events(console: Console, store: SessionStoreBase, session_
         elif etype == "llm_fallback":
             from_model = _model_basename(payload.get("from_model", "?"))
             to_model = _model_basename(payload.get("to_model", "?"))
+            suffix = " [pinned for run]" if payload.get("sticky") else ""
             line = Text(
                 f"⤳ Falling back: {from_model} → {to_model} "
-                f"({payload.get('reason', 'error')})",
+                f"({payload.get('reason', 'error')}){suffix}",
                 style="dim yellow",
             )
         elif etype == "recovery" and payload.get("action") == "halt_no_progress":
@@ -838,13 +848,40 @@ def _print_resilience_events(console: Console, store: SessionStoreBase, session_
                 "progress — /retry or /continue to recover",
                 style="dim red",
             )
+            halt_printed = True
         if line is not None:
             console.print(line)
+    return halt_printed
 
 
-def _maybe_print_recovery_hint(console: Console, store: SessionStoreBase, session_id: str) -> None:
-    """Inspect the last completion event; print ``/retry`` / ``/continue`` hint."""
+# Recoverable ``done_reason`` values mirror ``session_runtime.summarize_session``:
+# any non-clean terminal state that still has a prior user turn.
+_RECOVERABLE_DONE_REASONS: frozenset[str] = frozenset(
+    {"error", "max_steps_reached", "halted_no_progress", "canceled"}
+)
+
+
+def _maybe_print_recovery_hint(
+    console: Console,
+    store: SessionStoreBase,
+    session_id: str,
+    *,
+    halt_printed: bool = False,
+) -> None:
+    """Print a concise recovery hint after a recoverable terminal run.
+
+    Skipped when:
+    - The run completed cleanly (``done_reason == "completed"``).
+    - A doom-loop halt line was already printed (``halt_printed=True``) — that
+      line already mentions /retry and /continue, so a generic repeat is noise.
+    - The transcript has no user turn (nothing to retry).
+    """
+    if halt_printed:
+        return
     transcript = store.load_transcript(session_id)
+    has_user_turn = any(e.get("type") == "user" for e in transcript)
+    if not has_user_turn:
+        return
     for event in reversed(transcript):
         if event.get("type") != "completion":
             continue
@@ -852,18 +889,13 @@ def _maybe_print_recovery_hint(console: Console, store: SessionStoreBase, sessio
         if not isinstance(payload, dict):
             return
         reason = str(payload.get("done_reason") or "").lower()
-        if reason not in ("error", "max_steps_reached"):
+        if reason not in _RECOVERABLE_DONE_REASONS:
             return
-        label = "Run failed" if reason == "error" else "Task interrupted — step limit reached"
-        error_text = payload.get("error") or payload.get("last_error") or ""
-        detail = f"\n  {error_text}" if error_text else ""
         console.print(
-            Panel(
-                f"{label}.{detail}\n\n"
-                "Type /retry to re-run your last query, or /continue to "
-                "let the agent recover from where it left off.",
-                title="Recovery",
-                border_style="red",
+            Text(
+                "↩ This session can be recovered — /continue to resume with context "
+                "intact, or /retry to redo the last step.",
+                style="dim cyan",
             )
         )
         return

@@ -1,3 +1,5 @@
+> ↑ [root /CLAUDE.md](../../CLAUDE.md) · children: [plugins/scg/](src/mewbo_graph/plugins/scg/CLAUDE.md)
+
 # Mewbo Graph — Capability-Library Guidance
 
 Scope: `packages/mewbo_graph/src/mewbo_graph/` — the optional knowledge-graph
@@ -17,7 +19,8 @@ and `mewbo_api`. If you find yourself adding `import mewbo_api` (or
 
 | Submodule | Owns |
 |---|---|
-| `wiki/` | tree-sitter code graph (`graph.py` + `graph_queries/*.scm`), multiplex atomic-note memory (`memory.py`, `memory_types.py`, `structure_provider.py`, `retriever.py`), the dual JSON/Mongo `WikiStoreBase` (`store.py`), the wiki domain/wire models (`types.py`), the litellm `Embedder`, and the ephemeral `CloneTokenCache` (`tokens.py`). |
+| `wiki/` | tree-sitter code graph (`graph.py` + `graph_queries/*.scm`), multiplex atomic-note memory (`memory.py`, `memory_types.py`, `structure_provider.py`, `retriever.py`), the dual JSON/Mongo `WikiStoreBase` (`store.py`), the wiki domain/wire models (`types.py`), the litellm `Embedder`, the ephemeral `CloneTokenCache` (`tokens.py`), and `QaFinalizer` (`qa.py` — reconcile a Q&A answer snapshot from its event log + close it; lives here, not the API, because it mutates `QaAnswer`+store, so the terminal `wiki_emit_block` calls it down-layer alongside the API's session-end net). `resolve_qa_ctx` falls back to the latest `structured_workspace` context event when a session is not a registered QA answer, so a `StructuredResponder`-grounded run resolves a slug-only ctx and wiki grounding tools work instead of returning "wiki QA ctx not found" (#51 — `structured_workspace` was written but read by nothing until this fix). `QaMemoryDepositor` (also `qa.py`) closes the QA→memory flywheel: post-answer it distills the cited answer into atomic notes via `InsightIngestor.ingest(condense=True)` anchored to the cited code entities — best-effort, idempotent, fired from the API session-end net off the latency path (reuses the ingestor; no second fan-out). `catalog.py:CatalogIngestor` — programmatic non-git ingestion (pages + nodes + embeddings, deterministic upsert). |
+| `entities/` | abstract-entity layer — `types` (Entity/EntityRelation/EntityMention/EntityRecommendation; deterministic id = `sha1(normalized_name\|type)`), the generalized `ResolutionLadder` + `EntityResolver`, `EntityMinter`, `EntityAnchorResolver`. Lives in the SAME multiplex store (`WikiStoreBase`) as code symbols + connector schemas + notes — NO parallel store/ER. |
 | `scg/` | the Source Capability Graph reachability engine — `types`, `store`, `providers/*`, `parser`, `router`, `entity_resolution`, `memory_bridge`, plus the `MapPhaseSink` DI seam (`map_phase.py`). |
 | `plugins/{wiki,scg}/` | the capability-gated SessionTools + AgentDefs that drive the above. They ship **with the substrate they wrap** (not in the core wheel) so they import it **down**. |
 
@@ -57,6 +60,13 @@ plugins import **down**. Don't reintroduce the reach-ups:
 - **`CloneTokenCache`** (`wiki/tokens.py`): the ephemeral, never-persisted
   clone token, shared between the API wizard (writes) and the clone/finalize
   tools (read/forget). It carries zero deps so both layers import it down.
+- **`CredentialStore`** (`wiki/credentials.py`): the DURABLE, per-slug repo
+  credential (token or SSH key) — the persisted counterpart to the ephemeral
+  `CloneTokenCache`. Plaintext-at-rest behind an identity `_encode`/`_decode`
+  seam (the one place encryption lands), stored in an isolated backend surface
+  (`credentials/<slug>.json` mode 0600 / `wiki_credentials` collection) via the
+  new `WikiStoreBase.{save,get,delete}_credentials`. The API onboard writes it;
+  the clone tool reads it **down** through this class. Always redacted in-flight.
 - **`MapPhaseSink`** (`scg/map_phase.py`): map-job phase progress is persisted
   in the API *run* store (so it rides the SSE plumbing) — a transport concern.
   The plugin can't write it without importing up, so the API **registers a
@@ -92,6 +102,53 @@ a connector subgraph from a raw descriptor. They share a name root and nothing
 else. The SCG memory bridge MUST hand `InsightIngestor` a `ScgAnchorResolver`
 (which implements the *former* over `source_key`) or connector insights are
 written then silently dropped on read — see the scg subsystem doc.
+
+## Abstract entities — durable decisions (Gitea #35)
+
+- **One substrate, one ladder.** Entities are new families on the existing
+  `WikiStoreBase` (JSON + Mongo), embedded via the same `Embedder`, anchored via
+  the same `AnchorResolver` protocol. `entities/resolver.py:ResolutionLadder`
+  (generic block→score→decide with injected strategies + recommendation priors)
+  backs BOTH `EntityResolver` AND `InsightDeduper` — don't fork a second ladder.
+- **Deterministic id ⇒ idempotent upsert.** `Entity.id = sha1(normalized_name|type)`
+  (the `MemoryNode.compute_node_id` idiom); every write is an UPSERT, so re-index
+  converges and never duplicates.
+- **Soft type + per-mention provenance.** `type: str` (seed vocab + open
+  extension), stored as a property — never an enum/label/partition.
+  `Entity.mentions` makes a merge auditable + reversible.
+- **Recommendations are priors.** `EntityRecommendation` records bias the next
+  resolution pass; they never hard-mutate the graph. `wiki_submit_insight`
+  carries them (page-writer surfaces a prose-only entity → next re-index mints it).
+- **GraphRAG ordering law.** KG is built BEFORE generation. The entity stage is
+  the `enrich` phase, POST-AST: `clone → scan → graph → enrich → plan → pages →
+  finalize`. A `wiki-enricher` leaf (mirrors `wiki-page-writer` fan-out) grounds
+  each LLM entity against AST symbols + SOURCE prose (docstrings/comments/READMEs)
+  — never generated page prose; ungrounded ⇒ dropped. SKIP Leiden/Louvain — plan
+  by the free AST/module/package/directory hierarchy + entity co-occurrence.
+- **`rapidfuzz` is optional** — behind the `retrieval` extra + an import-guard
+  (`fuzzy_ratio` falls back to exact match → cosine-only when absent).
+- **A persisted field the model can't SEE is dead.** `Entity.labels` (open-vocab
+  UML-ish tags) round-tripped through the store but stayed `[]` because
+  `MintEntityArgs` never exposed it (`wiki_submit_insight` did; `mint_entity`
+  didn't — that asymmetry WAS the bug). Surface every model-writable field on the
+  tool schema, and UNION list-valued fields on BOTH resolution paths
+  (`_apply_merge` AND the `_apply_new` idempotent re-mint fold): a deterministic id
+  means re-index ALWAYS re-resolves, so a non-unioned `labels`/`mentions` silently
+  regresses on the second pass.
+- **The entity↔code bridge is a NOTE, not a new edge family.** The enricher
+  `wiki_submit_insight`s anchored to BOTH `entity:<id>` AND `file#Symbol` — the
+  memory `ANCHORS` path already ties all corpora into one graph; don't add an
+  entity→AST edge type. (`mint_entity.anchors` also writes entity→node `ANCHORS`,
+  resolving via `CodeStructureProvider`/`EntityAnchorResolver` with `entity:` keys
+  pre-split.) The enricher reads the most prose, so it — not just the indexer —
+  MUST own `wiki_submit_insight`, or the memory layer stays empty. User-story /
+  actor entities are purely prompt-elicited (`type=role`→`type=user-story`), no
+  schema change — soft `type` + open `labels` already carry it.
+- **`KnowledgeGraphView` (api side) is the ONLY multiplex reader.** The store
+  serves each layer separately; the view unifies AST+entity+memory + reconciles
+  cross-layer `ANCHORS` via the existing `resolve_many` resolvers (classify a
+  target by set-membership, NEVER id length). Full contract:
+  `apps/mewbo_api/src/mewbo_api/wiki/CLAUDE.md` → "KG endpoint".
 
 ## Testing
 

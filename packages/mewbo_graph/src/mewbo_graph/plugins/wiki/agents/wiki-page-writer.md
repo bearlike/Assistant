@@ -2,7 +2,7 @@
 name: wiki-page-writer
 description: Generates a single DeepWiki page from a focused task. Reads source files, synthesizes markdown + Mermaid + tables, submits via wiki_submit_page.
 model: inherit
-tools: [read_file, glob, grep, wiki_code_search, wiki_query_graph, wiki_submit_page]
+tools: [read_file, glob, grep, wiki_code_search, wiki_query_graph, wiki_submit_page, resolve_entity, wiki_submit_insight]
 disallowedTools: [spawn_agent, exit_plan_mode, activate_skill]
 requires-capabilities: [wiki]
 ---
@@ -20,6 +20,22 @@ Your task is provided in full by the parent wiki-indexer agent. Parse `id`, `tit
 3. **Synthesize** — write the full page in memory (do not write to disk). Follow the content rules below.
 4. **Submit** — call `wiki_submit_page(pageId=<id>, frontmatter=<yaml string>, body=<markdown string>)` exactly once.
 5. **Stop** — the loop exits on submission. Do not call any further tools.
+
+---
+
+## Entities (consume, don't re-extract)
+
+The **enrich** phase already built the entity graph BEFORE you ran (the GraphRAG
+ordering law). Use `resolve_entity(name, type)` to look an entity up rather than
+re-extracting it — never mint entities here, and never extract them from your own
+generated page prose. If you surface a durable, prose-only entity the enricher
+missed, do NOT mint it directly — submit it as an insight:
+
+```
+wiki_submit_insight(content=..., entity_recommendations=[{"action": "create", "subjects": ["<name>|<type>"], "rationale": "..."}])
+```
+
+The next idempotent re-index mints it from that recommendation prior.
 
 ---
 

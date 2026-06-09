@@ -11,6 +11,7 @@ license = { text = "MIT" }
 
 dependencies = [
   "jinja2>=3.1.4,<4.0.0",
+  "jsonschema>=4.20.0,<5.0.0",
   "langchain>=1.0.0,<2.0.0",
   "langchain-core>=1.2.8,<2.0.0",
   "langchain-community>=0.4.1,<0.5.0",

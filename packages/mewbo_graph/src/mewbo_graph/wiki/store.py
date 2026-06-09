@@ -23,11 +23,20 @@ import json
 import threading
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from mewbo_core.common import get_logger
 from mewbo_core.config import get_config_value
 from pydantic import BaseModel
+
+from mewbo_graph._util import cosine as _cosine
+from mewbo_graph.entities.types import (
+    Entity,
+    EntityEmbedding,
+    EntityFilter,
+    EntityRecommendation,
+    EntityRelation,
+)
 
 from .memory_types import (
     DocPageNote,
@@ -51,6 +60,19 @@ from .types import (
 logging = get_logger(name="api.wiki.store")
 
 _M = TypeVar("_M", bound=BaseModel)
+
+
+class _HasVector(Protocol):
+    """Structural type for any embedding row carrying a dense ``vector``.
+
+    Both ``MemoryEmbedding`` and ``EntityEmbedding`` satisfy it, so the single
+    cosine-rank core (`_rank_embeddings`) is reused across both families.
+    """
+
+    vector: list[float]
+
+
+_V = TypeVar("_V", bound=_HasVector)
 
 
 def _slug_to_path(slug: str) -> str:
@@ -171,6 +193,20 @@ class WikiStoreBase(abc.ABC):
     def get_job_plan(self, job_id: str) -> list[dict[str, Any]] | None:
         """Return the page-plan list, or None if no plan has been committed yet."""
 
+    # Resume sidecar (checkpoint-aware recovery, Gitea #54). A tiny dict computed
+    # ONCE by ``ResumePlan.build`` at resume time; rebuilt cheaply per tool call
+    # via ``ResumePlan.from_persisted`` so the phase skip-guards never re-query
+    # the graph. Concrete defaults (no-op / None) so a backend that never persists
+    # it simply degrades to a full rebuild on resume — never a crash.
+
+    def save_resume_plan(self, job_id: str, plan: dict[str, Any]) -> None:
+        """Persist the resume-plan dict for *job_id*; overwrites any previous one."""
+        raise NotImplementedError
+
+    def get_resume_plan(self, job_id: str) -> dict[str, Any] | None:
+        """Return the persisted resume-plan dict, or None if the job isn't resuming."""
+        return None
+
     @abc.abstractmethod
     def get_job_submitted_count(self, job_id: str) -> int:
         """Return the number of pages submitted so far for *job_id*."""
@@ -187,11 +223,64 @@ class WikiStoreBase(abc.ABC):
     def get_job_submission(self, job_id: str) -> dict[str, Any] | None:
         """Return the persisted submission dict, or None if not yet saved."""
 
+    # Repository credentials (isolated, per-slug, plaintext-at-rest)
+
+    @abc.abstractmethod
+    def save_credentials(self, slug: str, blob: dict[str, Any]) -> None:
+        """Persist the (already encoded) credential *blob* for *slug*; overwrite."""
+
+    @abc.abstractmethod
+    def get_credentials(self, slug: str) -> dict[str, Any] | None:
+        """Return the encoded credential blob for *slug*, or None if absent."""
+
+    @abc.abstractmethod
+    def delete_credentials(self, slug: str) -> bool:
+        """Delete *slug*'s credential; return True if one was removed, else False."""
+
+    # Restart-recovery counter (slug-keyed, isolated from the submission sidecar)
+
+    @abc.abstractmethod
+    def get_recovery_attempts(self, slug: str) -> int:
+        """Return the recovery-attempt count for *slug* (0 if never recovered)."""
+
+    @abc.abstractmethod
+    def bump_recovery_attempts(self, slug: str) -> int:
+        """Atomically increment *slug*'s recovery counter; return the new value.
+
+        Slug-keyed (not job-keyed) so the cap bounds re-drives across recovery
+        generations / new job_ids. Lives on its OWN persistent surface so it
+        never pollutes the wizard-submission sidecar (which validates strictly
+        as a ``WizardSubmission``).
+        """
+
+    def reset_recovery_attempts(self, slug: str) -> None:
+        """Clear *slug*'s recovery counter (a user-initiated resume gets a fresh budget).
+
+        A human asking to retry an index must not be blocked by prior automatic
+        re-drives, so the manual resume path resets the auto-recovery cap. Concrete
+        default no-op so a backend that never tracks the counter is unaffected.
+        """
+
     # QA
 
     @abc.abstractmethod
     def save_qa(self, answer: QaAnswer) -> None:
-        """Persist a QA answer record."""
+        """Persist a QA answer record. Use ONLY to create it (resets bookkeeping)."""
+
+    @abc.abstractmethod
+    def update_qa_fields(self, answer: QaAnswer) -> None:
+        """Update a QA answer's content fields in place — NON-destructive.
+
+        Persists every ``QaAnswer`` field but MUST NOT disturb store bookkeeping
+        that some backends pack alongside the record: the ``event_count`` idx
+        counter and the ``session_id`` mapping. ``save_qa`` does a FULL replace,
+        which on Mongo resets ``event_count`` to 0 (so the next ``append_qa_event``
+        collides at idx 0) AND drops ``session_id`` (breaking
+        ``find_qa_by_session``). Mid-stream writers (``QaFinalizer``) MUST use
+        this; ``save_qa`` is for creation only. (The JSON backend keeps session +
+        events in separate files, so for it this is just an answer.json rewrite —
+        the divergence is why a JSON-only test missed the Mongo regression.)
+        """
 
     @abc.abstractmethod
     def get_qa(self, answer_id: str) -> QaAnswer | None:
@@ -350,6 +439,23 @@ class WikiStoreBase(abc.ABC):
         """Memory node_ids with ≥1 live ANCHORS edge (validity gate)."""
         raise NotImplementedError
 
+    @staticmethod
+    def _rank_embeddings(
+        pool: list[_V], qvec: list[float], k: int
+    ) -> list[_V]:
+        """Cosine-rank a pre-loaded embedding pool and return the top-k.
+
+        The single cosine-sort core shared by memory AND entity vector search:
+        each driver loads (and, for memory, facet-filters) its own pool, then
+        delegates here so scoring/ordering can never desync across families or
+        backends. Generic over any row with a ``vector`` (`_HasVector`).
+        """
+        if not pool:
+            return []
+        scored = [(emb, _cosine(qvec, emb.vector)) for emb in pool]
+        scored.sort(key=lambda t: t[1], reverse=True)
+        return [emb for emb, _ in scored[:k]]
+
     def _rank_memory(
         self,
         slug: str,
@@ -358,14 +464,12 @@ class WikiStoreBase(abc.ABC):
         k: int,
         filt: MemoryFilter | None,
     ) -> list[MemoryEmbedding]:
-        """Facet-filter + cosine-rank a backend-loaded embedding pool (top-k).
+        """Facet-filter then cosine-rank a backend-loaded memory pool (top-k).
 
-        The single ranking core both drivers share: each loads its own pool,
-        then delegates here so facet/validity intersection and cosine scoring
-        can never desync across backends.
+        The single ranking core both memory drivers share: each loads its own
+        pool, then delegates here so facet/validity intersection can never
+        desync across backends. The cosine-sort itself is `_rank_embeddings`.
         """
-        from .embedder import Embedder
-
         if not pool:
             return []
         if filt is not None:
@@ -379,9 +483,7 @@ class WikiStoreBase(abc.ABC):
                 allowed = live if allowed is None else (allowed & live)
             if allowed is not None:
                 pool = [e for e in pool if e.node_id in allowed]
-        scored = [(emb, Embedder.cosine(qvec, emb.vector)) for emb in pool]
-        scored.sort(key=lambda t: t[1], reverse=True)
-        return [emb for emb, _ in scored[:k]]
+        return self._rank_embeddings(pool, qvec, k)
 
     # Documentation-page notes (docs-as-multiplex-nodes)
 
@@ -419,6 +521,62 @@ class WikiStoreBase(abc.ABC):
 
     def delete_file_manifest(self, slug: str, path: str) -> bool:
         """Delete a file-manifest entry; return True if one was removed."""
+        raise NotImplementedError
+
+    # Abstract-entity layer (multiplex overlay — same opt-in pattern as memory)
+    #
+    # Default impls raise NotImplementedError so a backend opts in by
+    # overriding (no separate EntityStore ABC — KISS, one store). Both shipping
+    # drivers (JSON, Mongo) implement the full surface; the base stays a
+    # default-raise (not @abstractmethod) so existing partial test doubles keep
+    # instantiating, exactly like the memory layer above.
+
+    def upsert_entities(self, slug: str, entities: Iterable[Entity]) -> None:
+        """Upsert entities; dedup by ``id`` (= sha1(normalized_name|type))."""
+        raise NotImplementedError
+
+    def get_entity(self, slug: str, entity_id: str) -> Entity | None:
+        """Return a single entity, or None if absent."""
+        raise NotImplementedError
+
+    def query_entities(
+        self, slug: str, *, filt: EntityFilter | None = None
+    ) -> list[Entity]:
+        """Return entities matching *filt*'s facets (no filter ⇒ all)."""
+        raise NotImplementedError
+
+    def upsert_entity_embeddings(
+        self, slug: str, items: Iterable[EntityEmbedding]
+    ) -> None:
+        """Upsert entity embedding vectors; dedup by ``entity_id``."""
+        raise NotImplementedError
+
+    def entity_vector_search(
+        self, slug: str, qvec: list[float], k: int = 10
+    ) -> list[EntityEmbedding]:
+        """Top-k entity embeddings by cosine (the ANN block seam for ER)."""
+        raise NotImplementedError
+
+    def upsert_entity_edges(
+        self, slug: str, edges: Iterable[EntityRelation]
+    ) -> None:
+        """Upsert entity relations; dedup by ``id`` (= source|type|target)."""
+        raise NotImplementedError
+
+    def list_entity_edges(
+        self, slug: str, *, source_id: str | None = None
+    ) -> list[EntityRelation]:
+        """Return entity relations, optionally scoped to ``source_id``."""
+        raise NotImplementedError
+
+    def save_entity_recommendation(
+        self, slug: str, rec: EntityRecommendation
+    ) -> None:
+        """Append a resolution-recommendation record (a prior for the next pass)."""
+        raise NotImplementedError
+
+    def get_entity_recommendations(self, slug: str) -> list[EntityRecommendation]:
+        """Return every persisted entity recommendation for *slug*."""
         raise NotImplementedError
 
 
@@ -729,6 +887,27 @@ class JsonWikiStore(WikiStoreBase):
         except Exception:
             return None
 
+    def _job_resume_path(self, job_id: str) -> Path:
+        """Filesystem path for the resume-plan sidecar file."""
+        return self._job_dir(job_id) / "resume.json"
+
+    def save_resume_plan(self, job_id: str, plan: dict[str, Any]) -> None:
+        """Persist the resume-plan dict for *job_id*; overwrites any previous one."""
+        path = self._job_resume_path(job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+
+    def get_resume_plan(self, job_id: str) -> dict[str, Any] | None:
+        """Return the persisted resume-plan dict, or None if the job isn't resuming."""
+        path = self._job_resume_path(job_id)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
     def get_job_submitted_count(self, job_id: str) -> int:
         """Return the number of pages submitted so far for *job_id*."""
         meta = self._load_job_meta(job_id)
@@ -766,6 +945,85 @@ class JsonWikiStore(WikiStoreBase):
         except Exception:
             return None
 
+    # -- Repository credentials (isolated subdir, mode 0600) -----------------
+
+    def _credentials_dir(self) -> Path:
+        """Directory holding per-slug credential files (mode 0700)."""
+        d = self.root_dir / "credentials"
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            d.chmod(0o700)
+        except OSError:  # pragma: no cover — best-effort on exotic filesystems
+            pass
+        return d
+
+    def _credential_path(self, slug: str) -> Path:
+        """Filesystem path for a slug's credential file."""
+        return self._credentials_dir() / f"{_slug_to_path(slug)}.json"
+
+    def save_credentials(self, slug: str, blob: dict[str, Any]) -> None:
+        """Persist the encoded credential *blob* for *slug* at mode 0600."""
+        path = self._credential_path(slug)
+        path.write_text(json.dumps(blob, indent=2), encoding="utf-8")
+        try:
+            path.chmod(0o600)
+        except OSError:  # pragma: no cover
+            pass
+
+    def get_credentials(self, slug: str) -> dict[str, Any] | None:
+        """Return the encoded credential blob for *slug*, or None."""
+        path = self._credential_path(slug)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def delete_credentials(self, slug: str) -> bool:
+        """Delete *slug*'s credential file; return True if one existed."""
+        path = self._credential_path(slug)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
+    # -- Restart-recovery counter (slug-keyed sidecar) -----------------------
+
+    def _recovery_path(self, slug: str) -> Path:
+        """Filesystem path for a slug's recovery-attempt counter file."""
+        d = self.root_dir / "recovery"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"{_slug_to_path(slug)}.json"
+
+    def get_recovery_attempts(self, slug: str) -> int:
+        """Return the recovery-attempt count for *slug* (0 if never recovered)."""
+        path = self._recovery_path(slug)
+        if not path.exists():
+            return 0
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return int(data.get("attempts", 0)) if isinstance(data, dict) else 0
+        except Exception:
+            return 0
+
+    def bump_recovery_attempts(self, slug: str) -> int:
+        """Atomically increment *slug*'s recovery counter; return the new value."""
+        with self._lock:
+            count = self.get_recovery_attempts(slug) + 1
+            self._recovery_path(slug).write_text(
+                json.dumps({"attempts": count}, indent=2), encoding="utf-8"
+            )
+            return count
+
+    def reset_recovery_attempts(self, slug: str) -> None:
+        """Clear *slug*'s recovery counter file (user-initiated resume fresh budget)."""
+        with self._lock:
+            path = self._recovery_path(slug)
+            if path.exists():
+                path.unlink()
+
     # -- QA ------------------------------------------------------------------
 
     def _qa_dir(self, answer_id: str) -> Path:
@@ -783,6 +1041,14 @@ class JsonWikiStore(WikiStoreBase):
     def save_qa(self, answer: QaAnswer) -> None:
         """Persist a QA answer record (``slug`` round-trips through answer.json)."""
         self._qa_dir(answer.answer_id).mkdir(parents=True, exist_ok=True)
+        self._save_json(self._qa_path(answer.answer_id), answer)
+
+    def update_qa_fields(self, answer: QaAnswer) -> None:
+        """Non-destructive field update.
+
+        Session + events are separate files here, so a plain answer.json rewrite
+        already preserves them.
+        """
         self._save_json(self._qa_path(answer.answer_id), answer)
 
     def get_qa(self, answer_id: str) -> QaAnswer | None:
@@ -1186,6 +1452,109 @@ class JsonWikiStore(WikiStoreBase):
             self._write_jsonl(self._manifest_path(slug), keep)
             return True
 
+    # -- Abstract-entity layer (multiplex overlay) ---------------------------
+    #
+    # Persisted as JSONL under the same per-slug memory dir as memory nodes,
+    # reusing the exact ``_load_jsonl`` / ``_write_jsonl`` upsert idiom so the
+    # entity overlay can never desync from the memory overlay's conventions.
+
+    def _entities_path(self, slug: str) -> Path:
+        return self._memory_dir(slug) / "entities.jsonl"
+
+    def _entity_embeddings_path(self, slug: str) -> Path:
+        return self._memory_dir(slug) / "entity_embeddings.jsonl"
+
+    def _entity_edges_path(self, slug: str) -> Path:
+        return self._memory_dir(slug) / "entity_edges.jsonl"
+
+    def _entity_recs_path(self, slug: str) -> Path:
+        return self._memory_dir(slug) / "entity_recommendations.jsonl"
+
+    def upsert_entities(self, slug: str, entities: Iterable[Entity]) -> None:
+        """Upsert entities for *slug*; dedup by id."""
+        with self._lock:
+            existing = {
+                e.id: e for e in self._load_jsonl(self._entities_path(slug), Entity)
+            }
+            for entity in entities:
+                existing[entity.id] = entity
+            self._write_jsonl(self._entities_path(slug), list(existing.values()))
+
+    def get_entity(self, slug: str, entity_id: str) -> Entity | None:
+        """Return a single entity, or None if absent."""
+        for e in self._load_jsonl(self._entities_path(slug), Entity):
+            if e.id == entity_id:
+                return e
+        return None
+
+    def query_entities(
+        self, slug: str, *, filt: EntityFilter | None = None
+    ) -> list[Entity]:
+        """Return entities matching *filt*'s facets."""
+        entities = self._load_jsonl(self._entities_path(slug), Entity)
+        if filt is None:
+            return entities
+        return [e for e in entities if filt.matches(e)]
+
+    def upsert_entity_embeddings(
+        self, slug: str, items: Iterable[EntityEmbedding]
+    ) -> None:
+        """Upsert entity embedding vectors for *slug*; dedup by entity_id."""
+        with self._lock:
+            existing = {
+                e.entity_id: e
+                for e in self._load_jsonl(
+                    self._entity_embeddings_path(slug), EntityEmbedding
+                )
+            }
+            for item in items:
+                existing[item.entity_id] = item
+            self._write_jsonl(
+                self._entity_embeddings_path(slug), list(existing.values())
+            )
+
+    def entity_vector_search(
+        self, slug: str, qvec: list[float], k: int = 10
+    ) -> list[EntityEmbedding]:
+        """Return top-k entity embeddings for *slug* by cosine similarity."""
+        pool = self._load_jsonl(self._entity_embeddings_path(slug), EntityEmbedding)
+        return self._rank_embeddings(pool, qvec, k)
+
+    def upsert_entity_edges(
+        self, slug: str, edges: Iterable[EntityRelation]
+    ) -> None:
+        """Upsert entity relations for *slug*; dedup by id."""
+        with self._lock:
+            existing = {
+                e.id: e
+                for e in self._load_jsonl(self._entity_edges_path(slug), EntityRelation)
+            }
+            for edge in edges:
+                existing[edge.id] = edge
+            self._write_jsonl(self._entity_edges_path(slug), list(existing.values()))
+
+    def list_entity_edges(
+        self, slug: str, *, source_id: str | None = None
+    ) -> list[EntityRelation]:
+        """Return entity relations, optionally scoped to ``source_id``."""
+        out = self._load_jsonl(self._entity_edges_path(slug), EntityRelation)
+        if source_id is not None:
+            out = [e for e in out if e.source_id == source_id]
+        return out
+
+    def save_entity_recommendation(
+        self, slug: str, rec: EntityRecommendation
+    ) -> None:
+        """Append a resolution-recommendation record (a prior for the next pass)."""
+        with self._lock:
+            recs = self._load_jsonl(self._entity_recs_path(slug), EntityRecommendation)
+            recs.append(rec)
+            self._write_jsonl(self._entity_recs_path(slug), recs)
+
+    def get_entity_recommendations(self, slug: str) -> list[EntityRecommendation]:
+        """Return every persisted entity recommendation for *slug*."""
+        return self._load_jsonl(self._entity_recs_path(slug), EntityRecommendation)
+
 # ---------------------------------------------------------------------------
 # MongoDB driver
 # ---------------------------------------------------------------------------
@@ -1287,6 +1656,8 @@ class MongoWikiStore(WikiStoreBase):
             [("answer_id", ASCENDING), ("idx", ASCENDING)],
             "ix_qa_events_answer_idx",
         )
+        _idx("wiki_credentials", [("slug", ASCENDING)], "ix_credentials_slug")
+        _idx("wiki_recovery", [("slug", ASCENDING)], "ix_recovery_slug")
 
     def _atomic_next_idx(self, col: str, owner_field: str, owner_id: str) -> int:
         """Atomically increment event_count on the owner document and return the next idx (0-based).
@@ -1484,6 +1855,21 @@ class MongoWikiStore(WikiStoreBase):
         plan = doc.get("plan")
         return plan if isinstance(plan, list) else None
 
+    def save_resume_plan(self, job_id: str, plan: dict[str, Any]) -> None:
+        """Persist the resume-plan dict on the job doc; overwrites any previous one."""
+        self._col("wiki_jobs").update_one(
+            {"job_id": job_id},
+            {"$set": {"resume_plan": plan}},
+        )
+
+    def get_resume_plan(self, job_id: str) -> dict[str, Any] | None:
+        """Return the persisted resume-plan dict, or None if the job isn't resuming."""
+        doc = self._col("wiki_jobs").find_one({"job_id": job_id}, {"resume_plan": 1})
+        if doc is None:
+            return None
+        val = doc.get("resume_plan")
+        return val if isinstance(val, dict) else None
+
     def get_job_submitted_count(self, job_id: str) -> int:
         """Return the number of pages submitted so far for *job_id*."""
         doc = self._col("wiki_jobs").find_one({"job_id": job_id}, {"submitted_pages": 1})
@@ -1519,13 +1905,68 @@ class MongoWikiStore(WikiStoreBase):
         val = doc.get("submission")
         return val if isinstance(val, dict) else None
 
+    # -- Repository credentials (isolated collection) ------------------------
+
+    def save_credentials(self, slug: str, blob: dict[str, Any]) -> None:
+        """Persist the encoded credential blob for *slug* (slug PK, upsert)."""
+        self._col("wiki_credentials").replace_one(
+            {"slug": slug}, {"slug": slug, "blob": blob}, upsert=True
+        )
+
+    def get_credentials(self, slug: str) -> dict[str, Any] | None:
+        """Return the encoded credential blob for *slug*, or None."""
+        doc = self._col("wiki_credentials").find_one({"slug": slug}, {"blob": 1})
+        if doc is None:
+            return None
+        val = doc.get("blob")
+        return val if isinstance(val, dict) else None
+
+    def delete_credentials(self, slug: str) -> bool:
+        """Delete *slug*'s credential document; return True if one existed."""
+        result = self._col("wiki_credentials").delete_one({"slug": slug})
+        return result.deleted_count > 0
+
+    # -- Restart-recovery counter (slug-keyed collection) --------------------
+
+    def get_recovery_attempts(self, slug: str) -> int:
+        """Return the recovery-attempt count for *slug* (0 if never recovered)."""
+        doc = self._col("wiki_recovery").find_one({"slug": slug}, {"attempts": 1})
+        return int(doc.get("attempts", 0)) if doc else 0
+
+    def bump_recovery_attempts(self, slug: str) -> int:
+        """Atomically increment *slug*'s recovery counter; return the new value."""
+        from pymongo import ReturnDocument
+
+        doc = self._col("wiki_recovery").find_one_and_update(
+            {"slug": slug},
+            {"$inc": {"attempts": 1}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        return int(doc["attempts"])
+
+    def reset_recovery_attempts(self, slug: str) -> None:
+        """Clear *slug*'s recovery counter document (user-initiated resume fresh budget)."""
+        self._col("wiki_recovery").delete_one({"slug": slug})
+
     # -- QA ------------------------------------------------------------------
 
     def save_qa(self, answer: QaAnswer) -> None:
-        """Persist a QA answer record."""
+        """Persist a QA answer record (creation: resets event_count, no session yet)."""
         doc = {"event_count": 0, **answer.model_dump(by_alias=False)}
         self._col("wiki_qa").replace_one(
             {"answer_id": answer.answer_id}, doc, upsert=True
+        )
+
+    def update_qa_fields(self, answer: QaAnswer) -> None:
+        """In-place ``$set`` of the QaAnswer fields only.
+
+        Leaves ``event_count`` + ``session_id`` (this backend packs both into the
+        same doc) intact, unlike ``save_qa``'s full replace.
+        """
+        self._col("wiki_qa").update_one(
+            {"answer_id": answer.answer_id},
+            {"$set": answer.model_dump(by_alias=False)},
         )
 
     def get_qa(self, answer_id: str) -> QaAnswer | None:
@@ -1750,6 +2191,23 @@ class MongoWikiStore(WikiStoreBase):
             [("slug", ASCENDING), ("path", ASCENDING)],
             name="ix_manifest_slug_path", unique=True, background=True,
         )
+        # Abstract-entity overlay collections (same lazy-index pattern).
+        self._col("wiki_entities").create_index(
+            [("slug", ASCENDING), ("id", ASCENDING)],
+            name="ix_entities_slug_id", unique=True, background=True,
+        )
+        self._col("wiki_entity_embeddings").create_index(
+            [("slug", ASCENDING), ("entity_id", ASCENDING)],
+            name="ix_entity_emb_slug_eid", unique=True, background=True,
+        )
+        self._col("wiki_entity_edges").create_index(
+            [("slug", ASCENDING), ("id", ASCENDING)],
+            name="ix_entity_edges_slug_id", unique=True, background=True,
+        )
+        self._col("wiki_entity_recommendations").create_index(
+            [("slug", ASCENDING)],
+            name="ix_entity_recs_slug", background=True,
+        )
         self._mem_idx_done = True
 
     def upsert_memory_nodes(self, slug: str, nodes: Iterable[MemoryNode]) -> None:
@@ -1950,6 +2408,112 @@ class MongoWikiStore(WikiStoreBase):
             {"slug": slug, "path": path}
         )
         return result.deleted_count > 0
+
+    # -- Abstract-entity layer (multiplex overlay) ---------------------------
+    #
+    # Mirrors the memory-node Mongo block exactly: per-(slug, key) upsert,
+    # ``slug`` carried as a store-internal field and stripped on read.
+
+    def upsert_entities(self, slug: str, entities: Iterable[Entity]) -> None:
+        """Upsert entities for *slug*; dedup by (slug, id)."""
+        self._ensure_memory_indexes()
+        col = self._col("wiki_entities")
+        for entity in entities:
+            col.update_one(
+                {"slug": slug, "id": entity.id},
+                {"$set": {"slug": slug, **entity.model_dump(by_alias=False)}},
+                upsert=True,
+            )
+
+    def get_entity(self, slug: str, entity_id: str) -> Entity | None:
+        """Return a single entity, or None if absent."""
+        doc = self._col("wiki_entities").find_one({"slug": slug, "id": entity_id})
+        if doc is None:
+            return None
+        clean = _strip_mongo_meta(doc)
+        clean.pop("slug", None)
+        return Entity.model_validate(clean)
+
+    def query_entities(
+        self, slug: str, *, filt: EntityFilter | None = None
+    ) -> list[Entity]:
+        """Return entities matching *filt*'s facets."""
+        out: list[Entity] = []
+        for doc in self._col("wiki_entities").find({"slug": slug}):
+            clean = _strip_mongo_meta(doc)
+            clean.pop("slug", None)
+            out.append(Entity.model_validate(clean))
+        if filt is None:
+            return out
+        return [e for e in out if filt.matches(e)]
+
+    def upsert_entity_embeddings(
+        self, slug: str, items: Iterable[EntityEmbedding]
+    ) -> None:
+        """Upsert entity embedding vectors for *slug*; dedup by (slug, entity_id)."""
+        self._ensure_memory_indexes()
+        col = self._col("wiki_entity_embeddings")
+        for item in items:
+            col.update_one(
+                {"slug": slug, "entity_id": item.entity_id},
+                {"$set": item.model_dump(by_alias=False)},
+                upsert=True,
+            )
+
+    def entity_vector_search(
+        self, slug: str, qvec: list[float], k: int = 10
+    ) -> list[EntityEmbedding]:
+        """Return top-k entity embeddings for *slug* by cosine (in-memory scoring)."""
+        pool = [
+            EntityEmbedding.model_validate(_strip_mongo_meta(d))
+            for d in self._col("wiki_entity_embeddings").find({"slug": slug})
+        ]
+        return self._rank_embeddings(pool, qvec, k)
+
+    def upsert_entity_edges(
+        self, slug: str, edges: Iterable[EntityRelation]
+    ) -> None:
+        """Upsert entity relations for *slug*; dedup by (slug, id)."""
+        self._ensure_memory_indexes()
+        col = self._col("wiki_entity_edges")
+        for edge in edges:
+            col.update_one(
+                {"slug": slug, "id": edge.id},
+                {"$set": {"slug": slug, **edge.model_dump(by_alias=False)}},
+                upsert=True,
+            )
+
+    def list_entity_edges(
+        self, slug: str, *, source_id: str | None = None
+    ) -> list[EntityRelation]:
+        """Return entity relations, optionally scoped to ``source_id``."""
+        query: dict[str, Any] = {"slug": slug}
+        if source_id is not None:
+            query["source_id"] = source_id
+        out: list[EntityRelation] = []
+        for d in self._col("wiki_entity_edges").find(query):
+            clean = _strip_mongo_meta(d)
+            clean.pop("slug", None)
+            out.append(EntityRelation.model_validate(clean))
+        return out
+
+    def save_entity_recommendation(
+        self, slug: str, rec: EntityRecommendation
+    ) -> None:
+        """Append a resolution-recommendation record (a prior for the next pass)."""
+        self._ensure_memory_indexes()
+        self._col("wiki_entity_recommendations").insert_one(
+            {"slug": slug, **rec.model_dump(by_alias=False)}
+        )
+
+    def get_entity_recommendations(self, slug: str) -> list[EntityRecommendation]:
+        """Return every persisted entity recommendation for *slug*."""
+        out: list[EntityRecommendation] = []
+        for d in self._col("wiki_entity_recommendations").find({"slug": slug}):
+            clean = _strip_mongo_meta(d)
+            clean.pop("slug", None)
+            out.append(EntityRecommendation.model_validate(clean))
+        return out
 
 # ---------------------------------------------------------------------------
 # Factory

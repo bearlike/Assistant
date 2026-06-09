@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Database,
   Eye,
   EyeOff,
   GitFork,
@@ -35,11 +36,12 @@ import { cn } from "@/lib/utils";
 
 import { ModelChip, ModelPicker } from "./ModelPicker";
 import { WikiTopBar } from "./WikiTopBar";
+import { CatalogDocsForm } from "./CatalogDocsForm";
 import { Field } from "./configure-wizard/Field";
 import { PlatformIcon } from "./configure-wizard/PlatformIcon";
 import { PlatformTile } from "./configure-wizard/PlatformTile";
 import { Stepper } from "./configure-wizard/Stepper";
-import { getDefaultExclusions } from "./api/client";
+import { getDefaultExclusions, uploadCatalogDocuments } from "./api/client";
 import {
   useSubmitWizard,
   useWikiDefaults,
@@ -50,7 +52,9 @@ import { useModels } from "../../hooks/useModels";
 import { buildHref } from "./router";
 import { slugFromRepoUrl } from "./slug";
 import type {
+  CatalogDocument,
   Platform,
+  WizardSourceType,
   WizardSubmission,
 } from "./api/types";
 
@@ -88,6 +92,9 @@ interface ConfigureWizardProps {
 }
 
 interface WizardState {
+  /** Whether this is a git-backed or catalog (non-git) workspace. */
+  sourceType: WizardSourceType;
+  // ── git fields ────────────────────────────────────────────────────
   url: string;
   platform: Platform["id"];
   platformLocked: boolean;
@@ -98,12 +105,30 @@ interface WizardState {
   filterMode: "exclude" | "include";
   dirs: string;
   files: string;
+  // ── catalog fields ────────────────────────────────────────────────
+  /** Human-readable workspace name; slugified to produce the project slug. */
+  catalogName: string;
+  catalogDocs: CatalogDocument[];
 }
 
-const STEPS = [
+/** Slugify a free-form workspace name into a valid project slug. */
+function slugifyName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+const GIT_STEPS = [
   { id: "source", label: "Source", sub: "Where the code lives" },
   { id: "generation", label: "Generation", sub: "Depth · language · model" },
   { id: "scope", label: "Scope", sub: "What to index" },
+];
+
+const CATALOG_STEPS = [
+  { id: "source", label: "Source", sub: "Workspace name & documents" },
 ];
 
 export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
@@ -116,11 +141,14 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
   const submit = useSubmitWizard();
   const [step, setStep] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [catalogPending, setCatalogPending] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const platformList = useMemo(() => platforms.data ?? [], [platforms.data]);
   const languageList = useMemo(() => languages.data ?? [], [languages.data]);
 
   const [state, setState] = useState<WizardState>(() => ({
+    sourceType: "git",
     url: initialUrl,
     platform: "github",
     platformLocked: false,
@@ -131,6 +159,8 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
     filterMode: "exclude",
     dirs: "",
     files: "",
+    catalogName: "",
+    catalogDocs: [],
   }));
 
   // Seed the model from wiki.default_model if pinned, else fall back to
@@ -141,7 +171,9 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
     }
   }, [seedModel, state.model]);
 
-  const slug = useMemo(() => slugFromRepoUrl(state.url), [state.url]);
+  const gitSlug = useMemo(() => slugFromRepoUrl(state.url), [state.url]);
+  const catalogSlug = useMemo(() => slugifyName(state.catalogName), [state.catalogName]);
+
   const platform =
     platformList.find((p) => p.id === state.platform) ?? platformList[0];
 
@@ -157,11 +189,23 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
 
   const set = (patch: Partial<WizardState>) => setState((s) => ({ ...s, ...patch }));
 
+  // Which steps to show depends on source type.
+  const STEPS = state.sourceType === "catalog" ? CATALOG_STEPS : GIT_STEPS;
+
   const validate = (n: number): boolean => {
     const e: Record<string, string> = {};
     if (n === 0) {
-      if (!state.url.trim()) e.url = "Repository URL is required.";
-      else if (!slug) e.url = "Doesn't look like a valid repository URL.";
+      if (state.sourceType === "git") {
+        if (!state.url.trim()) e.url = "Repository URL is required.";
+        else if (!gitSlug) e.url = "Doesn't look like a valid repository URL.";
+      } else {
+        if (!state.catalogName.trim()) e.catalogName = "Workspace name is required.";
+        else if (!catalogSlug) e.catalogName = "Name must contain at least one letter or number.";
+        if (state.catalogDocs.length === 0) e.catalogDocs = "Add at least one document.";
+        else if (state.catalogDocs.some((d) => !d.text.trim())) {
+          e.catalogDocs = "All documents must have content.";
+        }
+      }
     }
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -174,14 +218,19 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
   const goBack = () => setStep((s) => Math.max(0, s - 1));
 
   const onSubmit = () => {
+    if (state.sourceType === "catalog") {
+      onSubmitCatalog();
+      return;
+    }
+    // git path
     if (!validate(0)) {
       setStep(0);
       return;
     }
-    if (!slug || !platform) return;
+    if (!gitSlug || !platform) return;
     const payload: WizardSubmission = {
       repoUrl: state.url,
-      slug,
+      slug: gitSlug,
       platform: state.platform,
       token: state.token || undefined,
       depth: state.depth,
@@ -197,13 +246,40 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
           buildHref({
             kind: "indexing",
             jobId: job.jobId,
-            slug,
+            slug: gitSlug,
             platform: state.platform,
           })
         );
       },
     });
   };
+
+  const onSubmitCatalog = () => {
+    if (!validate(0)) return;
+    const slug = catalogSlug;
+    if (!slug) return;
+    setCatalogPending(true);
+    setCatalogError(null);
+    uploadCatalogDocuments(slug, state.catalogDocs)
+      .then((report) => {
+        // Navigate to the Q&A screen for this workspace using the landing page.
+        navigate(
+          buildHref({
+            kind: "page",
+            pageId: report.landingPageId,
+            slug: report.slug,
+          })
+        );
+      })
+      .catch((err: unknown) => {
+        const msg =
+          err instanceof Error ? err.message : "Upload failed. Please try again.";
+        setCatalogError(msg);
+        setCatalogPending(false);
+      });
+  };
+
+  const isPending = submit.isPending || catalogPending;
 
   return (
     <div className="flex flex-col flex-1 overflow-y-auto">
@@ -244,20 +320,23 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
                   errors={errors}
                   platform={platform}
                   platforms={platformList}
+                  catalogError={catalogError}
                 />
               )}
-              {step === 1 && (
+              {step === 1 && state.sourceType === "git" && (
                 <StepGeneration
                   state={state}
                   set={set}
                   languages={languageList}
                 />
               )}
-              {step === 2 && <StepScope state={state} set={set} />}
+              {step === 2 && state.sourceType === "git" && (
+                <StepScope state={state} set={set} />
+              )}
             </div>
 
-            {/* Summary strip */}
-            {step > 0 && platform && state.model && (
+            {/* Summary strip — git mode only */}
+            {state.sourceType === "git" && step > 0 && platform && state.model && (
               <div className="px-6 py-3 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 flex items-center gap-3 flex-wrap text-xs">
                 <span className="inline-flex items-center gap-1.5">
                   <span
@@ -268,7 +347,7 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
                     <PlatformIcon platformId={platform.id} className="h-3 w-3 text-white" />
                   </span>
                   <span className="font-mono text-[hsl(var(--foreground))]">
-                    {slug ?? "—"}
+                    {gitSlug ?? "—"}
                   </span>
                 </span>
                 <span aria-hidden className="text-[hsl(var(--muted-foreground))]">·</span>
@@ -319,13 +398,24 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
                 >
                   Continue
                 </Button>
+              ) : state.sourceType === "catalog" ? (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  onClick={onSubmit}
+                  disabled={isPending}
+                  leadingIcon={<Database className="h-3.5 w-3.5" />}
+                >
+                  {isPending ? "Ingesting…" : "Create workspace"}
+                </Button>
               ) : (
                 <Button
                   type="button"
                   variant="primary"
                   size="sm"
                   onClick={onSubmit}
-                  disabled={submit.isPending}
+                  disabled={isPending}
                   leadingIcon={<Sparkles className="h-3.5 w-3.5" />}
                 >
                   Generate Wiki
@@ -347,147 +437,252 @@ function StepSource({
   errors,
   platform,
   platforms,
+  catalogError,
 }: {
   state: WizardState;
   set: (patch: Partial<WizardState>) => void;
   errors: Record<string, string>;
   platform: Platform | undefined;
   platforms: Platform[];
+  catalogError?: string | null;
 }) {
   const [reveal, setReveal] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
 
   return (
     <div className="space-y-5">
+      {/* ── Source type toggle ──────────────────────────────────── */}
       <div>
-        <h2 className="text-base font-semibold">Where's the code?</h2>
+        <h2 className="text-base font-semibold">What are you indexing?</h2>
         <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">
-          Paste the repository URL and tell us which host it lives on. For private
-          repositories add a read-only access token.
+          Point to a code repository or upload a document collection.
         </p>
-      </div>
-
-      <Field
-        label="Repository URL"
-        hint="HTTPS or SSH"
-        required
-        error={errors.url}
-      >
-        <div className="flex items-center gap-2 h-11 px-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--input))] focus-within:border-[hsl(var(--border-strong))] focus-within:ring-2 focus-within:ring-[hsl(var(--primary))]/30">
-          <GitFork className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
-          <input
-            type="text"
-            placeholder="https://github.com/owner/repo"
-            value={state.url}
-            onChange={(e) => set({ url: e.target.value })}
-            spellCheck={false}
-            autoFocus
-            className="flex-1 bg-transparent text-sm font-mono outline-none placeholder:text-[hsl(var(--muted-foreground))]"
+        <div className="mt-3 grid gap-2 grid-cols-1 sm:grid-cols-2">
+          <SourceTypeCard
+            icon={<GitFork className="h-4 w-4" />}
+            title="Git repository"
+            desc="Index a GitHub, GitLab, Gitea, or any hosted repo."
+            selected={state.sourceType === "git"}
+            onSelect={() => set({ sourceType: "git" })}
+          />
+          <SourceTypeCard
+            icon={<Database className="h-4 w-4" />}
+            title="Document catalog"
+            desc="Paste or upload text/Markdown files — no git URL needed."
+            selected={state.sourceType === "catalog"}
+            onSelect={() => set({ sourceType: "catalog" })}
           />
         </div>
-      </Field>
+      </div>
 
-      <Field
-        label="Platform"
-        required
-        hint="We auto-detect from the URL — change if needed"
-      >
-        <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-          {platforms.map((p) => (
-            <PlatformTile
-              key={p.id}
-              platform={p}
-              selected={state.platform === p.id}
-              onSelect={() => set({ platform: p.id, platformLocked: true })}
-            />
-          ))}
-        </div>
-      </Field>
-
-      {platform && (
-        <Field
-          label={platform.tokenLabel}
-          hint="Optional · only needed for private repos"
-        >
-          <div className="flex items-center gap-2 h-11 px-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--input))] focus-within:border-[hsl(var(--border-strong))] focus-within:ring-2 focus-within:ring-[hsl(var(--primary))]/30">
-            <KeyRound className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
-            <input
-              type={reveal ? "text" : "password"}
-              placeholder={`Paste your ${platform.name} token`}
-              value={state.token}
-              onChange={(e) => set({ token: e.target.value })}
-              spellCheck={false}
-              autoComplete="off"
-              className="flex-1 bg-transparent text-sm outline-none placeholder:text-[hsl(var(--muted-foreground))]"
-            />
-            <button
-              type="button"
-              onClick={() => setReveal((r) => !r)}
-              aria-label={reveal ? "Hide token" : "Show token"}
-              className="inline-flex items-center justify-center w-7 h-7 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]"
-            >
-              {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            </button>
-          </div>
-          <div className="mt-2 flex items-start justify-between gap-3 flex-wrap">
-            <div className="inline-flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
-              <Info className="h-3 w-3" />
-              Token is held in memory for this session only — never persisted.
+      {/* ── Git fields ─────────────────────────────────────────── */}
+      {state.sourceType === "git" && (
+        <>
+          <Field
+            label="Repository URL"
+            hint="HTTPS or SSH"
+            required
+            error={errors.url}
+          >
+            <div className="flex items-center gap-2 h-11 px-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--input))] focus-within:border-[hsl(var(--border-strong))] focus-within:ring-2 focus-within:ring-[hsl(var(--primary))]/30">
+              <GitFork className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
+              <input
+                type="text"
+                placeholder="https://github.com/owner/repo"
+                value={state.url}
+                onChange={(e) => set({ url: e.target.value })}
+                spellCheck={false}
+                autoFocus
+                className="flex-1 bg-transparent text-sm font-mono outline-none placeholder:text-[hsl(var(--muted-foreground))]"
+              />
             </div>
-            <button
-              type="button"
-              onClick={() => setHelpOpen((s) => !s)}
-              className="inline-flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+          </Field>
+
+          <Field
+            label="Platform"
+            required
+            hint="We auto-detect from the URL — change if needed"
+          >
+            <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+              {platforms.map((p) => (
+                <PlatformTile
+                  key={p.id}
+                  platform={p}
+                  selected={state.platform === p.id}
+                  onSelect={() => set({ platform: p.id, platformLocked: true })}
+                />
+              ))}
+            </div>
+          </Field>
+
+          {platform && (
+            <Field
+              label={platform.tokenLabel}
+              hint="Optional · only needed for private repos"
             >
-              <BookOpen className="h-3 w-3" />
-              How do I create a {platform.name} token?
-              {helpOpen ? (
-                <ChevronUp className="h-3 w-3" />
-              ) : (
-                <ChevronDown className="h-3 w-3" />
-              )}
-            </button>
-          </div>
-          {helpOpen && (
-            <div className="mt-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-3">
-              <div className="flex items-start gap-3 flex-wrap">
-                <span
-                  aria-hidden
-                  className="inline-flex items-center justify-center w-8 h-8 rounded shrink-0"
-                  style={{ background: platform.color }}
+              <div className="flex items-center gap-2 h-11 px-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--input))] focus-within:border-[hsl(var(--border-strong))] focus-within:ring-2 focus-within:ring-[hsl(var(--primary))]/30">
+                <KeyRound className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
+                <input
+                  type={reveal ? "text" : "password"}
+                  placeholder={`Paste your ${platform.name} token`}
+                  value={state.token}
+                  onChange={(e) => set({ token: e.target.value })}
+                  spellCheck={false}
+                  autoComplete="off"
+                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-[hsl(var(--muted-foreground))]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setReveal((r) => !r)}
+                  aria-label={reveal ? "Hide token" : "Show token"}
+                  className="inline-flex items-center justify-center w-7 h-7 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]"
                 >
-                  <PlatformIcon platformId={platform.id} className="h-4 w-4 text-white" />
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium">
-                    Create a token on {platform.name}
-                  </div>
-                  <div className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">
-                    {platform.tokenScope}
-                  </div>
-                </div>
-                {platform.tokenUrl && (
-                  <a
-                    href={platform.tokenUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-[11px] text-[hsl(var(--primary))] hover:underline"
-                  >
-                    Open token settings
-                    <ExternalLink className="h-2.5 w-2.5" />
-                  </a>
-                )}
+                  {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </button>
               </div>
-              <ol className="mt-2.5 space-y-1.5 text-xs text-[hsl(var(--muted-foreground))] list-decimal pl-5">
-                {platform.tokenSteps.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ol>
-            </div>
+              <div className="mt-2 flex items-start justify-between gap-3 flex-wrap">
+                <div className="inline-flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
+                  <Info className="h-3 w-3" />
+                  Token is held in memory for this session only — never persisted.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHelpOpen((s) => !s)}
+                  className="inline-flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                >
+                  <BookOpen className="h-3 w-3" />
+                  How do I create a {platform.name} token?
+                  {helpOpen ? (
+                    <ChevronUp className="h-3 w-3" />
+                  ) : (
+                    <ChevronDown className="h-3 w-3" />
+                  )}
+                </button>
+              </div>
+              {helpOpen && (
+                <div className="mt-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-3">
+                  <div className="flex items-start gap-3 flex-wrap">
+                    <span
+                      aria-hidden
+                      className="inline-flex items-center justify-center w-8 h-8 rounded shrink-0"
+                      style={{ background: platform.color }}
+                    >
+                      <PlatformIcon platformId={platform.id} className="h-4 w-4 text-white" />
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">
+                        Create a token on {platform.name}
+                      </div>
+                      <div className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">
+                        {platform.tokenScope}
+                      </div>
+                    </div>
+                    {platform.tokenUrl && (
+                      <a
+                        href={platform.tokenUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] text-[hsl(var(--primary))] hover:underline"
+                      >
+                        Open token settings
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    )}
+                  </div>
+                  <ol className="mt-2.5 space-y-1.5 text-xs text-[hsl(var(--muted-foreground))] list-decimal pl-5">
+                    {platform.tokenSteps.map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+            </Field>
           )}
-        </Field>
+        </>
+      )}
+
+      {/* ── Catalog fields ─────────────────────────────────────── */}
+      {state.sourceType === "catalog" && (
+        <>
+          <Field
+            label="Workspace name"
+            hint="Becomes the project slug"
+            required
+            error={errors.catalogName}
+          >
+            <div className="flex items-center gap-2 h-11 px-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--input))] focus-within:border-[hsl(var(--border-strong))] focus-within:ring-2 focus-within:ring-[hsl(var(--primary))]/30">
+              <Database className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
+              <input
+                type="text"
+                placeholder="my-knowledge-base"
+                value={state.catalogName}
+                onChange={(e) => set({ catalogName: e.target.value })}
+                spellCheck={false}
+                autoFocus
+                className="flex-1 bg-transparent text-sm outline-none placeholder:text-[hsl(var(--muted-foreground))]"
+              />
+            </div>
+            {state.catalogName.trim() && (
+              <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))]">
+                Slug:{" "}
+                <span className="font-mono text-[hsl(var(--foreground))]">
+                  {slugifyName(state.catalogName) || "—"}
+                </span>
+              </p>
+            )}
+          </Field>
+
+          <Field
+            label="Documents"
+            required
+            error={errors.catalogDocs}
+            hint="Paste content or upload .txt / .md files"
+          >
+            <CatalogDocsForm
+              docs={state.catalogDocs}
+              onChange={(docs) => set({ catalogDocs: docs })}
+              error={catalogError ?? undefined}
+            />
+          </Field>
+        </>
       )}
     </div>
+  );
+}
+
+// ── SourceTypeCard ───────────────────────────────────────────────────
+
+function SourceTypeCard({
+  icon,
+  title,
+  desc,
+  selected,
+  onSelect,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  desc: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onSelect}
+      className={cn(
+        "flex items-start gap-3 p-3.5 rounded-lg border text-left transition-all",
+        selected
+          ? "border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/[0.06] ring-1 ring-[hsl(var(--primary))]/30"
+          : "border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:border-[hsl(var(--border-strong))] hover:bg-[hsl(var(--accent))]/40"
+      )}
+    >
+      <span className="text-[hsl(var(--primary))] mt-0.5 shrink-0">{icon}</span>
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm font-medium">{title}</span>
+        <span className="block text-[11px] text-[hsl(var(--muted-foreground))]">{desc}</span>
+      </span>
+    </button>
   );
 }
 

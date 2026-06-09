@@ -171,6 +171,37 @@ class TestSessionList:
         sessions = resp.get_json()["sessions"]
         assert all(s["session_id"] != empty_sid for s in sessions)
 
+    def test_list_surfaces_recoverable_flag(self, client, auth_headers, tmp_path, monkeypatch):
+        """F2: a session that died without a completion event is recoverable=True
+        on the /api/sessions wire; a completed one is False.
+        """
+        _reset_backend(tmp_path, monkeypatch)
+        dead = backend.session_store.create_session()
+        backend.session_store.append_event(dead, {"type": "user", "payload": {"text": "q"}})
+        # No completion event — process died mid-call.
+        done = backend.session_store.create_session()
+        backend.session_store.append_event(done, {"type": "user", "payload": {"text": "q"}})
+        backend.session_store.append_event(
+            done,
+            {"type": "completion", "payload": {"done": True, "done_reason": "completed"}},
+        )
+        resp = client.get("/api/sessions", headers=auth_headers)
+        sessions = {s["session_id"]: s for s in resp.get_json()["sessions"]}
+        assert sessions[dead]["recoverable"] is True
+        assert sessions[done]["recoverable"] is False
+
+    def test_events_surfaces_recoverable_flag(self, client, auth_headers, tmp_path, monkeypatch):
+        """F2: the per-session /events poll carries ``recoverable``."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.session_store.append_event(sid, {"type": "user", "payload": {"text": "q"}})
+        backend.session_store.append_event(
+            sid, {"type": "completion", "payload": {"done": True, "done_reason": "error"}}
+        )
+        resp = client.get(f"/api/sessions/{sid}/events", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()["recoverable"] is True
+
     def test_list_hides_archived_by_default(self, client, auth_headers, tmp_path, monkeypatch):
         _reset_backend(tmp_path, monkeypatch)
         sid = backend.session_store.create_session()
@@ -351,6 +382,73 @@ class TestSessionEvents:
         # Far-future cutoff: no events after 9999-12-31 — expect empty list
         assert len(body2["events"]) == 0
 
+    def test_events_unknown_session_404(self, client, auth_headers, tmp_path, monkeypatch):
+        """#64: an unknown id must 404 — never synthesize a phantom idle 200."""
+        _reset_backend(tmp_path, monkeypatch)
+        resp = client.get("/api/sessions/does-not-exist/events", headers=auth_headers)
+        assert resp.status_code == 404
+        body = resp.get_json()
+        assert body["error"]["code"] == 404
+        # The phantom-idle placeholder must NOT leak through the 404.
+        assert "title" not in body
+        assert "status" not in body
+
+    def test_events_known_empty_session_returns_200(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """#64: the guard distinguishes 'exists-but-empty' from 'unknown' —
+        a real session with no events still polls 200 (with the placeholder)."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()  # exists, zero events
+        resp = client.get(f"/api/sessions/{sid}/events", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["session_id"] == sid
+        assert body["events"] == []
+        # The titleless-but-real placeholder is still correct here.
+        assert "status" in body
+
+    def test_events_truncate_is_opt_in_default_preserves_full_result(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """#42: default GET returns the FULL result (console renders it) — no cap,
+        no _truncated flag; ?truncate=1 caps free-text fields and flags them, but
+        leaves the already-capped ``summary`` untouched."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        big = "x" * 50_000
+        big_cmd = "c" * 50_000
+        backend.session_store.append_event(
+            sid,
+            {
+                "type": "tool_result",
+                "payload": {
+                    "tool_id": "shell",
+                    "result": big,
+                    "tool_input": {"cmd": big_cmd},
+                    "summary": "short-summary",
+                },
+            },
+        )
+
+        # Default — full result preserved, no truncation flags.
+        resp = client.get(f"/api/sessions/{sid}/events", headers=auth_headers)
+        assert resp.status_code == 200
+        ev = next(e for e in resp.get_json()["events"] if e["type"] == "tool_result")
+        assert len(ev["payload"]["result"]) == 50_000
+        assert "result_truncated" not in ev["payload"]
+        assert "tool_input_truncated" not in ev["payload"]
+
+        # ?truncate=1 — result capped at 2000 + flagged; tool_input (dict) flagged;
+        # the upstream-capped ``summary`` is left alone.
+        resp2 = client.get(f"/api/sessions/{sid}/events?truncate=1", headers=auth_headers)
+        assert resp2.status_code == 200
+        ev2 = next(e for e in resp2.get_json()["events"] if e["type"] == "tool_result")
+        assert len(ev2["payload"]["result"]) == 2000
+        assert ev2["payload"]["result_truncated"] is True
+        assert ev2["payload"]["tool_input_truncated"] is True
+        assert ev2["payload"]["summary"] == "short-summary"
+
 
 # ---------------------------------------------------------------------------
 # Session message (steering) and interrupt
@@ -388,16 +486,27 @@ class TestSessionMessage:
         assert resp.get_json()["enqueued"] is True
         assert enqueued[0][1] == "steer me"
 
-    def test_message_404_when_no_active_run(self, client, auth_headers, tmp_path, monkeypatch):
+    def test_message_idle_reengages_with_new_run(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """Idle session: a message starts a fresh run instead of 404 (#44.5)."""
         _reset_backend(tmp_path, monkeypatch)
         monkeypatch.setattr(backend.runtime, "enqueue_message", lambda sid, text: False)
+        monkeypatch.setattr(backend.runtime, "is_running", lambda sid: False)
+        monkeypatch.setattr(backend.runtime, "append_context_event", lambda sid, p: None)
+        monkeypatch.setattr(
+            backend.runtime, "start_async", lambda **kw: f"{kw['session_id']}:r1"
+        )
         sid = backend.session_store.create_session()
         resp = client.post(
             f"/api/sessions/{sid}/message",
             headers=auth_headers,
             json={"text": "steer me"},
         )
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["enqueued"] is True
+        assert body["run_id"] == f"{sid}:r1"
 
 
 class TestSessionInterrupt:
@@ -421,12 +530,14 @@ class TestSessionInterrupt:
         assert resp.get_json()["interrupted"] is True
         assert sid in interrupted
 
-    def test_interrupt_404_when_idle(self, client, auth_headers, tmp_path, monkeypatch):
+    def test_interrupt_idle_is_graceful_noop(self, client, auth_headers, tmp_path, monkeypatch):
+        """Idle session: interrupt is an idempotent no-op (200), not a 404 (#44.5)."""
         _reset_backend(tmp_path, monkeypatch)
         monkeypatch.setattr(backend.runtime, "interrupt_step", lambda sid: False)
         sid = backend.session_store.create_session()
         resp = client.post(f"/api/sessions/{sid}/interrupt", headers=auth_headers)
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        assert resp.get_json()["interrupted"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -474,25 +585,55 @@ class TestSessionAgents:
         assert len(body["agents"]) == 1
         assert body["agents"][0]["agent_id"] == "child-1"
 
-    def test_agents_token_totals_sum_stop_agents(self, client, auth_headers, tmp_path, monkeypatch):
+    def test_agents_token_totals_include_root(self, client, auth_headers, tmp_path, monkeypatch):
+        """Token rollup delegates to build_usage_numbers — root (depth==0)
+        tokens are counted, so a root-only session no longer reports 0 (#44.3)."""
         _reset_backend(tmp_path, monkeypatch)
         sid = backend.session_store.create_session()
         backend.session_store.append_event(
             sid,
             {
-                "type": "sub_agent",
-                "payload": {
-                    "action": "stop",
-                    "input_tokens": 200,
-                    "output_tokens": 100,
-                    "status": "completed",
-                },
+                "type": "llm_call_end",
+                "payload": {"depth": 0, "input_tokens": 200, "output_tokens": 100},
             },
         )
         resp = client.get(f"/api/sessions/{sid}/agents", headers=auth_headers)
         body = resp.get_json()
         assert body["total_input_tokens"] == 200
         assert body["total_output_tokens"] == 100
+
+    def test_agents_total_input_tokens_is_peak_not_billed(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """total_input_tokens reports PEAK context pressure, not the cumulative billed sum.
+
+        Within a session the prompt GROWS as tool results accumulate, so summing
+        input_tokens across calls double-counts the baseline (the billed sum is
+        ~2× the real peak for a long session).  The /agents endpoint must match
+        the peak figure the history overview + console badge show — not the billed
+        sum that is only correct for cost accounting.
+
+        Fixture mirrors the docstring example in build_usage_numbers:
+          call 1: 13 000 input tokens  →  billed = 13 000, peak = 13 000
+          call 2: 27 000 input tokens  →  billed = 40 000, peak = 27 000
+        """
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        for input_tokens in (13_000, 27_000):
+            backend.session_store.append_event(
+                sid,
+                {
+                    "type": "llm_call_end",
+                    "payload": {"depth": 0, "input_tokens": input_tokens, "output_tokens": 50},
+                },
+            )
+        resp = client.get(f"/api/sessions/{sid}/agents", headers=auth_headers)
+        body = resp.get_json()
+        # Peak — the figure that reflects real context pressure.
+        assert body["total_input_tokens"] == 27_000
+        # Billed sum — exposed separately for cost accounting; must NOT equal peak.
+        assert body["total_input_tokens_billed"] == 40_000
+        assert body["total_input_tokens"] != body["total_input_tokens_billed"]
 
 
 # ---------------------------------------------------------------------------
@@ -784,7 +925,7 @@ class TestSessionRecovery:
             return "original query"
 
         monkeypatch.setattr(backend.runtime, "resolve_recovery_query", fake_resolve)
-        monkeypatch.setattr(backend.runtime, "start_async", lambda **kw: True)
+        monkeypatch.setattr(backend.runtime, "start_async", lambda **kw: f"{sid}:r2")
 
         resp = client.post(
             f"/api/sessions/{sid}/recover",
@@ -795,6 +936,8 @@ class TestSessionRecovery:
         body = resp.get_json()
         assert body["action"] == "retry"
         assert body["accepted"] is True
+        # F3: the recover response carries the run_id minted by start_async.
+        assert body["run_id"] == f"{sid}:r2"
 
     def test_recovery_value_error_returns_400(self, client, auth_headers, tmp_path, monkeypatch):
         _reset_backend(tmp_path, monkeypatch)
@@ -827,6 +970,256 @@ class TestSessionRecovery:
             json={"action": "retry"},
         )
         assert resp.status_code == 409
+
+    def test_recovery_reinjects_capability_context(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """F1: a recovered session whose context declared a capability re-emits
+        it as the most-recent context event before the run starts.
+        """
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.runtime.append_context_event(sid, {"client_capabilities": ["wiki"]})
+        backend.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "q"}}
+        )
+
+        monkeypatch.setattr(
+            backend.runtime, "resolve_recovery_query", lambda *a, **k: "q"
+        )
+        # start_async must observe the re-injected capability as the latest context.
+        observed = {}
+
+        def fake_start_async(**kw):
+            events = backend.session_store.load_transcript(sid)
+            last_ctx = next(
+                (e for e in reversed(events) if e.get("type") == "context"), None
+            )
+            observed["caps"] = last_ctx["payload"].get("client_capabilities") if last_ctx else None
+            return f"{sid}:r2"
+
+        monkeypatch.setattr(backend.runtime, "start_async", fake_start_async)
+        resp = client.post(
+            f"/api/sessions/{sid}/recover",
+            headers=auth_headers,
+            json={"action": "continue"},
+        )
+        assert resp.status_code == 202
+        assert observed["caps"] == ["wiki"]
+
+    def test_recovery_inherits_fallback_models(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """F5: the generic recovery path must NOT strip the auto-heal chain.
+
+        It passes ``fallback_models`` unset (None) so the resolved config policy
+        applies — never an explicit empty tuple that would disable fallback.
+        """
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "q"}}
+        )
+        monkeypatch.setattr(
+            backend.runtime, "resolve_recovery_query", lambda *a, **k: "q"
+        )
+        captured = {}
+
+        def fake_start_async(**kw):
+            captured.update(kw)
+            return f"{sid}:r2"
+
+        monkeypatch.setattr(backend.runtime, "start_async", fake_start_async)
+        resp = client.post(
+            f"/api/sessions/{sid}/recover",
+            headers=auth_headers,
+            json={"action": "retry"},
+        )
+        assert resp.status_code == 202
+        # Not stripped to () — defers to config default (None) so auto-heal stays.
+        assert captured.get("fallback_models") in (None,)
+        assert captured.get("fallback_models") != ()
+
+
+class _FakeJob:
+    def __init__(self, status: str = "interrupted", slug: str = "org/repo") -> None:
+        self.status = status
+        self.slug = slug
+
+
+class _FakeWikiStore:
+    """Minimal wiki store exposing only the dispatch lookups."""
+
+    def __init__(self, *, job_id, job):
+        self._job_id = job_id
+        self._job = job
+
+    def find_job_by_session(self, session_id):
+        return self._job_id
+
+    def get_job(self, job_id):
+        return self._job if job_id == self._job_id else None
+
+
+class TestSessionRecoveryWikiDispatch:
+    """F4: origin-aware dispatch — a recoverable wiki INDEXING job routes to
+    WikiResume; a plain user session uses the generic path.
+    """
+
+    def test_indexing_session_routes_to_wiki_resume(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        job = _FakeJob(status="interrupted")
+        backend.runtime.wiki_store = _FakeWikiStore(job_id="job-1", job=job)
+
+        import mewbo_api.wiki.resume as resume_mod
+
+        called = {}
+
+        class FakeWikiResume:
+            @staticmethod
+            def is_resumable(j):
+                return j.status not in {"complete", "cancelled"}
+
+            @classmethod
+            def resume(
+                cls, store, runtime, job_id, *,
+                hook_manager=None, user_initiated=True, restart=False,
+            ):
+                called["job_id"] = job_id
+                called["restart"] = restart
+                return {"job_id": job_id, "session_id": sid, "status": "scanning"}
+
+        monkeypatch.setattr(resume_mod, "WikiResume", FakeWikiResume)
+        # If dispatch leaked to the generic path, this would blow up the test.
+        monkeypatch.setattr(
+            backend.runtime,
+            "resolve_recovery_query",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("generic path used")),
+        )
+
+        resp = client.post(
+            f"/api/sessions/{sid}/recover",
+            headers=auth_headers,
+            json={"action": "continue"},
+        )
+        assert resp.status_code == 202
+        body = resp.get_json()
+        assert called["job_id"] == "job-1"
+        assert called["restart"] is False  # continue == checkpoint resume
+        assert body["job_id"] == "job-1"
+        assert body["status"] == "scanning"
+        assert body["action"] == "continue"  # request action preserved, not hardcoded
+        assert body["slug"] == "org/repo"  # lets the client deep-link the indexing screen
+        assert body["accepted"] is True
+        # WikiResume rebinds the deps used by _reset_backend; restore for isolation.
+        backend.runtime.wiki_store = None
+
+    def test_indexing_retry_forces_restart(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A wiki indexing session's ``retry`` (Restart) forces a no-skip rebuild
+        (``restart=True``) rather than being silently down-graded to a continue."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        job = _FakeJob(status="failed")
+        backend.runtime.wiki_store = _FakeWikiStore(job_id="job-r", job=job)
+
+        import mewbo_api.wiki.resume as resume_mod
+
+        called = {}
+
+        class FakeWikiResume:
+            @staticmethod
+            def is_resumable(j):
+                return j.status not in {"complete", "cancelled"}
+
+            @classmethod
+            def resume(
+                cls, store, runtime, job_id, *,
+                hook_manager=None, user_initiated=True, restart=False,
+            ):
+                called["restart"] = restart
+                return {"job_id": job_id, "session_id": sid, "status": "scanning"}
+
+        monkeypatch.setattr(resume_mod, "WikiResume", FakeWikiResume)
+        resp = client.post(
+            f"/api/sessions/{sid}/recover",
+            headers=auth_headers,
+            json={"action": "retry"},
+        )
+        assert resp.status_code == 202
+        assert called["restart"] is True
+        assert resp.get_json()["action"] == "retry"
+        backend.runtime.wiki_store = None
+
+    def test_complete_indexing_job_uses_generic_path(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A non-resumable (complete) job falls through to the generic path."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "q"}}
+        )
+        job = _FakeJob(status="complete")
+        backend.runtime.wiki_store = _FakeWikiStore(job_id="job-2", job=job)
+
+        import mewbo_api.wiki.resume as resume_mod
+
+        class FakeWikiResume:
+            @staticmethod
+            def is_resumable(j):
+                return j.status not in {"complete", "cancelled"}
+
+            @classmethod
+            def resume(cls, *a, **k):  # pragma: no cover - must not run
+                raise AssertionError("should not resume a complete job")
+
+        monkeypatch.setattr(resume_mod, "WikiResume", FakeWikiResume)
+        monkeypatch.setattr(
+            backend.runtime, "resolve_recovery_query", lambda *a, **k: "q"
+        )
+        monkeypatch.setattr(backend.runtime, "start_async", lambda **kw: f"{sid}:r2")
+
+        resp = client.post(
+            f"/api/sessions/{sid}/recover",
+            headers=auth_headers,
+            json={"action": "continue"},
+        )
+        assert resp.status_code == 202
+        body = resp.get_json()
+        # Generic path response shape — no job_id key.
+        assert "job_id" not in body
+        assert body["run_id"] == f"{sid}:r2"
+        backend.runtime.wiki_store = None
+
+    def test_plain_user_session_uses_generic_path(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """No wiki_store / no indexing job ⇒ generic path (wiki Q&A re-runs here too)."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "q"}}
+        )
+        # No wiki_store attribute at all (graph-less install / non-wiki session).
+        monkeypatch.setattr(
+            backend.runtime, "resolve_recovery_query", lambda *a, **k: "q"
+        )
+        monkeypatch.setattr(backend.runtime, "start_async", lambda **kw: f"{sid}:r2")
+
+        resp = client.post(
+            f"/api/sessions/{sid}/recover",
+            headers=auth_headers,
+            json={"action": "retry"},
+        )
+        assert resp.status_code == 202
+        body = resp.get_json()
+        assert "job_id" not in body
+        assert body["run_id"] == f"{sid}:r2"
 
 
 # ---------------------------------------------------------------------------

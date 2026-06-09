@@ -1,3 +1,5 @@
+> ↑ [packages/mewbo_graph/CLAUDE.md](../../../../CLAUDE.md) · [root](../../../../../../CLAUDE.md)
+
 # scg built-in plugin — SCG map + search tools
 
 Scope: `packages/mewbo_graph/src/mewbo_graph/plugins/scg/`. The

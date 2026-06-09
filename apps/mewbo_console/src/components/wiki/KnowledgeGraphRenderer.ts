@@ -18,6 +18,7 @@ import fcose from "cytoscape-fcose";
 
 import type {
   GraphEdgeKind,
+  GraphLayer,
   GraphNodeKind,
   KnowledgeGraph,
 } from "./api/types";
@@ -32,8 +33,11 @@ function ensureFcose(): void {
 
 // ── Lucide icon paths (ISC, copied from lucide-react@0.522 internals) ──
 // Inlined to avoid a fragile reach into ``lucide-react/dist/esm/icons/*.js``
-// internals or pulling react-dom/server. Six paths × ~4 elements each.
-type IconElement = ["path" | "rect" | "polyline", Record<string, string>];
+// internals or pulling react-dom/server. One glyph per node kind.
+type IconElement = [
+  "path" | "rect" | "polyline" | "circle",
+  Record<string, string>,
+];
 
 const ICON_PATHS: Record<GraphNodeKind, IconElement[]> = {
   File: [
@@ -67,6 +71,29 @@ const ICON_PATHS: Record<GraphNodeKind, IconElement[]> = {
     ["polyline", { points: "3.29 7 12 12 20.71 7" }],
     ["path", { d: "m7.5 4.27 9 5.15" }],
   ],
+  // External — lucide ``package-2`` (a shared, resolved cross-file target).
+  // A lidded box: distinct from Module's 3-D cube glyph at small sizes.
+  External: [
+    ["path", { d: "M3 9h18v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9Z" }],
+    ["path", { d: "m3 9 2.45-4.9A2 2 0 0 1 7.24 3h9.52a2 2 0 0 1 1.8 1.1L21 9" }],
+    ["path", { d: "M12 3v6" }],
+  ],
+  // Entity — lucide ``tag`` (an abstract-layer concept/role/user-story).
+  Entity: [
+    ["path", { d: "M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" }],
+    ["circle", { cx: "7.5", cy: "7.5", r: ".5", fill: "white" }],
+  ],
+  // Memory — lucide ``brain`` (the memory-orchestration layer).
+  Memory: [
+    ["path", { d: "M12 18V5" }],
+    ["path", { d: "M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4" }],
+    ["path", { d: "M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5" }],
+    ["path", { d: "M17.997 5.125a4 4 0 0 1 2.526 5.77" }],
+    ["path", { d: "M18 18a4 4 0 0 0 2-7.464" }],
+    ["path", { d: "M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517" }],
+    ["path", { d: "M6 18a4 4 0 0 1-2-7.464" }],
+    ["path", { d: "M6.003 5.125a4 4 0 0 0-2.526 5.77" }],
+  ],
 };
 
 function makeIconUri(paths: IconElement[]): string {
@@ -92,6 +119,9 @@ const ICON_URI: Record<GraphNodeKind, string> = {
   Method: makeIconUri(ICON_PATHS.Method),
   Interface: makeIconUri(ICON_PATHS.Interface),
   Module: makeIconUri(ICON_PATHS.Module),
+  External: makeIconUri(ICON_PATHS.External),
+  Entity: makeIconUri(ICON_PATHS.Entity),
+  Memory: makeIconUri(ICON_PATHS.Memory),
 };
 
 // Theme-aware kind palette — both blocks live in src/index.css.
@@ -102,6 +132,23 @@ const KIND_VAR: Record<GraphNodeKind, string> = {
   Function: "--graph-function",
   Method: "--graph-method",
   Interface: "--graph-interface",
+  External: "--graph-external",
+  Entity: "--graph-entity",
+  Memory: "--graph-memory",
+};
+
+// Layer a kind belongs to — drives the per-layer toggle and node shape.
+// Kept exhaustive over GraphNodeKind so tsc flags any new kind.
+const KIND_LAYER: Record<GraphNodeKind, GraphLayer> = {
+  File: "ast",
+  Module: "ast",
+  Class: "ast",
+  Function: "ast",
+  Method: "ast",
+  Interface: "ast",
+  External: "ast",
+  Entity: "entity",
+  Memory: "memory",
 };
 
 const EDGE_VAR: Record<GraphEdgeKind, string> = {
@@ -110,6 +157,8 @@ const EDGE_VAR: Record<GraphEdgeKind, string> = {
   CALLS: "--graph-function",
   EXTENDS: "--graph-class",
   REFERENCES: "--graph-edge-soft",
+  ANCHORS: "--graph-edge-anchor",
+  RELATES: "--graph-edge-relates",
 };
 
 function cssVar(name: string): string {
@@ -151,9 +200,17 @@ export type NodeClickHandler = (node: {
   id: string;
   label: string;
   kind: GraphNodeKind;
+  /** Multiplex layer (wire contract v2) — defaults to ``ast`` for legacy. */
+  layer: GraphLayer;
   file: string;
   range: [number, number];
   docstring: string;
+  /** Entity nodes only. */
+  entityType?: string;
+  /** Entity / memory nodes only. */
+  labels?: string[];
+  /** Memory nodes only. */
+  snippet?: string;
   degree: number;
   inEdges: EdgeInfo[];
   outEdges: EdgeInfo[];
@@ -362,13 +419,19 @@ export class KnowledgeGraphRenderer {
       });
     });
 
+    const kind = (d.kind as GraphNodeKind) ?? "File";
+    const labels = Array.isArray(d.labels) ? (d.labels as string[]) : undefined;
     this.nodeClickHandler({
       id,
       label: String(d.label ?? ""),
-      kind: (d.kind as GraphNodeKind) ?? "File",
+      kind,
+      layer: (d.layer as GraphLayer) ?? KnowledgeGraphRenderer.layerForKind(kind),
       file: String(d.file ?? ""),
       range: (d.range as [number, number]) ?? [0, 0],
       docstring: String(d.docstring ?? ""),
+      entityType: d.entityType ? String(d.entityType) : undefined,
+      labels: labels && labels.length > 0 ? labels : undefined,
+      snippet: d.snippet ? String(d.snippet) : undefined,
       degree: (d.degree as number) ?? 0,
       inEdges: inList,
       outEdges: outList,
@@ -440,6 +503,22 @@ export class KnowledgeGraphRenderer {
   }
 
   // ── Static helpers (configuration over state) ─────────────────────
+
+  /** The node kinds that make up *layer* (``ast`` | ``entity`` | ``memory``).
+   *  Drives the per-layer segmented toggle in the screen — hiding all of a
+   *  layer's node kinds cascades to its edges via the endpoint-hidden rule
+   *  in ``_classifyAll``, so callers never enumerate edge kinds. */
+  static kindsForLayer(layer: GraphLayer): GraphNodeKind[] {
+    return (Object.keys(KIND_LAYER) as GraphNodeKind[]).filter(
+      (k) => KIND_LAYER[k] === layer,
+    );
+  }
+
+  /** The layer a node kind belongs to. */
+  static layerForKind(kind: GraphNodeKind): GraphLayer {
+    return KIND_LAYER[kind];
+  }
+
 
   /** Position the initial viewport so discs read at a usable size.
    *
@@ -534,13 +613,21 @@ export class KnowledgeGraphRenderer {
     const bg = cssVar("--background");
     const primary = cssVar("--primary");
 
-    // Per-kind overlays — static colour + icon URI.
+    // Per-kind overlays — static colour + icon URI. Non-AST layers get a
+    // distinct silhouette (round-rectangle / hexagon) so the entity &
+    // memory layers read apart from the AST discs at a glance.
+    const SHAPE: Partial<Record<GraphNodeKind, string>> = {
+      Entity: "round-rectangle",
+      Memory: "round-hexagon",
+      External: "round-diamond",
+    };
     const kindOverlays = (Object.keys(KIND_VAR) as GraphNodeKind[]).map(
       (kind) => ({
         selector: `node[kind = "${kind}"]`,
         style: {
           "background-color": cssVar(KIND_VAR[kind]),
           "background-image": ICON_URI[kind],
+          ...(SHAPE[kind] ? { shape: SHAPE[kind] } : {}),
         },
       }),
     );
@@ -614,6 +701,18 @@ export class KnowledgeGraphRenderer {
         },
       },
       ...edgeOverlays,
+      {
+        // Cross-layer ANCHORS ties read as a different layer: dashed,
+        // lighter, no arrowhead — a soft "this entity is anchored here"
+        // rather than a directed AST relationship.
+        selector: 'edge[kind = "ANCHORS"]',
+        style: {
+          "line-style": "dashed",
+          "line-dash-pattern": [4, 4],
+          "line-opacity": 0.35,
+          "target-arrow-shape": "none",
+        },
+      },
       {
         selector: "edge.dimmed",
         style: { "line-opacity": 0.06, "target-arrow-shape": "none" },

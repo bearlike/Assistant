@@ -246,13 +246,20 @@ def test_delete_worktree_force(parent_project) -> None:
 
 
 def test_delete_worktree_not_found(parent_project) -> None:
-    """Delete worktree not found."""
+    """Delete worktree that is already absent → idempotent 200, not 404.
+
+    The worktree lifecycle is system-owned; the on_session_end hook and the FE
+    may both call DELETE. The second call must succeed gracefully so the
+    caller never has to special-case 'already deleted'.
+    """
     client = backend.app.test_client()
     resp = client.delete(
         f"/api/v_projects/{parent_project.project_id}/worktrees/wt:bogus:x",
         headers=_auth(),
     )
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "already_absent"
 
 
 def test_cannot_create_worktree_on_a_worktree(parent_project) -> None:
@@ -292,6 +299,53 @@ def test_auto_cleanup_removes_clean_worktree(parent_project) -> None:
     backend._auto_cleanup_worktree_on_session_end(session_id, None)
 
     assert backend.project_store.get_project(wt.project_id) is None
+
+
+def test_auto_cleanup_reaps_orphan_auto_promoted_parent(tmp_path: Path) -> None:
+    """Session-end hook reaps the auto-promoted parent when it has no remaining children.
+
+    Scenario (Gitea #53): a config project is auto-promoted to a managed
+    VirtualProject (path_source='provided') when the user first creates a
+    worktree.  After the worktree is reaped by the on_session_end hook the
+    parent is a ``managed`` row with no worktree children — an orphan.  The
+    hook must reap it too so the project_store stays clean.
+    """
+    # Build a minimal git repo so the worktree creation succeeds.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(str(repo), "init", "-b", "main")
+    _git(str(repo), "config", "user.email", "t@e.com")
+    _git(str(repo), "config", "user.name", "t")
+    (repo / "README.md").write_text("hi\n")
+    _git(str(repo), "add", "-A")
+    _git(str(repo), "commit", "-m", "init")
+    _git(str(repo), "branch", "feature/auth")
+
+    # Simulate auto-promotion: create a managed project with path_source='provided'.
+    promoted = backend.project_store.create_project(
+        name="auto-promoted", description="", path=str(repo)
+    )
+    assert promoted.path_source == "provided"
+
+    # Create a worktree child under the promoted parent.
+    wt = backend.project_store.create_worktree(promoted.project_id, "feature/auth")
+
+    # Wire a session to the worktree.
+    session_id = backend.runtime.session_store.create_session()
+    backend.runtime.append_context_event(
+        session_id, {"project": f"managed:{wt.project_id}"}
+    )
+
+    # Fire the hook — the worktree is clean so it should be reaped.
+    backend._auto_cleanup_worktree_on_session_end(session_id, None)
+
+    # Both the child worktree AND the orphaned auto-promoted parent must be gone.
+    assert backend.project_store.get_project(wt.project_id) is None, (
+        "worktree child was not reaped"
+    )
+    assert backend.project_store.get_project(promoted.project_id) is None, (
+        "auto-promoted parent was left as an orphan (Gitea #53)"
+    )
 
 
 def test_auto_cleanup_keeps_dirty_worktree(parent_project) -> None:

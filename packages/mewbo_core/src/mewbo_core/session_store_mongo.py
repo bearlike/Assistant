@@ -112,6 +112,7 @@ class MongoSessionStore(SessionStoreBase):
         """Insert an event document into the events collection."""
         record: EventRecord = {"ts": _utc_now(), **event}
         self._col("events").insert_one({"session_id": session_id, **record})
+        self._publish_appended(session_id, record)
 
     def load_transcript(self, session_id: str) -> list[EventRecord]:
         """Load all events for a session, sorted by timestamp."""
@@ -196,6 +197,17 @@ class MongoSessionStore(SessionStoreBase):
             doc["_id"]: doc["session_id"]
             for doc in self._col("tags").find({}, {"_id": 1, "session_id": 1})
         }
+
+    def tags_for_session(self, session_id: str) -> list[str]:
+        """Tags pointing at a session via a targeted query.
+
+        Overrides the base reverse-scan so ``list_sessions`` (which calls this
+        per session) issues one filtered lookup instead of loading every tag.
+        """
+        return [
+            str(doc["_id"])
+            for doc in self._col("tags").find({"session_id": session_id}, {"_id": 1})
+        ]
 
     def archive_session(self, session_id: str) -> None:
         """Set the archived_at timestamp on the session document."""

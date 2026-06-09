@@ -1,3 +1,5 @@
+> ↑ [apps/mewbo_api/CLAUDE.md](../../../CLAUDE.md) · [root](../../../../../CLAUDE.md) · children: [scg/](scg/CLAUDE.md)
+
 # Agentic Search ("Mewbo Search") — API Subsystem Guidance
 
 Scope: this file applies to `apps/mewbo_api/src/mewbo_api/agentic_search/`.

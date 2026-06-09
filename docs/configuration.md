@@ -195,7 +195,7 @@ Sub-agent hypervisor settings.
 | `default_sub_model` | string | `""` | Default LLM model for sub-agents. Falls back to the root agent's model when empty. |
 | `allowed_models` | list[string] |  | Allowlist of model names sub-agents may use. Empty means all models are allowed. |
 | `llm_call_timeout` | number | `120.0` | Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models (raised from 60s — bare timeouts were the largest single failure class). On timeout, the call is retried up to llm_call_retries times before cascading to fallback models. |
-| `llm_call_retries` | integer | `3` | Maximum attempts for the primary model before cascading to fallback models. Each fallback model gets retry.fallback_retries attempts. Backoff/budget/circuit-breaker live under agent.retry. |
+| `llm_call_retries` | integer | `2` | Maximum attempts for the primary model before cascading to fallback models (default 2 = one try + one retry — never a 3rd attempt on a dead model). Each fallback model gets retry.fallback_retries attempts. A rescue model that wins is pinned for the rest of the run. Backoff/budget/circuit-breaker live under agent.retry. |
 | `retry` | Retry |  | Automatic LLM-call retry / fallback resilience knobs. |
 | `default_denied_tools` | list[string] |  | Tool IDs denied to all sub-agents by default (e.g. spawn_agent). |
 | `edit_tool` | string | `""` | File editing mechanism override: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement). Leave empty (default) to auto-select based on the active model via llm.structured_patch_models. |

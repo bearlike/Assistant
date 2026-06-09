@@ -56,6 +56,19 @@ class WikiCommitPlanTool(WikiSessionTool):
 
         emit_phase(ctx, "plan")
 
+        # Checkpoint-aware resume (Gitea #54): reuse the plan the interrupted
+        # index already committed so the reused graph stays consistent with it.
+        # Done-detection lives ONLY in ResumePlan (DRY); this is the one-line
+        # short-circuit. Advance to ``pages`` so the page-writers run next.
+        rp = ctx.resume_plan
+        if rp is not None and rp.should_skip("plan"):
+            emit_log(ctx, f"Plan already committed ({rp.total_pages} pages) — skipped on resume")
+            emit_phase(ctx, "pages")
+            return MockSpeaker(content=str({
+                "committed": rp.total_pages,
+                "skipped": "plan already committed — reused on resume",
+            }))
+
         # 3. Persist the plan as a sidecar (not as a field on IndexingJob).
         # by_alias keeps the camelCase wire shape the LLM/page-writer use
         # (``relevantFiles``/``relatedPages``).

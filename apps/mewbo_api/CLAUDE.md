@@ -1,3 +1,5 @@
+> ↑ [root /CLAUDE.md](../../CLAUDE.md) · children: [wiki](src/mewbo_api/wiki/CLAUDE.md) · [agentic_search](src/mewbo_api/agentic_search/CLAUDE.md)
+
 # Mewbo API - Project Guidance
 
 Scope: this file applies to the `apps/mewbo_api/` package. It captures runtime behavior, hidden dependencies, and testing notes so changes stay safe and predictable.
@@ -13,13 +15,13 @@ Scope: this file applies to the `apps/mewbo_api/` package. It captures runtime b
 - Entry point: `apps/mewbo_api/src/mewbo_api/backend.py` (HTTP API framework).
 - Session endpoints:
   - `POST /api/sessions` create session
-  - `GET /api/sessions` list sessions
+  - `GET /api/sessions` list sessions (each summary carries `origin` — `user|wiki|search|channel` provenance computed in core `summarize_session`, forwarded verbatim; the console badges/filters on it)
   - `POST /api/sessions/{session_id}/query` enqueue run or core command
   - `GET /api/sessions/{session_id}/events?after=...` poll events
   - `POST /api/sessions/{session_id}/message` enqueue a user steering message into a running session
   - `POST /api/sessions/{session_id}/interrupt` interrupt the current tool execution step
   - `GET /api/sessions/{session_id}/agents` return sub-agent tree with lifecycle state (status, steps_completed) and total_steps
-  - `GET /api/sessions/{session_id}/stream` SSE stream for real-time session events (sub_agent, permission, tool_result, etc.)
+  - `GET /api/sessions/{session_id}/stream` SSE stream for real-time session events (sub_agent, permission, tool_result, etc.) — now **event-pushed** via core `SessionEventBus` (no 0.5s poll, no per-event transcript re-read; wire format unchanged). Generator: subscribe → backlog-once → queue-fed tail, content-key dedup of the subscribe↔backlog race, drain-before-`stream_end` (else the terminal `completion` event is dropped).
   - `GET /api/projects` list configured projects for multi-project support
   - `GET /api/tools?project=name` list tools scoped to a project's CWD
   - `GET /api/skills?project=name` list skills scoped to a project's CWD
@@ -41,6 +43,10 @@ Scope: this file applies to the `apps/mewbo_api/` package. It captures runtime b
   - `GET /api/notifications` list notifications
   - `POST /api/notifications/dismiss` dismiss notifications
   - `POST /api/notifications/clear` clear notifications
+- Realtime endpoints (`init_realtime`; low-latency SideStage surface — siblings to `/v1/structured`, NOT modes on it):
+  - `POST /v1/structured/fast` retrieval-only, sessionless, single round-trip via `StructuredSynthesizer` + `WikiGroundingProvider` (`HybridRetriever` via `Embedder()`)
+  - `POST /v1/draft/stream` token SSE; `DraftStreamer.astream()` bridged to the sync Flask generator via ONE per-request event loop, single-shot
+  - `POST /v1/wiki/projects/{slug}/documents` non-git catalog ingestion via `CatalogIngestor` (direct write, no agent)
 - Agentic Search endpoints (`init_agentic_search`; run store is separate from session transcripts):
   - `GET /api/agentic_search/sources?project=` list the source catalog (unconfigured sources returned with `available=false`, not omitted)
   - `GET/POST /api/agentic_search/workspaces`, `PATCH/DELETE /api/agentic_search/workspaces/<id>` workspace CRUD
@@ -67,6 +73,49 @@ Scope: this file applies to the `apps/mewbo_api/` package. It captures runtime b
 - Sessions: supports `session_id`, `session_tag`, and `fork_from` (tag or id). Tags are resolved via `SessionStore`.
 - Event payloads: `action_plan` steps are `{title, description}`; tool events use `tool_id`, `operation`, `tool_input`.
 
+## MCP-facing contracts (#40–#45, non-obvious only)
+
+The `apps/mewbo_mcp` facade depends on these REST decisions (see its CLAUDE.md
+"Gold-standard contract"):
+- **One JSON 404 handler.** `@app.errorhandler(NotFound)` (registered once near
+  the `Api(app, …)` setup) returns `{"error": {code, reason}}` for EVERY route —
+  the single fix for the raw-Werkzeug-HTML-404 leak (a `project` with a `/` no
+  longer matches `<string:project_id>` and used to fall through to the HTML page).
+- **Storeless async `run_id`.** `SessionRuntime.start_async` mints
+  `"<session_id>:r<seq>"` (seq = count of prior user-turns) and returns it (`""`
+  when the run registry refuses a concurrent start — preserves `if not started:`).
+  No run-store: recover the session by splitting on the FIRST `:`. `/v1/structured`
+  is async on this handle (`POST` → `{run_id, status, output?}`, `GET
+  /v1/structured/<run_id>` resolves the session's latest `structured_output`
+  event); core force-emits so it stops 422-ing (see core CLAUDE.md).
+- **`/events` carries authoritative status.** `GET /api/sessions/<id>/events`
+  returns `status`/`done_reason`/`title` (from `summarize_session`/`load_title`)
+  so the MCP overview reads them instead of reconstructing from the timeline tail
+  (the old `status:null` + ignored-title source).
+- **Idle session-control = Devin-modeled.** `/interrupt` on idle → 200
+  `{interrupted:false}` (no-op); `/message` on idle/finished → re-engage via the
+  `start_async`/query path, returning the new `run_id`; only a terminated session
+  rejects. `/agents` token rollup delegates to `build_usage_numbers` so a
+  root-only session reports real tokens (not 0).
+- **Worktree lifecycle is system-owned.** The `on_session_end` hook is the SOLE
+  reaper; it also auto-reaps the promoted parent project when it has no worktree
+  children left (kills the #53 orphan). The DELETE route is idempotent:
+  already-absent → 200 `{status:"already_absent"}`, not 404. MCP no longer
+  hands out a worktree handle.
+- **`/agents` `total_input_tokens` = PEAK semantics** (`root_peak_input_tokens +
+  sub_peak_input_tokens`) matching the `get_session_history` overview; the
+  cumulative billed sum is separately exposed as `total_input_tokens_billed`
+  (#45 — the old bare sum was ~2× the peak and confused callers).
+- **`GET /v1/structured/<run_id>`**: output-present always maps to `status:
+  "completed"` regardless of raw `summarize_session` status — the emit tool
+  only fires on success, so presence IS completion.
+- **`RepoIdentity` (`repo_identity.py`).** Canonical `(host, owner, repo)` parsed
+  from a project's git remotes; `_resolve_repo_or_404` matches a key against every
+  registered project's identity + aliases (so one repo resolves via its Gitea host
+  OR GitHub mirror OR `owner/repo` OR bare name), and `GET /api/projects` surfaces
+  `repo`/`aliases`. Ambiguous bare names raise a candidates error, never a silent
+  wrong match.
+
 ## Config endpoints & secret handling
 `ConfigSchemaView` (`config_view.py`) is the single atomic class governing how `/api/config*` treats sensitive fields — it consolidates four former scattered `_*_protected_*` helpers into one schema traversal, DI'd with the generated schema. Two field classes (declared via `x-*` in core `config.py`):
 - **`x-protected`** — never read, never written: stripped from `GET /config/schema` and `GET /config`; a `PATCH` touching one is 403'd. (host paths, `api.master_token`.)
@@ -88,6 +137,25 @@ The console's `SecretField` is the matching write-only 3-state widget. Multi-tok
 ## Testing guidance
 - `apps/mewbo_api/tests` mock `SessionRuntime.run_sync` and focus on response schema.
 - Avoid mocking too much of core: keep at least one integration test that exercises `SessionStore` behavior.
+
+## Debugging session errors (trace methodology)
+
+When given a session URL (`/s/<session_id>`), work through these layers in order:
+
+1. **MongoDB transcript** — authoritative event log. Query `db.events.find({session_id}).sort({ts:1})` via `MEWBO_MONGODB_URI` (port 27018). Check `tool_result.error`, `context.mcp_tools`, `completion.done_reason`.
+2. **Langfuse traces** — LLM conversation chain. `fetch_traces(age=N)` → `fetch_observation(id)` on `GENERATION` to see system prompt, bound tool schemas, model reasoning. Trace-to-session: `trace_id == session_id`.
+3. **Config** — `configs/app.json` (mounted read-only at `/app/configs/`), `docker.env` for secrets, MCP at `configs/mcp.json` (global) or `<project>/.mcp.json` (project).
+4. **Docker env** — `docker-compose.yml` + override for mounts. API runs at `/app` with `MEWBO_HOME=/app/data`. Project dirs need identical host/container paths.
+
+### Common root-cause signatures
+
+| Symptom | Cause |
+|---|---|
+| `result: null, success: false` on shell/file tools | CWD missing in container (volume mount), or `root` not injected |
+| `"Tool not available"` | LLM hallucinated a filtered-out built-in tool, or `tool_id` mismatch with registry |
+| `"MCP server 'X' not found in config"` | `MCPToolRunner` loaded config without project CWD; project `.mcp.json` not merged |
+| `done_reason: "max_steps_reached"` | Legacy only — agents now run until natural completion |
+| Langfuse `sessionId: null` | `invoke_config["metadata"]` not propagated; check `langfuse_metadata` 3-line pattern in `tool_use_loop.py` |
 
 ## Cross-project insights (fast decision help)
 - Explicit tool allowlists and permission gates reduce unsafe actions; keep API calls explicit and auditable.

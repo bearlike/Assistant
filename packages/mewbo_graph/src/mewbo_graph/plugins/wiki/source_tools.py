@@ -150,7 +150,7 @@ class WikiSourceAccess:
 
     def read_file(self, args: WikiReadFileArgs) -> dict[str, Any]:
         """Return a slice (or all) of a file from the indexed clone."""
-        target = self._safe_path(args.path)
+        target = self._safe_path(args.path, self.clone_dir)
         if target is None or not target.is_file():
             return _err_result("not_found", f"file not found inside clone: {args.path!r}")
 
@@ -248,13 +248,20 @@ class WikiSourceAccess:
 
     # ── Statics (pure helpers) ──────────────────────────────────────
 
-    def _safe_path(self, rel: str) -> Path | None:
-        """Resolve *rel* under ``self.clone_dir``; refuse ``..`` escapes."""
+    @staticmethod
+    def _safe_path(rel: str, clone_dir: Path) -> Path | None:
+        """Resolve *rel* under *clone_dir*; refuse absolute paths and ``..`` escapes.
+
+        ``resolve()`` collapses ``..`` and dereferences symlinks, so a target
+        that lands outside ``clone_dir`` fails ``relative_to`` → ``None``. Static
+        + clone-dir-parameterised so the API source route can reuse the guard
+        without constructing a ``WikiSourceAccess``/``WikiQaCtx`` just to read it.
+        """
         if not rel or rel.startswith("/"):
             return None
-        candidate = (self.clone_dir / rel).resolve()
+        candidate = (clone_dir / rel).resolve()
         try:
-            candidate.relative_to(self.clone_dir.resolve())
+            candidate.relative_to(clone_dir.resolve())
         except ValueError:
             return None
         return candidate
@@ -297,11 +304,19 @@ class _SourceToolShim(WikiSessionTool):
             return args
 
         result = self._call(access, args)
+        # access.ctx is the WikiQaCtx (carries answer_id) — record the file(s)
+        # this read touched for the deterministic citation trail. list_files
+        # only *lists* paths (no read), so it records nothing (default []).
+        self._record_qa_access(access.ctx, self._access_refs(args, result))
         return MockSpeaker(content=str(result))
 
     def _call(self, access: WikiSourceAccess, args: Any) -> dict[str, Any]:
         """Delegate to the right :class:`WikiSourceAccess` method (subclass)."""
         raise NotImplementedError
+
+    def _access_refs(self, args: Any, result: Any) -> list[str]:
+        """Citation refs for the file(s) this tool actually read. Default: none."""
+        return []
 
 
 class WikiReadFileTool(_SourceToolShim):
@@ -314,6 +329,13 @@ class WikiReadFileTool(_SourceToolShim):
     def _call(self, access: WikiSourceAccess, args: WikiReadFileArgs) -> dict[str, Any]:
         return access.read_file(args)
 
+    def _access_refs(self, args: WikiReadFileArgs, result: Any) -> list[str]:
+        if not isinstance(result, dict) or "error" in result:
+            return []
+        if args.start_line and args.end_line:
+            return [f"{args.path}#L{args.start_line}-{args.end_line}"]
+        return [args.path]
+
 
 class WikiGrepTool(_SourceToolShim):
     """SessionTool: case-insensitive regex search over the indexed clone."""
@@ -324,6 +346,16 @@ class WikiGrepTool(_SourceToolShim):
 
     def _call(self, access: WikiSourceAccess, args: WikiGrepArgs) -> dict[str, Any]:
         return access.grep(args)
+
+    def _access_refs(self, args: WikiGrepArgs, result: Any) -> list[str]:
+        if not isinstance(result, dict):
+            return []
+        out: list[str] = []
+        for hit in result.get("hits", []):
+            path = hit.get("path")
+            if path and path not in out:
+                out.append(path)
+        return out
 
 
 class WikiListFilesTool(_SourceToolShim):

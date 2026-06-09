@@ -59,6 +59,7 @@ theme:
     "Knowledge & Discovery": lucide:library
     "Agentic Wiki": lucide:book-marked
     "Agentic Search": lucide:search
+    "Structured Outputs": lucide:brackets
     "Composition & Delegation": lucide:users
     "Sub-agents": lucide:git-branch
     Skills: lucide:graduation-cap
@@ -66,6 +67,8 @@ theme:
     "Control & Safety": lucide:shield
     "Plan Mode": lucide:clipboard-list
     "Permissions & Hooks": lucide:lock
+    Policies: lucide:shield-check
+    Monitors: lucide:eye
     "Session & Context": lucide:clock
     "Token Usage": lucide:coins
     Compaction: lucide:archive
@@ -155,6 +158,7 @@ nav:
   - Knowledge & Discovery:
       - Agentic Wiki: features-wiki.md
       - Agentic Search: features-search.md
+      - Structured Outputs: features-structured-outputs.md
   - Capabilities:
       - Workspace & Execution:
           - Built-in Tools: features-builtin-tools.md
@@ -169,6 +173,8 @@ nav:
       - Control & Safety:
           - Plan Mode: features-plan-mode.md
           - Permissions & Hooks: features-permissions-hooks.md
+          - Policies: features-policies.md
+          - Monitors: features-monitors.md
       - Session & Context:
           - Token Usage: features-token-usage.md
           - Compaction: features-compaction.md

@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import {
   BookOpen,
+  ChevronDown,
   ChevronRight,
   FileText,
   GitBranch,
@@ -20,6 +21,7 @@ import {
   LayoutGrid,
   List,
   Loader2,
+  RotateCcw,
   Search,
   Sparkles,
   Trash2,
@@ -42,9 +44,16 @@ import { BrandMark } from "./BrandMark";
 import { IndexingProgress } from "./progress";
 import { IndexedSnapshot } from "./indexedSnapshot";
 import { IndexedSnapshotCaption } from "./IndexedSnapshotCaption";
+import { RelativeTime } from "./relativeTime";
 import { RepoLink } from "./RepoLink";
-import { useActiveIndexingJobs, useDeleteProject, useWikiProjects } from "./api/hooks";
-import type { IndexingJob, Project } from "./api/types";
+import {
+  useActiveIndexingJobs,
+  useDeleteProject,
+  useRecoverableJobs,
+  useResumeIndexing,
+  useWikiProjects,
+} from "./api/hooks";
+import type { IndexingJob, Project, RecoverableJob } from "./api/types";
 import { PlatformIcon } from "./configure-wizard/PlatformIcon";
 import { buildHref } from "./router";
 import { parseSlug, slugFromRepoUrl } from "./slug";
@@ -57,11 +66,14 @@ export function LandingScreen() {
   const [, navigate] = useLocation();
   const projectsQuery = useWikiProjects();
   const activeJobsQuery = useActiveIndexingJobs();
+  const recoverableJobsQuery = useRecoverableJobs();
   const deleteProjectMutation = useDeleteProject();
+  const resumeIndexingMutation = useResumeIndexing();
   const [url, setUrl] = useState("");
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"grid" | "list">("grid");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [incompleteOpen, setIncompleteOpen] = useState(false);
 
   // Slugs currently indexing — used to suppress the project tile if a
   // legacy Project row exists alongside a fresh re-index for the same
@@ -81,6 +93,16 @@ export function LandingScreen() {
         platform: job.platform,
       })
     );
+  };
+
+  // Resume a recoverable job, then drop onto the indexing screen so the user
+  // watches the resumed run finish from where it stopped.
+  const resumeJob = (job: RecoverableJob) => {
+    if (resumeIndexingMutation.isPending) return;
+    resumeIndexingMutation.mutate(job.jobId, {
+      onSuccess: (res) =>
+        navigate(buildHref({ kind: "indexing", jobId: res.jobId, slug: job.slug })),
+    });
   };
 
   const slug = slugFromRepoUrl(url);
@@ -103,6 +125,17 @@ export function LandingScreen() {
     if (!q) return all;
     return all.filter((j) => j.slug.toLowerCase().includes(q));
   }, [activeJobsQuery.data, search]);
+
+  // Recoverable (failed / interrupted / cancelled-but-incomplete) jobs, minus
+  // any that are already re-indexing — the active tile takes precedence.
+  const visibleRecoverable = useMemo(() => {
+    const all = (recoverableJobsQuery.data ?? []).filter(
+      (j) => !activeSlugs.has(j.slug)
+    );
+    const q = search.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((j) => j.slug.toLowerCase().includes(q));
+  }, [recoverableJobsQuery.data, search, activeSlugs]);
 
   const onGenerate = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -262,6 +295,95 @@ export function LandingScreen() {
                 );
               })}
             </div>
+          </section>
+        )}
+
+        {/* ── Incomplete indexes (resumable failed/interrupted jobs) ────── */}
+        {visibleRecoverable.length > 0 && (
+          <section className="mt-8 sm:mt-10">
+            <button
+              type="button"
+              onClick={() => setIncompleteOpen((o) => !o)}
+              aria-expanded={incompleteOpen}
+              className="flex items-center gap-2 mb-3 text-left group/inc"
+            >
+              <ChevronDown
+                className={cn(
+                  "h-3.5 w-3.5 text-[hsl(var(--muted-foreground))] transition-transform",
+                  incompleteOpen ? "" : "-rotate-90"
+                )}
+              />
+              <TriangleAlert className="h-3.5 w-3.5 text-amber-500" />
+              <h2 className="text-sm font-semibold tracking-tight">Incomplete indexes</h2>
+              <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+                {visibleRecoverable.length} resumable
+              </span>
+            </button>
+            {incompleteOpen && (
+              <div className="flex flex-col gap-2">
+                {visibleRecoverable.map((job) => {
+                  const total = job.totalPages ?? 0;
+                  const done = job.recoverable.pagesDone;
+                  return (
+                    <div
+                      key={job.jobId}
+                      className="flex items-center gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3.5 py-2.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 text-sm font-medium text-[hsl(var(--foreground))]">
+                          <span className="truncate">
+                            <RepoLink slug={job.slug} display="short" />
+                          </span>
+                          {job.phase && (
+                            <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] font-mono shrink-0">
+                              stopped at {job.phase}
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))] flex-wrap">
+                          <span className="font-mono tabular-nums">
+                            {done}/{total || "?"} pages
+                          </span>
+                          {job.updatedAt && (
+                            <>
+                              <span className="opacity-50">·</span>
+                              <span title={RelativeTime.tooltip(job.updatedAt)}>
+                                {RelativeTime.format(job.updatedAt)}
+                              </span>
+                            </>
+                          )}
+                          {job.error && (
+                            <>
+                              <span className="opacity-50">·</span>
+                              <span className="text-amber-600 truncate">{job.error.message}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="neutral"
+                        size="sm"
+                        tone="info"
+                        disabled={resumeIndexingMutation.isPending}
+                        onClick={() => resumeJob(job)}
+                        leadingIcon={
+                          resumeIndexingMutation.isPending &&
+                          resumeIndexingMutation.variables === job.jobId ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <RotateCcw className="h-3 w-3" />
+                          )
+                        }
+                        className="shrink-0"
+                      >
+                        Resume
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         )}
 

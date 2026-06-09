@@ -90,6 +90,15 @@ class SessionStoreBase(abc.ABC):
     def list_tags(self) -> dict[str, str]:
         """Return a mapping of tags to session IDs."""
 
+    def tags_for_session(self, session_id: str) -> list[str]:
+        """Return every tag pointing at ``session_id`` (reverse of ``resolve_tag``).
+
+        Concrete default over ``list_tags`` so all backends share one
+        implementation; the tag set is small. Provenance classification reads
+        this to recover a session's origin (see ``session_provenance``).
+        """
+        return [tag for tag, sid in self.list_tags().items() if sid == session_id]
+
     @abc.abstractmethod
     def archive_session(self, session_id: str) -> None:
         """Mark a session as archived."""
@@ -111,6 +120,23 @@ class SessionStoreBase(abc.ABC):
         """
 
     # -- concrete template methods ------------------------------------------
+
+    @staticmethod
+    def _publish_appended(session_id: str, record: EventRecord) -> None:
+        """Fan a just-appended record out to the process-wide event bus.
+
+        The universal append choke-point: every backend calls this right after
+        the durable write so SSE waiters wake immediately and ``on_event`` hooks
+        fire — driven by the SAME persisted ``record`` ``load_transcript``
+        returns, so a live SSE event is byte-identical to the backlog one.
+        Best-effort: a bus failure must never break a durable append.
+        """
+        from mewbo_core.session_event_bus import get_session_event_bus
+
+        try:
+            get_session_event_bus().publish(session_id, record)
+        except Exception:
+            logging.warning("Session event bus publish failed.", exc_info=True)
 
     def fork_session(self, source_session_id: str) -> str:
         """Create a new session by copying events, summary, and title from another."""
@@ -253,6 +279,7 @@ class SessionStore(SessionStoreBase):
         payload: EventRecord = {"ts": _utc_now(), **event}
         with open(paths.transcript_path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload) + "\n")
+        self._publish_appended(session_id, payload)
 
     def load_transcript(self, session_id: str) -> list[EventRecord]:
         """Load all transcript events for a session."""

@@ -1157,9 +1157,11 @@ class TestFileReadDedupCache:
 
 
 class TestBudgetWarningStillFires:
-    """Session-level budget_exhausted() warning is still injected."""
+    """Session-level budget enforcement: NL warning near budget, hard stop at it."""
 
-    def test_budget_warning_injected(self):
+    def test_budget_warning_injected_near_budget(self):
+        """Within ``headroom`` of the budget (but not exhausted) injects an NL
+        warning so the agent can wind down — without killing the run."""
         spec = _make_spec("aider_shell_tool", "Run shell")
         registry = _make_registry(spec)
 
@@ -1188,10 +1190,10 @@ class TestBudgetWarningStillFires:
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = bound
 
-            # Create context with exhausted budget.
+            # Near the budget (remaining=2 ≤ headroom 5) but NOT exhausted.
             ctx = _make_agent_context()
-            ctx.registry._session_step_budget = 1
-            ctx.registry._total_steps = 100  # Already exhausted
+            ctx.registry._session_step_budget = 10
+            ctx.registry._total_steps = 8
 
             loop = ToolUseLoop(
                 agent_context=ctx,
@@ -1208,6 +1210,53 @@ class TestBudgetWarningStillFires:
             if isinstance(m, SystemMessage) and "BUDGET WARNING" in m.content
         ]
         assert len(budget_warnings) >= 1
+
+    def test_budget_exhaustion_hard_stops_runaway_loop(self):
+        """At budget exhaustion the loop HARD-STOPS (#62): a model that always
+        returns a tool call would loop forever, but the budget check breaks out
+        with ``done_reason == "halted_no_progress"``. If the ``break`` were
+        removed this test would HANG — that's the point."""
+        spec = _make_spec("aider_shell_tool", "Run shell")
+        registry = _make_registry(spec)
+
+        # The model NEVER returns text → it never naturally stops. Only the
+        # budget hard-stop can terminate the run.
+        def _always_tool_call(msgs, **kwargs):
+            return _tool_call_response("aider_shell_tool", {"command": "x"}, "c1")
+
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(side_effect=_always_tool_call)
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        mock_tool = MagicMock()
+        mock_speaker = MagicMock()
+        mock_speaker.content = "ok"
+        mock_tool.run.return_value = mock_speaker
+
+        with (
+            patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            ctx = _make_agent_context()
+            # Budget already exhausted → the top-of-loop check hard-stops on the
+            # first turn, before the (otherwise endless) tool-call stream.
+            ctx.registry._session_step_budget = 2
+            ctx.registry._total_steps = 2
+
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            tq, state = asyncio.run(loop.run("do work", tool_specs=[spec], context=_make_context()))
+
+        assert state.done is True
+        assert state.done_reason == "halted_no_progress"
 
 
 # ---------------------------------------------------------------------------
@@ -1240,7 +1289,7 @@ class TestModelFallback:
             async def _side_effect(messages, **kw):
                 nonlocal call_count
                 call_count += 1
-                if call_count <= 3:  # primary exhausts its 3 attempts
+                if call_count <= 2:  # primary exhausts its 2 attempts (cap-2)
                     raise primary_error
                 return fallback_response
 
@@ -1260,8 +1309,74 @@ class TestModelFallback:
 
             assert state.done
             assert "fallback worked" in (tq.task_result or "")
-            # 3 primary attempts (default primary_retries) + 1 fallback attempt.
-            assert call_count == 4
+            # 2 primary attempts (default primary_retries=2) + 1 fallback attempt.
+            assert call_count == 3
+
+        asyncio.run(_test())
+
+    def test_sticky_pin_uses_rescue_client_next_turn(self):
+        """Regression (#54): after a sticky escalation pins a rescue model, the
+        NEXT turn must invoke the RESCUE model's client — not silently re-call the
+        dead primary. Guards the ``tool_use_loop._invoke`` discriminant (key off
+        the model NAME, not ``is_fallback``: a pinned rescue reorders to idx 0
+        where ``is_fallback`` is False). The unit-level RetryStrategy tests can't
+        catch this — only the real driver closure rebinds the client per model."""
+
+        async def _test():
+            ctx = _make_agent_context(model_name="primary-model")
+            object.__setattr__(ctx, "fallback_models", ("rescue-model",))
+
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=_make_registry(_make_spec()),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+            rescue_calls = {"n": 0}
+
+            async def _rescue_invoke(messages, **kw):
+                rescue_calls["n"] += 1
+                # turn 1 -> a tool call keeps the loop alive into turn 2;
+                # turn 2 -> finish with text.
+                if rescue_calls["n"] == 1:
+                    return _tool_call_response("test_tool", {"input": "x"})
+                return _text_response("rescued")
+
+            # Per-model clients so we can see WHICH model each turn actually hits.
+            clients: dict[str, MagicMock] = {}
+
+            def _factory(model_name=None, **kw):
+                client = clients.get(model_name)
+                if client is not None:
+                    return client
+                client = MagicMock(name=f"model:{model_name}")
+                bound = client.bind_tools.return_value
+                if model_name == "primary-model":
+                    bound.ainvoke = AsyncMock(side_effect=RuntimeError("primary down"))
+                else:
+                    bound.ainvoke = AsyncMock(side_effect=_rescue_invoke)
+                clients[model_name] = client
+                return client
+
+            with (
+                patch("mewbo_core.tool_use_loop.build_chat_model", side_effect=_factory),
+                patch("mewbo_core.llm_resilience.RetryStrategy.backoff", return_value=0.0),
+            ):
+                tq, state = await loop.run(
+                    "test query",
+                    tool_specs=[_make_spec()],
+                    context=_make_context(),
+                )
+
+            assert state.done
+            assert "rescued" in (tq.task_result or "")
+            primary_invoke = clients["primary-model"].bind_tools.return_value.ainvoke
+            # Turn 1 exhausts the primary's 2 attempts and pins the rescue. Turn 2
+            # goes STRAIGHT to the pinned rescue — the dead primary is never called
+            # again (the is_fallback-keyed bug would re-hit it: 4 calls total).
+            assert primary_invoke.call_count == 2
+            assert rescue_calls["n"] == 2
 
         asyncio.run(_test())
 
@@ -1392,3 +1507,60 @@ class TestRootInjection:
             {"name": "aider_shell_tool", "args": {"command": "ls", "root": "/elsewhere"}}
         )
         assert step.tool_input["root"] == "/elsewhere"
+
+
+# ---------------------------------------------------------------------------
+# Doom-loop halt event (A4 — the `recovery` / halt_no_progress contract)
+# ---------------------------------------------------------------------------
+
+
+class TestDoomLoopHaltEvent:
+    """The no-progress halt emits a `recovery` event the console/CLI parse."""
+
+    def test_halt_emits_recovery_event_with_client_contract_keys(self):
+        # Model repeats the SAME tool + identical input every turn; the tool
+        # returns identical content -> no progress -> doom-loop halt.
+        spec = _make_spec("stuck_tool", "Always returns the same thing")
+        registry = _make_registry(spec)
+
+        same_call = _tool_call_response("stuck_tool", {"input": "x"}, call_id="c")
+        fake = AsyncMock(side_effect=[same_call] * 10)
+        bound = MagicMock()
+        bound.ainvoke = fake
+
+        mock_tool = MagicMock()
+        speaker = MagicMock()
+        speaker.content = "identical result"  # constant -> result never advances
+        mock_tool.run.return_value = speaker
+
+        emitted: list[dict] = []
+
+        with (
+            patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+            ctx = _make_agent_context(event_logger=emitted.append)
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            asyncio.run(loop.run("do it", tool_specs=[spec], context=_make_context()))
+
+        halts = [
+            e
+            for e in emitted
+            if e["type"] == "recovery" and e["payload"].get("action") == "halt_no_progress"
+        ]
+        assert len(halts) == 1, "exactly one no-progress halt event expected"
+        payload = halts[0]["payload"]
+        # Exact keys the console (logs.ts:renderRecoveryHalt) + CLI
+        # (_print_resilience_events) parse — match verbatim.
+        assert payload["action"] == "halt_no_progress"
+        assert payload["tool"] == "stuck_tool"
+        assert payload["agent_id"] == ctx.agent_id
+        assert payload["depth"] == ctx.depth
+        assert "step" in payload

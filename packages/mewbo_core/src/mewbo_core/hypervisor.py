@@ -290,6 +290,12 @@ class AgentHypervisor:
             return -1  # Unlimited
         return max(0, self._session_step_budget - self._total_steps)
 
+    def budget_warning(self, *, headroom: int = 5) -> bool:
+        """True when within ``headroom`` steps of the session budget (0 = off)."""
+        if self._session_step_budget <= 0:
+            return False
+        return self.budget_remaining() <= headroom
+
     async def stalled_agents(self, threshold: float = 120.0) -> list[AgentHandle]:
         """Return agents not making progress within threshold seconds.
 

@@ -204,7 +204,9 @@ def test_start_qa_skips_invalid_json_data_line():
                 200, content=sse_body, headers={"content-type": "text/event-stream"}
             )  # noqa: E501
         if req.method == "GET" and req.url.path == "/v1/wiki/qa/ans-skip":
-            return httpx.Response(200, json={"blocks": [{"kind": "p", "text": "Good."}]})
+            return httpx.Response(
+                200, json={"status": "complete", "blocks": [{"kind": "p", "text": "Good."}]}
+            )
         return httpx.Response(404, json={"message": "no route"})
 
     client = _build_wiki_client(_dispatch)
@@ -592,10 +594,208 @@ def test_truncate_beyond_limit():
 
 def test_overview_with_no_turns():
     """_overview works when the session has no turns yet (first load)."""
-    result = tools.SessionTools._overview("s-empty", [], running=True)
+    result = tools.SessionTools._overview("s-empty", [], {"running": True})
     assert result["session_id"] == "s-empty"
     assert result["title"] == ""
     assert result["summary"] == ""
     assert result["turn_count"] == 0
     assert result["running"] is True
     assert result["status"] == "running"
+
+
+def test_overview_prefers_authoritative_status_and_title():
+    """_overview reads the API's status/title from the events meta, not the timeline."""
+    result = tools.SessionTools._overview(
+        "s-meta", [], {"running": False, "status": "completed", "title": "My Task"}
+    )
+    assert result["status"] == "completed"
+    assert result["title"] == "My Task"
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — WikiTools._block_text: table / diagram / hr block kinds
+# ---------------------------------------------------------------------------
+
+
+def test_block_text_table_renders_markdown_table():
+    """A 'table' block renders as a Markdown table with header + separator + rows."""
+    block = {
+        "kind": "table",
+        "head": ["Name", "Status"],
+        "rows": [
+            ["Alice", "active"],
+            ["Bob", "inactive"],
+        ],
+    }
+    result = tools.WikiTools._block_text(block)
+    # Header row must be present
+    assert "| Name |" in result
+    assert "| Status |" in result
+    # Separator row
+    assert "---" in result
+    # Data rows
+    assert "Alice" in result
+    assert "inactive" in result
+
+
+def test_block_text_table_with_inline_cell():
+    """Table cells that are inline-node dicts are rendered via _inline_text."""
+    block = {
+        "kind": "table",
+        "head": ["Pkg"],
+        "rows": [[{"text": "mewbo-core"}]],
+    }
+    result = tools.WikiTools._block_text(block)
+    assert "mewbo-core" in result
+
+
+def test_block_text_diagram_renders_placeholder():
+    """A 'diagram' block renders a terse mermaid placeholder referencing the id."""
+    block = {"kind": "diagram", "id": "graph-overview"}
+    result = tools.WikiTools._block_text(block)
+    assert "graph-overview" in result
+
+
+def test_block_text_hr_renders_horizontal_rule():
+    """An 'hr' block renders as '---'."""
+    block = {"kind": "hr"}
+    result = tools.WikiTools._block_text(block)
+    assert result == "---"
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — WikiTools._inline_text: code / link / src inline node shapes
+# ---------------------------------------------------------------------------
+
+
+def test_inline_text_code_span():
+    """A {'code': '...'} dict renders as a backtick code span."""
+    result = tools.WikiTools._inline_text({"code": "my_func()"})
+    assert result == "`my_func()`"
+
+
+def test_inline_text_link_node():
+    """A {'link': '...', 'text': '...'} dict renders as [text](link)."""
+    result = tools.WikiTools._inline_text({"link": "https://example.com", "text": "Example"})
+    assert result == "[Example](https://example.com)"
+
+
+def test_inline_text_src_node_with_lines():
+    """A {'kind': 'src', 'path': '...', 'lines': '...'} renders as path:lines."""
+    result = tools.WikiTools._inline_text({"kind": "src", "path": "auth.py", "lines": "10-20"})
+    assert result == "auth.py:10-20"
+
+
+def test_inline_text_src_node_without_lines():
+    """A {'kind': 'src', 'path': '...'} without lines renders as just the path."""
+    result = tools.WikiTools._inline_text({"kind": "src", "path": "auth.py"})
+    assert result == "auth.py"
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — _render_qa_blocks + ask end-to-end: table block in answer
+# ---------------------------------------------------------------------------
+
+
+def test_render_qa_blocks_mixed_kinds_with_table():
+    """A table block is rendered (not dropped) when present among other blocks."""
+    blocks = [
+        {"kind": "h2", "text": "Comparison"},
+        {"kind": "table", "head": ["Feature", "Status"], "rows": [["Auth", "done"]]},
+        {"kind": "sources", "items": ["src://x"]},
+    ]
+    text, citations = tools.WikiTools._render_qa_blocks(blocks)
+    assert "Comparison" in text
+    # The table row content must appear in the answer — the core regression fix
+    assert "Auth" in text
+    assert "done" in text
+    assert citations == ["src://x"]
+
+
+def test_ask_wiki_answer_contains_table_rows(fake_rest):
+    """End-to-end: ask returns an answer string containing the table cells."""
+    primer = ":" + (" " * 8) + "\n\n"
+    meta = (
+        "id: 0\nevent: meta\n"
+        'data: {"answerId": "ans-tbl", "model": "m", "fromPageId": ""}\n\n'
+    )
+    sse_body = (primer + meta).encode()
+
+    def _dispatch(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.url.path == "/v1/wiki/qa":
+            return httpx.Response(
+                200, content=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        if req.method == "GET" and req.url.path == "/v1/wiki/qa/ans-tbl":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "complete",
+                    "blocks": [
+                        {"kind": "p", "text": "See the table below."},
+                        {
+                            "kind": "table",
+                            "head": ["Component", "Coverage"],
+                            "rows": [["core", "92%"], ["tools", "88%"]],
+                        },
+                        {"kind": "sources", "items": ["src://cov"]},
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    client = _build_wiki_client(_dispatch)
+    result = run(
+        tools.WikiTools(client, timeout_s=5.0, poll_interval_s=0.0).ask(project="p", question="q")
+    )
+    assert result["status"] == "complete"
+    # The table rows must be in the answer, not silently dropped
+    assert "Component" in result["answer"]
+    assert "core" in result["answer"]
+    assert "92%" in result["answer"]
+    assert result["citations"] == ["src://cov"]
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 — create_session returns minimal shape (no worktree ids)
+# ---------------------------------------------------------------------------
+
+
+def test_create_session_returns_minimal_shape_no_project(fake_rest):
+    """create_session without a project returns only {session_id, status}."""
+    fake = (
+        fake_rest
+        .on("POST", "/api/sessions", {"session_id": "s-min"})
+        .on("POST", "/api/sessions/s-min/query", {"accepted": True}, status=202)
+    )
+    result = run(tools.SessionTools(fake.client()).create(prompt="hello"))
+    assert result["session_id"] == "s-min"
+    assert result["status"] == "running"
+    assert "worktree_project_id" not in result
+    assert "parent_project_id" not in result
+
+
+def test_create_session_with_project_still_provisions_but_no_ids_returned(fake_rest):
+    """Worktree is provisioned server-side but ids are NOT returned to the caller."""
+    fake = (
+        fake_rest
+        .on("GET", "/api/v_projects/Repo/branches", {"current_branch": "main"})
+        .on(
+            "POST",
+            "/api/v_projects/Repo/worktrees",
+            {"project_id": "wt:42", "branch": "mewbo/task"},
+            status=201,
+        )
+        .on("POST", "/api/sessions", {"session_id": "s-wt"})
+        .on("POST", "/api/sessions/s-wt/query", {"accepted": True}, status=202)
+    )
+    result = run(
+        tools.SessionTools(fake.client()).create(prompt="task", repo="Repo")
+    )
+    assert result["session_id"] == "s-wt"
+    assert result["status"] == "running"
+    # Worktree IS still provisioned (POST to worktrees endpoint was made)
+    fake.find("POST", "/api/v_projects/Repo/worktrees")
+    # But the caller does NOT receive the worktree ids
+    assert "worktree_project_id" not in result
+    assert "parent_project_id" not in result

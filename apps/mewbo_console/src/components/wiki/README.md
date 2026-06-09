@@ -42,7 +42,7 @@ src/components/wiki/
 ├── WikiScreen.tsx
 ├── QAScreen.tsx
 │
-├── WikiTopBar.tsx               # MewboWiki brand + Edit Wiki popover + Copy link
+├── WikiTopBar.tsx               # MewboWiki brand + Edit Wiki + Copy badge popovers + Copy link
 ├── ModelPicker.tsx              # reuses ModelBrandIcon + formatModelName
 ├── MarkdownBlock.tsx            # react-markdown + remark-gfm + rehype-slug
 ├── MermaidBlock.tsx             # lazy mermaid, memoised, cached
@@ -56,6 +56,7 @@ src/components/wiki/
 ├── BrandMark.tsx                # clay flower SVG
 ├── mermaid-renderer.ts          # shared lazy-load + (theme,source)→svg cache
 ├── router.ts                    # WikiRoute parser/buildHref
+├── badge.ts                     # atomic class: WikiBadge (README "Copy badge" snippet)
 ├── useStoredModel.ts            # localStorage `wiki:qa-model`
 │
 ├── configure-wizard/

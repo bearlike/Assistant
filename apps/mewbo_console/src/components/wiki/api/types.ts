@@ -172,9 +172,49 @@ export type IndexingStatus =
   | "queued"
   | "scanning"
   | "finalizing"
+  | "interrupted"
   | "complete"
   | "cancelled"
   | "failed";
+
+/**
+ * A terminal-but-incomplete indexing job that still has reusable work —
+ * surfaced in the landing page's "Incomplete indexes" section. Returned by
+ * ``GET /v1/wiki/jobs/recoverable``.
+ */
+export interface RecoverableJob {
+  jobId: string;
+  /** Canonical fully-qualified slug ``host/owner/repo``. */
+  slug: string;
+  /** Terminal-but-incomplete status (failed / interrupted / cancelled). */
+  status: IndexingStatus;
+  /** Phase the run reached before stopping. */
+  phase?: IndexingPhase | null;
+  /** Terminal error the job carried, if any (the backend sends the WikiError
+   *  object, not a bare string — render `error.message`). */
+  error?: WikiError | null;
+  /** Pages persisted before the run stopped. */
+  pagesSubmitted?: number;
+  /** Total pages from the committed plan; null until commit_plan landed. */
+  totalPages?: number | null;
+  /** ISO timestamp of the last update. */
+  updatedAt?: string | null;
+  /** Reusable work a resume will skip / pick up from. */
+  recoverable: {
+    /** Page ids / phases already done that a resume will skip. */
+    skip: string[];
+    pagesDone: number;
+    pagesRemaining: number;
+    nodeCount: number;
+  };
+}
+
+/** 202 response shape from ``POST /v1/wiki/index/<job_id>/resume``. */
+export interface ResumeIndexingResponse {
+  jobId: string;
+  sessionId: string;
+  status: IndexingStatus;
+}
 
 /**
  * Discriminated event union streamed by `subscribeToIndexing`.
@@ -218,6 +258,7 @@ export type IndexingPhase =
   | "clone"
   | "scan"
   | "graph"
+  | "enrich"
   | "plan"
   | "pages"
   | "finalize";
@@ -250,10 +291,41 @@ export interface QaAnswer {
   answerId: string;
   /** Page id this answer was generated from, used to caption the summary. */
   fromPageId: string;
+  /** The LLM's curated, human-facing citation list. */
   summarySources: string[];
   /** Authoring model — used by the "Generated with…" pill. */
   model: string;
   blocks: Block[];
+  /**
+   * Deterministic provenance trail: every graph node / source file / wiki
+   * page the hypervisor's probes actually touched. Citation-id grammar:
+   * ``graph:<node_id>``, ``<path>#L<a>-<b>`` (or bare ``<path>``),
+   * ``wiki:<page_id>``. Distinct from the curated ``summarySources``.
+   * Absent on older answers — treat as ``[]``.
+   */
+  accessedSources?: string[];
+  /**
+   * Distinct LLM models that ran across the hypervisor + its probes
+   * (e.g. ``["openai/claude-sonnet-4-6", "openai/haiku"]``). Absent on
+   * older answers — treat as ``[]``.
+   */
+  modelsUsed?: string[];
+}
+
+/**
+ * A file-source excerpt for a single cited source card. Returned by
+ * ``GET /v1/wiki/projects/<slug>/source?path=&start=&end=``. ``content`` is
+ * the raw excerpt text (the requested window, or the whole file when no
+ * range is given); ``startLine`` is the 1-based line number of the first
+ * line of ``content`` so the viewer can number it correctly, and
+ * ``endLine`` the last. ``totalLines`` is the file's full length.
+ */
+export interface SourceExcerpt {
+  path: string;
+  startLine: number | null;
+  endLine: number | null;
+  totalLines: number;
+  content: string;
 }
 
 /**
@@ -292,23 +364,51 @@ export type GraphNodeKind =
   | "Class"
   | "Function"
   | "Method"
-  | "Interface";
+  | "Interface"
+  // ── Multiplex layers (wire contract v2) ──
+  // ``External`` is an AST node for a cross-file/import target the graph
+  // now resolves and shares; ``Entity`` and ``Memory`` are the abstract
+  // and memory-orchestration layers respectively.
+  | "External"
+  | "Entity"
+  | "Memory";
 
 export type GraphEdgeKind =
   | "CONTAINS"
   | "IMPORTS"
   | "CALLS"
   | "EXTENDS"
-  | "REFERENCES";
+  | "REFERENCES"
+  // ── Multiplex layers (wire contract v2) ──
+  // ``ANCHORS`` is the cross-layer edge tying an entity/memory node to its
+  // AST anchor; ``RELATES`` is the intra-layer edge for entity & memory
+  // graphs (carries an optional verb ``label``).
+  | "ANCHORS"
+  | "RELATES";
+
+/** Multiplex layer a node belongs to (wire contract v2). */
+export type GraphLayer = "ast" | "entity" | "memory";
+
+/** Multiplex layer an edge belongs to — ``cross`` is the inter-layer tie. */
+export type GraphEdgeLayer = GraphLayer | "cross";
 
 export interface KnowledgeGraphNode {
   data: {
     id: string;
     label: string;
     kind: GraphNodeKind;
-    file: string;
-    range: [number, number];
-    docstring: string;
+    /** Multiplex layer (wire contract v2). Absent on legacy AST-only jobs. */
+    layer?: GraphLayer;
+    /** AST nodes only — absent on entity/memory nodes. */
+    file?: string;
+    range?: [number, number];
+    docstring?: string;
+    /** Entity nodes only — e.g. ``concept`` | ``role`` | ``user-story``. */
+    entityType?: string;
+    /** Entity / memory nodes — free-form classifier labels. */
+    labels?: string[];
+    /** Memory nodes only — the stored snippet. */
+    snippet?: string;
   };
 }
 
@@ -318,6 +418,10 @@ export interface KnowledgeGraphEdge {
     source: string;
     target: string;
     kind: GraphEdgeKind;
+    /** Multiplex layer (wire contract v2). Absent on legacy AST-only jobs. */
+    layer?: GraphEdgeLayer;
+    /** Verb label carried by ``RELATES`` entity edges. */
+    label?: string;
   };
 }
 
@@ -336,8 +440,49 @@ export interface KnowledgeGraph {
     /** ``true`` when a node cap dropped real nodes. Orphan-edge
      *  filtering on its own does NOT set this. */
     truncated?: boolean;
+    /** Per-layer node tallies (wire contract v2). Absent on legacy jobs. */
+    perLayer?: Partial<Record<GraphLayer, number>>;
   };
 }
+
+// ── Catalog (non-git workspace) ───────────────────────────────────────
+
+/**
+ * A single document to ingest into a non-git catalog workspace.
+ * ``id`` must be unique within the batch; ``title`` becomes the page
+ * title and ``text`` the raw content. Optional ``metadata`` is
+ * forwarded verbatim for embedding / retrieval filtering.
+ */
+export interface CatalogDocument {
+  id: string;
+  title: string;
+  text: string;
+  metadata?: Record<string, string>;
+}
+
+/**
+ * 201 response shape from ``POST /v1/wiki/projects/<slug>/documents``.
+ * Mirrors the backend ``CatalogIngestResponse`` wire contract.
+ */
+export interface CatalogIngestReport {
+  /** Canonical project slug (created if absent). */
+  slug: string;
+  /** Number of documents accepted into the batch. */
+  ingested: number;
+  /** Documents that were also embedded (may be < ingested on partial failure). */
+  embedded: number;
+  /** Running total of documents in this workspace after the call. */
+  totalDocuments: number;
+  /** Documents indexed via BM25 only (embedding quota / short text). */
+  bm25Only: number;
+  /** Wiki landing page id for the new workspace. */
+  landingPageId: string;
+}
+
+// ── Wizard state type (used across wizard + catalog paths) ────────────
+
+/** Discriminates the two wizard source paths. */
+export type WizardSourceType = "git" | "catalog";
 
 // ── Errors ─────────────────────────────────────────────────────────────
 

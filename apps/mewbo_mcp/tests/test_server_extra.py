@@ -233,7 +233,7 @@ def test_server_read_wiki_structure_wires_to_wiki_tools(server):
     graph = {"nodes": [{"id": "a"}], "edges": []}
     routes = {"GET /v1/wiki/projects/assistant/graph": (200, graph)}
     result = _run_tool(server, "read_wiki_structure", {"project": "assistant"}, routes)
-    assert result == graph
+    assert result["stats"]["nodeCount"] == 1  # default tier = compact stats
 
 
 def test_server_read_wiki_page_wires_to_wiki_tools(server):
@@ -291,7 +291,9 @@ def test_server_ask_wiki_wires_to_wiki_tools(server):
                 200, content=sse_body, headers={"content-type": "text/event-stream"}
             )  # noqa: E501
         if req.method == "GET" and req.url.path == "/v1/wiki/qa/ans-svr":
-            return httpx.Response(200, json={"blocks": [{"kind": "p", "text": "Answer text"}]})
+            return httpx.Response(
+                200, json={"status": "complete", "blocks": [{"kind": "p", "text": "Answer text"}]}
+            )
         return httpx.Response(404, json={"message": "no route"})
 
     ctx = _make_ctx(server)
@@ -324,7 +326,7 @@ def test_server_list_integrations_wires_to_integration_tools(server):
         "GET /api/plugins": (200, {"plugins": []}),
     }
     result = _run_tool(server, "list_integrations", {}, routes)
-    assert result["tools"] == [{"tool_id": "shell"}]
+    assert result["tools"] == [{"tool_id": "shell", "name": "shell"}]
     assert result["plugins"] == []
 
 
@@ -430,3 +432,29 @@ def test_server_instructions_mention_key_capabilities(server):
     assert "Bearer" in _INSTRUCTIONS
     assert "Mewbo Search" in _INSTRUCTIONS
     assert "Agentic Wiki" in _INSTRUCTIONS
+
+
+# ---------------------------------------------------------------------------
+# Error envelope — every tool returns {error:{code,reason,retryable}}, not a raise
+# ---------------------------------------------------------------------------
+
+
+def test_tool_returns_structured_error_envelope(server):
+    """A REST 4xx surfaces as a structured envelope, not a raised exception."""
+    routes = {
+        "GET /api/sessions/s1/events": (404, {"error": {"code": 404, "reason": "no session"}})
+    }
+    result = _run_tool(
+        server, "get_session_history", {"session_id": "s1", "level": "overview"}, routes
+    )
+    assert result["error"]["code"] == 404
+    assert "no session" in result["error"]["reason"]
+    assert result["error"]["retryable"] is False
+
+
+def test_tool_envelope_marks_5xx_retryable(server):
+    """A 5xx is reported retryable so a caller knows to back off and retry."""
+    routes = {"GET /api/sessions": (503, {"error": {"reason": "starting up"}})}
+    result = _run_tool(server, "list_sessions", {}, routes)
+    assert result["error"]["code"] == 503
+    assert result["error"]["retryable"] is True

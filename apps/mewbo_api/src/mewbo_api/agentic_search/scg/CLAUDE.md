@@ -1,3 +1,5 @@
+> ↑ [agentic_search/CLAUDE.md](../CLAUDE.md) · [apps/mewbo_api/CLAUDE.md](../../../../CLAUDE.md) · [root](../../../../../../CLAUDE.md)
+
 # Source Capability Graph (SCG) — API Subsystem Guidance
 
 Scope: `apps/mewbo_api/src/mewbo_api/agentic_search/scg/` — the run/map-job

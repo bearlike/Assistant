@@ -17,6 +17,12 @@ export async function copyText(text: string) {
   textarea.style.left = '-9999px';
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand('copy');
+  try {
+    document.execCommand('copy');
+  } catch {
+    // best-effort: the legacy path can throw in sandboxed / non-gesture
+    // contexts. Swallow so callers still get a normal return (and their
+    // "copied" feedback fires) and the temp node is always cleaned up.
+  }
   document.body.removeChild(textarea);
 }

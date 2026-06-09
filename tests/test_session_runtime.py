@@ -1,5 +1,6 @@
 """Tests for shared session runtime helpers."""
 
+import threading
 import time
 
 import pytest
@@ -65,7 +66,7 @@ def test_runtime_load_events_filters_by_after(tmp_path):
 
 
 def test_runtime_start_async_and_cancel(tmp_path):
-    """Start and cancel an async run."""
+    """Start and cancel an async run; start_async returns the minted run_id."""
     store = SessionStore(root_dir=str(tmp_path))
     runtime = SessionRuntime(session_store=store)
 
@@ -85,7 +86,10 @@ def test_runtime_start_async_and_cancel(tmp_path):
 
     runtime.run_sync = fake_run_sync
     session_id = runtime.resolve_session()
-    assert runtime.start_async(session_id=session_id, user_query="hello") is True
+    run_id = runtime.start_async(session_id=session_id, user_query="hello")
+    # The first run mints "<session_id>:r1"; resolvable back to session_id.
+    assert run_id == f"{session_id}:r1"
+    assert run_id.split(":", 1)[0] == session_id
     assert runtime.is_running(session_id) is True
     assert runtime.cancel(session_id) is True
 
@@ -95,6 +99,91 @@ def test_runtime_start_async_and_cancel(tmp_path):
             break
         time.sleep(0.01)
     assert runtime.is_running(session_id) is False
+
+
+def test_runtime_start_async_runid_increments_per_turn(tmp_path):
+    """Each run on a session mints a fresh 1-based ``:r<seq>`` run_id."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+
+    def fake_run_sync(*, session_id, user_query, should_cancel=None, **_kwargs):
+        # Mirror production: the run appends its own user event.
+        runtime.session_store.append_event(
+            session_id, {"type": "user", "payload": {"text": user_query}}
+        )
+
+    runtime.run_sync = fake_run_sync
+    session_id = runtime.resolve_session()
+
+    first = runtime.start_async(session_id=session_id, user_query="one")
+    assert first == f"{session_id}:r1"
+    _wait_idle(runtime, session_id)
+
+    second = runtime.start_async(session_id=session_id, user_query="two")
+    assert second == f"{session_id}:r2"
+    _wait_idle(runtime, session_id)
+
+
+def test_runtime_start_async_returns_empty_when_busy(tmp_path):
+    """A concurrent start is refused with a falsy empty run_id (busy contract)."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+
+    def fake_run_sync(*, session_id, user_query, should_cancel=None, **_kwargs):
+        while should_cancel and not should_cancel():
+            time.sleep(0.01)
+
+    runtime.run_sync = fake_run_sync
+    session_id = runtime.resolve_session()
+    first = runtime.start_async(session_id=session_id, user_query="busy")
+    assert first  # truthy run_id
+    try:
+        # Registry refuses a second concurrent run → empty string (falsy) so
+        # existing ``if not started`` callers still detect the refusal.
+        second = runtime.start_async(session_id=session_id, user_query="again")
+        assert second == ""
+    finally:
+        runtime.cancel(session_id)
+        _wait_idle(runtime, session_id)
+
+
+def test_runtime_start_async_forwards_structured_params(tmp_path):
+    """start_async threads extra_session_tools/approval_callback/strict_tool_scope."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    captured: dict = {}
+    done = threading.Event()
+
+    def fake_run_sync(**kwargs):
+        captured.update(kwargs)
+        done.set()
+
+    runtime.run_sync = fake_run_sync
+    session_id = runtime.resolve_session()
+
+    sentinel_tool = object()
+
+    def my_callback(*_a, **_k):
+        return True
+
+    runtime.start_async(
+        session_id=session_id,
+        user_query="hi",
+        extra_session_tools=[sentinel_tool],
+        approval_callback=my_callback,
+        strict_tool_scope=True,
+    )
+    assert done.wait(2.0)
+    assert captured["extra_session_tools"] == [sentinel_tool]
+    assert captured["approval_callback"] is my_callback
+    assert captured["strict_tool_scope"] is True
+    _wait_idle(runtime, session_id)
+
+
+def _wait_idle(runtime, session_id, timeout=2.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline and runtime.is_running(session_id):
+        time.sleep(0.005)
 
 
 def test_enqueue_message_persists_user_event(tmp_path):
@@ -397,6 +486,208 @@ def test_resolve_recovery_query_refuses_running_session(tmp_path):
     try:
         with pytest.raises(RuntimeError, match="running"):
             runtime.resolve_recovery_query(session_id, "retry")
+    finally:
+        runtime.cancel(session_id)
+        deadline = time.time() + 2.0
+        while time.time() < deadline and runtime.is_running(session_id):
+            time.sleep(0.01)
+
+
+# ---------------------------------------------------------------------------
+# Recovery capability re-injection (Gitea #54, Part F1)
+# ---------------------------------------------------------------------------
+
+
+def test_reinject_recovery_context_reemits_client_capabilities(tmp_path):
+    """A recovered session whose original context declared ``client_capabilities``
+    re-emits it as the most-recent context event, so capability-gated AgentDefs
+    (wiki-*, etc.) still resolve after recovery.
+    """
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    runtime.append_context_event(session_id, {"client_capabilities": ["wiki"]})
+    store.append_event(session_id, {"type": "user", "payload": {"text": "q"}})
+    # Simulate a later gating-less context event (e.g. a model override on recovery)
+    runtime.append_context_event(session_id, {"model": "gpt-4o"})
+
+    runtime.reinject_recovery_context(session_id)
+
+    events = store.load_transcript(session_id)
+    last_context = next(
+        (e for e in reversed(events) if e.get("type") == "context"), None
+    )
+    assert last_context is not None
+    assert last_context["payload"].get("client_capabilities") == ["wiki"]
+
+
+def test_reinject_recovery_context_reemits_structured_workspace(tmp_path):
+    """``structured_workspace`` (the grounded-structured slug) survives recovery."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    runtime.append_context_event(
+        session_id, {"structured_workspace": "my-repo", "client_capabilities": ["wiki"]}
+    )
+    runtime.append_context_event(session_id, {"model": "gpt-4o"})
+
+    runtime.reinject_recovery_context(session_id)
+
+    events = store.load_transcript(session_id)
+    last_context = next(
+        (e for e in reversed(events) if e.get("type") == "context"), None
+    )
+    assert last_context is not None
+    assert last_context["payload"].get("structured_workspace") == "my-repo"
+    assert last_context["payload"].get("client_capabilities") == ["wiki"]
+
+
+def test_reinject_recovery_context_noop_without_gating_fields(tmp_path):
+    """A session that never declared a gating field gets no extra context event."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    runtime.append_context_event(session_id, {"model": "gpt-4o"})
+    before = len(store.load_transcript(session_id))
+
+    runtime.reinject_recovery_context(session_id)
+
+    assert len(store.load_transcript(session_id)) == before
+
+
+def test_reinject_recovery_context_uses_latest_gating_value(tmp_path):
+    """When the gating field changed across events, the LATEST value wins."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    runtime.append_context_event(session_id, {"client_capabilities": ["wiki"]})
+    runtime.append_context_event(session_id, {"client_capabilities": ["wiki", "scg"]})
+
+    runtime.reinject_recovery_context(session_id)
+
+    events = store.load_transcript(session_id)
+    last_context = next(
+        (e for e in reversed(events) if e.get("type") == "context"), None
+    )
+    assert last_context is not None
+    assert last_context["payload"].get("client_capabilities") == ["wiki", "scg"]
+
+
+# ---------------------------------------------------------------------------
+# ``recoverable`` flag (Gitea #54, Part F2)
+# ---------------------------------------------------------------------------
+
+
+def _append_completion(store, session_id, *, done, done_reason):
+    store.append_event(
+        session_id,
+        {"type": "completion", "payload": {"done": done, "done_reason": done_reason}},
+    )
+
+
+def test_recoverable_true_when_failed(tmp_path):
+    """A failed session with a prior user turn is recoverable."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "do it"}})
+    _append_completion(store, session_id, done=True, done_reason="error")
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "failed"
+    assert summary["recoverable"] is True
+
+
+def test_recoverable_true_when_canceled(tmp_path):
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "do it"}})
+    _append_completion(store, session_id, done=False, done_reason="canceled")
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "canceled"
+    assert summary["recoverable"] is True
+
+
+def test_recoverable_true_when_incomplete(tmp_path):
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "do it"}})
+    _append_completion(store, session_id, done=False, done_reason="max_steps_reached")
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "incomplete"
+    assert summary["recoverable"] is True
+
+
+def test_recoverable_true_when_died_without_completion(tmp_path):
+    """The real failure mode: process killed mid-call, NO completion event.
+
+    Status stays ``idle`` but a user turn exists — must be recoverable.
+    """
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "do it"}})
+    # No completion event at all (process killed).
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "idle"
+    assert summary["recoverable"] is True
+
+
+def test_recoverable_false_when_completed(tmp_path):
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "do it"}})
+    _append_completion(store, session_id, done=True, done_reason="completed")
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "completed"
+    assert summary["recoverable"] is False
+
+
+def test_recoverable_true_when_awaiting_approval(tmp_path):
+    """A session parked in ``awaiting_approval`` is recoverable — recovery
+    ``continue`` is the auto-exit, mirroring send_followup re-engagement (#66)."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "plan it"}})
+    _append_completion(store, session_id, done=True, done_reason="awaiting_approval")
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "awaiting_approval"
+    assert summary["recoverable"] is True
+
+
+def test_recoverable_false_without_user_turn(tmp_path):
+    """No prior user message ⇒ resolve_recovery_query would raise ⇒ not recoverable."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "context", "payload": {"model": "x"}})
+    summary = runtime.summarize_session(session_id)
+    assert summary["recoverable"] is False
+
+
+def test_recoverable_false_when_running(tmp_path):
+    """A running session is never recoverable (it hasn't failed yet)."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+
+    def fake_run_sync(*, session_id, user_query, should_cancel=None, **_kwargs):
+        while should_cancel and not should_cancel():
+            time.sleep(0.01)
+
+    runtime.run_sync = fake_run_sync
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+    runtime.start_async(session_id=session_id, user_query="hi")
+    try:
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not runtime.is_running(session_id):
+            time.sleep(0.01)
+        summary = runtime.summarize_session(session_id)
+        assert summary["status"] == "running"
+        assert summary["recoverable"] is False
     finally:
         runtime.cancel(session_id)
         deadline = time.time() + 2.0

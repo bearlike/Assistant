@@ -185,7 +185,7 @@ Cache savings appear immediately in the per-turn chip as **cache read** tokens. 
 | `token_budget.model_context_windows` | `{}` | Per-model overrides (map of model name → token count). Use to cap below the real max or for proxy-only models. |
 | `llm.compact_models` | `["default"]` | Priority-ordered model list for compaction. |
 
-See [configuration.md](configuration.md#tokenbudgetconfig) for the full schema.
+See [configuration.md](configuration.md#token-budget) for the full schema.
 
 > [!NOTE] How it works internally
 > See [Architecture Overview → Token tracking](core-orchestration.md#token-tracking).

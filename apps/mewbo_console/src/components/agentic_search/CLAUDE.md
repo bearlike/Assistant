@@ -1,3 +1,5 @@
+> ↑ [apps/mewbo_console/CLAUDE.md](../../../CLAUDE.md) · [root](../../../../../CLAUDE.md)
+
 # Agentic Search ("Mewbo Search") — Console Subsystem Guidance
 
 Scope: this file applies to `apps/mewbo_console/src/components/agentic_search/`

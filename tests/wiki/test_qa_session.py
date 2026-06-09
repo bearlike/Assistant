@@ -116,14 +116,20 @@ def test_qa_start_creates_record_and_emits_meta_event(store, runtime):
     assert tag == f"wiki:qa:{answer.answer_id}"
     runtime.start_async.assert_called_once()
     kw = runtime.start_async.call_args.kwargs
-    assert "wiki_search_pages" in kw["allowed_tools"]
+    # The root is a HYPERVISOR: it fans out retrieval probes (spawn_agent /
+    # check_agents) and emits the fused answer (wiki_emit_block). It has NO
+    # direct retrieval tools — those belong to the wiki-qa-probe sub-agents.
+    assert "spawn_agent" in kw["allowed_tools"]
+    assert "check_agents" in kw["allowed_tools"]
     assert "wiki_emit_block" in kw["allowed_tools"]
+    assert "wiki_query_graph" not in kw["allowed_tools"]
+    assert "wiki_search_pages" not in kw["allowed_tools"]
     assert kw["model_name"] == "anthropic/claude-sonnet-4-6"
     assert kw["user_query"] == "What is the auth flow?"
 
 
 def test_qa_start_playbook_contains_agent_instructions(store, runtime):
-    """skill_instructions comes from the wiki-qa.md body."""
+    """skill_instructions comes from the wiki-qa.md body (the hypervisor playbook)."""
     WikiQaSession.start(
         slug="org/repo",
         question="What?",
@@ -132,8 +138,9 @@ def test_qa_start_playbook_contains_agent_instructions(store, runtime):
         runtime=runtime,
     )
     kw = runtime.start_async.call_args.kwargs
-    # wiki-qa.md body must reference the retrieval tools
-    assert "wiki_search_pages" in kw["skill_instructions"]
+    # wiki-qa.md body must drive the probe fan-out + emit the fused answer.
+    assert "spawn_agent" in kw["skill_instructions"]
+    assert "wiki-qa-probe" in kw["skill_instructions"]
     assert "wiki_emit_block" in kw["skill_instructions"]
 
 
@@ -170,6 +177,8 @@ def test_qa_cancel_appends_cancelled_event(store, runtime):
     events = store.load_qa_events(answer.answer_id)
     assert any(e["type"] == "cancelled" for e in events)
     runtime.cancel.assert_called_once_with("sess-qa-abc")
+    # the snapshot is marked terminal too, so a non-streaming poll (MCP) stops
+    assert store.get_qa(answer.answer_id).status == "cancelled"
 
 
 def test_qa_cancel_idempotent(store, runtime):
@@ -338,18 +347,16 @@ def test_post_qa_response_starts_with_meta_event(client):
     assert block_pos == -1 or meta_pos < block_pos
 
 
-def test_post_qa_validates_missing_model(client):
-    """Missing model → 400 validation error."""
+def test_post_qa_model_is_optional(client):
+    """Missing model is OK — the server defaults the QA model (no 400)."""
     c, _ = client
     resp = c.post(
         "/v1/wiki/qa",
         json={"question": "What?", "slug": "org/repo"},
         headers={"X-Api-Key": API_KEY},
     )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert data["code"] == "validation"
-    assert "model" in data.get("fields", {})
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.content_type
 
 
 def test_post_qa_validates_missing_question(client):
@@ -366,8 +373,8 @@ def test_post_qa_validates_missing_question(client):
     assert "question" in data.get("fields", {})
 
 
-def test_post_qa_validates_missing_slug(client):
-    """Missing slug → 400 validation error."""
+def test_post_qa_validates_missing_project(client):
+    """Missing project/slug → 400 validation error naming the public 'project'."""
     c, _ = client
     resp = c.post(
         "/v1/wiki/qa",
@@ -377,7 +384,7 @@ def test_post_qa_validates_missing_slug(client):
     assert resp.status_code == 400
     data = resp.get_json()
     assert data["code"] == "validation"
-    assert "slug" in data.get("fields", {})
+    assert "project" in data.get("fields", {})  # public name, not internal 'slug'
 
 
 def test_post_qa_requires_auth(client):

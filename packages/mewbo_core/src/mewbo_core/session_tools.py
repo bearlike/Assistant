@@ -51,6 +51,16 @@ class SessionTool(Protocol):
         """Return True (consuming the flag) when the loop should exit cleanly."""
         ...
 
+    def terminal_reason(self) -> str:
+        """Return the ``done_reason`` to stamp when this tool terminates the run.
+
+        The default is ``"awaiting_approval"`` (the ``exit_plan_mode`` pattern).
+        Tools that signal a *successful* terminal state (e.g.
+        ``EmitStructuredResponseTool``) override this to ``"completed"`` so the
+        loop stamps the right reason without a hardcoded literal.
+        """
+        return "awaiting_approval"
+
 
 # Plugin session tools default to act-mode-only. A plugin that wants its
 # tool bound in plan mode must override ``modes`` on the class.

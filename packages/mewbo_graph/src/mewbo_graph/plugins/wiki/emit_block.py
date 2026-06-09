@@ -58,12 +58,29 @@ class WikiEmitBlockTool(WikiSessionTool):
         WikiEmitBlockArgs, name="wiki_emit_block"
     )
 
+    def should_terminate_run(self) -> bool:
+        """The terminal ``sources`` block is the answer's accept state.
+
+        Emitting it submits the finished answer (the ``EmitStructuredResponseTool``
+        pattern), so the loop stops cleanly here instead of spending a trailing
+        turn. Set by :meth:`handle` once the required sources block lands.
+        """
+        return getattr(self, "_terminate", False)
+
     async def handle(self, action_step: ActionStep) -> MockSpeaker:
         """Execute a ``wiki_emit_block`` tool call."""
         # 1. Resolve runtime and QA ctx.
         ctx = self._qa_ctx()
         if ctx is None:
             return _err_result("internal", "wiki QA ctx not found for this session")
+        # A grounded structured-response session resolves a slug-only ctx
+        # (``answer_id is None``) — it has no QA event log to write blocks into.
+        # Emitting answer blocks is QA-only; refuse rather than NPE on the
+        # ``load_qa_events``/``append_qa_event`` calls below.
+        if ctx.answer_id is None:
+            return _err_result(
+                "internal", "wiki_emit_block requires a registered QA answer"
+            )
 
         # 2. Parse and validate outer args.
         args = self._parse_args(WikiEmitBlockArgs, action_step)
@@ -98,6 +115,15 @@ class WikiEmitBlockTool(WikiSessionTool):
             "type": "block_close",
             "index": args.index,
         })
+
+        # 6. The sources block is required LAST and IS the answer's accept state:
+        #    submit (reconcile snapshot + terminal ``complete`` — including the
+        #    snapshot's ``status``, see ``QaFinalizer.close``) and terminate the
+        #    run. The on_session_end net still covers a run that halts before it.
+        if block_dict.get("kind") == "sources":
+            from mewbo_graph.wiki.qa import QaFinalizer  # noqa: PLC0415
+            QaFinalizer.close(ctx.store, ctx.answer_id)
+            self._terminate = True
 
         return MockSpeaker(content=str({"ok": True, "index": args.index}))
 

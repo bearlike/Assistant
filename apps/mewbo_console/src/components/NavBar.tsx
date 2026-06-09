@@ -20,6 +20,7 @@ import {
   FolderOpen,
   KeyRound,
   ListChecks,
+  PenLine,
   Search } from
 'lucide-react';
 import { NotificationItem, SessionSummary, SessionUsage } from '../types';
@@ -81,6 +82,7 @@ export interface NavBarProps {
   onPluginsClick?: () => void;
   onProjectsClick?: () => void;
   onSearchClick?: () => void;
+  onDraftClick?: () => void;
   /**
    * Which landing-page section is active. Controls the cross-section
    * link strip rendered between the logo and the right-side actions in
@@ -127,6 +129,7 @@ export function NavBar({
   onPluginsClick,
   onProjectsClick,
   onSearchClick,
+  onDraftClick,
   landingNav = null,
   onTasksClick,
   onWikiClick,
@@ -377,6 +380,10 @@ export function NavBar({
         <DropdownMenuItem onSelect={() => onSearchClick?.()}>
           <Search className="w-3.5 h-3.5 mr-2" />
           Search
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onDraftClick?.()}>
+          <PenLine className="w-3.5 h-3.5 mr-2" />
+          Draft stream
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onProjectsClick?.()}>
           <FolderOpen className="w-3.5 h-3.5 mr-2" />

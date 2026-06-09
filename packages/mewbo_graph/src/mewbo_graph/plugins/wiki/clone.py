@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlparse, urlunparse
 
@@ -67,15 +68,22 @@ class WikiCloneRepoTool(WikiSessionTool):
         if isinstance(args, MockSpeaker):
             return args
 
-        # 3. Build the clone URL with token rewriting (never persisted).
-        # Prefer the LLM-supplied token, but fall back to the ephemeral
-        # token the API stashed at submission time so the LLM never has
-        # to see the secret.
-        effective_token = args.token
-        if not effective_token:
-            from mewbo_graph.wiki.tokens import CloneTokenCache  # noqa: PLC0415
+        # 3. Resolve the credential. Order: LLM arg (fast) → ephemeral
+        # CloneTokenCache (warm path) → durable CredentialStore (source of
+        # truth — survives the process that warmed the cache). The SSH branch
+        # authenticates via GIT_SSH_COMMAND + a temp key file; the token branch
+        # injects x-access-token into the URL (never persisted).
+        from mewbo_graph.wiki.credentials import CredentialStore  # noqa: PLC0415
+        from mewbo_graph.wiki.tokens import CloneTokenCache  # noqa: PLC0415
 
-            effective_token = CloneTokenCache.peek(ctx.job_id)
+        effective_token = args.token or CloneTokenCache.peek(ctx.job_id)
+        ssh_key: str | None = None
+        if not effective_token:
+            cred = CredentialStore.load(ctx.store, ctx.slug)
+            if cred is not None and cred.kind == "token":
+                effective_token = cred.value
+            elif cred is not None and cred.kind == "ssh_key":
+                ssh_key = cred.value
         clone_url = _inject_token(args.url, effective_token)
 
         # 4. Prepare clone dir (clean if present from a prior partial run).
@@ -98,22 +106,30 @@ class WikiCloneRepoTool(WikiSessionTool):
             cmd += ["--branch", args.ref, "--single-branch"]
         cmd += [clone_url, str(clone_dir)]
 
+        run_env, key_path = _ssh_env_for(ssh_key)
         try:
-            proc = subprocess.run(cmd, capture_output=True, timeout=300)
-        except subprocess.TimeoutExpired:
-            err_msg = "git clone timed out after 300s"
-            ctx.store.append_job_event(ctx.job_id, {
-                "type": "error",
-                "error": {"code": "repo_access", "message": err_msg},
-            })
-            ctx.store.update_job(ctx.job_id, status="failed")
-            return _err_result("repo_access", err_msg)
+            try:
+                proc = subprocess.run(cmd, capture_output=True, timeout=300, env=run_env)
+            except subprocess.TimeoutExpired:
+                err_msg = "git clone timed out after 300s"
+                ctx.store.append_job_event(ctx.job_id, {
+                    "type": "error",
+                    "error": {"code": "repo_access", "message": err_msg},
+                })
+                ctx.store.update_job(ctx.job_id, status="failed")
+                return _err_result("repo_access", err_msg)
+        finally:
+            if key_path is not None:
+                key_path.unlink(missing_ok=True)
 
         if proc.returncode != 0:
             err_msg = (proc.stderr or b"").decode(errors="ignore").strip() or "git clone failed"
-            # Scrub token from any error message before persisting.
-            if args.token:
-                err_msg = err_msg.replace(args.token, "<redacted>")
+            # Scrub EVERY non-None secret that could be in the URL before it
+            # reaches the event log OR the tool result. On the durable path the
+            # real token is in ``effective_token`` (args.token is None), and an
+            # SSH key value is a file path/content — none must leak verbatim.
+            for secret in filter(None, [args.token, effective_token, ssh_key]):
+                err_msg = err_msg.replace(secret, "<redacted>")
             ctx.store.append_job_event(ctx.job_id, {
                 "type": "error",
                 "error": {"code": "repo_access", "message": err_msg},
@@ -197,6 +213,36 @@ def _inject_token(url: str, token: str | None) -> str:
     return urlunparse(parsed._replace(netloc=netloc))
 
 
+def _ssh_env_for(ssh_key: str | None) -> tuple[dict[str, str] | None, Path | None]:
+    """Build the subprocess env for an SSH-key clone, plus the temp key path.
+
+    Returns ``(None, None)`` when there is no SSH key (token/anon path keeps
+    the inherited env). Otherwise writes *ssh_key* to a private temp file
+    (mode 0600), returns an env with ``GIT_SSH_COMMAND`` pointing at it, and the
+    path so the caller can delete it in a ``finally``. ``accept-new`` trusts a
+    first-seen host key without an interactive prompt (we clone ephemerally).
+    """
+    if not ssh_key:
+        return None, None
+    import os  # noqa: PLC0415
+    import shlex  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    fd, name = tempfile.mkstemp(prefix="mewbo-wiki-key-")
+    key_path = Path(name)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(ssh_key if ssh_key.endswith("\n") else ssh_key + "\n")
+    key_path.chmod(0o600)
+    env = dict(os.environ)
+    # Quote the key path — TMPDIR can contain spaces, which would otherwise
+    # split GIT_SSH_COMMAND mid-path and break the clone.
+    env["GIT_SSH_COMMAND"] = (
+        f"ssh -i {shlex.quote(str(key_path))} "
+        "-o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
+    )
+    return env, key_path
+
+
 def _git_rev_parse(clone_dir: Any, args: list[str]) -> str | None:
     """Run ``git -C <clone_dir> rev-parse <args>`` and return stdout.
 
@@ -221,6 +267,7 @@ __all__ = [
     "WikiCloneArgs",
     "WikiCloneRepoTool",
     "_inject_token",
+    "_ssh_env_for",
     "_err_result",
     "_git_rev_parse",
 ]

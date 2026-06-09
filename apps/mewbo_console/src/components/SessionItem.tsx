@@ -1,21 +1,38 @@
 import React from 'react';
-import { Archive, GitFork, RotateCcw } from 'lucide-react';
+import { Archive, GitFork, Play, RotateCcw } from 'lucide-react';
 import { SessionSummary } from '../types';
 import { StatusBadge } from './StatusBadge';
+import { SessionOriginBadge } from './SessionOriginBadge';
+import { Button } from './ui/button';
+import { useRecoverSession } from '../hooks/useRecoverSession';
+import { ProjectLabel } from '../utils/projectLabel';
 import { formatSessionTime } from '../utils/time';
 interface SessionItemProps {
   session: SessionSummary;
+  projectLabel: ProjectLabel;
   onClick: (sessionId: string) => void;
   onArchive?: (sessionId: string) => void;
   onUnarchive?: (sessionId: string) => void;
 }
 export function SessionItem({
   session,
+  projectLabel,
   onClick,
   onArchive,
   onUnarchive
 }: SessionItemProps) {
   const isArchived = Boolean(session.archived);
+  const { label: project, branch } = projectLabel.resolve(session.context);
+  const recover = useRecoverSession();
+  const showRecover = Boolean(session.recoverable) && !session.running;
+  const handleRecover = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    action: 'retry' | 'continue',
+  ) => {
+    event.stopPropagation();
+    if (recover.isPending) return;
+    recover.mutate({ sessionId: session.session_id, action });
+  };
   const handleArchive = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     if (isArchived) {
@@ -35,20 +52,47 @@ export function SessionItem({
         </h3>
         <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
           <span className="whitespace-nowrap">{formatSessionTime(session.created_at)}</span>
-          {(session.context?.project || session.context?.repo) && (
+          <SessionOriginBadge session={session} />
+          {project && (
             <>
               <span>·</span>
               <GitFork className="w-3 h-3 shrink-0" />
-              <span className="truncate">{session.context?.project || session.context?.repo}</span>
+              <span className="truncate">{project}</span>
             </>
           )}
-          {session.context?.branch && (
-            <span className="font-mono truncate bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-[11px]">{session.context.branch}</span>
+          {branch && (
+            <span className="font-mono truncate bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-[11px]">{branch}</span>
           )}
         </div>
       </div>
 
-      <div className="flex items-center gap-3 shrink-0 pt-0.5">
+      <div className="flex items-center gap-2 shrink-0 pt-0.5">
+        {showRecover && (
+          <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            <Button
+              variant="neutral"
+              size="sm"
+              tone="warn"
+              disabled={recover.isPending}
+              leadingIcon={<Play className="w-3 h-3" />}
+              onClick={(e) => handleRecover(e, 'continue')}
+              title="Resume this session with its context intact"
+            >
+              Continue
+            </Button>
+            <Button
+              variant="neutral"
+              size="sm"
+              tone="info"
+              disabled={recover.isPending}
+              leadingIcon={<RotateCcw className="w-3 h-3" />}
+              onClick={(e) => handleRecover(e, 'retry')}
+              title="Restart the last turn from scratch"
+            >
+              Restart
+            </Button>
+          </div>
+        )}
         <StatusBadge
           status={session.status || 'idle'}
           doneReason={session.done_reason} />

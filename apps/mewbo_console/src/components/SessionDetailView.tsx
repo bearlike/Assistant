@@ -13,7 +13,8 @@ import { buildTimeline, getActiveTurn, turnHasWidget } from "../utils/timeline";
 import { mergeDiffFiles } from "../utils/diff";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { extractSummaryTesting } from "../utils/logs";
-import { approvePlan, recoverSession, forkSession } from "../api/client";
+import { approvePlan, forkSession } from "../api/client";
+import { useRecoverSession } from "../hooks/useRecoverSession";
 import { RotateCcw, Play } from "lucide-react";
 import { Button } from "./ui/button";
 // Kept for backward-compat with App.tsx's session-header slot. The shape is
@@ -203,24 +204,35 @@ export function SessionDetailView({
     },
     [session.session_id],
   );
-  const triggerRecover = async (action: "retry" | "continue") => {
-    if (running || !session.session_id) return;
-    await recoverSession(session.session_id, action);
-    // Full reset: clear stale events + lastTsRef so the next poll
-    // fetches the authoritative transcript from scratch. The backend
-    // deletes old events on retry (time-travel) and stale recovery
-    // attempts on continue (stitch), so a merge-based resume would
-    // show orphaned events until hard-refresh.
+  const recover = useRecoverSession();
+  // Shared post-recovery refresh for a generic (non-wiki) dispatch. A
+  // wiki-indexing dispatch navigates away inside the hook, so this never
+  // runs for it. Full reset: clear stale events + lastTsRef so the next
+  // poll fetches the authoritative transcript from scratch (the backend
+  // deletes old events on retry / stale recovery attempts on continue, so a
+  // merge-based resume would show orphaned events until hard-refresh), then
+  // re-fetch the session list so the NavBar StatusBadge flips failed→running.
+  const onGenericRecover = useCallback(() => {
     resetEvents();
-    // Re-fetch session list so the NavBar's StatusBadge updates from
-    // "failed" to "running" without requiring a hard refresh.
     onSessionChange?.();
+  }, [resetEvents, onSessionChange]);
+  const triggerRecover = (action: "retry" | "continue") => {
+    if (running || !session.session_id || recover.isPending) return;
+    recover.mutate({
+      sessionId: session.session_id,
+      action,
+      onGeneric: onGenericRecover,
+    });
   };
-  const handleRetryFrom = async (fromTs: string) => {
-    if (running || !session.session_id) return;
-    await recoverSession(session.session_id, "retry", fromTs, undefined, effectiveContext?.model);
-    resetEvents();
-    onSessionChange?.();
+  const handleRetryFrom = (fromTs: string) => {
+    if (running || !session.session_id || recover.isPending) return;
+    recover.mutate({
+      sessionId: session.session_id,
+      action: "retry",
+      fromTs,
+      model: effectiveContext?.model,
+      onGeneric: onGenericRecover,
+    });
   };
   const handleForkFrom = async (fromTs: string) => {
     if (running || !session.session_id) return;
@@ -235,11 +247,16 @@ export function SessionDetailView({
       // fork failed — silently ignore, notification will surface via API
     }
   };
-  const handleEditAndRegenerate = async (fromTs: string, newText: string) => {
-    if (running || !session.session_id) return;
-    await recoverSession(session.session_id, "retry", fromTs, newText, effectiveContext?.model);
-    resetEvents();
-    onSessionChange?.();
+  const handleEditAndRegenerate = (fromTs: string, newText: string) => {
+    if (running || !session.session_id || recover.isPending) return;
+    recover.mutate({
+      sessionId: session.session_id,
+      action: "retry",
+      fromTs,
+      editedText: newText,
+      model: effectiveContext?.model,
+      onGeneric: onGenericRecover,
+    });
   };
 
   // Surface the last recoverable failure inline in the conversation so users
@@ -266,6 +283,18 @@ export function SessionDetailView({
     return null;
   }, [events, running, submitting]);
 
+  // Header-level recovery affordance, gated by the backend's authoritative
+  // ``session.recoverable`` flag. Covers the case the inline failure panel
+  // misses — a session killed mid-call with no completion event — so opening
+  // /s/<id> on a crashed session always offers recovery. When the inline
+  // panel already shows Retry/Continue (a completion event with an
+  // error/step-limit reason), this defers to it to avoid a double affordance.
+  const showHeaderRecovery =
+    Boolean(session.recoverable) &&
+    !running &&
+    !submitting &&
+    !lastRecoverableFailure;
+
   const conversationPanel = (
     <>
       {errorMessage && <div className="px-6 pt-4">
@@ -274,6 +303,39 @@ export function SessionDetailView({
           <AlertDescription>{errorMessage}</AlertDescription>
         </Alert>
       </div>}
+
+      {showHeaderRecovery && (
+        <div className="px-6 pt-4">
+          <div className="flex items-center justify-between gap-3 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-3 py-2">
+            <p className="text-xs text-[hsl(var(--muted-foreground))] min-w-0">
+              This session stopped before finishing. Continue to resume with its
+              context intact, or restart the last turn.
+            </p>
+            <div className="flex gap-2 shrink-0">
+              <Button
+                variant="neutral"
+                size="sm"
+                tone="warn"
+                leadingIcon={<Play className="w-3 h-3" />}
+                onClick={() => triggerRecover("continue")}
+                title="Resume this session with its context intact"
+              >
+                Continue
+              </Button>
+              <Button
+                variant="neutral"
+                size="sm"
+                tone="info"
+                leadingIcon={<RotateCcw className="w-3 h-3" />}
+                onClick={() => triggerRecover("retry")}
+                title="Restart the last turn from scratch"
+              >
+                Restart
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ConversationTimeline
         timeline={timeline}

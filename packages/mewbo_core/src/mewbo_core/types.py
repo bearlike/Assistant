@@ -131,6 +131,55 @@ class RecoveryPayload(TypedDict):
     action: Literal["retry", "continue"]
 
 
+class LlmRetryPayload(TypedDict):
+    """Payload emitted before a same-model LLM retry (``llm_retry`` event)."""
+
+    agent_id: str
+    depth: int
+    step: int
+    model: str
+    attempt: int
+    max_attempts: int
+    error: str
+    error_type: str
+    delay: float
+    retryable: bool
+
+
+class LlmFallbackPayload(TypedDict):
+    """Payload emitted when the run advances to another model (``llm_fallback``).
+
+    ``reason`` is either a classifier reason (``quota_exhausted``,
+    ``no_deployments``, ``context_window``, ``auth``) for a ``switch_model``
+    decision, or ``retries_exhausted`` when the per-model retry cap tripped on a
+    transient error. ``sticky`` is true when the destination model is pinned for
+    the rest of the run (always true under the escalation policy).
+    """
+
+    agent_id: str
+    depth: int
+    step: int
+    from_model: str
+    to_model: str
+    reason: str
+    previous_error_type: str
+    sticky: NotRequired[bool]
+
+
+class RecoveryHaltPayload(TypedDict):
+    """Payload emitted when the doom-loop guard halts a no-progress run.
+
+    The ``recovery`` event with ``action == "halt_no_progress"`` — distinct from
+    :class:`RecoveryPayload` (user-triggered retry/continue).
+    """
+
+    action: Literal["halt_no_progress"]
+    agent_id: str
+    depth: int
+    step: int
+    tool: str
+
+
 EventPayload = (
     ActionPlanPayload
     | PermissionPayload
@@ -144,6 +193,9 @@ EventPayload = (
     | PlanApprovedPayload
     | PlanRejectedPayload
     | RecoveryPayload
+    | LlmRetryPayload
+    | LlmFallbackPayload
+    | RecoveryHaltPayload
     | dict[str, JsonValue]
 )
 

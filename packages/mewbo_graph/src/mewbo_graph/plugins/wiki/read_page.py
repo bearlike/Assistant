@@ -72,6 +72,7 @@ class WikiReadPageTool(WikiSessionTool):
             return _err_result("not_found", f"page '{args.page_id}' not found in slug '{ctx.slug}'")
 
         # 4. Return full WikiPage dump.
+        self._record_qa_access(ctx, [f"wiki:{args.page_id}"])
         return MockSpeaker(content=str(page.model_dump(by_alias=True)))
 
 

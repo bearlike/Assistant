@@ -26,8 +26,8 @@
     "reasoning_effort": "",
     "reasoning_effort_models": [],
     "fallback": {
-      "enabled": false,
-      "models": []
+      "enabled": true,
+      "models": ["gpt-5.4"]
     }
   },
   "context": {
@@ -84,7 +84,7 @@
     "default_denied_tools": [],
     "edit_tool": "search_replace_block",
     "llm_call_timeout": 120.0,
-    "llm_call_retries": 3,
+    "llm_call_retries": 2,
     "retry": {
       "backoff_base": 1.0,
       "backoff_cap": 60.0,

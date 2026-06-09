@@ -1,13 +1,34 @@
 import { useState, useMemo, useCallback, useRef, useEffect, type CSSProperties } from 'react';
-import { AlertCircle, Search, X, Archive, RotateCcw, Loader2, ChevronDown } from 'lucide-react';
+import { AlertCircle, Search, X, Archive, RotateCcw, Loader2, ChevronDown, ListFilter } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { SessionItem } from './SessionItem';
+import { SessionOriginBadge } from './SessionOriginBadge';
 import { InputBar } from './InputBar';
 import { TypewriterGreeting } from './TypewriterGreeting';
-import { QueryMode, SessionContext, SessionSummary } from '../types';
+import { QueryMode, SessionContext, SessionOrigin, SessionSummary } from '../types';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { Button } from './ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+} from './ui/dropdown-menu';
+import { useProjects } from '../hooks/useProjects';
+import { ProjectLabel } from '../utils/projectLabel';
 import { formatSessionTime } from '../utils/time';
+
+// Per-origin filter. Default reveals what the user authored — sessions they
+// started in the console ("user") plus channel chats — and hides the
+// internally-spawned wiki/search sessions until scoped into.
+const ORIGIN_FILTERS: { origin: SessionOrigin; label: string }[] = [
+  { origin: 'user', label: 'My tasks' },
+  { origin: 'channel', label: 'Channels' },
+  { origin: 'wiki', label: 'Wiki' },
+  { origin: 'search', label: 'Search' },
+];
+const DEFAULT_VISIBLE_ORIGINS: SessionOrigin[] = ['user', 'channel'];
 interface HomeViewProps {
   sessions: SessionSummary[];
   archivedSessions: SessionSummary[];
@@ -48,7 +69,23 @@ export function HomeView({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'sessions' | 'archive'>('sessions');
+  const [visibleOrigins, setVisibleOrigins] = useState<Set<SessionOrigin>>(
+    () => new Set(DEFAULT_VISIBLE_ORIGINS)
+  );
   const [chevronHidden, setChevronHidden] = useState(false);
+  const { projects } = useProjects();
+  const projectLabel = useMemo(() => new ProjectLabel(projects), [projects]);
+  const toggleOrigin = useCallback((origin: SessionOrigin) => {
+    setVisibleOrigins((prev) => {
+      const next = new Set(prev);
+      if (next.has(origin)) next.delete(origin);
+      else next.add(origin);
+      return next;
+    });
+  }, []);
+  const isDefaultOriginFilter =
+    visibleOrigins.size === DEFAULT_VISIBLE_ORIGINS.length &&
+    DEFAULT_VISIBLE_ORIGINS.every((origin) => visibleOrigins.has(origin));
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sessionsRef = useRef<HTMLDivElement | null>(null);
 
@@ -101,18 +138,24 @@ export function HomeView({
   const listLoading = activeTab === 'archive' ? archivedLoading : loading;
   const scopedSessions = activeTab === 'archive' ? archivedSessions : sessions;
   const apiUnavailable = !listLoading && !!listError && scopedSessions.length === 0;
+  // Single source of truth for the visible list: scope (tab) → origin filter.
+  // Everything below (recent/older split, search) derives from this so the
+  // filter applies uniformly.
+  const displayedSessions = scopedSessions.filter((session) =>
+    visibleOrigins.has(session.origin ?? 'user')
+  );
   const now = useMemo(() => new Date(), []);
-  const recentSessions = scopedSessions.filter((session) => {
+  const recentSessions = displayedSessions.filter((session) => {
     if (!session.created_at) return true;
     const created = new Date(session.created_at);
     return (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24) <= 7;
   });
-  const olderSessions = scopedSessions.filter(
+  const olderSessions = displayedSessions.filter(
     (session) => !recentSessions.includes(session)
   );
-  const filteredSessions = scopedSessions.filter((session) => {
+  const filteredSessions = displayedSessions.filter((session) => {
     const title = session.title?.toLowerCase() || '';
-    const project = (session.context?.project || session.context?.repo || '').toLowerCase();
+    const project = (projectLabel.resolve(session.context).label || '').toLowerCase();
     return (
       title.includes(searchQuery.toLowerCase()) ||
       project.includes(searchQuery.toLowerCase()));
@@ -208,12 +251,41 @@ export function HomeView({
                 Archive
               </button>
             </div>
-            <button
-              onClick={() => setIsSearchOpen(true)}
-              className="pb-3 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
+            <div className="flex items-center gap-1 pb-3">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    aria-label="Filter sessions by origin"
+                    title="Filter sessions by origin"
+                    className="relative text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
+                    <ListFilter className="w-4 h-4" />
+                    {!isDefaultOriginFilter && (
+                      <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-[hsl(var(--primary))]" />
+                    )}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuLabel>Show</DropdownMenuLabel>
+                  {ORIGIN_FILTERS.map(({ origin, label }) => (
+                    <DropdownMenuCheckboxItem
+                      key={origin}
+                      checked={visibleOrigins.has(origin)}
+                      onSelect={(e) => e.preventDefault()}
+                      onCheckedChange={() => toggleOrigin(origin)}>
+                      {label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <button
+                onClick={() => setIsSearchOpen(true)}
+                aria-label="Search sessions"
+                title="Search sessions"
+                className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
 
-              <Search className="w-4 h-4" />
-            </button>
+                <Search className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           <div className="sessions-peek-fade">
@@ -222,7 +294,8 @@ export function HomeView({
               <SessionSection
               title="Archived"
               loading={listLoading}
-              sessions={scopedSessions}
+              sessions={displayedSessions}
+              projectLabel={projectLabel}
               onSessionSelect={onSessionSelect}
               onArchive={onArchive}
               onUnarchive={onUnarchive} />
@@ -234,6 +307,7 @@ export function HomeView({
               title="Last 7 Days"
               loading={listLoading}
               sessions={recentSessions}
+              projectLabel={projectLabel}
               onSessionSelect={onSessionSelect}
               onArchive={onArchive}
               onUnarchive={onUnarchive} />
@@ -242,6 +316,7 @@ export function HomeView({
               title="Older"
               loading={listLoading && recentSessions.length === 0}
               sessions={olderSessions}
+              projectLabel={projectLabel}
               onSessionSelect={onSessionSelect}
               onArchive={onArchive}
               onUnarchive={onUnarchive} />
@@ -314,10 +389,11 @@ export function HomeView({
                       </h3>
                       <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
                         <span className="whitespace-nowrap">{formatSessionTime(session.created_at)}</span>
-                        {(session.context?.project || session.context?.repo) && (
+                        <SessionOriginBadge session={session} />
+                        {projectLabel.resolve(session.context).label && (
                           <>
                             <span>·</span>
-                            <span className="truncate">{session.context?.project || session.context?.repo}</span>
+                            <span className="truncate">{projectLabel.resolve(session.context).label}</span>
                           </>
                         )}
                       </div>
@@ -358,6 +434,7 @@ function SessionSection({
   title,
   loading,
   sessions,
+  projectLabel,
   onSessionSelect,
   onArchive,
   onUnarchive
@@ -368,7 +445,7 @@ function SessionSection({
 
 
 
-}: {title: string;loading: boolean;sessions: SessionSummary[];onSessionSelect: (sessionId: string) => void;onArchive?: (sessionId: string) => void;onUnarchive?: (sessionId: string) => void;}) {
+}: {title: string;loading: boolean;sessions: SessionSummary[];projectLabel: ProjectLabel;onSessionSelect: (sessionId: string) => void;onArchive?: (sessionId: string) => void;onUnarchive?: (sessionId: string) => void;}) {
   return (
     <div>
       <h3 className="text-xs font-medium text-[hsl(var(--muted-foreground))] mb-3 uppercase tracking-wider pl-2">
@@ -392,6 +469,7 @@ function SessionSection({
           style={{ '--row-index': i } as CSSProperties}>
             <SessionItem
               session={session}
+              projectLabel={projectLabel}
               onClick={onSessionSelect}
               onArchive={onArchive}
               onUnarchive={onUnarchive} />

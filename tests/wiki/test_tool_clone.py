@@ -246,3 +246,188 @@ def test_unknown_session_returns_internal_error(tmp_path: Path) -> None:
         result = asyncio.run(tool.handle(_make_action_step({"url": "https://github.com/org/repo"})))
 
     assert "internal" in result.content
+
+
+# ── Test 6: token resolved from the durable CredentialStore ────────────────────
+
+
+def test_token_resolved_from_credential_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No arg token, cold CloneTokenCache → clone reads the durable credential."""
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
+    from mewbo_graph.wiki.credentials import CredentialStore
+    from mewbo_graph.wiki.tokens import CloneTokenCache
+    from mewbo_graph.wiki.types import RepoCredential
+
+    monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
+    store = _store(tmp_path)
+    store.create_job(_job("job-cs", "git.home/org/repo"))
+    store.attach_job_session("job-cs", "sess-cs")
+    CloneTokenCache.forget("job-cs")
+    CredentialStore.save(
+        store, "git.home/org/repo", RepoCredential(kind="token", value="ghp_store", username=None)
+    )
+
+    runtime = _fake_runtime(store)
+    tool = WikiCloneRepoTool(session_id="sess-cs")
+    clone_dir = tmp_path / "clones" / "job-cs"
+    calls: list = []
+
+    def _capturing_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return _git_success_side_effect(clone_dir)(cmd, **kwargs)
+
+    with patch.object(clone_mod, "_resolve_runtime", return_value=runtime), \
+         patch("subprocess.run", side_effect=_capturing_run):
+        asyncio.run(tool.handle(_make_action_step({"url": "https://git.home/org/repo"})))
+
+    clone_call = next(c for c in calls if "clone" in c)
+    assert any("x-access-token" in arg and "ghp_store" in arg for arg in clone_call)
+
+
+# ── Test 6b: durable-credential token is scrubbed from clone error output ──────
+
+
+def test_durable_token_scrubbed_from_clone_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A token resolved from the durable CredentialStore (args.token is None)
+    must be scrubbed from BOTH the persisted error event AND the returned tool
+    result when git fails and echoes the auth'd URL into stderr."""
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
+    from mewbo_graph.wiki.credentials import CredentialStore
+    from mewbo_graph.wiki.tokens import CloneTokenCache
+    from mewbo_graph.wiki.types import RepoCredential
+
+    monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
+    store = _store(tmp_path)
+    store.create_job(_job("job-leak", "git.home/org/repo"))
+    store.attach_job_session("job-leak", "sess-leak")
+    CloneTokenCache.forget("job-leak")
+    SECRET = "ghp_durableLEAK999"
+    CredentialStore.save(
+        store, "git.home/org/repo", RepoCredential(kind="token", value=SECRET, username=None)
+    )
+
+    runtime = _fake_runtime(store)
+    tool = WikiCloneRepoTool(session_id="sess-leak")
+
+    # git echoes the *authenticated* URL (with the injected token) into stderr.
+    stderr_text = (
+        f"fatal: unable to access 'https://x-access-token:{SECRET}@git.home/org/repo/': "
+        "The requested URL returned error: 403"
+    )
+    failed_proc = subprocess.CompletedProcess(
+        ["git", "clone", "..."], returncode=128, stdout=b"",
+        stderr=stderr_text.encode(),
+    )
+
+    with patch.object(clone_mod, "_resolve_runtime", return_value=runtime), \
+         patch("subprocess.run", return_value=failed_proc):
+        result = asyncio.run(
+            tool.handle(_make_action_step({"url": "https://git.home/org/repo"}))
+        )
+
+    # The returned tool result must NOT carry the secret, and must redact it.
+    assert SECRET not in result.content
+    assert "<redacted>" in result.content
+
+    # The persisted error event must NOT carry the secret either.
+    events = [e for e in store.load_job_events("job-leak") if e["type"] == "error"]
+    assert len(events) == 1
+    msg = events[0]["error"]["message"]
+    assert SECRET not in msg
+    assert "<redacted>" in msg
+
+
+# ── Test 7: SSH-key credential sets GIT_SSH_COMMAND, temp key cleaned up ────────
+
+
+def test_ssh_key_credential_sets_git_ssh_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ssh_key credential drives clone via GIT_SSH_COMMAND, not URL injection,
+    and the temp key file is removed afterward."""
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
+    from mewbo_graph.wiki.credentials import CredentialStore
+    from mewbo_graph.wiki.tokens import CloneTokenCache
+    from mewbo_graph.wiki.types import RepoCredential
+
+    monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
+    store = _store(tmp_path)
+    store.create_job(_job("job-ssh", "git.home/org/repo"))
+    store.attach_job_session("job-ssh", "sess-ssh")
+    CloneTokenCache.forget("job-ssh")
+    CredentialStore.save(
+        store, "git.home/org/repo",
+        RepoCredential(kind="ssh_key", value="PRIVATEKEYDATA", username="git"),
+    )
+
+    runtime = _fake_runtime(store)
+    tool = WikiCloneRepoTool(session_id="sess-ssh")
+    clone_dir = tmp_path / "clones" / "job-ssh"
+    seen_env: dict = {}
+    seen_keyfile: list[str] = []
+
+    def _capturing_run(cmd, **kwargs):
+        env = kwargs.get("env") or {}
+        if "clone" in cmd and "GIT_SSH_COMMAND" in env:
+            seen_env["GIT_SSH_COMMAND"] = env["GIT_SSH_COMMAND"]
+            # capture the -i <path> the command references so we can assert cleanup
+            parts = env["GIT_SSH_COMMAND"].split()
+            if "-i" in parts:
+                seen_keyfile.append(parts[parts.index("-i") + 1])
+        return _git_success_side_effect(clone_dir)(cmd, **kwargs)
+
+    with patch.object(clone_mod, "_resolve_runtime", return_value=runtime), \
+         patch("subprocess.run", side_effect=_capturing_run):
+        asyncio.run(tool.handle(_make_action_step({"url": "ssh://git@git.home/org/repo.git"})))
+
+    assert "GIT_SSH_COMMAND" in seen_env
+    assert "StrictHostKeyChecking=accept-new" in seen_env["GIT_SSH_COMMAND"]
+    # The temp key file is cleaned up in the finally block.
+    assert seen_keyfile and not Path(seen_keyfile[0]).exists()
+    # SSH path must NOT leak the key into any persisted file.
+    for f in tmp_path.rglob("*"):
+        if f.is_file() and "credentials" not in f.parts:
+            assert "PRIVATEKEYDATA" not in f.read_text(errors="replace")
+
+
+# ── Test 8: GIT_SSH_COMMAND key path is shell-quoted (TMPDIR with a space) ──────
+
+
+def test_ssh_command_quotes_key_path_with_spaces(tmp_path: Path) -> None:
+    """When the temp key path contains a space the GIT_SSH_COMMAND key path
+    must be shell-quoted so it isn't split mid-path."""
+    import os
+    import shlex
+
+    from mewbo_graph.plugins.wiki.clone import _ssh_env_for
+
+    spaced_tmp = tmp_path / "dir with space"
+    spaced_tmp.mkdir()
+    real_mkstemp = __import__("tempfile").mkstemp
+
+    def _mkstemp_in_spaced(*args, **kwargs):
+        kwargs.setdefault("dir", str(spaced_tmp))
+        return real_mkstemp(*args, **kwargs)
+
+    with patch("tempfile.mkstemp", side_effect=_mkstemp_in_spaced):
+        env, key_path = _ssh_env_for("PRIVATEKEYDATA")
+    try:
+        assert env is not None and key_path is not None
+        assert " " in str(key_path)  # sanity: the space really is in the path
+        cmd = env["GIT_SSH_COMMAND"]
+        # The quoted path round-trips through shlex back to the real path —
+        # an unquoted f"ssh -i {path}" would split into two tokens here.
+        tokens = shlex.split(cmd)
+        assert tokens[tokens.index("-i") + 1] == str(key_path)
+        assert shlex.quote(str(key_path)) in cmd
+        assert os.access(key_path, os.R_OK)
+    finally:
+        if key_path is not None:
+            key_path.unlink(missing_ok=True)

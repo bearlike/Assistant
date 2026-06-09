@@ -34,6 +34,21 @@
       "tool_id": "scg_memory",
       "module": "mewbo_graph.plugins.scg.memory",
       "class": "ScgMemoryTool"
+    },
+    {
+      "tool_id": "mint_entity",
+      "module": "mewbo_graph.plugins.wiki.mint_entity",
+      "class": "MintEntityTool"
+    },
+    {
+      "tool_id": "relate_entities",
+      "module": "mewbo_graph.plugins.wiki.mint_entity",
+      "class": "RelateEntitiesTool"
+    },
+    {
+      "tool_id": "resolve_entity",
+      "module": "mewbo_graph.plugins.wiki.mint_entity",
+      "class": "ResolveEntityTool"
     }
   ],
   "agents": [

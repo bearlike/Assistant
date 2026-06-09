@@ -17,12 +17,13 @@ LiteLLM already handles batching, retries, and provider routing.
 """
 from __future__ import annotations
 
-import math
 from typing import Protocol, runtime_checkable
 
 import litellm
 from mewbo_core.common import get_logger
 from mewbo_core.config import get_config, get_config_value
+
+from mewbo_graph._util import cosine as _cosine
 
 from .types import Embedding
 
@@ -157,15 +158,12 @@ class Embedder:
 
     @staticmethod
     def cosine(a: list[float], b: list[float]) -> float:
-        """Cosine similarity. Returns 0.0 if either vector is zero-length."""
-        if not a or not b or len(a) != len(b):
-            return 0.0
-        dot = sum(x * y for x, y in zip(a, b))
-        norm_a = math.sqrt(sum(x * x for x in a))
-        norm_b = math.sqrt(sum(x * x for x in b))
-        if norm_a == 0.0 or norm_b == 0.0:
-            return 0.0
-        return dot / (norm_a * norm_b)
+        """Cosine similarity. Returns 0.0 if either vector is zero-length.
+
+        Delegates to the shared, dependency-free ``mewbo_graph._util.cosine`` so
+        the wiki vector math and the entity resolution ladder can never desync.
+        """
+        return _cosine(a, b)
 
     @staticmethod
     def search(

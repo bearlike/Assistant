@@ -303,3 +303,30 @@ def test_merge_with_new_identity_retires_old_node(store) -> None:
     edges = store.list_memory_edges(SLUG, node_id=claim.node_id)
     anchors = {e.target for e in edges if e.type == "ANCHORS"}
     assert anchors == {"auth.py#AuthService", "auth.py#verify"}
+
+
+# ── deduper delegates to the ONE shared ResolutionLadder (DRY) ───────────────
+
+
+def test_deduper_classify_delegates_to_resolution_ladder(store) -> None:
+    """The fuzzy/LLM tiers now route through the generic ResolutionLadder.
+
+    Behavior is pinned by the regression suite above; this characterizes the
+    structural seam (one ladder, two callers) so the delegation can't silently
+    regress to a hand-rolled second ladder.
+    """
+    from mewbo_graph.entities.resolver import ResolutionLadder
+    from mewbo_graph.wiki.memory import InsightDeduper
+    from mewbo_graph.wiki.memory_types import MemoryNode, MemoryProvenance
+
+    deduper = InsightDeduper(store=store)
+    candidate = MemoryNode(
+        slug=SLUG,
+        content="AuthService verifies tokens",
+        provenance=MemoryProvenance(
+            author_agent="t", source="indexer", created_at=CLOCK
+        ),
+    )
+    ladder, by_id = deduper._build_ladder(SLUG, candidate, [1.0, 0.0])
+    assert isinstance(ladder, ResolutionLadder)
+    assert isinstance(by_id, dict)

@@ -28,7 +28,7 @@ from mewbo_core.permissions import (
     load_permission_policy,
 )
 from mewbo_core.session_store import SessionStoreBase, create_session_store
-from mewbo_core.session_tools import SessionToolRegistry
+from mewbo_core.session_tools import SessionTool, SessionToolRegistry
 from mewbo_core.skills import SkillRegistry, activate_skill
 from mewbo_core.token_budget import get_token_budget
 from mewbo_core.tool_registry import ToolRegistry, filter_specs, load_registry
@@ -175,6 +175,7 @@ class Orchestrator:
         user_id: str | None = None,
         source_platform: str | None = None,
         invocation_id: str | None = None,
+        extra_session_tools: list[SessionTool] | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration for a session."""
         if session_id is None:
@@ -200,6 +201,7 @@ class Orchestrator:
                     skill_instructions=skill_instructions,
                     message_queue=message_queue,
                     interrupt_step=interrupt_step,
+                    extra_session_tools=extra_session_tools,
                 )
 
     def _run_with_session_context(
@@ -217,6 +219,7 @@ class Orchestrator:
         skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
+        extra_session_tools: list[SessionTool] | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration with Langfuse session context set."""
         state = OrchestrationState(goal=user_query, session_id=session_id)
@@ -383,6 +386,7 @@ class Orchestrator:
                 cwd=self._cwd,
                 session_id=session_id,
                 session_capabilities=session_caps,
+                extra_session_tools=extra_session_tools,
             )
             try:
                 task_queue, state = asyncio.run(

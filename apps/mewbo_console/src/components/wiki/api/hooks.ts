@@ -10,21 +10,26 @@
 
 import { useEffect, useMemo, useReducer, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import {
   askQuestion,
   cancelIndexingJob,
   createIndexingJob,
   deleteProject,
+  getAnswer,
   getIndexingJob,
   getKnowledgeGraph,
   getPage,
+  getSourceExcerpt,
   getWikiDefaults,
   listActiveJobs,
   listLanguages,
   listPlatforms,
   listProjects,
+  listRecoverableJobs,
   requestWikiRefresh,
+  resumeIndexingJob,
   startAnswer,
   streamAnswer,
   submitWizard,
@@ -83,6 +88,45 @@ export function useActiveIndexingJobs() {
     queryFn: listActiveJobs,
     staleTime: 4_000,
     refetchInterval: 4_000,
+  });
+}
+
+/**
+ * Failed / interrupted / cancelled-but-incomplete jobs with reusable work.
+ * Powers the landing page's "Incomplete indexes" section. Polled on a slow
+ * cadence — these are terminal jobs, so they only change when one resumes.
+ */
+export function useRecoverableJobs() {
+  return useQuery({
+    queryKey: ["wiki", "jobs", "recoverable"],
+    queryFn: listRecoverableJobs,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+}
+
+/**
+ * Resume a recoverable indexing job. On success the job re-enters the active
+ * set, so invalidate the recoverable + active lists AND the per-job snapshot
+ * (whose polling stopped on the terminal status) so the indexing screen sees
+ * the job is live again. The caller navigates / re-subscribes to the stream.
+ */
+export function useResumeIndexing() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (jobId: string) => resumeIndexingJob(jobId),
+    onSuccess: (_res, jobId) => {
+      qc.invalidateQueries({ queryKey: ["wiki", "jobs", "recoverable"] });
+      qc.invalidateQueries({ queryKey: ["wiki", "jobs", "active"] });
+      qc.invalidateQueries({ queryKey: ["wiki", "indexing", jobId] });
+    },
+    // A 400/404/409 (already running, not resumable, …) must surface — the
+    // button re-enables on its own (mutation settles), the toast tells why.
+    onError: (err) => {
+      toast.error(
+        `Resume failed — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    },
   });
 }
 
@@ -149,7 +193,10 @@ export function useIndexingJob(jobId: string | null) {
     refetchInterval: (q) => {
       const last = q.state.data;
       if (!last) return 500;
-      return last.status === "complete" || last.status === "cancelled" || last.status === "failed"
+      return last.status === "complete" ||
+        last.status === "cancelled" ||
+        last.status === "failed" ||
+        last.status === "interrupted"
         ? false
         : 500;
     },
@@ -225,6 +272,43 @@ export function useAskWiki() {
 export function useStartAnswer() {
   return useMutation({
     mutationFn: startAnswer,
+  });
+}
+
+/**
+ * Snapshot lookup for a completed answer (``GET /v1/wiki/qa/<answerId>``).
+ * The live ``useQaStream`` drives the typewriter, but the deterministic
+ * provenance fields (``accessedSources`` / ``modelsUsed``) live only on the
+ * snapshot — the stream's internal ``access`` events are intentionally
+ * ignored. Enable this once the stream has assigned an ``answerId`` to fold
+ * those telemetry fields in. Idempotent read → long staleTime.
+ */
+export function useQaAnswerSnapshot(answerId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ["wiki", "qa", answerId],
+    queryFn: () => getAnswer(answerId as string),
+    enabled: Boolean(answerId) && enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/**
+ * Lazily fetch the file excerpt for one cited Q&A source card. Keyed by
+ * slug + path + range so each distinct card caches independently; the file
+ * content is idempotent, so a long staleTime keeps it cached across
+ * re-renders / navigations. Disabled until a slug + path are known.
+ */
+export function useSourceExcerpt(
+  slug: string | null,
+  path: string | null,
+  start?: number | null,
+  end?: number | null,
+) {
+  return useQuery({
+    queryKey: ["wiki", "source", slug, path, start ?? null, end ?? null],
+    queryFn: () => getSourceExcerpt(slug as string, path as string, start, end),
+    enabled: Boolean(slug) && Boolean(path),
+    staleTime: 5 * 60_000,
   });
 }
 
@@ -345,8 +429,13 @@ function reduceIndexing(state: IndexingStreamState, event: IndexingEvent): Index
  * Consume the indexing event stream into folded UI state. Handles
  * cancellation via an internal `AbortController` that fires on unmount
  * or when `jobId` changes.
+ *
+ * ``resubscribeKey`` lets a caller force a fresh subscription on the SAME
+ * job without unmounting — bump it after a resume so the screen re-opens
+ * the stream in place (the BE replays from idx 0 with ``queued`` first,
+ * which resets the folded state).
  */
-export function useIndexingStream(jobId: string | null) {
+export function useIndexingStream(jobId: string | null, resubscribeKey = 0) {
   const [state, dispatch] = useReducer(reduceIndexing, initialIndexingState);
   const controllerRef = useRef<AbortController | null>(null);
 
@@ -374,7 +463,7 @@ export function useIndexingStream(jobId: string | null) {
       cancelled = true;
       ctrl.abort();
     };
-  }, [jobId]);
+  }, [jobId, resubscribeKey]);
 
   // Bound the file-scan history (a side panel that only ever shows
   // recent activity) but keep the full ``logs`` list intact — the
@@ -438,6 +527,12 @@ function reduceQa(state: QaStreamState, event: QaEvent): QaStreamState {
       return { ...state, error: event.error, done: true };
     case "heartbeat":
       // Transport keep-alive — ignored by the UI reducer.
+      return state;
+    default:
+      // Unknown / internal event types (e.g. the hypervisor's ``access``
+      // provenance events) are tolerated and ignored — never rendered,
+      // never crash the reducer. The SSE parser yields every non-heartbeat
+      // frame, so this guard keeps state intact for types outside QaEvent.
       return state;
   }
 }

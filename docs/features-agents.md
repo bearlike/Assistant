@@ -109,7 +109,7 @@ The `summary` is designed to be short enough that the root agent can keep many c
 
 ## Configuration
 
-All keys live under `agent` in [`configs/app.json`](configuration.md#agentconfig).
+All keys live under `agent` in [`configs/app.json`](configuration.md#agent).
 
 | Key | Type | Default | Description |
 |---|---|---|---|

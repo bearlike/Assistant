@@ -24,10 +24,13 @@ import {
   listLanguages,
   listPlatforms,
   listProjects,
+  listRecoverableJobs,
   requestWikiRefresh,
+  resumeIndexingJob,
   startAnswer,
   streamAnswer,
   subscribeToIndexing,
+  uploadCatalogDocuments,
 } from "../../components/wiki/api/client";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -203,6 +206,63 @@ describe("cancelIndexingJob", () => {
   });
 });
 
+// ── listRecoverableJobs ────────────────────────────────────────────────────
+
+describe("listRecoverableJobs", () => {
+  it("GETs /v1/wiki/jobs/recoverable and returns the array", async () => {
+    const payload = [
+      {
+        jobId: "j1",
+        slug: "host/owner/repo",
+        status: "failed",
+        phase: "pages",
+        error: "boom",
+        pagesSubmitted: 4,
+        totalPages: 10,
+        updatedAt: "2026-06-07T00:00:00Z",
+        recoverable: { skip: ["core"], pagesDone: 4, pagesRemaining: 6, nodeCount: 120 },
+      },
+    ];
+    fetchSpy.mockResolvedValueOnce(jsonResp(payload));
+    const result = await listRecoverableJobs();
+    expect((fetchSpy.mock.calls[0] as [string])[0]).toBe("/v1/wiki/jobs/recoverable");
+    expect(result).toEqual(payload);
+  });
+
+  it("returns [] instead of throwing on error (graceful absence)", async () => {
+    fetchSpy.mockResolvedValueOnce(new Response("nope", { status: 500 }));
+    await expect(listRecoverableJobs()).resolves.toEqual([]);
+  });
+});
+
+// ── resumeIndexingJob ──────────────────────────────────────────────────────
+
+describe("resumeIndexingJob", () => {
+  it("POSTs /v1/wiki/index/<jobId>/resume and returns the 202 body", async () => {
+    const body = { jobId: "j1", sessionId: "s1", status: "queued" };
+    fetchSpy.mockResolvedValueOnce(jsonResp(body, 202));
+    const result = await resumeIndexingJob("j1");
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/v1/wiki/index/j1/resume");
+    expect(init.method).toBe("POST");
+    expect(result).toEqual(body);
+  });
+
+  it("throws validation error when jobId is empty", async () => {
+    await expect(resumeIndexingJob("")).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("propagates a 400 validation error from the server", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ code: "validation", message: "job already complete" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(resumeIndexingJob("done")).rejects.toMatchObject({ code: "validation" });
+  });
+});
+
 // ── getAnswer ─────────────────────────────────────────────────────────────
 
 describe("getAnswer", () => {
@@ -212,6 +272,34 @@ describe("getAnswer", () => {
     const result = await getAnswer("a1");
     expect((fetchSpy.mock.calls[0] as [string])[0]).toBe("/v1/wiki/qa/a1");
     expect(result).toEqual(answer);
+  });
+
+  it("carries the deterministic provenance fields through verbatim", async () => {
+    const answer = {
+      answerId: "a2",
+      fromPageId: "core",
+      summarySources: ["CLAUDE.md"],
+      model: "openai/claude-sonnet-4-6",
+      blocks: [],
+      accessedSources: [
+        "graph:tool_use_loop.py::ToolUseLoop.run",
+        "packages/mewbo_core/src/mewbo_core/hypervisor.py#L10-42",
+        "wiki:core-orchestration",
+      ],
+      modelsUsed: ["openai/claude-sonnet-4-6", "openai/haiku"],
+    };
+    fetchSpy.mockResolvedValueOnce(jsonResp(answer));
+    const result = await getAnswer("a2");
+    expect(result.accessedSources).toEqual(answer.accessedSources);
+    expect(result.modelsUsed).toEqual(answer.modelsUsed);
+  });
+
+  it("leaves the new provenance fields undefined on older answers", async () => {
+    const legacy = { answerId: "a3", fromPageId: "core", summarySources: [], model: "m", blocks: [] };
+    fetchSpy.mockResolvedValueOnce(jsonResp(legacy));
+    const result = await getAnswer("a3");
+    expect(result.accessedSources).toBeUndefined();
+    expect(result.modelsUsed).toBeUndefined();
   });
 });
 
@@ -229,6 +317,62 @@ describe("requestWikiRefresh", () => {
 
   it("throws validation error when slug is empty", async () => {
     await expect(requestWikiRefresh("")).rejects.toMatchObject({ code: "validation" });
+  });
+});
+
+// ── uploadCatalogDocuments ────────────────────────────────────────────────
+
+describe("uploadCatalogDocuments", () => {
+  it("POSTs documents to /v1/wiki/projects/<slug>/documents", async () => {
+    const report = {
+      slug: "my-workspace",
+      ingested: 2,
+      embedded: 2,
+      totalDocuments: 2,
+      bm25Only: 0,
+      landingPageId: "overview",
+    };
+    fetchSpy.mockResolvedValueOnce(jsonResp(report, 201));
+
+    const docs = [
+      { id: "doc-1", title: "Intro", text: "Hello world" },
+      { id: "doc-2", title: "Guide", text: "Step by step guide" },
+    ];
+    const result = await uploadCatalogDocuments("my-workspace", docs);
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/v1/wiki/projects/my-workspace/documents");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["X-API-Key"]).toBe("test-key");
+    expect(JSON.parse(init.body as string)).toEqual({ documents: docs });
+    expect(result).toEqual(report);
+  });
+
+  it("URL-encodes slug containing slashes", async () => {
+    const report = {
+      slug: "owner/my-wiki",
+      ingested: 1,
+      embedded: 1,
+      totalDocuments: 1,
+      bm25Only: 0,
+      landingPageId: "home",
+    };
+    fetchSpy.mockResolvedValueOnce(jsonResp(report, 201));
+    await uploadCatalogDocuments("owner/my-wiki", [{ id: "d1", title: "A", text: "body" }]);
+    const [url] = fetchSpy.mock.calls[0] as [string];
+    expect(url).toBe("/v1/wiki/projects/owner%2Fmy-wiki/documents");
+  });
+
+  it("throws validation error when slug is empty", async () => {
+    await expect(
+      uploadCatalogDocuments("", [{ id: "d1", title: "A", text: "body" }]),
+    ).rejects.toMatchObject({ code: "validation" });
+  });
+
+  it("throws validation error when documents list is empty", async () => {
+    await expect(
+      uploadCatalogDocuments("my-ws", []),
+    ).rejects.toMatchObject({ code: "validation" });
   });
 });
 
@@ -359,6 +503,33 @@ describe("streamAnswer", () => {
     expect(events[0]).toMatchObject({ type: "meta", answerId: "a1" });
     expect(events[1]).toMatchObject({ type: "summary_ready" });
     expect(events[2]).toMatchObject({ type: "complete" });
+  });
+
+  it("surfaces internal 'access' frames so the reducer can ignore them", async () => {
+    // The hypervisor emits internal `access` provenance events on the stream.
+    // The SSE parser yields every non-heartbeat frame verbatim; the QA
+    // reducer's `default` branch is what keeps these from crashing the UI.
+    const frames =
+      sseFrame("meta", { answerId: "a1", model: "m", fromPageId: "core" }) +
+      sseFrame("access", { citationId: "graph:foo", model: "openai/haiku" }) +
+      sseFrame("complete", { totalBlocks: 0 });
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(new TextEncoder().encode(frames), {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+
+    const input = { question: "q", fromPageId: "core", model: "m", slug: "owner/repo" };
+    const events = await collect(streamAnswer(input));
+    // The parser passes the unknown type through untouched — it is the
+    // consumer's reducer (not the transport) that drops it.
+    expect(events.map((e) => (e as { type: string }).type)).toEqual([
+      "meta",
+      "access",
+      "complete",
+    ]);
   });
 });
 

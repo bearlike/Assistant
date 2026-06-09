@@ -399,6 +399,35 @@ class LLMConfig(BaseModel):
         data = payload.get("data", [])
         return sorted([item.get("id") for item in data if item.get("id")])
 
+    def resolve_available_model(
+        self, model: str, *, fallback: str, timeout: float = 4.0
+    ) -> str:
+        """Return *model* if the proxy still advertises it, else *fallback*.
+
+        Guards a persisted/stale model id (e.g. a wiki reindex replaying an old
+        submission) against a model the proxy has since retired — that would
+        otherwise fast-fail the whole run on an invalid-model 400. Best-effort:
+        if the model list can't be fetched we trust *model* (the caller's
+        retry/fallback ladder is the backstop). The provider prefix is ignored
+        on both sides (``openai/x`` matches a bare ``x`` the proxy advertises).
+        """
+        if not model:
+            return fallback
+        try:
+            available = self.list_models(timeout=timeout)
+        except Exception:  # noqa: BLE001 — unreachable/unset proxy ⇒ trust model
+            return model
+        if not available:
+            return model
+
+        def _bare(name: str) -> str:
+            return name.split("/", 1)[-1].strip().lower()
+
+        target = _bare(model)
+        if any(_bare(entry) == target for entry in available):
+            return model
+        return fallback
+
     def validate_models(self) -> ConfigCheck:
         if not self._resolve_api_base():
             return ConfigCheck(
@@ -896,6 +925,13 @@ class HooksConfig(BaseModel):
     on_session_end: list[HookEntry] = Field(
         default_factory=list, description="Hooks executed when a session ends."
     )
+    on_event: list[HookEntry] = Field(
+        default_factory=list,
+        description=(
+            "Hooks executed (fire-and-forget) for every event appended to a "
+            "session transcript. The matcher fnmatches the event type."
+        ),
+    )
 
 
 class PluginsConfig(BaseModel):
@@ -1223,8 +1259,10 @@ class AgentConfig(BaseModel):
         DEFAULT_PRIMARY_RETRIES,
         description=(
             "Maximum attempts for the primary model before cascading to "
-            "fallback models. Each fallback model gets retry.fallback_retries "
-            "attempts. Backoff/budget/circuit-breaker live under agent.retry."
+            "fallback models (default 2 = one try + one retry). Each fallback "
+            "model gets retry.fallback_retries attempts. A rescue model that "
+            "wins is pinned for the rest of the run. "
+            "Backoff/budget/circuit-breaker live under agent.retry."
         ),
     )
     retry: RetryConfig = Field(

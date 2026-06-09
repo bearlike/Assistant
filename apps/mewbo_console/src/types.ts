@@ -95,6 +95,8 @@ export type SessionContext = {
   project?: string;
   model?: string;
   mode?: QueryMode;
+  /** Channel platform that opened the session (e.g. "nextcloud-talk", "email"). */
+  source_platform?: string;
   attachments?: AttachmentPayload[];
   /**
    * Opt-in cross-model fallback chain. When present and non-empty the run
@@ -118,6 +120,9 @@ export type SessionExport = {
   token?: string;
   created_at?: string;
 };
+/** Coarse provenance of a session — mirrors core ``SessionOrigin``. */
+export type SessionOrigin = 'user' | 'wiki' | 'search' | 'channel';
+
 export type SessionSummary = {
   session_id: string;
   title: string;
@@ -126,7 +131,16 @@ export type SessionSummary = {
   done_reason?: string | null;
   running?: boolean;
   context?: SessionContext;
+  /** How the session was spawned; absent on legacy summaries → treat as "user". */
+  origin?: SessionOrigin;
   archived?: boolean;
+  /**
+   * True iff the session is NOT running, did not successfully complete, and has
+   * a prior user turn (incl. a session killed mid-call with no completion).
+   * Drives the Continue / Restart recovery affordances. Absent on legacy
+   * summaries → treat as not recoverable.
+   */
+  recoverable?: boolean;
 };
 export type EventRecord = {
   ts: string;
@@ -392,6 +406,8 @@ export type LogEntry = {
   fallbackToModel?: string;
   fallbackReason?: string;
   fallbackPreviousErrorType?: string;
+  /** Destination model is pinned for the rest of the run (sticky fallback). */
+  fallbackSticky?: boolean;
   recoveryAction?: string;
   recoveryTool?: string;
 };

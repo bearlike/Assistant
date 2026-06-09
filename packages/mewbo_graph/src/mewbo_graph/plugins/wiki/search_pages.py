@@ -93,15 +93,19 @@ class WikiSearchPagesTool(WikiSessionTool):
         ]
 
         # 5. Emit summary_ready once — first search call in a QA session sets
-        #    the source list the frontend renders before blocks arrive.
-        existing = ctx.store.load_qa_events(ctx.answer_id)
-        if not any(ev.get("type") == "summary_ready" for ev in existing):
-            source_ids = [h.id for h in hits]
-            ctx.store.append_qa_event(ctx.answer_id, {
-                "type": "summary_ready",
-                "sources": source_ids,
-            })
+        #    the source list the frontend renders before blocks arrive. Only a
+        #    registered QA answer has an event log; a grounded structured-response
+        #    session (``answer_id is None``) has nowhere to write it, so skip.
+        if ctx.answer_id is not None:
+            existing = ctx.store.load_qa_events(ctx.answer_id)
+            if not any(ev.get("type") == "summary_ready" for ev in existing):
+                source_ids = [h.id for h in hits]
+                ctx.store.append_qa_event(ctx.answer_id, {
+                    "type": "summary_ready",
+                    "sources": source_ids,
+                })
 
+        self._record_qa_access(ctx, [f"wiki:{h.id}" for h in hits])
         return MockSpeaker(content=str({"hits": results}))
 
 

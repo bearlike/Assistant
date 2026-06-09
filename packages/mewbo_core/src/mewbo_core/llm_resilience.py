@@ -26,11 +26,17 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from langchain_core.messages import AIMessage
 
+    from mewbo_core.types import LlmFallbackPayload, LlmRetryPayload
+
 # Defaults are the single source of truth — config.py imports them for the
 # ``agent.retry`` field defaults. Calibrated for interactive agent turns:
 # longer waits than vendor-SDK retry defaults, to tolerate capacity provisioning.
 DEFAULT_TIMEOUT = 120.0
-DEFAULT_PRIMARY_RETRIES = 3
+# One try + one retry, then advance to the next model. A 3rd same-model attempt
+# rarely recovers a transient fault that survived a backed-off retry; the run is
+# better served by escalating to a healthy model (which is then pinned — see
+# ``RetryStrategy._pinned_model``).
+DEFAULT_PRIMARY_RETRIES = 2
 DEFAULT_FALLBACK_RETRIES = 1
 DEFAULT_BACKOFF_BASE = 1.0
 DEFAULT_BACKOFF_CAP = 60.0
@@ -43,6 +49,12 @@ DEFAULT_CB_THRESHOLD = 3
 DEFAULT_CB_COOLDOWN = 30.0
 DEFAULT_DOOM_LOOP_THRESHOLD = 3
 
+# Synchronization / wait primitives are NOT progress-making work. Polling them
+# (e.g. ``check_agents`` while spawned children finish one by one) is the
+# intended epoll pattern — repeated identical calls there are healthy waiting,
+# never a doom loop. They are dropped from the doom signature entirely.
+DOOM_LOOP_EXEMPT_TOOLS: frozenset[str] = frozenset({"check_agents"})
+
 # Provider/proxy substrings marking a condition hopeless on the *current* model
 # but recoverable on a *different* one. Narrow on purpose — users never
 # maintain provider exception names.
@@ -53,6 +65,19 @@ _SWITCH_HINTS: tuple[str, ...] = (
     "insufficient credits",
     "exceeded your current quota",
     "billing",
+)
+
+# An unknown/retired model id surfaces as a 400 too (e.g. the proxy dropped a
+# model a persisted submission still names) — hopeless on THIS model but
+# recoverable on a fallback, so it is ``switch_model``, not a fatal malformed
+# request. Paired with a ``"model"`` token check to avoid matching unrelated
+# 400s ("file does not exist" etc.).
+_INVALID_MODEL_HINTS: tuple[str, ...] = (
+    "invalid model",
+    "model not found",
+    "does not exist",
+    "no such model",
+    "unknown model",
 )
 
 # Deterministic local errors never benefit from a retry.
@@ -223,6 +248,11 @@ class RetryStrategy:
     breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
     clock: Callable[[], float] = _time.monotonic
     rng: Callable[[], float] = random.random
+    # Sticky escalation: once a rescue model wins (the configured primary was
+    # not the survivor), it is pinned and tried first on every subsequent turn —
+    # so a dead primary is not re-probed each step. ``None`` until an escalation
+    # succeeds; the circuit breaker + budget still bound any further switching.
+    _pinned_model: str | None = None
 
     @classmethod
     def from_config(cls) -> RetryStrategy:
@@ -319,6 +349,10 @@ class RetryStrategy:
             # — hopeless on this provider, switchable.
             if any(h in msg for h in _SWITCH_HINTS):
                 return ErrorDecision(RetryAction.SWITCH_MODEL, name, "quota_exhausted")
+            # An unknown/retired model id is a 400 too — switch to a fallback
+            # rather than dying fatally on this one.
+            if "model" in msg and any(h in msg for h in _INVALID_MODEL_HINTS):
+                return ErrorDecision(RetryAction.SWITCH_MODEL, name, "invalid_model")
             return ErrorDecision(RetryAction.FATAL, name, "bad_request")
         if _is("Timeout"):
             return ErrorDecision(RetryAction.RETRY_SAME, "Timeout", "timeout")
@@ -370,29 +404,39 @@ class RetryStrategy:
         tried: list[str] = []
         compacted = False
 
-        for idx, model_name in enumerate(models):
+        # The configured primary is always ``models[0]``; capture it BEFORE any
+        # reorder so a successful rescue model can be recognised as != primary
+        # (and then pinned). The pin reorders the chain so a dead primary is not
+        # re-probed every turn — the breaker + budget still bound the switching.
+        primary = models[0] if models else ""
+        ordered = self._order_models(models)
+
+        # Why the chain advanced to the model now being tried. Distinct from
+        # ``last_reason`` (the final telemetry reason): a transient error that
+        # exhausts the per-model cap advances with ``retries_exhausted`` even
+        # though the underlying ``last_reason`` is e.g. ``timeout``.
+        advance_reason = last_reason
+
+        for idx, model_name in enumerate(ordered):
             is_fallback = idx > 0
             # Skip a cooling model when an alternative exists, but never skip the
             # sole primary — there would be nothing left to fall back to.
-            if self.breaker.is_open(model_name) and (is_fallback or len(models) > 1):
+            if self.breaker.is_open(model_name) and (is_fallback or len(ordered) > 1):
                 continue
             if is_fallback:
-                emit(
-                    {
-                        "type": "llm_fallback",
-                        "payload": {
-                            "agent_id": agent_id,
-                            "depth": depth,
-                            "step": step,
-                            "from_model": tried[-1] if tried else model_name,
-                            "to_model": model_name,
-                            "reason": last_reason,
-                            "previous_error_type": (
-                                type(last_exc).__name__ if last_exc else "Unknown"
-                            ),
-                        },
-                    }
-                )
+                # Escalation is always sticky: the destination model is pinned
+                # for the rest of the run on success (see the success branch).
+                payload: LlmFallbackPayload = {
+                    "agent_id": agent_id,
+                    "depth": depth,
+                    "step": step,
+                    "from_model": tried[-1] if tried else model_name,
+                    "to_model": model_name,
+                    "reason": advance_reason,
+                    "previous_error_type": (type(last_exc).__name__ if last_exc else "Unknown"),
+                    "sticky": True,
+                }
+                emit({"type": "llm_fallback", "payload": payload})
             tried.append(model_name)
             attempts = self.primary_retries if not is_fallback else self.fallback_retries
 
@@ -400,7 +444,7 @@ class RetryStrategy:
             stop_chain = False
             while attempt < attempts:
                 if self._deadline_reached(started):
-                    last_reason = "deadline"
+                    last_reason = advance_reason = "deadline"
                     last_exc = last_exc or TimeoutError("turn deadline exceeded")
                     stop_chain = True
                     break
@@ -425,37 +469,45 @@ class RetryStrategy:
                         stop_chain = True
                         break
                     if decision.action is RetryAction.SWITCH_MODEL:
+                        advance_reason = decision.reason  # hopeless-here → carry the cause
                         break  # advance to the next model in the chain
                     if not self.budget.can_retry():
-                        last_reason = "budget_exhausted"
+                        last_reason = advance_reason = "budget_exhausted"
                         stop_chain = True
                         break
                     if attempt >= attempts:
+                        # Per-model retry cap tripped on a transient error: the
+                        # advance is "we gave up retrying", not a hopeless class.
+                        # Charge the budget for this final failed call too — else
+                        # exhausting a model is "free" and a chain of single-try
+                        # fallbacks never depletes the cross-turn storm guard.
+                        self.budget.charge()
+                        advance_reason = "retries_exhausted"
                         break  # primary exhausted -> next model (if any)
                     self.budget.charge()
                     delay = self.backoff(attempt, decision.retry_after)
-                    emit(
-                        {
-                            "type": "llm_retry",
-                            "payload": {
-                                "agent_id": agent_id,
-                                "depth": depth,
-                                "step": step,
-                                "model": model_name,
-                                "attempt": attempt,
-                                "max_attempts": attempts,
-                                "error": str(exc)[:200],
-                                "error_type": decision.error_type,
-                                "delay": delay,
-                                "retryable": True,
-                            },
-                        }
-                    )
+                    retry_payload: LlmRetryPayload = {
+                        "agent_id": agent_id,
+                        "depth": depth,
+                        "step": step,
+                        "model": model_name,
+                        "attempt": attempt,
+                        "max_attempts": attempts,
+                        "error": str(exc)[:200],
+                        "error_type": decision.error_type,
+                        "delay": delay,
+                        "retryable": True,
+                    }
+                    emit({"type": "llm_retry", "payload": retry_payload})
                     if delay > 0:
                         await asyncio.sleep(delay)
                 else:
                     self.breaker.record_success(model_name)
                     self.budget.credit()
+                    # Sticky escalation: if a rescue model (not the configured
+                    # primary) won, pin it so the next turn tries it first.
+                    if model_name != primary:
+                        self._pinned_model = model_name
                     return response, model_name
 
             if stop_chain:
@@ -465,18 +517,40 @@ class RetryStrategy:
             tried, last_exc, type(last_exc).__name__ if last_exc else "Unknown", reason=last_reason
         )
 
+    def _order_models(self, models: Sequence[str]) -> list[str]:
+        """Return the model chain with a pinned rescue model tried first.
+
+        Encapsulates the sticky-escalation reorder so the driver keeps passing
+        ``[primary, *fallback_models]`` unchanged each turn. When nothing is
+        pinned (or the pin is no longer in the chain), order is unchanged.
+        """
+        pinned = self._pinned_model
+        if pinned and pinned in models:
+            return [pinned, *(m for m in models if m != pinned)]
+        return list(models)
+
 
 @dataclass
 class DoomLoopGuard:
-    """Detects a model stuck repeating the same tool + input with no progress.
+    """Detects a model genuinely stuck — same action, same OUTCOME, no progress.
 
-    Holds the recent tool-call signatures; the loop calls :meth:`observe` each
-    turn and :meth:`is_stuck` to decide whether to halt cleanly. ``threshold
-    <= 0`` disables detection.
+    A doom loop is *not* merely "the same tool input repeated": a model that
+    re-issues an identical call whose **result advances** (e.g. polling a wait
+    primitive whose state moves on, or accumulating into a growing structure)
+    is making progress and must not be halted. The guard therefore tracks both
+    the per-turn input signature (:meth:`observe`, pre-execution) and the result
+    signature (:meth:`record_result`, post-execution); :meth:`is_stuck` halts
+    only when the last ``threshold`` turns share an identical input **and** an
+    identical result. ``threshold <= 0`` disables detection.
+
+    Synchronization/wait tools (``DOOM_LOOP_EXEMPT_TOOLS``) are dropped from both
+    signatures — polling ``check_agents`` while children run is intended epoll,
+    never a loop.
     """
 
     threshold: int = DEFAULT_DOOM_LOOP_THRESHOLD
     _signatures: list[str] = field(default_factory=list)
+    _results: list[str] = field(default_factory=list)
 
     @classmethod
     def from_config(cls) -> DoomLoopGuard:
@@ -493,13 +567,19 @@ class DoomLoopGuard:
 
     @staticmethod
     def signature(tool_calls: Sequence[Any]) -> str:
-        """Stable signature of a tool-call batch (name + sorted args, no id)."""
+        """Stable signature of a tool-call batch (name + sorted args, no id).
+
+        Exempt synchronization/wait tools are excluded, so a batch consisting
+        only of them yields ``""`` (never counted toward a stuck streak).
+        """
         parts: list[str] = []
         for tc in tool_calls or []:
             if isinstance(tc, dict):
                 tc_name, tc_args = tc.get("name", ""), tc.get("args", {})
             else:
                 tc_name, tc_args = getattr(tc, "name", ""), getattr(tc, "args", {})
+            if tc_name in DOOM_LOOP_EXEMPT_TOOLS:
+                continue
             try:
                 rendered = json.dumps(tc_args, sort_keys=True, default=str)
             except (TypeError, ValueError):
@@ -507,16 +587,54 @@ class DoomLoopGuard:
             parts.append(f"{tc_name}:{rendered}")
         return "|".join(parts)
 
+    @staticmethod
+    def result_signature(results: Sequence[Any]) -> str:
+        """Stable signature of a tool-result batch (success + content).
+
+        Drops exempt tools' results so it stays aligned with :meth:`signature`.
+        A *changing* signature across turns means the world advanced — i.e. the
+        model is making progress even if it called the same tool.
+        """
+        parts: list[str] = []
+        for r in results or []:
+            tool_id = getattr(r, "tool_id", "") or ""
+            if tool_id in DOOM_LOOP_EXEMPT_TOOLS:
+                continue
+            success = getattr(r, "success", True)
+            content = getattr(r, "content", "") or ""
+            parts.append(f"{int(bool(success))}:{content}")
+        return "|".join(parts)
+
     def observe(self, tool_calls: Sequence[Any]) -> None:
-        """Record this turn's tool-call batch."""
+        """Record this turn's tool-call batch (input signature, pre-execution)."""
         self._signatures.append(self.signature(tool_calls))
 
+    def record_result(self, results: Sequence[Any]) -> None:
+        """Record this turn's tool results (post-execution) for progress checks."""
+        self._results.append(self.result_signature(results))
+
     def is_stuck(self) -> bool:
-        """True when the last ``threshold`` observed batches are identical."""
+        """True only on genuine no-progress: identical input AND identical result.
+
+        The just-observed turn has no result yet, so progress is judged from the
+        prior identical-input turns' results. When no results have been recorded
+        at all (a pure-input caller), this falls back to input-identity.
+        """
         if self.threshold <= 0 or len(self._signatures) < self.threshold:
             return False
         tail = self._signatures[-self.threshold :]
-        return all(s == tail[0] and s != "" for s in tail)
+        if not all(s == tail[0] and s != "" for s in tail):
+            return False
+        # Inputs are identical. Only a doom loop if the world also stood still.
+        if not self._results:
+            return True  # legacy/pure-input caller — input identity is all we have
+        needed = self.threshold - 1
+        if needed <= 0:
+            return True
+        res_tail = self._results[-needed:]
+        if len(res_tail) < needed:
+            return False  # not enough executed history yet — keep going
+        return all(r == res_tail[0] for r in res_tail)
 
 
 def repair_tool_pairing(messages: list[Any]) -> int:

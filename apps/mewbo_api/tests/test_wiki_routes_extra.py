@@ -393,9 +393,104 @@ class TestQaPost:
         assert resp.status_code == 400
         data = resp.get_json()
         assert data["code"] == "validation"
-        # Fields map populated with missing keys
+        # Fields map populated with missing keys — model is NO LONGER required
+        # (server defaults it), and the public param name is ``project``.
         assert "question" in data.get("fields", {})
-        assert "model" in data.get("fields", {})
+        assert "model" not in data.get("fields", {})
+        assert "project" in data.get("fields", {})
+        assert "slug" not in data.get("fields", {})
+
+    def test_qa_validation_message_names_project_not_slug(self, client) -> None:
+        """The user-facing 400 speaks the PUBLIC param name (project)."""
+        c, _, _ = client
+        resp = c.post("/v1/wiki/qa", json={"question": "q?"}, headers=_h())
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "project" in data["message"]
+        assert "slug" not in data["message"]
+
+    def test_qa_model_optional_defaults_from_config(self, client) -> None:
+        """No model in the body → server defaults it via _resolve_qa_model."""
+        c, store, _ = client
+        _seed_project(store, slug="org/repo")
+
+        def _fake_get(*keys, default=""):
+            if keys == ("wiki", "default_qa_model"):
+                return "cfg-qa-model"
+            return default
+
+        fake_answer = MagicMock()
+        fake_answer.answer_id = "ans-defaulted"
+
+        with (
+            patch("mewbo_core.config.get_config_value", side_effect=_fake_get),
+            patch("mewbo_api.wiki.jobs.WikiQaSession.start", return_value=fake_answer) as start,
+            patch.dict(
+                os.environ, {"MEWBO_WIKI_SSE_MAX_IDLE": "0", "MEWBO_WIKI_SSE_SLEEP": "0"}
+            ),
+        ):
+            resp = c.post(
+                "/v1/wiki/qa",
+                json={"question": "what is it?", "project": "org/repo"},
+                headers=_h(),
+            )
+        assert resp.status_code == 200
+        assert start.call_args.kwargs["model"] == "cfg-qa-model"
+
+    def test_qa_accepts_project_alias(self, client) -> None:
+        """The body may use ``project`` (public) instead of ``slug`` (internal)."""
+        c, store, _ = client
+        _seed_project(store, slug="org/repo")
+
+        fake_answer = MagicMock()
+        fake_answer.answer_id = "ans-alias"
+
+        with (
+            patch("mewbo_api.wiki.jobs.WikiQaSession.start", return_value=fake_answer) as start,
+            patch.dict(
+                os.environ, {"MEWBO_WIKI_SSE_MAX_IDLE": "0", "MEWBO_WIKI_SSE_SLEEP": "0"}
+            ),
+        ):
+            resp = c.post(
+                "/v1/wiki/qa",
+                json={"question": "q?", "project": "org/repo", "model": "m"},
+                headers=_h(),
+            )
+        assert resp.status_code == 200
+        # ``project`` maps to the internal ``slug`` plumbing unchanged.
+        assert start.call_args.kwargs["slug"] == "org/repo"
+
+    def test_resolve_qa_model_chain(self) -> None:
+        """_resolve_qa_model honors qa → wiki.default → llm.default order."""
+        from mewbo_api.wiki.routes import _resolve_qa_model
+
+        def _qa(*keys, default=""):
+            if keys == ("wiki", "default_qa_model"):
+                return "qa"
+            if keys == ("wiki", "default_model"):
+                return "wiki"
+            if keys == ("llm", "default_model"):
+                return "llm"
+            return default
+
+        def _wiki_only(*keys, default=""):
+            if keys == ("wiki", "default_model"):
+                return "wiki"
+            if keys == ("llm", "default_model"):
+                return "llm"
+            return default
+
+        def _llm_only(*keys, default=""):
+            if keys == ("llm", "default_model"):
+                return "llm"
+            return default
+
+        with patch("mewbo_core.config.get_config_value", side_effect=_qa):
+            assert _resolve_qa_model() == "qa"
+        with patch("mewbo_core.config.get_config_value", side_effect=_wiki_only):
+            assert _resolve_qa_model() == "wiki"
+        with patch("mewbo_core.config.get_config_value", side_effect=_llm_only):
+            assert _resolve_qa_model() == "llm"
 
     def test_qa_internal_error_returns_500(self, client) -> None:
         # Patch at the exact seam the route calls: WikiQaSession.start in routes.py.
@@ -774,3 +869,36 @@ def test_get_job_snapshot_hydrates_platform(client) -> None:
     data = resp.get_json()
     assert data.get("platform") == "github"
     assert data.get("host") == "github.com"
+
+
+# ---------------------------------------------------------------------------
+# WikiQaSession step-budget ceiling (#62)
+# ---------------------------------------------------------------------------
+
+
+class TestWikiQaSessionStepBudget:
+    """#62: the QA fan-out is started with a HARD session-wide step ceiling so an
+    unbounded probe fan-out can't run away (~1.1M tokens / 110 steps observed)."""
+
+    def test_start_passes_session_step_budget(self, runtime_stub) -> None:
+        """Real path through WikiQaSession.start; only the runtime boundary is
+        stubbed. Assert start_async is invoked with the documented ceiling."""
+        from mewbo_api.wiki.jobs import QA_SESSION_STEP_BUDGET, WikiQaSession
+
+        answer = WikiQaSession.start(
+            slug="org/repo",
+            question="How does auth work?",
+            from_page_id="overview",
+            model="anthropic/claude-3",
+            runtime=runtime_stub,
+        )
+
+        # The QA answer round-trips through the real store.
+        assert answer.slug == "org/repo"
+
+        runtime_stub.start_async.assert_called_once()
+        _, kwargs = runtime_stub.start_async.call_args
+        assert kwargs["session_step_budget"] == QA_SESSION_STEP_BUDGET
+        # Sanity: the ceiling is a generous-but-finite cost backstop, never 0
+        # (0 == unbounded in start_async).
+        assert QA_SESSION_STEP_BUDGET > 0
