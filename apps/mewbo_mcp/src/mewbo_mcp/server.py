@@ -333,10 +333,14 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
         The server runs an agentic session: the model may call grounding tools
         (wiki/code search, graph traversal, entity resolution) before emitting
         the final answer as an object that validates against ``schema``.
-        ``workspace`` (optional) scopes a wiki project / SCG source; ``tool_ids``
-        (optional) is the grounding-tool allowlist. Returns ``{run_id, status,
-        output?}`` — ``status: "running"`` means it did not finish within the
-        await budget; call ``get_structured_run(run_id)`` for the object.
+        ``workspace`` (optional) is a wiki slug OR a Mewbo Search workspace
+        (id/name): a mapped search workspace runs GRAPH-FIRST over the Source
+        Capability Graph — route → probe each pathway → aggregate → emit — and
+        the result carries ``provenance`` (which recipes routed, which probes
+        ran). ``tool_ids`` (optional) is the grounding-tool allowlist. Returns
+        ``{run_id, status, output?, provenance?}`` — ``status: "running"`` means
+        it did not finish within the await budget; call
+        ``get_structured_run(run_id)`` for the object.
         """
         async with _client(ctx) as client:
             return await tools.StructuredQueryTools(client).query(
@@ -390,15 +394,19 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
 
     @mcp.tool()
     @_enveloped
-    async def list_search_workspaces(ctx: Context) -> dict[str, Any]:
+    async def list_search_workspaces(
+        ctx: Context, query: str | None = None
+    ) -> dict[str, Any]:
         """List saved Mewbo Search workspaces (id, name, sources, recent-query count).
 
         A workspace is a saved set of sources (connectors) a search fans out
-        across. Use this to discover what you can search, then pass a workspace
-        id or name to ``search``.
+        across. ``query`` optionally narrows the listing (case-insensitive
+        substring over name, description, and past-query text). Use this to
+        discover what you can search, then pass a workspace id or name to
+        ``search``.
         """
         async with _client(ctx) as client:
-            return await tools.SearchTools(client).list_workspaces()
+            return await tools.SearchTools(client).list_workspaces(query=query)
 
     @mcp.tool()
     @_enveloped

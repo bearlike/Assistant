@@ -23,6 +23,8 @@ export function SessionItem({
 }: SessionItemProps) {
   const isArchived = Boolean(session.archived);
   const { label: project, branch } = projectLabel.resolve(session.context);
+  const capabilities = session.capabilities ?? [];
+  const workspace = session.workspace ?? null;
   const recover = useRecoverSession();
   const showRecover = Boolean(session.recoverable) && !session.running;
   const handleRecover = (
@@ -63,6 +65,23 @@ export function SessionItem({
           {branch && (
             <span className="font-mono truncate bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-[11px]">{branch}</span>
           )}
+          {workspace && (
+            <span
+              className="font-mono truncate bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-[11px]"
+              title={`Workspace ${workspace}`}
+            >
+              {workspace}
+            </span>
+          )}
+          {capabilities.map((cap) => (
+            <span
+              key={cap}
+              className="uppercase tracking-wide bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-[10px]"
+              title={`Scoped to the "${cap}" capability`}
+            >
+              {cap}
+            </span>
+          ))}
         </div>
       </div>
 

@@ -1,0 +1,3512 @@
+{
+  "basePath": "/",
+  "consumes": [
+    "application/json"
+  ],
+  "definitions": {
+    "ActionStep": {
+      "properties": {
+        "operation": {
+          "description": "The type of action to be performed (get/set)",
+          "type": "string"
+        },
+        "result": {
+          "description": "The result of the executed action",
+          "type": "string"
+        },
+        "tool_id": {
+          "description": "The tool responsible for executing the action",
+          "type": "string"
+        },
+        "tool_input": {
+          "description": "Arguments for the tool invocation",
+          "type": "object"
+        }
+      },
+      "required": [
+        "operation",
+        "tool_id",
+        "tool_input"
+      ],
+      "type": "object"
+    },
+    "Citation": {
+      "properties": {
+        "id": {
+          "description": "Source identifier",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Source kind (page / node / memory)",
+          "type": "string"
+        },
+        "score": {
+          "description": "Retrieval relevance score",
+          "type": "number"
+        },
+        "snippet": {
+          "description": "Extracted text excerpt",
+          "type": "string"
+        },
+        "source": {
+          "description": "Human-readable source label",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ConfigPatchRequest": {
+      "properties": {
+        "*": {
+          "additionalProperties": {
+            "type": "object"
+          },
+          "description": "Partial configuration subtree, deep-merged into the stored configuration. Mirrors the shape served by GET /api/config/schema.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "DraftStreamRequest": {
+      "properties": {
+        "model": {
+          "description": "Optional model override. Any configured LiteLLM model id; a non-string value is ignored and the configured default is used.",
+          "example": "openai/gpt-5.4-nano",
+          "type": "string"
+        },
+        "query": {
+          "description": "Natural-language request to answer.",
+          "example": "Draft a short release note for the latest deploy.",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Wiki slug used for retrieval grounding. Omit for no grounding.",
+          "example": "my-project",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "FastStructuredRequest": {
+      "properties": {
+        "model": {
+          "description": "Optional model override. Any configured LiteLLM model id; a non-string value is ignored and the configured default is used.",
+          "example": "openai/gpt-5.4-nano",
+          "type": "string"
+        },
+        "query": {
+          "description": "Natural-language request to answer.",
+          "example": "Which services does the deploy pipeline restart?",
+          "type": "string"
+        },
+        "schema": {
+          "description": "JSON Schema the output object must validate against.",
+          "example": {
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "type": "object"
+          },
+          "type": "object"
+        },
+        "workspace": {
+          "description": "Wiki slug used for retrieval grounding. Omit for no grounding.",
+          "example": "my-project",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "schema"
+      ],
+      "type": "object"
+    },
+    "FastStructuredResponse": {
+      "properties": {
+        "citations": {
+          "items": {
+            "$ref": "#/definitions/Citation"
+          },
+          "type": "array"
+        },
+        "output": {
+          "description": "Schema-validated structured output",
+          "type": "object"
+        },
+        "session_id": {
+          "description": "Session id backing this run (additive; for trace/transcript lookup)",
+          "type": "string"
+        },
+        "status": {
+          "description": "Always 'completed' on success",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "KeyMintRequest": {
+      "properties": {
+        "label": {
+          "description": "Human-readable label for the key, shown in key listings.",
+          "example": "ci-deploy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "type": "object"
+    },
+    "NotificationClearRequest": {
+      "properties": {
+        "clear_all": {
+          "description": "When true, clear every notification. Defaults to clearing only dismissed ones.",
+          "example": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "NotificationDismissRequest": {
+      "properties": {
+        "id": {
+          "description": "Single notification id. Ignored when `ids` is present.",
+          "type": "string"
+        },
+        "ids": {
+          "description": "Notification ids to dismiss.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PlanApproveRequest": {
+      "properties": {
+        "approved": {
+          "description": "True to approve the pending plan, false to reject it.",
+          "example": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "approved"
+      ],
+      "type": "object"
+    },
+    "PlanStep": {
+      "properties": {
+        "description": {
+          "description": "Brief description of the step",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short title for the plan step",
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "title"
+      ],
+      "type": "object"
+    },
+    "PluginInstallRequest": {
+      "properties": {
+        "marketplace": {
+          "description": "Marketplace the plugin is published in.",
+          "example": "official",
+          "type": "string"
+        },
+        "name": {
+          "description": "Plugin name as listed by GET /api/plugins/marketplace.",
+          "example": "code-review",
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplace",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ProjectCreateRequest": {
+      "properties": {
+        "description": {
+          "description": "Optional free-text description.",
+          "example": "Payments service monorepo",
+          "type": "string"
+        },
+        "name": {
+          "description": "Display name for the project.",
+          "example": "my-service",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute filesystem path to an existing checkout. When omitted, the server provisions a folder for the project.",
+          "example": "/srv/repos/my-service",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ProjectPatchRequest": {
+      "properties": {
+        "description": {
+          "description": "New description. Omit to keep the current one.",
+          "type": "string"
+        },
+        "name": {
+          "description": "New display name. Omit to keep the current one.",
+          "example": "my-service",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SearchRunCreateRequest": {
+      "properties": {
+        "project": {
+          "description": "Optional project name that scopes connector configuration.",
+          "type": "string"
+        },
+        "query": {
+          "description": "Natural-language search query.",
+          "example": "Which services call the billing API?",
+          "type": "string"
+        },
+        "tier": {
+          "description": "Search depth: `fast`, `auto` or `deep`. The tier also picks the model that drives the run. Defaults to the server's configured tier.",
+          "enum": [
+            "fast",
+            "auto",
+            "deep"
+          ],
+          "example": "auto",
+          "type": "string"
+        },
+        "workspace_id": {
+          "description": "Workspace to search, returned by POST /api/agentic_search/workspaces.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "workspace_id"
+      ],
+      "type": "object"
+    },
+    "SessionCommandRequest": {
+      "properties": {
+        "args": {
+          "description": "Positional arguments for the command.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Command name without the leading slash.",
+          "example": "compact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "SessionCreateRequest": {
+      "properties": {
+        "attachments": {
+          "description": "Attachment descriptors returned by the attachments upload endpoint.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "context": {
+          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `skill`, and `fallback_models`.",
+          "type": "object"
+        },
+        "mode": {
+          "description": "Orchestration mode. Either `plan` or `act`.",
+          "example": "act",
+          "type": "string"
+        },
+        "project": {
+          "description": "Project to bind the session to: a configured project name, or `managed:<project_id>` for a managed project or worktree.",
+          "example": "Assistant",
+          "type": "string"
+        },
+        "session_tag": {
+          "description": "Optional stable tag for looking the session up later.",
+          "example": "nightly-report",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SessionForkRequest": {
+      "properties": {
+        "compact": {
+          "description": "Set to `true` to compact the forked transcript in the background after the fork.",
+          "example": "true",
+          "type": "string"
+        },
+        "from_ts": {
+          "description": "Fork point: copy events up to this timestamp. Omit to fork the full transcript.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Model override recorded on the new session.",
+          "example": "anthropic/claude-sonnet-4-6",
+          "type": "string"
+        },
+        "tag": {
+          "description": "Optional tag applied to the new session.",
+          "example": "experiment-2",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SessionMessageRequest": {
+      "properties": {
+        "text": {
+          "description": "Message text. Steers the active run, or re-engages an idle session as a new query.",
+          "example": "Focus on the failing tests first.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "SessionQueryRequest": {
+      "properties": {
+        "attachments": {
+          "description": "Attachment descriptors returned by the attachments upload endpoint.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "context": {
+          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `skill`, and `fallback_models`.",
+          "type": "object"
+        },
+        "mode": {
+          "description": "Orchestration mode. Either `plan` or `act`.",
+          "example": "act",
+          "type": "string"
+        },
+        "project": {
+          "description": "Project whose directory the run executes in: a configured project name or `managed:<project_id>`.",
+          "example": "Assistant",
+          "type": "string"
+        },
+        "query": {
+          "description": "The user message to run, or a slash command such as `/status` or `/terminate`.",
+          "example": "Summarize the open pull requests.",
+          "type": "string"
+        },
+        "skill": {
+          "description": "Name of a skill to activate for this run.",
+          "example": "deep-research",
+          "type": "string"
+        },
+        "skill_args": {
+          "description": "Arguments passed to the activated skill.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "SessionRecoverRequest": {
+      "properties": {
+        "action": {
+          "description": "`retry` re-runs the last user query; `continue` resumes from where the failed run stopped.",
+          "example": "retry",
+          "type": "string"
+        },
+        "edited_text": {
+          "description": "Replacement text for the recovered query.",
+          "type": "string"
+        },
+        "from_ts": {
+          "description": "Timestamp of the user message to recover from. Defaults to the most recent one.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Model override for the recovered run.",
+          "example": "anthropic/claude-sonnet-4-6",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "SourceMapRequest": {
+      "properties": {
+        "auth_scope": {
+          "description": "Redacted label for the auth the connector carries, for example `oauth:repo`. Never a token or credential.",
+          "example": "oauth:repo",
+          "type": "string"
+        },
+        "descriptor": {
+          "description": "The connector's self-description, such as an MCP tool list or an OpenAPI document. Optional for `mcp_tool_list` sources, where it is built from the connector's live tool list when omitted.",
+          "type": "object"
+        },
+        "model": {
+          "description": "Optional model override for the mapping session, as a LiteLLM model name.",
+          "type": "string"
+        },
+        "nl_context": {
+          "description": "Optional workspace prose that seeds the mapping step, with `workspace_instructions` and `workspace_description` keys. Usually injected automatically when a workspace is saved.",
+          "type": "object"
+        },
+        "source_type": {
+          "description": "Kind of connector being mapped, for example `mcp_tool_list`. `text` is not yet supported and returns 422.",
+          "example": "mcp_tool_list",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_type"
+      ],
+      "type": "object"
+    },
+    "StructuredQueryRequest": {
+      "properties": {
+        "model": {
+          "description": "Optional model override. Any configured LiteLLM model id; a non-string value is ignored and the configured default is used.",
+          "example": "openai/gpt-5.4-nano",
+          "type": "string"
+        },
+        "query": {
+          "description": "Natural-language request to answer.",
+          "example": "List the public HTTP endpoints and what each one returns.",
+          "type": "string"
+        },
+        "schema": {
+          "description": "JSON Schema the output object must validate against.",
+          "example": {
+            "properties": {
+              "endpoints": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "summary"
+            ],
+            "type": "object"
+          },
+          "type": "object"
+        },
+        "tools": {
+          "description": "Allowlist of tool ids the run may use. Omit for the default set.",
+          "example": [
+            "wiki_search"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "workspace": {
+          "description": "Wiki slug or search workspace that grounds the run. A workspace mapped to an indexed search workspace also grants graph traversal tools.",
+          "example": "my-project",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "schema"
+      ],
+      "type": "object"
+    },
+    "SyncQueryRequest": {
+      "properties": {
+        "attachments": {
+          "description": "Attachment descriptors returned by the attachments upload endpoint.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "context": {
+          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, and `mcp_tools` (tool allowlist).",
+          "type": "object"
+        },
+        "fork_from": {
+          "description": "Session id or tag to fork the new session from.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "Orchestration mode. Either `plan` or `act`.",
+          "example": "act",
+          "type": "string"
+        },
+        "project": {
+          "description": "Project whose directory the run executes in: a configured project name or `managed:<project_id>`.",
+          "example": "Assistant",
+          "type": "string"
+        },
+        "query": {
+          "description": "The user query to run to completion.",
+          "example": "What changed in the last release?",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "Existing session id to continue.",
+          "type": "string"
+        },
+        "session_tag": {
+          "description": "Human-friendly tag resolving to a session (created if new).",
+          "example": "cli",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "TaskQueue": {
+      "properties": {
+        "action_steps": {
+          "items": {
+            "$ref": "#/definitions/ActionStep"
+          },
+          "type": "array"
+        },
+        "human_message": {
+          "description": "The original user query",
+          "type": "string"
+        },
+        "plan_steps": {
+          "items": {
+            "$ref": "#/definitions/PlanStep"
+          },
+          "type": "array"
+        },
+        "session_id": {
+          "description": "Session identifier for transcript storage",
+          "type": "string"
+        },
+        "task_result": {
+          "description": "Combined response of all action steps",
+          "type": "string"
+        }
+      },
+      "required": [
+        "human_message",
+        "task_result"
+      ],
+      "type": "object"
+    },
+    "TitlePatchRequest": {
+      "properties": {
+        "title": {
+          "description": "New display title. Trimmed and capped at 120 characters.",
+          "example": "Refactor the billing pipeline",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "VcsPickupRequest": {
+      "properties": {
+        "api_url": {
+          "description": "Forge REST API base URL. Required for the final answer to be posted back to the issue or pull request as a comment.",
+          "example": "https://git.example.com/api/v1",
+          "type": "string"
+        },
+        "assignee": {
+          "description": "Login the item was assigned to.",
+          "type": "string"
+        },
+        "base_ref": {
+          "description": "Pull request base branch.",
+          "example": "main",
+          "type": "string"
+        },
+        "body": {
+          "description": "Issue or pull request description.",
+          "type": "string"
+        },
+        "bot_login": {
+          "description": "Configured bot login, used to ignore the bot's own comments.",
+          "type": "string"
+        },
+        "comment": {
+          "description": "Text of the mention comment that triggered the pickup, when present.",
+          "type": "string"
+        },
+        "comment_author": {
+          "description": "Login of the comment author.",
+          "type": "string"
+        },
+        "event": {
+          "description": "Triggering event name.",
+          "example": "issue_comment.created",
+          "type": "string"
+        },
+        "head_ref": {
+          "description": "Pull request head branch. When set, the session runs in a worktree checked out on this branch.",
+          "example": "feature/fix-login",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Whether the trigger is an issue or a pull request.",
+          "enum": [
+            "issue",
+            "pull_request"
+          ],
+          "example": "pull_request",
+          "type": "string"
+        },
+        "mode": {
+          "description": "Agent mode for the run.",
+          "enum": [
+            "plan",
+            "act"
+          ],
+          "example": "plan",
+          "type": "string"
+        },
+        "model": {
+          "description": "Optional model override. Any configured LiteLLM model id; omit for the configured default.",
+          "example": "openai/gpt-5.4-nano",
+          "type": "string"
+        },
+        "number": {
+          "description": "Issue or pull request number.",
+          "example": 42,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "project": {
+          "description": "Project key override. Defaults to the repository.",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "Full override of the generated agent prompt.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "Forge that sent the event. Informational.",
+          "example": "gitea",
+          "type": "string"
+        },
+        "repository": {
+          "description": "owner/repo of the triggering repository.",
+          "example": "acme/widgets",
+          "type": "string"
+        },
+        "title": {
+          "description": "Issue or pull request title.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Web URL of the issue or pull request.",
+          "example": "https://git.example.com/acme/widgets/pulls/42",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "number",
+        "repository"
+      ],
+      "type": "object"
+    },
+    "WorkspaceCreateRequest": {
+      "properties": {
+        "desc": {
+          "default": "",
+          "description": "Short description shown in workspace lists.",
+          "example": "Issues, code and docs for the platform team",
+          "type": "string"
+        },
+        "instructions": {
+          "default": "",
+          "description": "Guidance applied to every run in this workspace, such as preferred repositories or terminology.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Human-readable workspace name.",
+          "example": "Engineering systems",
+          "type": "string"
+        },
+        "sources": {
+          "description": "Ids of the sources to enable, from GET /api/agentic_search/sources. Defaults to no sources.",
+          "example": [
+            "github",
+            "linear"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "WorkspacePatchRequest": {
+      "properties": {
+        "desc": {
+          "description": "New short description.",
+          "type": "string"
+        },
+        "instructions": {
+          "description": "Replacement run guidance.",
+          "type": "string"
+        },
+        "name": {
+          "description": "New workspace name.",
+          "type": "string"
+        },
+        "sources": {
+          "description": "Replacement list of enabled source ids. Changing the selection can start background mapping of newly enabled sources.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "WorktreeCreateRequest": {
+      "properties": {
+        "base": {
+          "description": "Optional base ref. When set, a fresh `branch` is created from this ref instead of requiring the branch to exist.",
+          "example": "main",
+          "type": "string"
+        },
+        "branch": {
+          "description": "Branch to check out in the new worktree. Must already exist unless `base` is provided.",
+          "example": "feature/checkout-flow",
+          "type": "string"
+        }
+      },
+      "required": [
+        "branch"
+      ],
+      "type": "object"
+    }
+  },
+  "host": "localhost:5125",
+  "info": {
+    "description": "Everything the Mewbo web console can do is available over plain HTTP. Create sessions and send queries. Stream events live. Run multi-source searches. Get schema-constrained answers for pipelines. Every endpoint below is generated from the running server, so this reference is always current with the code.\n\n## Base URL\n\nA self-hosted stack serves the API on port `5125` by default:\n\n```\nhttp://localhost:5125\n```\n\nReplace the host with wherever your stack runs. The request samples on this page use this base URL.\n\n## Authentication\n\nEvery endpoint expects an API key in the `X-API-KEY` header:\n\n```bash\ncurl -H \"X-API-KEY: $MEWBO_API_KEY\" http://localhost:5125/api/models\n```\n\nTwo kinds of keys work. The master token from `configs/app.json` (`api.master_token`) always works, and it is the only key allowed to mint others via `POST /api/keys`. Minted keys work everywhere else and can be revoked individually, so give each integration its own.\n\nBrowsers cannot set headers on `EventSource` connections. Server-sent event endpoints therefore also accept the key as a query parameter: `?api_key=<key>`.\n\n## Make your first request\n\nThree calls take you from nothing to a live agent run:\n\n```bash\n# 1. Create a session\ncurl -X POST http://localhost:5125/api/sessions \\\n  -H \"X-API-KEY: $MEWBO_API_KEY\" -H \"Content-Type: application/json\" -d '{}'\n# -> {\"session_id\": \"9e2d47c1...\"}\n\n# 2. Send it a query\ncurl -X POST http://localhost:5125/api/sessions/9e2d47c1.../query \\\n  -H \"X-API-KEY: $MEWBO_API_KEY\" -H \"Content-Type: application/json\" \\\n  -d '{\"query\": \"Summarize the open pull requests.\"}'\n\n# 3. Watch the run live\ncurl -N \"http://localhost:5125/api/sessions/9e2d47c1.../stream?api_key=$MEWBO_API_KEY\"\n```\n\nThe stream closes when the run finishes. The full transcript stays available through `GET /api/sessions/{session_id}/events`.\n\n## Long-running work\n\nSearches, structured runs, and indexing jobs can outlive a single request. These endpoints return a run or job id right away. Poll the matching `GET` endpoint, or subscribe to the run's `/events` stream, until the status turns terminal. Structured run handles have the form `<session_id>:r<seq>`, so the part before the first colon is always a session you can stream.\n\n## Streaming\n\nEndpoints ending in `/stream` or `/events` speak [server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events). Connect once and keep reading. Events are pushed the moment they happen; there is no polling interval to tune.\n\n## Errors\n\nFailures return a JSON body, never an HTML page. Expect `{\"message\": \"...\"}` on auth and validation errors, and `{\"error\": {\"code\", \"reason\", \"retryable\"}}` from the structured and search surfaces. Unknown routes return the same JSON envelope with a 404.\n\n## Related guides\n\nThe [Web Console + API](../clients-web-api/) guide covers concepts like capability negotiation and sharing. [Building a Client](../developer-guide/) walks through a minimal integration. The Agentic Wiki has its own HTTP surface under `/v1/wiki/*`, documented in the [Agentic Wiki](../features-wiki/) guide.\n",
+    "title": "Mewbo API",
+    "version": "0.0.13"
+  },
+  "paths": {
+    "/api/agentic_search/runs": {
+      "post": {
+        "description": "Runs the search agent over the workspace's enabled sources. The\nresponse always carries `run_id`, `session_id`, `status` and the full\n`run` snapshot. An orchestrated run returns `running` promptly and\nsettles through the event stream or by polling `GET /runs/{run_id}`;\nthe echo path settles synchronously as `completed`. Set `tier` to\ntrade depth for latency; the tier also picks the model that drives\nthe run.",
+        "operationId": "create_run",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SearchRunCreateRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run started; body carries the run snapshot plus its ids."
+          },
+          "400": {
+            "description": "Malformed body, missing field, or unknown tier."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Workspace not found."
+          }
+        },
+        "summary": "Start a search run",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      }
+    },
+    "/api/agentic_search/runs/{run_id}": {
+      "get": {
+        "description": "Returns the durable run snapshot: status, query, tier, timestamps and\nthe results and answer accumulated so far. Safe to poll while a run\nis `running`, and self-sufficient for reload, share and deep-link\nviews with no other context.",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "description": "Run id returned by POST /api/agentic_search/runs.",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run snapshot."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Run not found."
+          }
+        },
+        "summary": "Get a run",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      }
+    },
+    "/api/agentic_search/runs/{run_id}/cancel": {
+      "post": {
+        "description": "Requests cancellation of an in-flight run and, best effort, the\nsession backing it. The `cancelled` flag in the response is false\nwhen the run had already settled, in which case nothing changes.\nThe terminal state still arrives on the event stream and snapshot.",
+        "operationId": "cancel_run",
+        "parameters": [
+          {
+            "description": "Run id returned by POST /api/agentic_search/runs.",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancellation attempted; `cancelled` reports the outcome."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Run not found."
+          }
+        },
+        "summary": "Cancel a run",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      }
+    },
+    "/api/agentic_search/runs/{run_id}/events": {
+      "get": {
+        "description": "Server-sent events (`text/event-stream`): replays the run's\nappend-only event log from the start, then tails it live until a\nterminal event. Each frame's `id` line carries the event index, so a\ndropped connection resumes with `after_idx` or the `Last-Event-ID`\nheader. Because EventSource cannot set headers, the API key is also\naccepted as the `api_key` query parameter.",
+        "operationId": "stream_run_events",
+        "parameters": [
+          {
+            "description": "Run id returned by POST /api/agentic_search/runs.",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "Replay only events with an index greater than this value. Defaults to -1, a full replay from the start.",
+            "in": "query",
+            "name": "after_idx",
+            "type": "integer"
+          },
+          {
+            "description": "API key, for EventSource clients that cannot set the X-API-Key header.",
+            "in": "query",
+            "name": "api_key",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent event stream of run events."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Run not found."
+          }
+        },
+        "summary": "Stream run events",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      }
+    },
+    "/api/agentic_search/scg": {
+      "get": {
+        "description": "Returns node, edge, source and recipe counts for the Source\nCapability Graph, plus the list of mapped sources with their types.\nUseful to confirm that map jobs have populated the graph. The read is\ndeterministic and never invokes a model. Returns 503 when\n`scg.enabled` is off.",
+        "operationId": "introspect_scg",
+        "responses": {
+          "200": {
+            "description": "Graph counts and the mapped source list."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "503": {
+            "description": "Source Capability Graph is disabled."
+          }
+        },
+        "summary": "Inspect the capability graph",
+        "tags": [
+          "Source Graph"
+        ]
+      }
+    },
+    "/api/agentic_search/sources": {
+      "get": {
+        "description": "Returns the catalog of connectors a workspace can enable. Each entry\ndescribes one source: its id, display name, type and availability.\nA configured source whose discovery failed stays listed with\n`available` false rather than being omitted. Pass `project` to scope\nthe catalog to one project's configuration.",
+        "operationId": "list_sources",
+        "parameters": [
+          {
+            "description": "Project name that scopes the catalog to that project's connector configuration.",
+            "in": "query",
+            "name": "project",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The source catalog."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "summary": "List available sources",
+        "tags": [
+          "Source Graph"
+        ]
+      }
+    },
+    "/api/agentic_search/sources/{source_id}/map": {
+      "post": {
+        "description": "Starts a background job that indexes the connector's schema into the\nSource Capability Graph, which makes the source routable by search\nruns. The job is asynchronous: the response carries a `job_id` to\npoll via `GET /sources/{source_id}/map/jobs/{job_id}` or to follow on\nthe map event stream. When `descriptor` is omitted for an\n`mcp_tool_list` source, one is built from the connector's live tool\nlist; a source with no configured connector returns 422 instead.\nReturns 503 when `scg.enabled` is off.",
+        "operationId": "map_source",
+        "parameters": [
+          {
+            "description": "Source id from GET /api/agentic_search/sources.",
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SourceMapRequest"
+            }
+          },
+          {
+            "description": "Project name used to locate the connector when building a descriptor from its live tool list.",
+            "in": "query",
+            "name": "project",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Map job accepted; track it via the job and event endpoints."
+          },
+          "400": {
+            "description": "Malformed or invalid request body."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "422": {
+            "description": "Unsupported source type, or no connector available to introspect."
+          },
+          "503": {
+            "description": "Source Capability Graph is disabled, or the mapper is unavailable."
+          }
+        },
+        "summary": "Map a source",
+        "tags": [
+          "Source Graph"
+        ]
+      }
+    },
+    "/api/agentic_search/sources/{source_id}/map/events": {
+      "get": {
+        "description": "Server-sent events (`text/event-stream`) over a mapping job's\nappend-only event log: replays from the start, then tails live until\na terminal event. The newest job for the source is streamed by\ndefault; pass `job_id` to pick one. A dropped connection resumes with\n`after_idx` or the `Last-Event-ID` header. Because EventSource cannot\nset headers, the API key is also accepted as the `api_key` query\nparameter.",
+        "operationId": "stream_map_events",
+        "parameters": [
+          {
+            "description": "Source id from GET /api/agentic_search/sources.",
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "Map job to stream. Defaults to the newest job for the source.",
+            "in": "query",
+            "name": "job_id",
+            "type": "string"
+          },
+          {
+            "description": "Replay only events with an index greater than this value. Defaults to -1, a full replay from the start.",
+            "in": "query",
+            "name": "after_idx",
+            "type": "integer"
+          },
+          {
+            "description": "API key, for EventSource clients that cannot set the X-API-Key header.",
+            "in": "query",
+            "name": "api_key",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent event stream of map job events."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "No map job for the source, or unknown job id."
+          }
+        },
+        "summary": "Stream map job events",
+        "tags": [
+          "Source Graph"
+        ]
+      }
+    },
+    "/api/agentic_search/sources/{source_id}/map/jobs": {
+      "get": {
+        "description": "Returns the source's mapping jobs, newest first. Each record carries\nthe job's status (`queued`, `running`, `completed` or `failed`) and\nits progress phase. Poll this after starting a map job to follow it\nwithout holding an event stream open.",
+        "operationId": "list_map_jobs",
+        "parameters": [
+          {
+            "description": "Source id from GET /api/agentic_search/sources.",
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Map jobs for the source, newest first."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "summary": "List map jobs for a source",
+        "tags": [
+          "Source Graph"
+        ]
+      }
+    },
+    "/api/agentic_search/sources/{source_id}/map/jobs/{job_id}": {
+      "get": {
+        "description": "Returns one mapping job's record. The job must belong to the source\nin the path; otherwise the response is 404. Poll this until the\nstatus settles to `completed` or `failed`.",
+        "operationId": "get_map_job",
+        "parameters": [
+          {
+            "description": "Source id from GET /api/agentic_search/sources.",
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "Map job id returned by POST /sources/{source_id}/map.",
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The map job record."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Map job not found, or it belongs to another source."
+          }
+        },
+        "summary": "Get a map job",
+        "tags": [
+          "Source Graph"
+        ]
+      }
+    },
+    "/api/agentic_search/workspaces": {
+      "get": {
+        "description": "Returns all saved workspaces, each with its enabled sources,\ninstructions and recent query history. Pass `q` to filter by name,\ndescription or past-query text.",
+        "operationId": "list_workspaces",
+        "parameters": [
+          {
+            "description": "Case-insensitive filter matched against workspace name, description and past-query text.",
+            "in": "query",
+            "name": "q",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching workspaces."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "summary": "List workspaces",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      },
+      "post": {
+        "description": "A workspace names a set of enabled sources plus optional run\ninstructions. Creating one also refreshes its connector configuration\nand may start mapping newly enabled live sources in the background.\nThe new workspace is returned with its generated `id`.",
+        "operationId": "create_workspace",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/WorkspaceCreateRequest"
+            }
+          },
+          {
+            "description": "Project name used when auto-mapping newly enabled sources.",
+            "in": "query",
+            "name": "project",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Workspace created."
+          },
+          "400": {
+            "description": "Malformed or invalid request body."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "summary": "Create a workspace",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      }
+    },
+    "/api/agentic_search/workspaces/{workspace_id}": {
+      "delete": {
+        "description": "Removes the workspace and its stored connector configuration,\nincluding any auth material that configuration carried. Past runs\nremain readable by id. The response confirms the deleted id.",
+        "operationId": "delete_workspace",
+        "parameters": [
+          {
+            "description": "Workspace id returned by POST /api/agentic_search/workspaces.",
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace deleted."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Workspace not found."
+          }
+        },
+        "summary": "Delete a workspace",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      },
+      "patch": {
+        "description": "Applies a partial update: only `name`, `desc`, `sources` and\n`instructions` are writable, and omitted fields keep their current\nvalues. Changing the source selection or the instructions can start\nbackground re-mapping of the affected sources. Returns the full\nupdated workspace.",
+        "operationId": "update_workspace",
+        "parameters": [
+          {
+            "description": "Workspace id returned by POST /api/agentic_search/workspaces.",
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/WorkspacePatchRequest"
+            }
+          },
+          {
+            "description": "Project name used when auto-mapping newly enabled sources.",
+            "in": "query",
+            "name": "project",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The updated workspace."
+          },
+          "400": {
+            "description": "Malformed request body."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Workspace not found."
+          }
+        },
+        "summary": "Update a workspace",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      }
+    },
+    "/api/agentic_search/workspaces/{workspace_id}/graph": {
+      "get": {
+        "description": "Returns the capability graph scoped to the workspace's enabled\nsources, as cytoscape-style `nodes` and `edges` plus `stats` and the\nresolved `scope`. Every element is tagged with a layer (`schema`,\n`memory`, `entity` or `cross`) so clients can toggle layers\nindependently. A source that has never been mapped appears as one\nghost node flagged `unmapped`. The endpoint degrades gracefully: a\ndisabled or unavailable graph backend still returns 200 with an empty\nschema layer and every source listed as unmapped. Only an unknown\nworkspace returns 404. No node or edge ever carries a credential.",
+        "operationId": "get_workspace_graph",
+        "parameters": [
+          {
+            "description": "Workspace id returned by POST /api/agentic_search/workspaces.",
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workspace graph."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Workspace not found."
+          }
+        },
+        "summary": "Get the workspace graph",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      }
+    },
+    "/api/agentic_search/workspaces/{workspace_id}/runs": {
+      "get": {
+        "description": "Returns the workspace's recent run records, newest first. Use it to\nrebuild run history in a client; fetch one run with\n`GET /runs/{run_id}` for the full snapshot. An unknown workspace id\nyields an empty list.",
+        "operationId": "list_workspace_runs",
+        "parameters": [
+          {
+            "description": "Workspace id returned by POST /api/agentic_search/workspaces.",
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent runs, newest first."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "summary": "List runs for a workspace",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      }
+    },
+    "/api/automation/vcs-pickup": {
+      "post": {
+        "description": "Starts or continues an agent session for an issue or pull request event\nfrom CI. Sessions are keyed by the deterministic tag\n`vcs:<owner/repo>:<kind>:<number>`, so repeated triggers for the same item\nreuse one conversation. If a run is already active on that session, the\nnew prompt is enqueued as a steering message and the request returns 202.\nPull request pickups with a `head_ref` run in a worktree checked out on\nthat branch. When a forge token is configured server-side, the final\nanswer is posted back to the issue or pull request as a comment.",
+        "operationId": "post_vcs_pickup",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/VcsPickupRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run started, or trigger skipped because the comment author is the bot"
+          },
+          "202": {
+            "description": "Prompt enqueued as a steering message into the already-active run"
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          },
+          "404": {
+            "description": "Repository could not be resolved to a known project"
+          },
+          "409": {
+            "description": "The session is already running and the prompt could not be enqueued"
+          },
+          "422": {
+            "description": "The pull request branch or worktree could not be prepared"
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Trigger an agent pickup",
+        "tags": [
+          "Automation"
+        ]
+      }
+    },
+    "/api/commands": {
+      "get": {
+        "description": "Returns the server-side slash command registry with each command's\nname, arguments, and render kind, so clients can build command\npalettes without hardcoding the list.",
+        "operationId": "get_command_registry",
+        "responses": {
+          "200": {
+            "description": "Command registry."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List commands",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/config": {
+      "get": {
+        "description": "Returns the current configuration with protected and secret values\nstripped, plus a `secrets` map reporting which secret fields are set\n(true or false) without revealing their values.",
+        "operationId": "get_config_resource",
+        "responses": {
+          "200": {
+            "description": "Configuration values and secret status map."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Get configuration",
+        "tags": [
+          "Configuration"
+        ]
+      },
+      "patch": {
+        "description": "Deep-merges the request body into the stored configuration, validates\nthe result, and persists it. Attempts to modify protected fields are\nrejected with 403. A merge that fails validation returns 422 with the\nvalidation errors and changes nothing.",
+        "operationId": "patch_config_resource",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/ConfigPatchRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated configuration values and secret status map."
+          },
+          "400": {
+            "description": "Empty payload."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "403": {
+            "description": "Attempted to modify a protected field."
+          },
+          "422": {
+            "description": "Merged configuration failed validation; nothing was saved."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Update configuration",
+        "tags": [
+          "Configuration"
+        ]
+      }
+    },
+    "/api/config/schema": {
+      "get": {
+        "description": "Returns the JSON Schema describing the application configuration.\nProtected fields are stripped entirely and secret fields are marked\n`writeOnly`, so the schema can drive a settings UI directly.",
+        "operationId": "get_config_schema_resource",
+        "responses": {
+          "200": {
+            "description": "Configuration JSON Schema."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Get the configuration schema",
+        "tags": [
+          "Configuration"
+        ]
+      }
+    },
+    "/api/keys": {
+      "get": {
+        "description": "Returns metadata for every key: id, label, creation time, and\nrevocation state. Hashes and plaintext key values are never included.\nRequires the master token.",
+        "operationId": "get_api_keys",
+        "responses": {
+          "200": {
+            "description": "Key metadata list."
+          },
+          "401": {
+            "description": "Master token required."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List API keys",
+        "tags": [
+          "API Keys"
+        ]
+      },
+      "post": {
+        "description": "Creates a new API key for use in the `X-API-Key` header. The plaintext\nkey is returned exactly once in this response and cannot be retrieved\nagain, so store it securely. Requires the master token; keys minted\nhere cannot manage other keys.",
+        "operationId": "post_api_keys",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/KeyMintRequest"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Key created. The plaintext key is in the response body."
+          },
+          "400": {
+            "description": "Missing label."
+          },
+          "401": {
+            "description": "Master token required."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Mint an API key",
+        "tags": [
+          "API Keys"
+        ]
+      }
+    },
+    "/api/keys/{key_id}": {
+      "delete": {
+        "description": "Permanently revokes the key. Requests presenting a revoked key are\nrejected with 401 from that point on. Requires the master token.",
+        "operationId": "delete_api_key",
+        "parameters": [
+          {
+            "description": "Key id returned by POST /api/keys.",
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Key revoked."
+          },
+          "401": {
+            "description": "Master token required."
+          },
+          "404": {
+            "description": "Key not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Revoke an API key",
+        "tags": [
+          "API Keys"
+        ]
+      }
+    },
+    "/api/models": {
+      "get": {
+        "description": "Returns the model names served by the configured LLM proxy, the\ndefault model, and a per-model capability map. Use\n`capabilities[name].supports_vision` to decide whether image\nattachments can be sent to a given model.",
+        "operationId": "get_models",
+        "responses": {
+          "200": {
+            "description": "Model names, default model, and capability map."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List available models",
+        "tags": [
+          "Models"
+        ]
+      }
+    },
+    "/api/notifications": {
+      "get": {
+        "description": "Returns session lifecycle notifications such as session created,\ncompleted, or failed. Dismissed entries are hidden unless\n`include_dismissed=true`.",
+        "operationId": "get_notifications",
+        "parameters": [
+          {
+            "description": "Set to true to include dismissed notifications.",
+            "in": "query",
+            "name": "include_dismissed",
+            "type": "boolean"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notification list."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List notifications",
+        "tags": [
+          "Notifications"
+        ]
+      }
+    },
+    "/api/notifications/clear": {
+      "post": {
+        "description": "Deletes dismissed notifications, or every notification when\n`clear_all` is true. Returns the number cleared.",
+        "operationId": "post_notification_clear",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NotificationClearRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Number of notifications cleared."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Clear notifications",
+        "tags": [
+          "Notifications"
+        ]
+      }
+    },
+    "/api/notifications/dismiss": {
+      "post": {
+        "description": "Marks the given notification ids as dismissed. Accepts either an\n`ids` array or a single `id`. Returns the number dismissed.",
+        "operationId": "post_notification_dismiss",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NotificationDismissRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Number of notifications dismissed."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Dismiss notifications",
+        "tags": [
+          "Notifications"
+        ]
+      }
+    },
+    "/api/plugins": {
+      "get": {
+        "description": "Returns each installed plugin with its version, source marketplace,\nscope, and component counts: skills, agents, commands, MCP servers,\nand hooks.",
+        "operationId": "get_plugin_list",
+        "responses": {
+          "200": {
+            "description": "Installed plugin list."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List installed plugins",
+        "tags": [
+          "Plugins"
+        ]
+      }
+    },
+    "/api/plugins/marketplace": {
+      "get": {
+        "description": "Returns the plugins available for installation from the configured\nmarketplaces. Install one with POST on this same path.",
+        "operationId": "get_plugin_marketplace",
+        "responses": {
+          "200": {
+            "description": "Available plugin list."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List marketplace plugins",
+        "tags": [
+          "Plugins"
+        ]
+      },
+      "post": {
+        "description": "Installs the named plugin from a configured marketplace. Its skills,\ncommands, agents, and MCP servers become available to sessions started\nafter installation.",
+        "operationId": "post_plugin_marketplace",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/PluginInstallRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin installed."
+          },
+          "400": {
+            "description": "Missing fields or unknown plugin/marketplace."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "500": {
+            "description": "Installation failed."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Install a plugin",
+        "tags": [
+          "Plugins"
+        ]
+      }
+    },
+    "/api/plugins/{plugin_name}": {
+      "delete": {
+        "description": "Removes an installed plugin and its components from the install\ndirectory.",
+        "operationId": "delete_plugin_detail",
+        "parameters": [
+          {
+            "description": "Name of an installed plugin, as listed by GET /api/plugins.",
+            "in": "path",
+            "name": "plugin_name",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin uninstalled."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Plugin not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Uninstall a plugin",
+        "tags": [
+          "Plugins"
+        ]
+      }
+    },
+    "/api/projects": {
+      "get": {
+        "description": "Returns configuration-defined and managed projects in one list. Each\nentry carries an `available` flag (whether its path exists on disk)\nand, for git checkouts, a `repo` identity plus `aliases` such as\n`owner/repo` that address the same project elsewhere in the API.\nManaged worktrees appear as child entries with `is_worktree` set.",
+        "operationId": "get_projects",
+        "responses": {
+          "200": {
+            "description": "Unified project list."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List projects",
+        "tags": [
+          "Projects & Worktrees"
+        ]
+      }
+    },
+    "/api/query": {
+      "post": {
+        "description": "Runs the query to completion and returns the full result in one\nresponse, including the executed action steps. POST /api/query remains\nsupported as a simple synchronous alternative for CLI-style clients;\nprefer the asynchronous session endpoints for interactive use. A new\nsession is created automatically unless `session_id`, `session_tag`,\nor `fork_from` selects an existing one.",
+        "operationId": "post_mewbo_query",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SyncQueryRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed run with the executed action steps.",
+            "schema": {
+              "$ref": "#/definitions/TaskQueue"
+            }
+          },
+          "400": {
+            "description": "Missing query or invalid project."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Run a synchronous query",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions": {
+      "get": {
+        "description": "Returns one summary per session with status, title, timestamps, and an\n`origin` field (`user`, `wiki`, `search`, or `channel`) describing\nwhat created it. Archived sessions are hidden unless\n`include_archived=true`.",
+        "operationId": "get_sessions",
+        "parameters": [
+          {
+            "description": "Set to true to include archived sessions.",
+            "in": "query",
+            "name": "include_archived",
+            "type": "boolean"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session summaries."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List sessions",
+        "tags": [
+          "Sessions"
+        ]
+      },
+      "post": {
+        "description": "Creates an empty session and returns its `session_id`. Optionally\nbinds a project, applies a lookup tag, and persists initial context\nsuch as the model to use. Clients may declare capabilities via the\n`X-Mewbo-Capabilities` header (comma separated). Run queries against\nthe session with POST /api/sessions/{session_id}/query.",
+        "operationId": "post_sessions",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SessionCreateRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session created; body carries the new `session_id`."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Create a session",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/agents": {
+      "get": {
+        "description": "Returns the session's sub-agent lifecycle events with status, model,\nand per-agent token counts, plus rollups: `total_steps`,\n`total_input_tokens` (peak context pressure), and\n`total_input_tokens_billed` (cumulative billed input). Use it to\nrender a live agent tree alongside the event stream.",
+        "operationId": "get_session_agents",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent tree and token rollups."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Get the agent tree",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/archive": {
+      "delete": {
+        "description": "Restores an archived session to the default session list.",
+        "operationId": "delete_session_archive",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session unarchived."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Session not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Unarchive a session",
+        "tags": [
+          "Sessions"
+        ]
+      },
+      "post": {
+        "description": "Hides the session from the default session list. Archiving is fully\nreversible with DELETE on the same path.",
+        "operationId": "post_session_archive",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session archived."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Session not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Archive a session",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/attachments": {
+      "post": {
+        "description": "Accepts one or more files as `multipart/form-data` under the `files`\nfield (a single `file` field also works). Documents are parsed to\nMarkdown at upload time so later runs can read them without\nre-parsing. Unsupported file types are rejected, as are image uploads\nwhen the `model` hint names a model without vision support. Reference\nthe returned descriptors in the `attachments` field of a query.",
+        "operationId": "post_session_attachments",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "Optional model hint. Image uploads are rejected early when the named model lacks vision support.",
+            "in": "query",
+            "name": "model",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved attachment descriptors."
+          },
+          "400": {
+            "description": "No files, unsupported file type, or image sent to a non-vision model."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Session not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Upload attachments",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/command": {
+      "post": {
+        "description": "Executes a server-side slash command such as `compact` against the\nsession. Commands that render into the transcript run asynchronously\nlike a regular query: the call returns 202 and their output arrives on\nthe event stream. Dialog and notification commands execute inline and\nreturn their result in the response body with 200. Discover available\ncommands via GET /api/commands.",
+        "operationId": "post_session_command",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SessionCommandRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inline command result (dialog or notification render)."
+          },
+          "202": {
+            "description": "Transcript command started; watch the event stream."
+          },
+          "400": {
+            "description": "Missing name or invalid arguments."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Unknown command."
+          },
+          "409": {
+            "description": "Session is already running."
+          },
+          "500": {
+            "description": "Command handler failed."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Run a command",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/events": {
+      "get": {
+        "description": "Returns the session's event timeline plus authoritative run state:\n`running`, `status`, `done_reason`, `title`, and `recoverable`. Pass\n`after` to fetch only new events while polling; the status fields are\nalways computed from the full transcript. Prefer the stream endpoint\nwhen you want push delivery.",
+        "operationId": "get_session_events",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "Return only events with a timestamp strictly after this value. Use the `ts` of the last event you received.",
+            "in": "query",
+            "name": "after",
+            "type": "string"
+          },
+          {
+            "description": "Set to 1 or true to cap large free-text payload fields (results, tool inputs, errors) at 2000 characters.",
+            "in": "query",
+            "name": "truncate",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events plus authoritative session status."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Session not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Poll session events",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/export": {
+      "get": {
+        "description": "Returns the full event transcript and the stored summary in one\npayload, suitable for download or offline analysis.",
+        "operationId": "get_session_export",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transcript and summary."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Session not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Export a session",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/fork": {
+      "post": {
+        "description": "Copies the transcript into a new session and returns its id. Pass\n`from_ts` to fork from a specific point instead of the full history.\nThe fork records its provenance and can apply a new tag or model. A\nrunning session cannot be forked.",
+        "operationId": "post_session_fork",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SessionForkRequest"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Fork created; body carries the new `session_id`."
+          },
+          "400": {
+            "description": "Fork failed (for example, an unknown fork point)."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "409": {
+            "description": "Cannot fork a running session."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Fork a session",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git-diff": {
+      "get": {
+        "description": "Returns a unified git diff for the session's bound project. When the\nsession has no project, or the project is not a git repository, the\ncall still returns 200 with `git_repo` false and a `reason` instead of\nan error.",
+        "operationId": "get_session_git_diff",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "`uncommitted` (default) diffs the working tree against HEAD; `branch` diffs against the merge base with origin/main (or origin/master).",
+            "enum": [
+              "uncommitted",
+              "branch"
+            ],
+            "in": "query",
+            "name": "scope",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unified diff, or `git_repo: false` with a reason."
+          },
+          "400": {
+            "description": "Invalid scope."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Session not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Get the session diff",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/interrupt": {
+      "post": {
+        "description": "Stops the currently executing step of an active run and returns 202.\nInterrupting an idle session is an idempotent no-op that returns 200\nwith `interrupted` false, so the call is always safe to make.",
+        "operationId": "post_session_interrupt",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session was idle; nothing to interrupt (`interrupted: false`)."
+          },
+          "202": {
+            "description": "Current step interrupted."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Interrupt a session",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/message": {
+      "post": {
+        "description": "While a run is active the text is enqueued as a steering message for\nthe agent and the call returns 202. On an idle or finished session the\nmessage re-engages it instead: a fresh run starts with the text as its\nquery and the call returns 200 with the new `run_id`. Run ids have the\nform `<session_id>:r<seq>`. Only a terminated session rejects.",
+        "operationId": "post_session_message",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SessionMessageRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Idle session re-engaged; body carries the new `run_id`."
+          },
+          "202": {
+            "description": "Steering message enqueued into the active run."
+          },
+          "400": {
+            "description": "Missing text."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "409": {
+            "description": "Session could not be re-engaged."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Send a session message",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/plan.md": {
+      "get": {
+        "description": "Returns the session's current `plan.md` as `text/markdown`. A plan\nfile exists only after a plan-mode run has written one; otherwise the\ncall returns 404.",
+        "operationId": "get_session_plan_file",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plan content (`text/markdown`)."
+          },
+          "400": {
+            "description": "Invalid session id."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "No plan file for this session."
+          },
+          "500": {
+            "description": "Plan file could not be read."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Fetch the session plan",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/plan/approve": {
+      "post": {
+        "description": "Resolves a pending plan-mode proposal. Approval immediately starts a\nnew run in act mode that implements the approved plan; rejection\nleaves the session dormant so the user can send refinement guidance\nvia the query endpoint. Returns 404 when no proposal is pending.",
+        "operationId": "post_session_plan_approve",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/PlanApproveRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decision recorded."
+          },
+          "400": {
+            "description": "`approved` must be a boolean."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "No pending plan proposal, or a run is already active."
+          },
+          "500": {
+            "description": "Plan approved but the follow-up run could not start."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Approve or reject a plan",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/query": {
+      "post": {
+        "description": "Starts an asynchronous run for `query` on the session and returns 202\nimmediately; follow progress via the events or stream endpoints. The\nslash commands `/terminate` and `/status` are handled inline without\nstarting a run. A session executes one run at a time, so a second\ncall while one is active returns 409.",
+        "operationId": "post_session_query",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SessionQueryRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Slash command handled inline (`/status`)."
+          },
+          "202": {
+            "description": "Run started; poll the events endpoint or open the stream."
+          },
+          "400": {
+            "description": "Missing query or invalid project."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "409": {
+            "description": "Session is already running."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Run a session query",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/recover": {
+      "post": {
+        "description": "Restarts work on a failed or incomplete session. `retry` re-runs the\nlast user query, optionally edited via `edited_text`; `continue`\nresumes from where the run stopped. The run inherits the session's\nprior context and settings. Wiki indexing sessions resume from their\ncheckpoint instead and return a `job_id` to monitor rather than a\n`run_id`.",
+        "operationId": "post_session_recovery",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SessionRecoverRequest"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Recovery run started; body carries `run_id` (or `job_id` for wiki jobs)."
+          },
+          "400": {
+            "description": "Invalid action, or nothing to recover from."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "409": {
+            "description": "Session is already running."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Recover a session",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/share": {
+      "post": {
+        "description": "Mints a share token for the session. Anyone holding the token can\nread the transcript via GET /api/share/{token} without an API key.",
+        "operationId": "post_session_share",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Share record with the new token."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Session not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Create a share link",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/stream": {
+      "get": {
+        "description": "Opens a Server-Sent Events stream. The stored backlog is replayed\nfirst, then new events are pushed as they happen. Heartbeat comments\nkeep the connection alive, and a terminal `stream_end` frame is sent\nwhen the run finishes. Because EventSource cannot set headers, the API\nkey may be passed as the `api_key` query parameter instead.",
+        "operationId": "get_session_stream",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "API key, for EventSource clients that cannot set the `X-API-Key` header.",
+            "in": "query",
+            "name": "api_key",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream (`text/event-stream`)."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Stream session events",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/title": {
+      "patch": {
+        "description": "Saves a user-provided display title for the session. Titles are\ntrimmed and capped at 120 characters.",
+        "operationId": "patch_session_title",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/TitlePatchRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Title saved."
+          },
+          "400": {
+            "description": "Missing or empty title."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Session not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Rename a session",
+        "tags": [
+          "Sessions"
+        ]
+      },
+      "post": {
+        "description": "Asks the configured model to produce a title from the transcript,\nsaves it, and appends a `title_update` event to the session. Returns\n422 when no usable title could be generated.",
+        "operationId": "post_session_title",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generated title saved."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Session not found."
+          },
+          "422": {
+            "description": "No usable title could be generated."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Generate a session title",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/usage": {
+      "get": {
+        "description": "Returns token usage split between the root agent and sub-agents,\nincluding peak and billed input figures and compaction statistics.",
+        "operationId": "get_session_usage",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token usage breakdown."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Get token usage",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/share/{token}": {
+      "get": {
+        "description": "Public endpoint. Returns the shared session's transcript and summary\nfor a valid token. No API key is required; possession of the token is\nthe only credential.",
+        "operationId": "get_share_lookup",
+        "parameters": [
+          {
+            "description": "Share token returned by POST /api/sessions/{session_id}/share.",
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shared transcript and summary."
+          },
+          "404": {
+            "description": "Share token not found."
+          }
+        },
+        "security": [],
+        "summary": "Resolve a share link",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/skills": {
+      "get": {
+        "description": "Returns the available skills, including those contributed by installed\nplugins, with their descriptions, tool allowlists, and invocation\nflags. Activate a skill for a run via the `skill` field of a query.",
+        "operationId": "get_skills",
+        "parameters": [
+          {
+            "description": "Configured project name. Includes skills defined inside that project.",
+            "in": "query",
+            "name": "project",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill list."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List skills",
+        "tags": [
+          "Tools & Skills"
+        ]
+      }
+    },
+    "/api/tools": {
+      "get": {
+        "description": "Returns every known tool integration with its enablement state, the\nMCP server it comes from, and a `scope` of `global`, `project`, or\n`plugin`. Pass `project` to include tools configured inside that\nproject. Use the `tool_id` values in a session's `mcp_tools` allowlist\nto scope what a run may call.",
+        "operationId": "get_tools",
+        "parameters": [
+          {
+            "description": "Configured project name. Includes tools from that project's own MCP configuration.",
+            "in": "query",
+            "name": "project",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tool list."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List tools",
+        "tags": [
+          "Tools & Skills"
+        ]
+      }
+    },
+    "/api/v_projects": {
+      "post": {
+        "description": "Registers a project managed by the server, as opposed to one defined\nin static configuration. When `path` is omitted the server provisions\na folder for it. Use the returned `project_id` with the other\n`/api/v_projects` endpoints, and as `managed:<project_id>` when\ncreating sessions.",
+        "operationId": "post_virtual_projects",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/ProjectCreateRequest"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Project created."
+          },
+          "400": {
+            "description": "Missing name."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Create a managed project",
+        "tags": [
+          "Projects & Worktrees"
+        ]
+      }
+    },
+    "/api/v_projects/{project_id}": {
+      "delete": {
+        "description": "Removes the managed project record. Returns 204 with an empty body on\nsuccess.",
+        "operationId": "delete_virtual_project_",
+        "parameters": [
+          {
+            "description": "Managed project id returned by POST /api/v_projects.",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Project deleted."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Project not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Delete a managed project",
+        "tags": [
+          "Projects & Worktrees"
+        ]
+      },
+      "get": {
+        "description": "Returns the full project record, including its filesystem path,\nworktree linkage (`is_worktree`, `parent_project_id`, `branch`), and\ntimestamps. Only managed project ids are accepted here; configured\nprojects are listed via GET /api/projects.",
+        "operationId": "get_virtual_project_",
+        "parameters": [
+          {
+            "description": "Managed project id returned by POST /api/v_projects.",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project record."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Project not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Get a managed project",
+        "tags": [
+          "Projects & Worktrees"
+        ]
+      },
+      "patch": {
+        "description": "Updates the name and/or description. Fields omitted from the body are\nleft unchanged. The path and worktree linkage of a project cannot be\nchanged after creation.",
+        "operationId": "patch_virtual_project_",
+        "parameters": [
+          {
+            "description": "Managed project id returned by POST /api/v_projects.",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/ProjectPatchRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated project record."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Project not found."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Update a managed project",
+        "tags": [
+          "Projects & Worktrees"
+        ]
+      }
+    },
+    "/api/v_projects/{project_id}/branches": {
+      "get": {
+        "description": "Returns `branches`, the `current_branch` (null when HEAD is detached),\nand `branches_in_use`, the branches already checked out by the parent\nrepository or another worktree. UIs should disable in-use entries,\nsince creating a worktree for them fails. When the project path is\nmissing or not a git repository the call still returns 200 with\n`git_repo` false and a `reason`.",
+        "operationId": "get_virtual_project_branches",
+        "parameters": [
+          {
+            "description": "Managed project id, configured project name, or git identity such as `owner/repo` (any alias of the repository resolves).",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Branch listing, or `git_repo: false` with a reason."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Project not found."
+          },
+          "409": {
+            "description": "Ambiguous bare repo name; disambiguate with host/owner/repo."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List branches",
+        "tags": [
+          "Projects & Worktrees"
+        ]
+      }
+    },
+    "/api/v_projects/{project_id}/worktrees": {
+      "get": {
+        "description": "Returns the union of worktrees created through this API and worktrees\nadded on disk with plain git. Each entry has a `managed` flag; managed\nentries carry a `project_id` that sessions can be pinned to. Every\nentry includes a `clean` flag indicating it has no uncommitted\nchanges.",
+        "operationId": "get_virtual_project_worktrees",
+        "parameters": [
+          {
+            "description": "Managed project id, configured project name, or git identity such as `owner/repo` (any alias of the repository resolves).",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worktree list."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Project not found."
+          },
+          "409": {
+            "description": "Ambiguous bare repo name; disambiguate with host/owner/repo."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List worktrees",
+        "tags": [
+          "Projects & Worktrees"
+        ]
+      },
+      "post": {
+        "description": "Checks out `branch` in a new worktree folder and registers it as a\nchild managed project. Pass `base` to create a fresh branch from that\nref instead of requiring `branch` to exist. Configured projects are\npromoted to managed projects automatically so the worktree gets a\nstable parent. Worktree lifecycle is system owned: a clean worktree is\nremoved automatically when its session ends.",
+        "operationId": "post_virtual_project_worktrees",
+        "parameters": [
+          {
+            "description": "Managed project id, configured project name, or git identity such as `owner/repo` (any alias of the repository resolves).",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/WorktreeCreateRequest"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Worktree created."
+          },
+          "400": {
+            "description": "Missing branch, invalid input, or not a git repository."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "404": {
+            "description": "Project not found."
+          },
+          "409": {
+            "description": "Branch already checked out elsewhere, or worktree path exists."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Create a worktree",
+        "tags": [
+          "Projects & Worktrees"
+        ]
+      }
+    },
+    "/api/v_projects/{project_id}/worktrees/{worktree_id}": {
+      "delete": {
+        "description": "Removes a managed worktree. The call is idempotent: deleting a\nworktree that is already gone returns 200 with status\n`already_absent`. A worktree with uncommitted changes is refused with\n409 unless `force=true`. Worktrees created outside this API must be\nremoved with git directly.",
+        "operationId": "delete_virtual_project_worktree",
+        "parameters": [
+          {
+            "description": "Parent project: managed project id, configured project name, or git identity such as `owner/repo`.",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "The worktree's own `project_id` from the worktree listing.",
+            "in": "path",
+            "name": "worktree_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "Set to true to remove a worktree with uncommitted changes.",
+            "in": "query",
+            "name": "force",
+            "type": "boolean"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worktree already absent; nothing to do."
+          },
+          "204": {
+            "description": "Worktree removed."
+          },
+          "400": {
+            "description": "Worktree does not belong to this project."
+          },
+          "401": {
+            "description": "Missing or invalid API key."
+          },
+          "409": {
+            "description": "Worktree has uncommitted changes and `force` was not set."
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Remove a worktree",
+        "tags": [
+          "Projects & Worktrees"
+        ]
+      }
+    },
+    "/v1/draft/stream": {
+      "post": {
+        "description": "Streams a draft answer as server-sent events. Each token arrives as a\n`data: {\"token\": \"<delta>\"}` frame, and the stream ends with a terminal\n`data: {\"done\": true, \"session_id\": \"<id>\"}` frame; a mid-flight failure\nemits a `data: {\"error\": \"<reason>\"}` frame instead. The backing session\nid is also sent up front in the `X-Mewbo-Session` response header. A\nworkspace adds retrieval grounding before streaming starts. The optional\n`model` field accepts any configured LiteLLM model id; a non-string\nvalue is ignored.",
+        "operationId": "post_draft_stream_resource",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/DraftStreamRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent event stream of token frames."
+          },
+          "400": {
+            "description": "Missing or invalid query"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          }
+        },
+        "summary": "Stream a draft answer",
+        "tags": [
+          "Draft Streaming"
+        ]
+      }
+    },
+    "/v1/structured": {
+      "post": {
+        "description": "Starts an agentic run that answers the query with a JSON object validating\nagainst the supplied schema. The response always carries a run handle of the\nform `<session_id>:r<seq>`. The request waits briefly before returning, so\nfast runs come back inline with status `completed` and the output attached.\nSlower runs return status `running`: poll GET /v1/structured/{run_id}, or\nattach to GET /api/sessions/{session_id}/stream using the part of the handle\nbefore the first colon. The optional `model` field accepts any configured\nLiteLLM model id; a non-string value is ignored.",
+        "operationId": "post_structured_resource",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/StructuredQueryRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run handle, with output attached when the run completed inline"
+          },
+          "400": {
+            "description": "Missing or invalid query or schema"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          },
+          "409": {
+            "description": "A structured run is already active for this session"
+          },
+          "422": {
+            "description": "The run could not be started"
+          },
+          "500": {
+            "description": "The run failed to start"
+          },
+          "503": {
+            "description": "Structured responses are not configured on this server"
+          }
+        },
+        "summary": "Run a structured query",
+        "tags": [
+          "Structured Outputs"
+        ]
+      }
+    },
+    "/v1/structured/fast": {
+      "post": {
+        "description": "Answers the query in one round trip with a JSON object that validates\nagainst the supplied schema; no tools are used. A workspace adds retrieval\ngrounding, and the matching citations come back alongside the output. An\nanswer that fails schema validation is reasked once; a second failure\nreturns 422. The optional `model` field accepts any configured LiteLLM\nmodel id; a non-string value is ignored. The response also carries the\n`session_id` backing the run, for trace and transcript lookup.",
+        "operationId": "post_fast_structured_resource",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/FastStructuredRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated output with grounding citations",
+            "schema": {
+              "$ref": "#/definitions/FastStructuredResponse"
+            }
+          },
+          "400": {
+            "description": "Missing or invalid query or schema"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          },
+          "422": {
+            "description": "The answer failed schema validation after one reask"
+          },
+          "500": {
+            "description": "Synthesis failed unexpectedly"
+          }
+        },
+        "summary": "Run a fast structured query",
+        "tags": [
+          "Fast Structured"
+        ]
+      }
+    },
+    "/v1/structured/{run_id}": {
+      "get": {
+        "description": "Resolves a run handle to its current state. While the run is in flight the\nbody is `{run_id, status}`. Once a validated output exists the status is\n`completed` and the output is attached; graph-grounded runs also carry a\n`provenance` object summarizing the pathways routed and probes executed.\nA run that ends without a valid output returns 422 with an error envelope.",
+        "operationId": "get_structured_run_resource",
+        "parameters": [
+          {
+            "description": "Run handle returned by POST /v1/structured, in the form <session_id>:r<seq>.",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run status, with output and provenance once completed"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          },
+          "404": {
+            "description": "No run exists for this handle"
+          },
+          "422": {
+            "description": "The run finished without a valid structured output"
+          },
+          "503": {
+            "description": "Structured responses are not configured on this server"
+          }
+        },
+        "summary": "Get a structured run",
+        "tags": [
+          "Structured Outputs"
+        ]
+      }
+    }
+  },
+  "produces": [
+    "application/json"
+  ],
+  "responses": {
+    "MaskError": {
+      "description": "When any error occurs on mask"
+    },
+    "ParseError": {
+      "description": "When a mask can't be parsed"
+    }
+  },
+  "schemes": [
+    "http"
+  ],
+  "security": [
+    {
+      "apikey": []
+    }
+  ],
+  "securityDefinitions": {
+    "apikey": {
+      "in": "header",
+      "name": "X-API-KEY",
+      "type": "apiKey"
+    }
+  },
+  "swagger": "2.0",
+  "tags": [
+    {
+      "description": "A session is the unit of conversation and audit. Create one, send it queries, steer it while it runs, and read everything back: events, sub-agent activity, token usage, diffs, and exports. Streams are push-based server-sent events. This is the surface the web console runs on.",
+      "name": "Sessions"
+    },
+    {
+      "description": "Projects point sessions at a working directory. Managed projects can be created over the API; git-backed projects additionally expose branches and isolated worktrees, so several sessions can work the same repository without stepping on each other.",
+      "name": "Projects & Worktrees"
+    },
+    {
+      "description": "Agentic Search over saved multi-source workspaces. Create a run against a workspace, then poll it or follow its event stream to a cited answer.",
+      "name": "Workspaces & Runs"
+    },
+    {
+      "description": "Source catalog and Source Capability Graph (SCG) indexing. Map jobs index a source's reachable schemas and pathways so search can route through them. Requires the SCG feature to be enabled.",
+      "name": "Source Graph"
+    },
+    {
+      "description": "Schema-constrained agentic runs. Send a query plus a JSON Schema and get back an object that validates against it, with optional workspace grounding and graph-first provenance.",
+      "name": "Structured Outputs"
+    },
+    {
+      "description": "Retrieval-only structured synthesis in one round trip. No tool use. Same request contract as /v1/structured, tuned for fast first tokens.",
+      "name": "Fast Structured"
+    },
+    {
+      "description": "Token-by-token draft answers over server-sent events. The lowest latency surface; no schema, no tool use.",
+      "name": "Draft Streaming"
+    },
+    {
+      "description": "Discover which LLM models the configured proxy currently serves.",
+      "name": "Models"
+    },
+    {
+      "description": "Introspect the tool registry and available skills, optionally scoped to a project. Useful for building pickers and capability checks.",
+      "name": "Tools & Skills"
+    },
+    {
+      "description": "List installed plugins, browse configured marketplaces, and install or uninstall plugins. Plugin components load into new sessions.",
+      "name": "Plugins"
+    },
+    {
+      "description": "Read and dismiss the notification feed shown in the console.",
+      "name": "Notifications"
+    },
+    {
+      "description": "Read and patch the server configuration. Secrets are write-only and protected fields are never exposed; the schema endpoint describes exactly what a client may render and edit.",
+      "name": "Configuration"
+    },
+    {
+      "description": "Mint, list, and revoke API keys. Only the master token may mint. Give each integration its own revocable key.",
+      "name": "API Keys"
+    },
+    {
+      "description": "CI and VCS automation. Lets a pipeline hand issues and pull requests to Mewbo agents (see the CI Agent Pickup guide).",
+      "name": "Automation"
+    }
+  ],
+  "x-tagGroups": [
+    {
+      "name": "Sessions",
+      "tags": [
+        "Sessions"
+      ]
+    },
+    {
+      "name": "Projects",
+      "tags": [
+        "Projects & Worktrees"
+      ]
+    },
+    {
+      "name": "Agentic Search",
+      "tags": [
+        "Workspaces & Runs",
+        "Source Graph"
+      ]
+    },
+    {
+      "name": "Structured & Realtime",
+      "tags": [
+        "Structured Outputs",
+        "Fast Structured",
+        "Draft Streaming"
+      ]
+    },
+    {
+      "name": "Platform",
+      "tags": [
+        "Models",
+        "Tools & Skills",
+        "Plugins",
+        "Notifications",
+        "Configuration",
+        "API Keys"
+      ]
+    },
+    {
+      "name": "Automation",
+      "tags": [
+        "Automation"
+      ]
+    }
+  ]
+}

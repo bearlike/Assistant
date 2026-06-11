@@ -539,7 +539,7 @@ def test_map_source_events_streams_existing_job(client, auth_headers, monkeypatc
     st = get_store()
     job = MapJobRecord(job_id="job-test-sse", source_id="notion", source_type="notion")
     st.create_map_job(job)
-    st.append_map_job_event("job-test-sse", {"type": "run_done", "status": "complete"})
+    st.append_map_job_event("job-test-sse", {"type": "run_done", "status": "completed"})
 
     resp = client.get(
         "/api/agentic_search/sources/notion/map/events?job_id=job-test-sse",
@@ -562,7 +562,7 @@ def test_map_source_events_no_job_id_uses_newest(client, auth_headers, monkeypat
     st = get_store()
     job = MapJobRecord(job_id="job-newest-test", source_id="github", source_type="github")
     st.create_map_job(job)
-    st.append_map_job_event("job-newest-test", {"type": "run_done", "status": "complete"})
+    st.append_map_job_event("job-newest-test", {"type": "run_done", "status": "completed"})
 
     resp = client.get(
         "/api/agentic_search/sources/github/map/events",

@@ -203,6 +203,64 @@ def _tool_schema_payload(tool: Any) -> dict[str, Any] | None:
     return _schema_from_args_schema(args_schema)
 
 
+async def _list_server_tool_schemas_async(
+    server_name: str, config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    from mewbo_tools.integration.mcp_pool import get_mcp_pool
+
+    pool = get_mcp_pool()
+    try:
+        await pool.refresh_if_config_changed(config)
+        state = await pool.get_or_connect(server_name)
+    except Exception as exc:
+        raise RuntimeError(
+            f"failed to introspect MCP server '{server_name}': {exc}"
+        ) from exc
+    tools: list[dict[str, Any]] = []
+    for tool in state.tools:
+        name = getattr(tool, "name", "")
+        if not name:
+            continue
+        entry: dict[str, Any] = {"name": name}
+        description = getattr(tool, "description", "") or ""
+        if description:
+            entry["description"] = description
+        schema = _tool_schema_payload(tool)
+        if schema is not None:
+            entry["inputSchema"] = schema
+        tools.append(entry)
+    return sorted(tools, key=lambda t: t["name"])
+
+
+def list_server_tool_schemas(
+    server_name: str,
+    *,
+    cwd: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return one configured server's live tool schemas via the shared pool.
+
+    The public introspection seam for callers that need a server's advertised
+    tool list (name / description / input schema) without binding the tools:
+    loads the merged MCP config for *cwd*, refreshes the pool fingerprint, and
+    connects on demand (the ``MCPToolRunner._invoke_via_pool`` pattern). Only
+    schema-bearing attributes are read off each tool — never connection or
+    auth material.
+
+    Raises:
+        LookupError: *server_name* has no entry in the merged MCP config.
+        RuntimeError: the config could not be read, or the live introspection
+            (pool connect / handshake) failed.
+    """
+    try:
+        config = _load_mcp_config(cwd=cwd)
+    except Exception as exc:
+        raise RuntimeError(f"failed to read MCP config: {exc}") from exc
+    servers = config.get("servers", {}) if isinstance(config, dict) else {}
+    if server_name not in servers:
+        raise LookupError(f"MCP server '{server_name}' is not configured.")
+    return asyncio.run(_list_server_tool_schemas_async(server_name, config))
+
+
 async def _discover_mcp_tool_details_with_failures_async(
     config: dict[str, Any],
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Exception]]:

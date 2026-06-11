@@ -7,6 +7,7 @@ import threading
 from mewbo_core.classes import ActionStep
 from mewbo_core.exit_plan_mode import ExitPlanModeTool
 from mewbo_core.permissions import auto_approve
+from mewbo_core.session_provenance import SessionOrigin
 from mewbo_core.structured_response import (
     FORCE_EMIT_DIRECTIVE,
     EmitStructuredResponseTool,
@@ -105,11 +106,15 @@ class _FakeRuntime:
         self._redrive_tool_inputs = redrive_tool_inputs
         self.context_events: list[dict] = []
         self.events: list[dict] = []
+        self.tags: list[str] = []
         self.run_kwargs: dict = {}
         self.run_calls: list[dict] = []
 
     def resolve_session(self, *, session_tag=None, session_id=None):
         return "sess-1"
+
+    def tag_session(self, session_id, tag):
+        self.tags.append(tag)
 
     def append_context_event(self, session_id, context):
         self.context_events.append(context)
@@ -161,6 +166,34 @@ def test_responder_returns_validated_object_and_scopes_session():
     assert runtime.run_kwargs["approval_callback"] is auto_approve
     injected = runtime.run_kwargs["extra_session_tools"]
     assert len(injected) == 1 and injected[0].tool_id == "emit_result"
+
+
+def test_responder_stamps_structured_provenance_tag_and_surface():
+    """``_prepare`` stamps a per-session ``structured:run:<id>`` tag + surface (#78/#87).
+
+    Without this the session is untagged → ``SessionOrigin`` falls back to
+    ``user`` and the trace loses ``surface:<platform>``. The tag is UNIQUE per
+    session (``structured:run:<id>``), never the bare ``structured:run`` prefix —
+    a constant tag would collide on the tag-keyed store and let one run steal
+    every other run's tag (#87). This also covers the MCP ``structured_query``
+    tool, which posts to the same route.
+    """
+    from mewbo_core.structured_response import STRUCTURED_RUN_TAG
+
+    runtime = _FakeRuntime(tool_inputs=[{"name": "Ada"}])
+    responder = StructuredResponder(
+        runtime=runtime,
+        schema=_PERSON_SCHEMA,
+        source_platform="mcp",
+    )
+    responder.run("who?")
+    # Unique per-session tag, NOT the bare prefix.
+    assert f"{STRUCTURED_RUN_TAG}:sess-1" in runtime.tags
+    assert STRUCTURED_RUN_TAG not in runtime.tags
+    assert {"source_platform": "mcp"} in runtime.context_events
+    # The tag classifies the session as ``structured``, not the ``user`` fallback
+    # (the prefix-matching parser is transparent to the id segment).
+    assert SessionOrigin.classify(runtime.tags, {}) == SessionOrigin.STRUCTURED
 
 
 def test_responder_persists_structured_output_event_for_async_get():

@@ -78,12 +78,22 @@ Every session has an **origin**: the surface or subsystem that created it. Origi
 |--------|-----------------|
 | `wiki` | Session is tagged `wiki:job` (indexing run) or `wiki:qa` (Q&A query) |
 | `search` | Session is tagged `agentic_search` |
-| `channel` | Session carries a channel tag such as `nextcloud-talk:<thread_id>` |
+| `structured` | Session is tagged `structured:run` (`POST /v1/structured`, including MCP `structured_query`) or `structured:fast` (`POST /v1/structured/fast`) |
+| `draft` | Session is tagged `draft:stream` (`POST /v1/draft/stream`) |
+| `channel` | Session carries a channel tag with a `:room:` or `:thread:` segment, such as `nextcloud-talk:room:<token>` |
 | `user` | Everything else: direct console, CLI, or API sessions |
 
-The **origin filter** on the session list lets you hide background sessions (wiki indexing jobs, search runs) and show only the surfaces you care about. By default the console shows `user` and `channel` sessions and hides `wiki` and `search` work. You can toggle any origin in or out independently.
+The `structured` and `draft` origins come from the realtime endpoints. Those endpoints used to be sessionless. They now mint real sessions, so every structured query and draft stream is browsable in the session list and carries a full transcript.
 
-**Badge display.** Each session card shows a small origin badge (`wiki`, `search`, `channel`, or `user`) so you can tell at a glance which surface created the session. Channel sessions additionally surface the room or thread name where space allows.
+The **origin filter** on the session list lets you hide background sessions and show only the surfaces you care about. By default the console shows `user` and `channel` sessions and hides `wiki`, `search`, `structured`, and `draft` work. You can toggle any origin in or out independently.
+
+**Badge display.** Each session card shows a small origin badge (`user`, `wiki`, `search`, `channel`, `structured`, or `draft`) so you can tell at a glance which surface created the session. Channel sessions show their platform name (for example Nextcloud or Email) instead of the generic label.
+
+**Capability and workspace chips.** Session cards also show what a session was scoped to. Each capability the session advertised at creation (for example `scg` or `wiki`) renders as a small chip beside the project and branch, and a structured workspace id renders the same way. The chips reflect advertised capabilities only. A capability granted at runtime shows up in the session's Langfuse trace, not on the card.
+
+### Trace provenance in Langfuse
+
+The same provenance reaches observability. At run start, each session's tags, context, and client surface are folded into filter tags on its Langfuse trace. You can filter traces by origin, product, session type, client surface (`cli`, `console`, `api`, `mcp`, and so on), project, repo, branch, workspace, and model. Higher-cardinality facets, such as worktree ids, capabilities, and wiki or search run ids, land in trace metadata. CI agent pickup sessions surface as the `vcs` product. Operator setup for Langfuse is covered in [Production deployment](deployment-production.md#observability-with-langfuse).
 
 ## Design goals
 - Keep the core orchestration engine centralized.

@@ -85,11 +85,16 @@ class _FakeMemoryBridge:
 
     def __init__(self) -> None:
         self.writes: list[tuple[str, str, list[str]]] = []
+        # Full kwargs of the most recent write (polarity/workspace/labels) so
+        # attribution + polarity assertions can read them without the positional
+        # tuple shape changing.
+        self.write_kwargs: list[dict[str, Any]] = []
 
     def write_insight(
-        self, slug: str, content: str, *, source_keys: list[str], **_kw: Any
+        self, slug: str, content: str, *, source_keys: list[str], **kw: Any
     ) -> _FakeIngestResult:
         self.writes.append((slug, content, list(source_keys)))
+        self.write_kwargs.append(dict(kw))
         return _FakeIngestResult()
 
     def read_insights(self, slug: str, query_vec: list[float], *, k: int = 10) -> list[Any]:
@@ -372,10 +377,87 @@ def test_route_returns_ranked_recipes(patched_core: JsonScgStore) -> None:
     assert out["recipes"][0]["steps"] == ["github#search", "github#Repo"]
 
 
+def test_route_recipes_carry_probe_tool_scope(patched_core: JsonScgStore) -> None:
+    """Each recipe lists its sources + EVERY capability of those sources.
+
+    The probe's allowed_tools scope is copied from the route result, never
+    inferred — a probe scoped to only the step tools cannot chain a follow-up
+    lookup within its own source (the first live run failed exactly this way).
+    """
+    _seed_route_graph(patched_core)
+    sibling = ScgNode(
+        source_key="github#get_issue",
+        kind="capability",
+        source_id="github",
+        name="get_issue",
+    )
+    patched_core.upsert_nodes([sibling])
+
+    out = _run(ScgRouteTool(session_id="s1"), {"query": "find repos", "k": 5})
+
+    recipe = out["recipes"][0]
+    assert recipe["source_ids"] == ["github"]
+    assert recipe["source_capabilities"] == ["get_issue", "search"]
+    # The EXECUTABLE allowlist — real mcp_<server>_<tool> ids, never graph
+    # source_keys (passing source_keys granted nothing: run-c52e9597).
+    assert recipe["allowed_tool_ids"] == ["mcp_github_get_issue", "mcp_github_search"]
+
+
 def test_route_empty_graph_returns_no_recipes(patched_core: JsonScgStore) -> None:
     """An empty SCG yields zero routes (not an error)."""
     out = _run(ScgRouteTool(session_id="s1"), {"query": "anything"})
     assert out == {"count": 0, "recipes": []}
+
+
+def test_route_recipes_carry_memory_hints(
+    monkeypatch: pytest.MonkeyPatch, patched_core: JsonScgStore, tmp_path: Path
+) -> None:
+    """A routed recipe surfaces its anchored connector insights as compact hints (#76).
+
+    Drives the REAL memory-aware router (a real bridge over a real wiki JSON
+    store) through ``ScgCore.router`` so the ``scg_route`` projection carries
+    ``memory_hints`` for the pathway, capped + compact, without a second lookup.
+    """
+    from mewbo_graph.scg.memory_bridge import (
+        CONNECTOR_SLUG,
+        ScgAnchorResolver,
+        ScgMemoryBridge,
+    )
+    from mewbo_graph.scg.router import ScgRouter
+    from mewbo_graph.wiki.store import JsonWikiStore
+
+    _seed_route_graph(patched_core)
+    # The note anchors on the entity_type surface (the resolver's anchor target).
+    patched_core.upsert_nodes([
+        ScgNode(source_key="github#search", kind="entity_type",
+                source_id="github", name="search"),
+    ])
+
+    embedder = _FakeEmbedder({"find repos": [1.0, 0.0]})
+    # Embedder shared by the parser-style node embed + query; deposit a positive
+    # note so a hint exists for the github#search pathway.
+    wiki_store = JsonWikiStore(root_dir=tmp_path / "wiki")
+    bridge = ScgMemoryBridge(wiki_store=wiki_store, embedder=embedder, llm=None)
+    bridge.resolver = ScgAnchorResolver(patched_core)
+    bridge.write_insight(
+        CONNECTOR_SLUG, "github#search is queryable by repo, not free-text",
+        source_keys=["github#search"], polarity="positive",
+    )
+    monkeypatch.setattr(
+        _core.ScgCore, "router",
+        staticmethod(lambda s: ScgRouter(store=s, embedder=embedder, memory_bridge=bridge)),
+    )
+
+    out = _run(ScgRouteTool(session_id="s1"), {"query": "find repos", "k": 5})
+
+    recipe = out["recipes"][0]
+    assert recipe["source_key"] == "github#search"
+    hints = recipe.get("memory_hints")
+    assert hints, "expected anchored memory hints on the routed recipe"
+    assert hints[0]["source_key"] == "github#search"
+    assert "free-text" in hints[0]["text"]
+    # Compact: capped per recipe (the projection never dumps the whole corpus).
+    assert len(hints) <= 3
 
 
 # ── scg_memory ───────────────────────────────────────────────────────────────
@@ -414,6 +496,64 @@ def test_memory_write_deposits_insight(patched_memory: _FakeMemoryBridge) -> Non
             ["github#search"],
         )
     ]
+
+
+def test_memory_write_unscoped_falls_back_to_session_attribution(
+    patched_memory: _FakeMemoryBridge,
+) -> None:
+    """An UNSCOPED deposit (no workspace bound) attributes to ``session:<id>``.
+
+    #83-B: ordinary sessions (CLI/console/channel) deposit insights with no
+    ``ScgScope`` workspace bound, so attribution falls back to the session id —
+    reusing the same ``labels`` mechanism as ``ws:<id>`` (no new field). The
+    workspace kwarg is ``None`` (no partition) and a ``session:s1`` label rides
+    the deposit so the learned layer stays attributable to which task curated it.
+    """
+    from mewbo_graph.scg.scope import ScgScope
+
+    # No ScgScope.use(...) → ScgScope.workspace() is None (the unscoped default).
+    assert ScgScope.workspace() is None
+
+    _run(
+        ScgMemoryTool(session_id="s1"),
+        {
+            "operation": "write",
+            "content": "github#search is queryable by repo, not free-text",
+            "source_keys": ["github#search"],
+        },
+    )
+
+    kw = patched_memory.write_kwargs[-1]
+    assert kw["workspace"] is None
+    assert kw["labels"] == ["session:s1"]
+
+
+def test_memory_write_workspace_bound_keeps_ws_attribution(
+    patched_memory: _FakeMemoryBridge,
+) -> None:
+    """A workspace-bound deposit attributes to the workspace, not the session.
+
+    When a run binds an ``ScgScope`` (a workspace-scoped search/structured run),
+    the ambient workspace is the attribution and the ``session:<id>`` fallback is
+    NOT added — preserving today's behaviour for scoped runs.
+    """
+    from mewbo_graph.scg.scope import ScgScope
+
+    with ScgScope.use(["github"], workspace="ws-42"):
+        _run(
+            ScgMemoryTool(session_id="s1"),
+            {
+                "operation": "write",
+                "content": "github#search is queryable by repo",
+                "source_keys": ["github#search"],
+            },
+        )
+
+    kw = patched_memory.write_kwargs[-1]
+    assert kw["workspace"] == "ws-42"
+    # No session fallback label when a workspace is bound (ws:<id> is added by
+    # the bridge from the workspace kwarg, not here).
+    assert kw["labels"] is None
 
 
 def test_memory_read_returns_insights(patched_memory: _FakeMemoryBridge) -> None:
@@ -555,6 +695,7 @@ def test_plugin_manifest_registers_tools_and_agents() -> None:
         "scg_link_entities",
         "scg_finalize_map",
         "scg_route",
+        "scg_observe",
         "scg_memory",
         # Shared abstract-entity tools (#35) registered under scg too so search
         # can read/mint the same holistic entity graph as the wiki.

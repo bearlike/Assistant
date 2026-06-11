@@ -13,7 +13,7 @@ SOURCE_PATHS = [
     os.path.join(ROOT, "apps", "mewbo_cli", "src"),
     os.path.join(ROOT, "apps", "mewbo_api", "src"),
     os.path.join(ROOT, "apps", "mewbo_mcp", "src"),
-    os.path.join(ROOT, "mewbo_ha_conversation"),
+    os.path.join(ROOT, "apps"),
 ]
 for path in SOURCE_PATHS:
     if path not in sys.path:

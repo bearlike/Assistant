@@ -174,6 +174,21 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 <span class="ms-card__body">Expose Mewbo to your whole agent fleet. Claude Code, Codex, Cursor, or another Mewbo connects over MCP to start coding sessions on a fresh worktree, steer and read them back at the detail it needs, and ask grounded questions of your Agentic Wiki — authenticated with a key you issue and revoke.</span>
 </a>
 
+<a class="ms-card" href="features-structured-outputs/">
+<span class="ms-card__title">Structured Outputs</span>
+<span class="ms-card__body">Describe what you need, pass a JSON Schema, and get back a validated object. An agentic session does the research first: it can search your code and wiki, and ground itself in a connected search workspace, before it writes a single field. On a workspace with a mapped Source Capability Graph the run goes graph-first, so the answer carries provenance. Built for pipelines that need machine-readable output, not prose.</span>
+</a>
+
+<a class="ms-card" href="ci-agent-pickup/">
+<span class="ms-card__title">CI Agent Pickup</span>
+<span class="ms-card__body">Assign a bot account to an issue, or @mention it in a comment, and Mewbo picks the work up. One workflow file runs on both GitHub Actions and Gitea Actions. It hands the item to your Mewbo API, an agent session starts in the right working directory, and the final answer lands back on the issue or PR as a comment from the bot.</span>
+</a>
+
+<a class="ms-card" href="rest-api/">
+<span class="ms-card__title">REST API Reference</span>
+<span class="ms-card__body">The full HTTP surface, generated from the running API server so it never drifts from the code. Browse every endpoint with its parameters and response shapes, and copy ready-to-run request samples in curl, Python, JavaScript, and more.</span>
+</a>
+
 </div>
 
 ---

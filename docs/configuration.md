@@ -195,7 +195,7 @@ Sub-agent hypervisor settings.
 | `default_sub_model` | string | `""` | Default LLM model for sub-agents. Falls back to the root agent's model when empty. |
 | `allowed_models` | list[string] |  | Allowlist of model names sub-agents may use. Empty means all models are allowed. |
 | `llm_call_timeout` | number | `120.0` | Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models (raised from 60s — bare timeouts were the largest single failure class). On timeout, the call is retried up to llm_call_retries times before cascading to fallback models. |
-| `llm_call_retries` | integer | `2` | Maximum attempts for the primary model before cascading to fallback models (default 2 = one try + one retry — never a 3rd attempt on a dead model). Each fallback model gets retry.fallback_retries attempts. A rescue model that wins is pinned for the rest of the run. Backoff/budget/circuit-breaker live under agent.retry. |
+| `llm_call_retries` | integer | `2` | Maximum attempts for the primary model before cascading to fallback models (default 2 = one try + one retry). Each fallback model gets retry.fallback_retries attempts. A rescue model that wins is pinned for the rest of the run. Backoff/budget/circuit-breaker live under agent.retry. |
 | `retry` | Retry |  | Automatic LLM-call retry / fallback resilience knobs. |
 | `default_denied_tools` | list[string] |  | Tool IDs denied to all sub-agents by default (e.g. spawn_agent). |
 | `edit_tool` | string | `""` | File editing mechanism override: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement). Leave empty (default) to auto-select based on the active model via llm.structured_patch_models. |
@@ -228,6 +228,17 @@ Operator-facing knobs for the wiki subsystem.
 | `memory` | Memory |  | Multiplex memory-layer knobs (atomic insights over the graph). |
 | `refresh` | Refresh |  | On-demand incremental-refresh thresholds. |
 
+## SCG
+
+Top-level key: `scg`
+
+Operator-facing knobs for the Source Capability Graph (agentic search).
+
+| Key | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `enabled` | boolean | `false` | Master switch for the SCG feature (source mapping and orchestrated agentic-search runs). |
+| `traversal` | Traversal |  | Traversal defaults (the per-run search tier). |
+
 ## Hooks
 
 Top-level key: `hooks`
@@ -240,6 +251,7 @@ External shell hooks fired during the session lifecycle.
 | `post_tool_use` | list[Hook] |  | Hooks executed after each tool invocation. |
 | `on_session_start` | list[Hook] |  | Hooks executed when a new session begins. |
 | `on_session_end` | list[Hook] |  | Hooks executed when a session ends. |
+| `on_event` | list[Hook] |  | Hooks executed (fire-and-forget) for every event appended to a session transcript. The matcher fnmatches the event type. |
 
 ## Plugins
 

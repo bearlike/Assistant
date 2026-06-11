@@ -51,11 +51,11 @@ def test_create_get_map_job(tmp_path):
 def test_update_map_job_partial_and_missing(tmp_path):
     """update_map_job patches given fields; unknown id raises KeyError."""
     store = JsonAgenticSearchStore(root_dir=tmp_path)
-    store.create_map_job(_job("map-1", status="mapping"))
+    store.create_map_job(_job("map-1", status="running"))
     updated = store.update_map_job(
-        "map-1", status="complete", node_count=12, edge_count=7
+        "map-1", status="completed", node_count=12, edge_count=7
     )
-    assert updated.status == "complete"
+    assert updated.status == "completed"
     assert updated.node_count == 12
     assert updated.edge_count == 7
     # Untouched field preserved.
@@ -69,7 +69,7 @@ def test_update_map_job_partial_and_missing(tmp_path):
 def test_update_map_job_error_is_redacted_dict(tmp_path):
     """error round-trips as a small {code, message} dict (never a secret)."""
     store = JsonAgenticSearchStore(root_dir=tmp_path)
-    store.create_map_job(_job("map-1", status="mapping"))
+    store.create_map_job(_job("map-1", status="running"))
     err = {"code": "introspect_failed", "message": "OpenAPI doc unreachable"}
     updated = store.update_map_job("map-1", status="failed", error=err)
     assert updated.error == err
@@ -147,7 +147,7 @@ def test_map_job_events_separate_from_run_events(tmp_path):
 def test_emit_phase_dual_writes_event_and_snapshot(tmp_path):
     """emit_phase appends a phase event AND patches phase + phase_started_at."""
     store = JsonAgenticSearchStore(root_dir=tmp_path)
-    store.create_map_job(_job("map-1", status="mapping"))
+    store.create_map_job(_job("map-1", status="running"))
 
     idx = MapJobProgress.emit_phase(store, "map-1", "introspect")
     assert idx == 0
@@ -157,7 +157,7 @@ def test_emit_phase_dual_writes_event_and_snapshot(tmp_path):
     assert job.phase == "introspect"
     assert job.phase_started_at  # ISO ts set
     # Status (the coarse bucket) is untouched by a phase emit.
-    assert job.status == "mapping"
+    assert job.status == "running"
 
     # 2) Event-log side: a single phase event appended.
     events = store.load_map_job_events("map-1")
@@ -170,7 +170,7 @@ def test_emit_phase_dual_writes_event_and_snapshot(tmp_path):
 def test_emit_phase_sequence_keeps_idx_monotonic(tmp_path):
     """Repeated emit_phase keeps event idx monotonic + snapshot tracks latest."""
     store = JsonAgenticSearchStore(root_dir=tmp_path)
-    store.create_map_job(_job("map-1", status="mapping"))
+    store.create_map_job(_job("map-1", status="running"))
 
     phases = ["connect", "introspect", "parse", "link", "finalize"]
     idxs = [MapJobProgress.emit_phase(store, "map-1", p) for p in phases]

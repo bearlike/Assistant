@@ -35,6 +35,7 @@ function headers(apiKey?: string): HeadersInit {
     ...authHeaders(apiKey),
     "Content-Type": "application/json",
     "X-Mewbo-Capabilities": WIDGET_CAPABILITY_ID,
+    "X-Mewbo-Surface": "console",
   };
 }
 

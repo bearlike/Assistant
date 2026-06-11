@@ -5,7 +5,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mewbo_core.capabilities import filter_by_capabilities, parse_capabilities
+import pytest
+from mewbo_core.capabilities import (
+    augment_session_capabilities,
+    filter_by_capabilities,
+    parse_capabilities,
+    register_session_capability_provider,
+    reset_session_capability_providers,
+)
 
 # ------------------------------------------------------------------
 # parse_capabilities
@@ -82,3 +89,65 @@ def test_filter_by_capabilities_session_ordering_irrelevant():
     items = [_Item("x", ("a", "b"))]
     assert filter_by_capabilities(items, ("a", "b")) == items
     assert filter_by_capabilities(items, ("b", "a")) == items
+
+
+# ------------------------------------------------------------------
+# augment_session_capabilities + the provider push registry (#83-B)
+# ------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_providers():
+    """Isolate the global provider registry per test (a process-wide singleton)."""
+    reset_session_capability_providers()
+    yield
+    reset_session_capability_providers()
+
+
+def test_augment_no_providers_returns_advertised_unchanged():
+    assert augment_session_capabilities(("wiki",)) == ("wiki",)
+    assert augment_session_capabilities(()) == ()
+
+
+def test_augment_unions_provider_grant():
+    register_session_capability_provider(
+        lambda adv: ("scg",) if "scg" not in adv else ()
+    )
+    # An unscoped/plain session (advertised nothing) gains the runtime grant.
+    assert augment_session_capabilities(()) == ("scg",)
+    # Unioned + sorted + deduped with an existing advertisement.
+    assert augment_session_capabilities(("wiki",)) == ("scg", "wiki")
+
+
+def test_augment_provider_noops_when_already_advertised():
+    seen: list[tuple[str, ...]] = []
+
+    def provider(adv: tuple[str, ...]) -> tuple[str, ...]:
+        seen.append(adv)
+        return () if "scg" in adv else ("scg",)
+
+    register_session_capability_provider(provider)
+    # Already advertised → provider sees it and returns no extra (no double-grant).
+    assert augment_session_capabilities(("scg",)) == ("scg",)
+    assert seen == [("scg",)]
+
+
+def test_augment_skips_raising_provider():
+    def boom(_adv: tuple[str, ...]) -> tuple[str, ...]:
+        raise RuntimeError("predicate unreachable store")
+
+    register_session_capability_provider(lambda _adv: ("scg",))
+    register_session_capability_provider(boom)
+    # A raising provider is logged + skipped; the healthy grant still lands.
+    assert augment_session_capabilities(()) == ("scg",)
+
+
+def test_register_provider_is_idempotent_on_identity():
+    def provider(_adv: tuple[str, ...]) -> tuple[str, ...]:
+        return ("scg",)
+
+    register_session_capability_provider(provider)
+    register_session_capability_provider(provider)  # same identity → not added twice
+    # Grant present exactly once (dedupe also makes a double-add invisible, but
+    # the registry itself must not accumulate duplicates).
+    assert augment_session_capabilities(()) == ("scg",)

@@ -147,13 +147,28 @@ class ScgCore:
 
     # -- query-time collaborators ------------------------------------------
 
-    @staticmethod
-    def router(store: ScgStore) -> ScgRouter:
-        """Build an :class:`ScgRouter` over *store* with the wiki query embedder."""
+    @classmethod
+    def router(cls, store: ScgStore) -> ScgRouter:
+        """Build a **memory-aware** :class:`ScgRouter` over *store* (#76).
+
+        The router is DI'd with the wiki query embedder AND an
+        :class:`ScgMemoryBridge` so routing biases toward pathways the learned
+        layer marks productive and away from discovered dead ends — a zero-LLM
+        retrieval step. The bridge is best-effort: if its memory substrate can't
+        be built (a graph-only install, or an unreachable backend), the bias is
+        simply empty and routing degrades to structure-alone — so a failure here
+        must never break routing. The bridge is anchored to THIS *store* so its
+        connector anchors resolve against the live structure (mirrors
+        :meth:`memory_bridge`).
+        """
         from mewbo_graph.scg.router import ScgRouter  # noqa: PLC0415
         from mewbo_graph.wiki.embedder import make_embedder  # noqa: PLC0415
 
-        return ScgRouter(store=store, embedder=make_embedder())
+        try:
+            bridge: ScgMemoryBridge | None = cls.memory_bridge(store)
+        except Exception:  # noqa: BLE001 — memory bias is best-effort, never fatal
+            bridge = None
+        return ScgRouter(store=store, embedder=make_embedder(), memory_bridge=bridge)
 
     @staticmethod
     def embedder() -> Embedder:

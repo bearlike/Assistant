@@ -1145,16 +1145,21 @@ class SearchTools:
 
     # -- behaviors --------------------------------------------------------
 
-    async def list_workspaces(self) -> dict[str, Any]:
+    async def list_workspaces(self, *, query: str | None = None) -> dict[str, Any]:
         """List saved workspaces, compact for discovery.
 
         Wires ``GET {BASE}/workspaces``. A workspace is a saved set of sources a
         search fans out across. Each is slimmed to ``{id, name, desc, sources,
         recent_query_count}`` — dropping the console-only ``instructions``
         (untrusted prompt input) and the full history — so the listing stays
-        cheap. Pass an ``id`` or ``name`` from here to :meth:`search`.
+        cheap. *query* passes the API's ``?q=`` filter through verbatim
+        (case-insensitive substring over name / description / past-query text).
+        Pass an ``id`` or ``name`` from here to :meth:`search`.
         """
-        payload = _as_dict(await self.client.get(f"{self.BASE}/workspaces"))
+        params = {"q": query} if query else None
+        payload = _as_dict(
+            await self.client.get(f"{self.BASE}/workspaces", params=params)
+        )
         return {"workspaces": [self._shape_workspace(w) for w in _dict_list(payload, "workspaces")]}
 
     async def search(
@@ -1425,13 +1430,19 @@ class StructuredQueryTools:
 
     @staticmethod
     def _shape(snapshot: Any, run_id: str) -> dict[str, Any]:
-        """Project a structured run snapshot into the MCP result."""
+        """Project a structured run snapshot into the MCP result.
+
+        Carries ``provenance`` when present — the additive pathway/probe trail a
+        graph-first run (a structured run bound to a mapped search workspace)
+        emits: ``{recipes_routed, probes_run, probe_status}`` so a caller can see
+        the graph was consulted and which probes executed.
+        """
         d = _as_dict(snapshot)
         status = str(
             d.get("status") or ("completed" if d.get("output") is not None else "running")
         )
         out: dict[str, Any] = {"run_id": d.get("run_id") or run_id or None, "status": status}
-        for key in ("output", "workspace", "error"):
+        for key in ("output", "workspace", "error", "provenance"):
             if d.get(key) is not None:
                 out[key] = d.get(key)
         return out

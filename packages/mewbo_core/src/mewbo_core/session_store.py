@@ -47,6 +47,22 @@ class SessionStoreBase(abc.ABC):
         """Create a new session and return its identifier."""
 
     @abc.abstractmethod
+    def ensure_session(self, session_id: str) -> None:
+        """Idempotently materialise a session RECORD for a known id.
+
+        ``create_session`` mints its own uuid; some callers (the realtime
+        write-behind recorder) need to back a session whose id was pre-minted
+        elsewhere — e.g. for an in-flight Langfuse trace opened before any store
+        write. Without a record, ``list_sessions`` (and every read surface built
+        on it) never sees the id, so the transcript is an orphan: events exist,
+        the session is invisible.
+
+        This is the seam that closes that gap. It is idempotent — calling it on
+        an existing session is a no-op (never resets created_at / archived state).
+        ``create_session`` is implemented on top of it (mint id → materialise).
+        """
+
+    @abc.abstractmethod
     def append_event(self, session_id: str, event: Event) -> None:
         """Append a single event record to the session transcript."""
 
@@ -137,6 +153,27 @@ class SessionStoreBase(abc.ABC):
             get_session_event_bus().publish(session_id, record)
         except Exception:
             logging.warning("Session event bus publish failed.", exc_info=True)
+
+    @staticmethod
+    def merge_context_events(events: list[EventRecord]) -> dict[str, object]:
+        """Reduce a transcript to its current context (most-recent payload wins).
+
+        One reducer shared by :meth:`latest_context` (the trace-provenance path)
+        and ``SessionRuntime.summarize_session`` (the origin/recovery path) so the
+        rule for "what context is this session running under" lives in exactly one
+        place. ``context`` events are sparse, so a full scan is cheap.
+        """
+        merged: dict[str, object] = {}
+        for event in events:
+            if event.get("type") == "context":
+                payload = event.get("payload")
+                if isinstance(payload, dict):
+                    merged.update(payload)
+        return merged
+
+    def latest_context(self, session_id: str) -> dict[str, object]:
+        """Return the session's merged context (most-recent context event wins)."""
+        return self.merge_context_events(self.load_transcript(session_id))
 
     def fork_session(self, source_session_id: str) -> str:
         """Create a new session by copying events, summary, and title from another."""
@@ -260,9 +297,17 @@ class SessionStore(SessionStoreBase):
     def create_session(self) -> str:
         """Create a new session directory and return its identifier."""
         session_id = uuid.uuid4().hex
-        paths = self._paths(session_id)
-        os.makedirs(paths.session_dir, exist_ok=True)
+        self.ensure_session(session_id)
         return session_id
+
+    def ensure_session(self, session_id: str) -> None:
+        """Idempotently create the session directory for a known id.
+
+        For the filesystem driver a session "record" IS its directory (that's
+        what :meth:`list_sessions` enumerates), so materialisation is a
+        ``makedirs`` — ``exist_ok=True`` makes it a safe no-op on replay.
+        """
+        os.makedirs(self._paths(session_id).session_dir, exist_ok=True)
 
     def _paths(self, session_id: str) -> SessionPaths:
         """Build filesystem paths for a session."""

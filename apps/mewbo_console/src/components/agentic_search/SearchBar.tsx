@@ -1,31 +1,103 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
-  ArrowUp,
   Check,
   ChevronDown,
   Clock,
-  Maximize2,
-  Mic,
+  Gauge,
   Plus,
   Search,
   SlidersHorizontal,
 } from "lucide-react"
 import { Command as CmdK } from "cmdk"
 import {
-  CommandEmpty,
   CommandGroup,
   CommandItem,
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import {
+  ComposerSendButton,
+  ComposerShell,
+  composerSurface,
+  composerSurfaceData,
+} from "@/components/ui/composer-shell"
 import { cn } from "@/lib/utils"
-import type { SourceCatalogEntry, Workspace } from "../../types/agenticSearch"
+import { RelativeTime } from "../wiki/relativeTime"
+import type { SearchTier, SourceCatalogEntry, Workspace } from "../../types/agenticSearch"
 import { SrcAvatar } from "./SrcAvatar"
+
+// Tier = one budget knob (decomposition depth + probe fan-out) — see
+// docs/features-search.md "Search tiers". Default is auto.
+const TIERS: { id: SearchTier; name: string; hint: string }[] = [
+  { id: "fast", name: "Fast", hint: "quick lookups" },
+  { id: "auto", name: "Auto", hint: "balanced (default)" },
+  { id: "deep", name: "Deep", hint: "exhaustive research" },
+]
+
+/** Fast/Auto/Deep selector — same pill language as `WorkspacePill`. */
+function TierPill({
+  tier,
+  onChange,
+  inline,
+}: {
+  tier: SearchTier
+  onChange: (tier: SearchTier) => void
+  inline?: boolean
+}) {
+  const current = TIERS.find((t) => t.id === tier) ?? TIERS[1]
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          title="Search tier"
+          aria-label="Search tier"
+          className={cn(
+            "inline-flex items-center gap-1.5 transition-colors flex-none rounded-md font-medium",
+            inline
+              ? "h-[30px] px-2.5 text-[12.5px] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))]"
+              : "h-8 px-2.5 text-sm hover:bg-[hsl(var(--accent))]"
+          )}
+        >
+          <Gauge className="h-3 w-3 opacity-70" />
+          <span>{current.name}</span>
+          <ChevronDown className="h-3 w-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56 shadow-[var(--elev-3)]">
+        <DropdownMenuRadioGroup
+          value={tier}
+          onValueChange={(v) => onChange(v as SearchTier)}
+        >
+          {/* Uniform-height rows: the radio indicator owns the reserved left
+              slot (pl-8 from the primitive); the name fills, and the prose
+              hint is a consistent right column — NOT mono (it's prose, not
+              data), so the rows read evenly sized regardless of hint length. */}
+          {TIERS.map((t) => (
+            <DropdownMenuRadioItem key={t.id} value={t.id} className="h-8">
+              <span className="font-medium">{t.name}</span>
+              <span className="ml-auto pl-3 text-xs text-[hsl(var(--muted-foreground))]">
+                {t.hint}
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 /**
  * Workspace selector. Two visual modes — chip (default) for the compact
@@ -115,17 +187,26 @@ interface SearchBarProps {
   value: string
   onChange: (value: string) => void
   onSubmit: (value: string) => void
+  /** Replay a stored run by id (GET snapshot) — past-query suggestions use this
+   *  instead of re-running. Optional so legacy call sites stay valid; when
+   *  absent a past-query item falls back to pre-filling a fresh run. */
+  onReplay?: (runId: string) => void
   workspace: Workspace
   workspaces: Workspace[]
   onPickWorkspace: (workspace: Workspace) => void
   onNewWorkspace: () => void
   autoFocus?: boolean
   compact?: boolean
+  /** A run submission is in flight (mutation pending) — submit disables. */
+  submitting?: boolean
   /** "hero" → two-row 96px bar matching the task-landing rhythm. */
   variant?: "hero"
   /** Hero footer Configure pill — shows up to 4 source avatars + sliders icon. */
   sources?: SourceCatalogEntry[]
   onOpenConfig?: (workspace: Workspace) => void
+  /** Fast/Auto/Deep budget knob — rendered when both props are provided. */
+  tier?: SearchTier
+  onTierChange?: (tier: SearchTier) => void
 }
 
 /**
@@ -138,24 +219,46 @@ export function SearchBar({
   value,
   onChange,
   onSubmit,
+  onReplay,
   workspace,
   workspaces,
   onPickWorkspace,
   onNewWorkspace,
   autoFocus = false,
   compact = false,
+  submitting = false,
   variant,
   sources = [],
   onOpenConfig,
+  tier,
+  onTierChange,
 }: SearchBarProps) {
   const isHero = variant === "hero"
   const [acOpen, setAcOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  // The mount-time `autoFocus` focus must NOT pop the suggestions open — the
+  // dropdown opens on a genuine user focus/typing gesture only (#82). We
+  // suppress the open-on-focus for exactly the one programmatic focus call.
+  const suppressFocusOpenRef = useRef(false)
 
   useEffect(() => {
-    if (autoFocus) inputRef.current?.focus()
+    if (autoFocus) {
+      suppressFocusOpenRef.current = true
+      inputRef.current?.focus()
+    }
   }, [autoFocus])
+
+  // Open the suggestions when the input takes focus — but skip the single
+  // programmatic focus fired by `autoFocus` on mount (which would otherwise
+  // render `combobox [expanded]` before any interaction).
+  const handleFocus = () => {
+    if (suppressFocusOpenRef.current) {
+      suppressFocusOpenRef.current = false
+      return
+    }
+    setAcOpen(true)
+  }
 
   // Close autocomplete on outside click. cmdk's Command doesn't ship a
   // controlled-open story for an external dropdown, so this thin doc
@@ -184,7 +287,7 @@ export function SearchBar({
 
   const submit = (override?: string) => {
     const q = (override ?? value).trim()
-    if (!q) return
+    if (!q || submitting) return
     setAcOpen(false)
     onSubmit(q)
   }
@@ -192,33 +295,61 @@ export function SearchBar({
   const hasContent =
     filtered.length > 0 || (!!value.trim() && filtered.length === 0) || otherWorkspaces.length > 0
 
+  // Suggestions dropdown — a Google-suggest-style extension of the composer
+  // surface. It anchors tight to the bar (mt-1, same border-strong + radius
+  // family + elev-3) and pans out from beneath it via the `.composer-suggest`
+  // origin-top entrance (index.css, reduced-motion safe). One typographic
+  // scale: group headings (cmdk `text-xs` muted), item label (text-sm), and a
+  // consistent right meta column that keeps `font-mono` ONLY on data
+  // (counts/times). Icons are uniform 14px (`[&_svg]:size-3.5`) at one opacity.
   const dropdown = acOpen && hasContent && (
     <div
-      className="absolute left-0 right-0 top-full mt-2 z-40 rounded-xl border border-[hsl(var(--border-strong))] bg-[hsl(var(--popover))] shadow-[var(--elev-3)] overflow-hidden"
+      className="composer-suggest absolute left-0 right-0 top-full mt-1 z-40 rounded-xl border border-[hsl(var(--border-strong))] bg-[hsl(var(--popover))] shadow-[var(--elev-3)] overflow-hidden"
       onMouseDown={(e) => e.preventDefault()}
     >
-      <CommandList>
+      <CommandList className="[&_[cmdk-item]_svg]:size-3.5">
         {filtered.length === 0 && !!value.trim() && (
-          <CommandEmpty className="py-3 px-3 text-sm">
-            <span className="inline-flex items-center gap-2">
-              <Search className="h-3.5 w-3.5 opacity-60" />
-              Search "{value}" in <b>{workspace.name}</b>
-            </span>
-          </CommandEmpty>
+          // Empty "search this" row — same icon size/opacity + gap rhythm as
+          // the item rows so it reads as a peer, not a one-off.
+          <CommandGroup heading={workspace.name}>
+            <CommandItem
+              value={`__search__${value}`}
+              onSelect={() => submit(value)}
+              className="gap-2.5"
+            >
+              <Search className="opacity-60" />
+              <span className="flex-1 truncate">
+                Search <span className="text-[hsl(var(--foreground))] font-medium">"{value}"</span>
+              </span>
+            </CommandItem>
+          </CommandGroup>
         )}
         {filtered.length > 0 && (
           <CommandGroup heading={`Recent in ${workspace.name}`}>
             {filtered.map((p) => (
+              // A recent-query suggestion REPLAYS its stored run (GET snapshot)
+              // when it has a run_id + a replay handler — never a fresh POST.
+              // Falls back to pre-filling a new run for legacy entries.
               <CommandItem
                 key={p.q}
                 value={p.q}
-                onSelect={() => submit(p.q)}
-                className="flex items-center gap-2"
+                onSelect={() => {
+                  if (p.run_id && onReplay) {
+                    setAcOpen(false)
+                    onReplay(p.run_id)
+                  } else {
+                    submit(p.q)
+                  }
+                }}
+                className="gap-2.5"
               >
-                <Clock className="h-3.5 w-3.5 opacity-60" />
+                <Clock className="opacity-60" />
                 <span className="flex-1 truncate">{p.q}</span>
-                <span className="text-[11px] font-mono text-[hsl(var(--muted-foreground))]">
-                  {p.results} · {p.when}
+                <span className="flex-none pl-3 text-[11px] font-mono tabular-nums text-[hsl(var(--muted-foreground))]">
+                  {/* Data right-column — mono is meaningful here (count · time).
+                      Relative label computed FE-side from the ISO field; the
+                      server-formatted `when` only covers un-migrated rows. */}
+                  {p.results} · {p.ran_at ? RelativeTime.format(p.ran_at) : p.when}
                 </span>
               </CommandItem>
             ))}
@@ -236,10 +367,15 @@ export function SearchBar({
                     setAcOpen(false)
                     onPickWorkspace(w)
                   }}
+                  className="gap-2.5"
                 >
-                  <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--primary))] mr-2" />
+                  {/* Workspace dot occupies the same 14px icon slot as the
+                      Clock/Search glyphs so the gap rhythm stays uniform. */}
+                  <span className="flex h-3.5 w-3.5 items-center justify-center">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--primary))]" />
+                  </span>
                   <span className="flex-1 truncate">{w.name}</span>
-                  <span className="text-[11px] font-mono text-[hsl(var(--muted-foreground))]">
+                  <span className="flex-none pl-3 text-[11px] font-mono tabular-nums text-[hsl(var(--muted-foreground))]">
                     {w.sources.length} sources
                   </span>
                 </CommandItem>
@@ -257,37 +393,32 @@ export function SearchBar({
       .filter((s): s is SourceCatalogEntry => Boolean(s))
       .slice(0, 4)
     return (
-      <div ref={wrapRef} className="relative w-full max-w-[720px] mx-auto">
-        <CmdK
-          shouldFilter={false}
-          loop
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              if (!acOpen || filtered.length === 0) {
-                e.preventDefault()
-                submit()
-              }
-            } else if (e.key === "Escape") {
-              setAcOpen(false)
+      <CmdK
+        shouldFilter={false}
+        loop
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            if (!acOpen || filtered.length === 0) {
+              e.preventDefault()
+              submit()
             }
-          }}
-          className="block"
-        >
-          <div
-            className={cn(
-              "relative block bg-[hsl(var(--card))] border border-[hsl(var(--border-strong))] rounded-2xl px-3.5 pt-3.5 pb-2.5 min-h-[96px]",
-              "shadow-[var(--elev-2)] transition-shadow",
-              "focus-within:shadow-[var(--elev-3),_0_0_0_4px_hsl(var(--ring)/0.1)] focus-within:border-[hsl(var(--ring)/0.55)]"
-            )}
-          >
-            <button
-              type="button"
-              tabIndex={-1}
-              aria-label="Expand"
-              className="absolute top-2.5 right-3 h-6 w-6 rounded-md inline-flex items-center justify-center text-[hsl(var(--muted-foreground))] opacity-60 hover:opacity-100 hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
-            >
-              <Maximize2 className="h-3.5 w-3.5" />
-            </button>
+          } else if (e.key === "Escape") {
+            setAcOpen(false)
+          }
+        }}
+        className="block w-full max-w-[720px] mx-auto"
+      >
+        <ComposerShell
+          wrapRef={wrapRef}
+          surface={{ radius: "rounded-2xl", elevation: "elev-2", halo: "strong" }}
+          bodyClassName="relative px-3.5 pt-3.5 pb-2.5 min-h-[96px]"
+          top={
+            // No expand affordance here: cmdk's `Command.Input` is a
+            // single-line <input> with no multiline mode, so a faithful
+            // "expand to a textarea" toggle would mean swapping the input
+            // element + re-deriving Enter/newline/height handling (>60 LOC of
+            // fiddly state). YAGNI — the hero box is a single-line natural-
+            // language prompt; a broken Maximize button was worse than none.
             <CmdK.Input
               ref={inputRef}
               value={value}
@@ -295,72 +426,56 @@ export function SearchBar({
                 onChange(v)
                 setAcOpen(true)
               }}
-              onFocus={() => setAcOpen(true)}
+              onFocus={handleFocus}
               placeholder="Ask or search the workspace…"
-              className="block w-full bg-transparent border-0 outline-none px-1 pb-3 pr-10 text-base text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
+              className="block w-full bg-transparent border-0 outline-none px-1 pb-3 text-base text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
             />
-            <div className="flex items-center justify-between gap-2">
-              <div className="inline-flex items-center gap-1">
+          }
+          toolbarLeft={
+            <>
+              {/* No Attach/Voice affordances: like the removed Expand button,
+                  a control that does nothing is worse than none. Re-add only
+                  alongside a real implementation. */}
+              <WorkspacePill
+                workspace={workspace}
+                workspaces={workspaces}
+                onPick={onPickWorkspace}
+                onNew={onNewWorkspace}
+                inline
+              />
+              {tier && onTierChange && (
+                <TierPill tier={tier} onChange={onTierChange} inline />
+              )}
+              {onOpenConfig && wsSourceObjs.length > 0 && (
                 <button
                   type="button"
-                  tabIndex={-1}
-                  aria-label="Attach"
-                  className="h-[30px] w-[30px] rounded-md inline-flex items-center justify-center text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
+                  onClick={() => onOpenConfig(workspace)}
+                  title="Configure workspace sources"
+                  className="hidden sm:inline-flex items-center gap-2 h-[30px] px-2.5 rounded-md text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
                 >
-                  <Plus className="h-4 w-4" />
+                  <span className="inline-flex gap-1">
+                    {wsSourceObjs.map((s) => (
+                      <SrcAvatar key={s.id} source={s} size={16} />
+                    ))}
+                  </span>
+                  <SlidersHorizontal className="h-3 w-3" />
                 </button>
-                <WorkspacePill
-                  workspace={workspace}
-                  workspaces={workspaces}
-                  onPick={onPickWorkspace}
-                  onNew={onNewWorkspace}
-                  inline
-                />
-                {onOpenConfig && wsSourceObjs.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => onOpenConfig(workspace)}
-                    title="Configure workspace sources"
-                    className="hidden sm:inline-flex items-center gap-2 h-[30px] px-2.5 rounded-md text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
-                  >
-                    <span className="inline-flex gap-1">
-                      {wsSourceObjs.map((s) => (
-                        <SrcAvatar key={s.id} source={s} size={16} />
-                      ))}
-                    </span>
-                    <SlidersHorizontal className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-              <div className="inline-flex items-center gap-1">
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  aria-label="Voice"
-                  className="h-[30px] w-[30px] rounded-md inline-flex items-center justify-center text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
-                >
-                  <Mic className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => submit()}
-                  disabled={!value.trim()}
-                  aria-label="Search"
-                  className={cn(
-                    "h-8 w-8 rounded-md inline-flex items-center justify-center transition-colors",
-                    value.trim()
-                      ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:brightness-110"
-                      : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] cursor-not-allowed"
-                  )}
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-          {dropdown}
-        </CmdK>
-      </div>
+              )}
+            </>
+          }
+          toolbarRight={
+            <ComposerSendButton
+              onClick={() => submit()}
+              submitting={submitting}
+              active={Boolean(value.trim())}
+              shape="square"
+              aria-label={submitting ? "Starting search…" : "Search"}
+              className="h-8 w-8 hover:brightness-110 hover:opacity-100"
+            />
+          }
+          popover={dropdown}
+        />
+      </CmdK>
     )
   }
 
@@ -388,11 +503,11 @@ export function SearchBar({
             // px-2 so the send button on the right has the same breathing
             // room as the workspace pill on the left, matching the button's
             // 8/9px top/bottom inset.
-            "flex items-center gap-1 px-2 rounded-full border bg-[hsl(var(--card))] transition-shadow",
-            "border-[hsl(var(--border-strong))] shadow-[var(--elev-1)]",
-            "focus-within:shadow-[var(--elev-2),_0_0_0_4px_hsl(var(--ring)/0.1)] focus-within:border-[hsl(var(--ring)/0.55)]",
+            "flex items-center gap-1 px-2",
+            composerSurface({ radius: "rounded-full", elevation: "elev-1", halo: "soft" }),
             compact ? "h-11" : "h-[54px]"
           )}
+          {...composerSurfaceData({ halo: "soft" })}
         >
           <WorkspacePill
             workspace={workspace}
@@ -400,6 +515,7 @@ export function SearchBar({
             onPick={onPickWorkspace}
             onNew={onNewWorkspace}
           />
+          {tier && onTierChange && <TierPill tier={tier} onChange={onTierChange} />}
           <span aria-hidden className="h-5 w-px bg-[hsl(var(--border))] mx-1" />
           <CmdK.Input
             ref={inputRef}
@@ -408,7 +524,7 @@ export function SearchBar({
               onChange(v)
               setAcOpen(true)
             }}
-            onFocus={() => setAcOpen(true)}
+            onFocus={handleFocus}
             placeholder={
               compact
                 ? `Search ${workspace.name.toLowerCase()}…`
@@ -419,25 +535,16 @@ export function SearchBar({
               compact ? "h-10 text-sm" : "h-12 text-base"
             )}
           />
-          <button
-            type="button"
+          {/* Smaller than the bar by ~16px so there's a visible inset on top,
+              bottom, AND right (matching the px-2 padding above). Square in
+              compact mode, round otherwise so it echoes the pill bar's curve. */}
+          <ComposerSendButton
             onClick={() => submit()}
-            disabled={!value.trim()}
-            aria-label="Search"
-            className={cn(
-              // Smaller than the bar by ~16px so there's a visible inset on
-              // top, bottom, AND right (matching the px-2 left/right padding
-              // above). Square in compact mode, round in hero so it echoes
-              // the pill bar's curve.
-              "inline-flex items-center justify-center transition-colors flex-none",
-              compact ? "h-7 w-7 rounded-md" : "h-9 w-9 rounded-full",
-              value.trim()
-                ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90"
-                : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] cursor-not-allowed"
-            )}
-          >
-            <ArrowUp className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
-          </button>
+            submitting={submitting}
+            active={Boolean(value.trim())}
+            shape={compact ? "square" : "round"}
+            aria-label={submitting ? "Starting search…" : "Search"}
+          />
         </div>
         {dropdown}
       </CmdK>

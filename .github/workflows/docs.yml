@@ -44,13 +44,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip uv
-          uv sync --group docs --extra ha
+          uv sync --group docs --extra ha --extra api
 
       - name: Prepare docs inputs
         run: |
           printf '{"commit":"%s"}\n' "$(git rev-parse --short HEAD)" > docs/build-info.json
           uv run python scripts/ci/generate_config_schema.py || true
           cp configs/app.schema.json docs/app.schema.json || true
+          # Refresh the REST API spec; the committed docs/openapi.json serves
+          # as fallback when the API app is not importable here.
+          uv run python scripts/ci/generate_openapi_spec.py || true
 
       # --- github.com: versioned GitHub Pages via mike ---
       - name: Configure git (mike)

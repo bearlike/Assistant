@@ -937,6 +937,75 @@
       "x-group": "server",
       "x-order": 3
     },
+    "ScgConfig": {
+      "additionalProperties": false,
+      "description": "Operator-facing knobs for the Source Capability Graph (agentic search).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Master switch for the SCG feature (source mapping and orchestrated agentic-search runs).",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "traversal": {
+          "$ref": "#/$defs/ScgTraversalConfig",
+          "description": "Traversal defaults (the per-run search tier)."
+        }
+      },
+      "title": "SCG",
+      "type": "object",
+      "x-group": "workspace",
+      "x-order": 3
+    },
+    "ScgTierModelsConfig": {
+      "additionalProperties": false,
+      "description": "Per-tier model mapping \u2014 the tier picks the brain, not just the budget.\n\nA tier maps to the LLM that drives the whole run (orchestrator session AND\nits probe sub-agents, which inherit the session model). An empty string\nfalls back to ``llm.default_model``. An explicit per-request ``model``\noverride (where the endpoint offers one) always wins over the tier map.",
+      "properties": {
+        "fast": {
+          "default": "openai/gpt-5.4-nano",
+          "description": "Model for `fast` tier runs (cheap, low-latency).",
+          "title": "Fast",
+          "type": "string"
+        },
+        "auto": {
+          "default": "openai/claude-sonnet-4-6",
+          "description": "Model for `auto` tier runs (balanced default).",
+          "title": "Auto",
+          "type": "string"
+        },
+        "deep": {
+          "default": "openai/gpt-5.5",
+          "description": "Model for `deep` tier runs (exhaustive research).",
+          "title": "Deep",
+          "type": "string"
+        }
+      },
+      "title": "Tier models",
+      "type": "object"
+    },
+    "ScgTraversalConfig": {
+      "additionalProperties": false,
+      "description": "Traversal defaults for SCG search (the per-run tier budget knob).",
+      "properties": {
+        "default_tier": {
+          "default": "auto",
+          "description": "Default search tier \u2014 one budget knob over decomposition depth and probe fan-out. Overridable per run.",
+          "enum": [
+            "fast",
+            "auto",
+            "deep"
+          ],
+          "title": "Default Tier",
+          "type": "string"
+        },
+        "tier_models": {
+          "$ref": "#/$defs/ScgTierModelsConfig",
+          "description": "Which LLM each search tier runs on (fast/auto/deep)."
+        }
+      },
+      "title": "Traversal",
+      "type": "object"
+    },
     "StorageConfig": {
       "description": "Session storage backend configuration.",
       "properties": {
@@ -1359,6 +1428,10 @@
     "wiki": {
       "$ref": "#/$defs/WikiConfig",
       "description": "Wiki subsystem defaults and embedding behavior."
+    },
+    "scg": {
+      "$ref": "#/$defs/ScgConfig",
+      "description": "Source Capability Graph feature gate and search-tier default."
     },
     "hooks": {
       "$ref": "#/$defs/HooksConfig",

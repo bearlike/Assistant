@@ -32,7 +32,7 @@ You are performing a thorough code review. Follow this checklist:
 
 | Key | Type | Required | Description |
 |---|---|---|---|
-| `name` | string | Yes | Lowercase, hyphens allowed, max 64 chars. Must match `^[a-z0-9]([a-z0-9\|-])*[a-z0-9]?$` |
+| `name` | string | Yes | Lowercase letters and digits, single hyphens only between them, max 64 characters. Must match `^[a-z0-9](?:[a-z0-9]\|-(?=[a-z0-9])){0,62}[a-z0-9]?$` |
 | `description` | string | Yes | Used for auto-invocation matching (max 1024 chars) |
 | `requires-capabilities` | string or list | No | Capability ids this skill needs; space-delimited string or YAML list. The skill is hidden from sessions that do not advertise all of them on `X-Mewbo-Capabilities`. See [Plugins & Marketplace → Capability gating](features-plugins.md#capability-gating). |
 | `allowed-tools` | string or list | No | Tool IDs the skill scopes to; space-delimited string or YAML list |

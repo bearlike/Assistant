@@ -25,7 +25,7 @@ CONF_TOP_K: str = "top_k"
 CONF_TOP_P: str = "top_p"
 CONF_PROMPT_SYSTEM: str = "prompt"
 
-DEFAULT_BASE_URL: str = "http://mewbo.server:5123"
+DEFAULT_BASE_URL: str = "http://mewbo.server:5125"
 DEFAULT_API_KEY: str = "msk-strong-password"
 DEFAULT_TIMEOUT: int = 60
 DEFAULT_MODEL: str = "llama2:latest"

@@ -22,6 +22,7 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 - **Plugin hooks** (`test_plugin_hooks.py`): hook format translation from plugin manifests to `HooksConfig`, matcher filtering.
 - **Plugin integration** (`test_plugin_integration.py`): end-to-end plugin loading into session init, component wiring (skills, hooks, agent definitions, MCP tools).
 - **Agent registry** (`test_agent_registry.py`): agent definition registry, markdown frontmatter parsing, `agent_type` lookup in `spawn_agent`.
+- **Agent pickup** (`apps/mewbo_api/tests/test_vcs_pickup.py` + `test_github_workflows.py`): vcs-pickup endpoint contract (tag continuity, worktree binding, steering enqueue, config-identity fallback) and the reply leg (completion hook context recovery, forge comment client request shape/truncation/token-less no-op) — stub by patching `vcs_pickup._service` attributes; one real-git test (bare origin + clone) exercises fetch→worktree→ff. Workflow contract: triggers/guards/payload of `.github/workflows/agent-pickup.yml`, incl. injection safety (event data only via `env:`, never inline `${{ github.event.* }}` in `run:`).
 
 ## Hidden dependencies / assumptions
 - Many tests rely on `monkeypatch` for env vars (LLM config, MCP config, log levels).
@@ -30,7 +31,9 @@ Scope: this file applies to the root `tests/` suite and shared test patterns.
 - Avoid pulling in real MCP servers or external HTTP.
 
 ## Pitfalls / gotchas
+- **Never run two pytest invocations concurrently** — suites share file-backed stores (session/project store under the same data root), so parallel runs cross-contaminate and produce one-off phantom failures that don't reproduce.
 - **Full-suite ordering failures = global-state leak.** A test that passes in isolation but fails under full-suite ordering has a leaked singleton (namespace, event loop, config). Route tests must NOT re-register a Flask-RESTX namespace on the shared backend app — `add_url_rule` after the app handled its first request raises (Flask setup frozen); rely on `backend.py`'s import-time wiring. Async unit tests use `asyncio.run` (fresh loop per call), never a shared `get_event_loop()` a prior test may have closed.
+- **Assert against the runtime the ROUTE holds, not `backend.runtime`.** `test_backend._reset_backend` rebinds `backend.runtime`/`backend.session_store` by **plain assignment** (no monkeypatch restore) → it leaks for the rest of the suite. A namespace captured its runtime at `init_*` time (e.g. `realtime.routes._runtime`), so the session a route persisted lives THERE, not in whatever `backend.runtime` now points at. Read the route module's own `_runtime` to verify a persisted side-effect. Corollary for write-behind routes: a test that asserts on the store must force the persist synchronous (patch `persist_async`→`persist`) so the daemon-thread write has landed before the assert.
 - Over-mocking hides real behavior. Mock only the LLM call boundary and tool execution boundary.
 - Schema mismatches must be exercised (string tool_input, dict tool_input, invalid schema, required fields).
 - Missing-tool tests should assert `last_error` and follow the same path as production.

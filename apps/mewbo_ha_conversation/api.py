@@ -139,6 +139,7 @@ class MewboApiClient:
             headers = {
                 "accept": "application/json",
                 "X-API-KEY": self._api_key,
+                "X-Mewbo-Surface": "home-assistant",
                 "Content-Type": "application/json",
             }
         async with async_timeout.timeout(self.timeout):

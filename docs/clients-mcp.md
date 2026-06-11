@@ -28,7 +28,7 @@ Every connection needs an API key that you issue from Mewbo:
 2. Create a key and label it (for example, the agent that will use it). **The key is shown once.** Copy it before leaving this page.
 3. Add it to your MCP client config as a `Bearer` token (see [Connect your client](#connect-your-client)).
 
-The same key authenticates both the REST API and the MCP server. It is one identity across two surfaces. The key stays valid until you revoke it from the same panel.
+The same key authenticates both the REST API and the MCP server. It is one identity across two surfaces. The key stays valid until you revoke it from the same panel. Calls that arrive through the MCP server are tagged with their originating surface, so the sessions they create show up as `surface:mcp` in Langfuse traces.
 
 | Token | Prefix | Use |
 |---|---|---|
@@ -71,7 +71,7 @@ The same key authenticates both the REST API and the MCP server. It is one ident
 
 | Tool | Description |
 |---|---|
-| **`list_search_workspaces`** | List your saved [Agentic Search](features-search.md) workspaces: id, name, connected sources, and recent query count. Pass the id or name to `search`. |
+| **`list_search_workspaces`** | List your saved [Agentic Search](features-search.md) workspaces: id, name, connected sources, and recent query count. Pass an optional `query` to narrow the listing; it matches a case-insensitive substring against name, description, and past-query text. Pass the id or name to `search`. |
 | **`search`** | Run an agentic search query across a workspace. Pass the workspace id or name and your question; get back a synthesised, cited answer with ranked source results. Optionally scope to a specific project or choose `detail="full"` for per-result snippets. If the run takes longer than the bounded wait, returns a `run_id` with `status: "running"`. Resume with `get_search_run`. |
 | **`get_search_run`** | Fetch the result of a prior search run by its `run_id`. Use this to resume a running search or to replay a past result. |
 
@@ -79,7 +79,7 @@ The same key authenticates both the REST API and the MCP server. It is one ident
 
 | Tool | Description |
 |---|---|
-| **`structured_query`** | Run a schema-constrained synthesis: describe what you want in plain English, pass a JSON Schema, and get back a validated object matching that schema. Optionally ground the session in a search workspace or enable specific tool integrations. Returns `{run_id, status, output}`. If the run takes longer than the bounded wait, resume with `get_structured_run`. See [Structured Outputs](features-structured-outputs.md) for the full feature. |
+| **`structured_query`** | Run a schema-constrained synthesis: describe what you want in plain English, pass a JSON Schema, and get back a validated object matching that schema. Optionally ground the session in a search workspace or enable specific tool integrations. When the workspace has a mapped Source Capability Graph, the run inherits graph-first grounding: it routes through the graph, probes each pathway, and the result carries provenance. Returns `{run_id, status, output}`. If the run takes longer than the bounded wait, resume with `get_structured_run`. See [Structured Outputs](features-structured-outputs.md) for the full feature. |
 | **`get_structured_run`** | Fetch a structured query run by `run_id`. Use it to resume a running query or replay a past result. |
 
 ### Discovery

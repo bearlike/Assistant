@@ -402,6 +402,9 @@ class _RunWithRedriveRuntime:
     def resolve_session(self, *, session_tag=None, session_id=None) -> str:
         return "sess-C"
 
+    def tag_session(self, session_id: str, tag: str) -> None:
+        """Stamp the structured provenance tag (#78); no-op store for this double."""
+
     def append_context_event(self, session_id: str, context: dict) -> None:
         self.context_events.append(context)
 

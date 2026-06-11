@@ -62,7 +62,7 @@ def test_structured_post_fast_completion(client, auth_headers):
                     "workspace": "wiki",
                     "tools": ["wiki_search_pages"],
                 },
-                headers=auth_headers,
+                headers={**auth_headers, "X-Mewbo-Surface": "mcp"},
             )
     assert r.status_code == 200
     body = r.get_json()
@@ -75,7 +75,120 @@ def test_structured_post_fast_completion(client, auth_headers):
     assert kwargs["schema"] == _SCHEMA
     assert kwargs["workspace"] == "wiki"
     assert kwargs["allowed_tools"] == ["wiki_search_pages"]
+    # Surface from X-Mewbo-Surface is forwarded so the run is tagged + traced
+    # as ``surface:mcp`` (covers the MCP ``structured_query`` tool path, #78).
+    assert kwargs["source_platform"] == "mcp"
     responder.start_async.assert_called_once_with("Who?")
+
+
+def test_structured_post_model_override_threaded_to_responder(client, auth_headers):
+    """An optional 'model' field is threaded into StructuredResponder.model_name."""
+    with patch("mewbo_api.structured.routes.StructuredResponder") as mock_cls:
+        mock_cls.return_value.start_async.return_value = "sess-m:r1"
+        with patch(
+            "mewbo_api.structured.routes._load_structured_output",
+            return_value={"name": "Ada"},
+        ):
+            r = client.post(
+                "/v1/structured",
+                json={
+                    "query": "Who?",
+                    "schema": _SCHEMA,
+                    "model": "openai/gpt-5.4-nano",
+                },
+                headers=auth_headers,
+            )
+    assert r.status_code == 200
+    _, kwargs = mock_cls.call_args
+    assert kwargs["model_name"] == "openai/gpt-5.4-nano"
+
+
+def test_structured_post_model_omitted_defaults_to_none(client, auth_headers):
+    """Omitting 'model' leaves model_name None → the configured default is used."""
+    with patch("mewbo_api.structured.routes.StructuredResponder") as mock_cls:
+        mock_cls.return_value.start_async.return_value = "sess-d:r1"
+        with patch(
+            "mewbo_api.structured.routes._load_structured_output",
+            return_value={"name": "Ada"},
+        ):
+            r = client.post(
+                "/v1/structured",
+                json={"query": "Who?", "schema": _SCHEMA},
+                headers=auth_headers,
+            )
+    assert r.status_code == 200
+    _, kwargs = mock_cls.call_args
+    assert kwargs["model_name"] is None
+
+
+def test_structured_post_non_string_model_ignored(client, auth_headers):
+    """A non-string 'model' is ignored (treated as omitted), matching the draft idiom."""
+    with patch("mewbo_api.structured.routes.StructuredResponder") as mock_cls:
+        mock_cls.return_value.start_async.return_value = "sess-n:r1"
+        with patch(
+            "mewbo_api.structured.routes._load_structured_output",
+            return_value={"name": "Ada"},
+        ):
+            r = client.post(
+                "/v1/structured",
+                json={"query": "Who?", "schema": _SCHEMA, "model": 123},
+                headers=auth_headers,
+            )
+    assert r.status_code == 200
+    _, kwargs = mock_cls.call_args
+    assert kwargs["model_name"] is None
+
+
+def test_structured_post_model_override_applied_to_graph_first_responder(client, auth_headers):
+    """The override is applied at the ONE route seam, covering the graph-first path.
+
+    ``_graph_first_responder`` returns a built (frozen) ``StructuredResponder``;
+    the route applies ``model`` via ``dataclasses.replace`` AFTER it returns
+    (yielding a NEW responder), so the agentic_search-owned builder is never
+    edited yet the responder the route actually drives honours the override.
+    """
+    from mewbo_core.structured_response import StructuredResponder
+
+    built = StructuredResponder(
+        runtime=MagicMock(),
+        schema=_SCHEMA,
+        workspace="search-ws",
+        model_name="builder-default",
+    )
+    # Capture the responder instance whose run is actually started — it is the
+    # post-replace copy, not ``built``. Patching the class method records ``self``.
+    driven: list[StructuredResponder] = []
+
+    def _capture_start(self, query):
+        driven.append(self)
+        return "sess-gf:r1"
+
+    with (
+        patch(
+            "mewbo_api.structured.routes.StructuredResource._graph_first_responder",
+            return_value=built,
+        ),
+        patch.object(StructuredResponder, "start_async", _capture_start),
+        patch(
+            "mewbo_api.structured.routes._load_structured_output",
+            return_value={"name": "Ada"},
+        ),
+    ):
+        r = client.post(
+            "/v1/structured",
+            json={
+                "query": "Who?",
+                "schema": _SCHEMA,
+                "workspace": "search-ws",
+                "model": "openai/gemini-3.1-flash-lite",
+            },
+            headers=auth_headers,
+        )
+    assert r.status_code == 200
+    # The responder the route drove carries the overridden model; the original
+    # builder output is left untouched (frozen-dataclass ``replace`` semantics).
+    assert driven and driven[0].model_name == "openai/gemini-3.1-flash-lite"
+    assert built.model_name == "builder-default"
 
 
 def test_structured_post_running_when_no_output_yet(client, auth_headers):
@@ -153,6 +266,44 @@ def test_structured_get_completed_returns_output(client, auth_headers):
     assert body["output"] == {"name": "Ada"}
     # session_id recovered by splitting on the FIRST colon.
     rt.session_store.load_transcript.assert_called_once_with("sess-abc")
+
+
+def test_structured_get_completed_carries_graph_provenance(client, auth_headers):
+    """A graph-first run's GET surfaces additive pathway/probe provenance (#77)."""
+    rt = MagicMock()
+    rt.session_store.list_sessions.return_value = ["sess-gf"]
+    rt.session_store.load_transcript.return_value = [
+        {"type": "tool_result", "payload": {"tool_id": "scg_route"}},
+        {"type": "tool_result", "payload": {"tool_id": "scg_route"}},
+        {"type": "sub_agent", "payload": {"agent_id": "p1", "action": "start"}},
+        {"type": "sub_agent", "payload": {"agent_id": "p1", "action": "stop",
+                                          "status": "completed"}},
+        {"type": "sub_agent", "payload": {"agent_id": "p2", "action": "stop",
+                                          "status": "no_data"}},
+        _event({"owner": "team-payments"}),
+    ]
+    rt.summarize_session.return_value = {"status": "completed"}
+    with patch("mewbo_api.structured.routes._runtime", rt):
+        r = client.get("/v1/structured/sess-gf:r1", headers=auth_headers)
+    body = r.get_json()
+    assert body["output"] == {"owner": "team-payments"}
+    prov = body["provenance"]
+    assert prov["recipes_routed"] == 2
+    assert prov["probes_run"] == 2
+    assert prov["probe_status"] == {"p1": "completed", "p2": "no_data"}
+    # ONE transcript read per GET (output + provenance share it).
+    rt.session_store.load_transcript.assert_called_once_with("sess-gf")
+
+
+def test_structured_get_plain_run_has_no_provenance(client, auth_headers):
+    """A plain (non-graph) run that fanned no probes carries no provenance key."""
+    rt = MagicMock()
+    rt.session_store.list_sessions.return_value = ["sess-abc"]
+    rt.session_store.load_transcript.return_value = [_event({"name": "Ada"})]
+    rt.summarize_session.return_value = {"status": "completed"}
+    with patch("mewbo_api.structured.routes._runtime", rt):
+        r = client.get("/v1/structured/sess-abc:r1", headers=auth_headers)
+    assert "provenance" not in r.get_json()
 
 
 def test_structured_get_latest_output_wins(client, auth_headers):

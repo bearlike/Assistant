@@ -498,6 +498,104 @@ class TestSessionCapabilities:
         caps = orch._session_capabilities(session_id)
         assert caps == ()
 
+    def test_runtime_provider_grants_capability_to_plain_session(self, tmp_path):
+        """#83-B: a registered runtime provider surfaces ``scg`` to a PLAIN session.
+
+        An ordinary session advertises NO capabilities, yet the single read-point
+        (`_session_capabilities`, consumed by every downstream gate) unions in the
+        provider's runtime grant — so the scg tools/AgentDefs scope in without the
+        client advertising ``scg``.
+        """
+        from mewbo_core.capabilities import (
+            register_session_capability_provider,
+            reset_session_capability_providers,
+        )
+
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+        reset_session_capability_providers()
+        try:
+            # No provider yet → plain session stays bare.
+            assert orch._session_capabilities(session_id) == ()
+            # Predicate holds → the provider grants scg.
+            register_session_capability_provider(
+                lambda adv: ("scg",) if "scg" not in adv else ()
+            )
+            assert "scg" in orch._session_capabilities(session_id)
+        finally:
+            reset_session_capability_providers()
+
+    def test_runtime_provider_withholds_when_predicate_false(self, tmp_path):
+        """A provider whose predicate is False grants nothing (disabled / empty graph)."""
+        from mewbo_core.capabilities import (
+            register_session_capability_provider,
+            reset_session_capability_providers,
+        )
+
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        store.append_event(
+            session_id,
+            {"type": "context", "payload": {"client_capabilities": ["wiki"]}},
+        )
+        reset_session_capability_providers()
+        try:
+            register_session_capability_provider(lambda _adv: ())  # predicate false
+            caps = orch._session_capabilities(session_id)
+            assert "scg" not in caps
+            assert "wiki" in caps  # advertised capability survives untouched
+        finally:
+            reset_session_capability_providers()
+
+    def test_runtime_granted_capability_lands_in_trace_metadata(self, tmp_path):
+        """#84: a RUNTIME-granted capability shows in the Langfuse trace facet.
+
+        The merged context carries only the advertised caps; ``run`` overlays the
+        augmented set (advertised ∪ provider grants) before deriving provenance,
+        so a session that never advertised ``scg`` but got it from the runtime
+        provider still surfaces ``scg`` in the trace's ``capabilities`` metadata —
+        otherwise the grant is live in the run yet invisible to a trace filter.
+        """
+        from mewbo_core.capabilities import (
+            register_session_capability_provider,
+            reset_session_capability_providers,
+        )
+
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+
+        captured: dict[str, object] = {}
+
+        def _capture(*_args, **kwargs):
+            captured.update(kwargs)
+            raise _StopRun()  # short-circuit before the real loop runs
+
+        reset_session_capability_providers()
+        try:
+            register_session_capability_provider(
+                lambda adv: ("scg",) if "scg" not in adv else ()
+            )
+            with patch(
+                "mewbo_core.orchestrator.langfuse_session_context",
+                side_effect=_capture,
+            ), patch.object(orch, "_session_store", store):
+                with pytest.raises(_StopRun):
+                    orch.run("deposit a bridge", session_id=session_id)
+        finally:
+            reset_session_capability_providers()
+
+        meta = captured.get("metadata") or {}
+        assert "scg" in str(meta.get("capabilities", ""))
+        # And the low-cardinality capabilities chip is NOT a tag (high-ish card,
+        # stays metadata-only) — the tag list carries origin/product/etc.
+        assert isinstance(captured.get("tags"), list)
+
+
+class _StopRun(Exception):
+    """Sentinel to short-circuit ``Orchestrator.run`` after provenance derive."""
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator: _resolve_mode

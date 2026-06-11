@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from mewbo_core.common import get_logger
-from mewbo_core.config import get_config
+from mewbo_core.config import get_config, get_config_value, get_version
 from mewbo_core.types import JsonValue
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -86,6 +86,46 @@ def build_langfuse_handler(
     except Exception as exc:  # pragma: no cover - defensive
         logging.warning("Langfuse initialization failed: {}", exc)
         return None
+
+
+def langfuse_invoke_config(
+    *,
+    user_id: str,
+    session_id: str,
+    trace_name: str,
+) -> dict[str, Any]:
+    """Build the LangChain ``invoke``/``astream`` ``config`` that exports a trace.
+
+    The "langfuse_metadata 3-line pattern" (see ``tool_use_loop``), extracted so
+    the no-loop synthesis primitives (``StructuredSynthesizer`` / ``DraftStreamer``)
+    export to Langfuse too. ``langfuse_session_context`` only *propagates
+    attributes* — it creates no observation, so a model call that doesn't ATTACH
+    the ``CallbackHandler`` produces zero exported spans (the #87 defect: realtime
+    synthesis traced nothing, ever). Attaching the handler is the seam that makes
+    the generation land in the session-grouped trace.
+
+    Returns a ``config`` dict carrying ``callbacks`` (+ ``metadata`` when the
+    handler exposes ``langfuse_metadata``), or ``{}`` when Langfuse is disabled /
+    unavailable — pass it straight to ``model.ainvoke(messages, config=cfg or None)``.
+    Cheap to call (no network, no flush) so it is safe on a latency-critical path;
+    the handler batches/exports asynchronously.
+
+    ``version`` / ``release`` are read from config here so callers stay 3 args.
+    """
+    handler = build_langfuse_handler(
+        user_id=user_id,
+        session_id=session_id,
+        trace_name=trace_name,
+        version=get_version(),
+        release=get_config_value("runtime", "envmode", default="Not Specified"),
+    )
+    if handler is None:
+        return {}
+    config: dict[str, Any] = {"callbacks": [handler]}
+    metadata = getattr(handler, "langfuse_metadata", None)
+    if isinstance(metadata, dict) and metadata:
+        config["metadata"] = metadata
+    return config
 
 
 def resolve_home_assistant_status() -> ComponentStatus:
@@ -198,13 +238,23 @@ def langfuse_session_context(
     user_id: str | None = None,
     invocation_id: str | None = None,
     source_platform: str | None = None,
+    tags: list[str] | None = None,
+    metadata: dict[str, str] | None = None,
 ) -> Iterator[None]:
     """Bind a Langfuse trace context to the current invocation.
 
     Each call gets a **unique trace** (via *invocation_id*) while
-    Langfuse groups traces under the same *session_id*.  Pass
-    *source_platform* (e.g. ``"cli"``, ``"nextcloud"``, ``"email"``)
-    so it propagates as a tag on every child observation.
+    Langfuse groups traces under the same *session_id*.
+
+    *tags* / *metadata* carry pre-derived trace provenance
+    (see ``session_provenance.TraceProvenance``) and are merged into the
+    propagated baseline so every child observation — including nested LangChain
+    CallbackHandler generations and ``langfuse_trace_span`` spans — is filterable
+    by product, workspace, project, repo, branch, surface, etc. This seam stays
+    taxonomy-free: it propagates whatever it is handed. When provenance is
+    supplied its ``surface:<…>`` tag supersedes the coarse
+    ``channel:<source_platform>`` fallback (kept only for callers that pass
+    *source_platform* alone).
     """
     trace_context = _build_langfuse_trace_context(session_id, invocation_id)
     token_ctx = _LANGFUSE_TRACE_CONTEXT.set(trace_context)
@@ -216,13 +266,17 @@ def langfuse_session_context(
     # tags automatically attach to every child observation (including
     # LangChain CallbackHandler generations).
     base_tags = ["mewbo"]
-    if source_platform:
+    base_metadata: dict[str, str] = {"sessionid": session_id[:12]}
+    if tags or metadata:
+        base_tags.extend(tags or [])
+        base_metadata.update(metadata or {})
+    elif source_platform:
         base_tags.append(f"channel:{source_platform}")
     propagate_cm = langfuse_propagate(
         session_id=session_id,
         user_id=resolved_user,
         tags=base_tags,
-        metadata={"sessionid": session_id[:12]},
+        metadata=base_metadata,
     )
     propagate_cm.__enter__()
     try:
@@ -378,6 +432,7 @@ __all__ = [
     "ComponentStatus",
     "build_langfuse_handler",
     "format_component_status",
+    "langfuse_invoke_config",
     "langfuse_propagate",
     "langfuse_session_context",
     "langfuse_trace_span",

@@ -13,9 +13,13 @@ the results are hashable and safely cachable.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from typing import Protocol, TypeVar
+
+from mewbo_core.common import get_logger
+
+logging = get_logger(name="core.capabilities")
 
 
 class _HasRequiresCapabilities(Protocol):
@@ -23,6 +27,57 @@ class _HasRequiresCapabilities(Protocol):
 
 
 _T = TypeVar("_T", bound=_HasRequiresCapabilities)
+
+# A runtime predicate that, given the capabilities a session ALREADY advertised,
+# returns extra capability ids to grant it (or ``()``). The signature is the
+# advertised tuple so a provider can no-op when its capability is already present.
+SessionCapabilityProvider = Callable[[tuple[str, ...]], Iterable[str]]
+
+# Down-only push seam (mirrors ``plugins.register_builtin_root`` /
+# ``scg.map_phase.MapPhaseSink``): an OPTIONAL capability library above core in
+# the DAG registers a provider so a capability can be granted by a RUNTIME
+# predicate (e.g. ``scg`` once the SCG is enabled AND a source is mapped),
+# without core ever importing up to evaluate that predicate. Empty by default —
+# a lean install grants nothing extra.
+_CAPABILITY_PROVIDERS: list[SessionCapabilityProvider] = []
+
+
+def register_session_capability_provider(provider: SessionCapabilityProvider) -> None:
+    """Register a runtime provider that may grant extra session capabilities.
+
+    Idempotent on identity and down-only (a library above core pushes here on
+    import). Called by :func:`augment_session_capabilities` per session-init, so
+    a freshly-mapped graph flips a live process without a restart.
+    """
+    if provider not in _CAPABILITY_PROVIDERS:
+        _CAPABILITY_PROVIDERS.append(provider)
+
+
+def reset_session_capability_providers() -> None:
+    """Drop all registered providers (test isolation seam)."""
+    _CAPABILITY_PROVIDERS.clear()
+
+
+def augment_session_capabilities(advertised: tuple[str, ...]) -> tuple[str, ...]:
+    """Union *advertised* with every registered provider's runtime grant.
+
+    Each provider is best-effort: a raising provider is logged and skipped so a
+    flaky predicate (an unreachable store) never breaks session init. Returns a
+    sorted, deduped tuple so the result stays hashable + cache-stable like
+    :func:`parse_capabilities`. A no-provider install returns *advertised*
+    unchanged.
+    """
+    if not _CAPABILITY_PROVIDERS:
+        return advertised
+    granted: set[str] = set(advertised)
+    for provider in _CAPABILITY_PROVIDERS:
+        try:
+            granted.update(str(c).strip() for c in provider(advertised) if str(c).strip())
+        except Exception as exc:  # noqa: BLE001 — a predicate must never break init
+            logging.warning(
+                "session capability provider failed: {}: {}", type(exc).__name__, exc
+            )
+    return tuple(sorted(granted))
 
 
 def parse_capabilities(raw: object) -> tuple[str, ...]:
@@ -77,4 +132,12 @@ def overlay_capabilities(spec: _T, extra: Iterable[str]) -> _T:
     return replace(spec, requires_capabilities=merged)  # type: ignore[type-var]
 
 
-__all__ = ["filter_by_capabilities", "overlay_capabilities", "parse_capabilities"]
+__all__ = [
+    "SessionCapabilityProvider",
+    "augment_session_capabilities",
+    "filter_by_capabilities",
+    "overlay_capabilities",
+    "parse_capabilities",
+    "register_session_capability_provider",
+    "reset_session_capability_providers",
+]

@@ -631,6 +631,7 @@ def _run_query(
                     mode=mode,
                     skill_instructions=skill_instructions,
                     session_step_budget=budget,
+                    source_platform="cli",
                 )
     else:
         hook_manager = _build_cli_hook_manager(console, tool_registry)
@@ -647,6 +648,7 @@ def _run_query(
             mode=mode,
             skill_instructions=skill_instructions,
             session_step_budget=budget,
+            source_platform="cli",
         )
 
     # Handle episodic plan approval — the run terminated because the model
@@ -695,6 +697,7 @@ def _run_query(
                 mode="act",
                 skill_instructions=skill_instructions,
                 session_step_budget=budget,
+                source_platform="cli",
             )
         else:
             runtime.reject_plan(state.session_id)

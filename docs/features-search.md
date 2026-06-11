@@ -14,6 +14,20 @@ A **workspace** is a named bundle of connected sources for one topic. *Engineeri
 
 Spin up a new workspace whenever you have a new question domain: name it, choose which MCP servers it can reach, and start asking.
 
+### Edit the purpose, re-index the graph
+
+Every workspace card carries an edit (pencil) button. It opens the workspace's name, its source selection, and a **Purpose & instructions** field. That text is not decoration. It codifies what the workspace's graph is for, and it seeds the enrichment step that runs when sources are mapped. Save a meaningful change (the purpose text, the description, or the source selection) and Mewbo re-maps and re-enriches the workspace's mapped sources in the background; the console confirms with a re-index toast. A name-only edit changes nothing in the graph and stays quiet.
+
+### See what a workspace knows
+
+Each card also has a graph button. It opens the workspace's capability graph in a dialog, served by `GET /api/agentic_search/workspaces/<id>/graph`. The view is layered, with a toggle per layer:
+
+- **Schema**: capability, entity-type, and field nodes from the workspace's mapped sources.
+- **Memory**: the learned connector notes deposited by past runs.
+- **Entity**: abstract concepts resolved across sources.
+
+Sources you enabled but have not yet mapped appear as ghost nodes with a hint to map them, so a half-configured workspace is visible at a glance instead of silently smaller.
+
 ---
 
 ## One question, parallel probe agents
@@ -45,7 +59,7 @@ flowchart LR
 
 ### What the graph contains
 
-The SCG has five node types and eight edge types.
+The SCG has five node types and six edge types.
 
 **Nodes:**
 
@@ -115,6 +129,12 @@ Each RouteRecipe becomes the brief for one probe agent. The probe is granted onl
 > [!NOTE] Scale path
 > The current brute-force cosine pass is designed with a documented upgrade seam to Personalised PageRank at scale. The calling interface does not change; only the ranking kernel is swapped in.
 
+### Reading the graph directly: `scg_observe`
+
+`scg_route` ranks entry points. `scg_observe` lets the agent walk from them. Given one or more node references, it returns each node's typed neighbourhood: its edges with kind, direction, and weight, compact neighbour cards, the route recipes that pass through it, and any learned memory notes anchored to it. The typed edges (`SUPPORTS_QUERY`, `PRODUCES`, `CONSUMES`, `RESOLVES_TO`) carry the routing meaning, so deciding where to step next is the agent's own reasoning, not a second ranking engine.
+
+Large nodes answer in two stages. An unfiltered read of a high-degree node returns a survey first: the distinct edge and neighbour kinds with counts. The agent then re-calls with an `edge_kinds` filter for the instances it actually wants. Observation is read-only and scope-filtered. A workspace-bound agent never observes a hop into a source the workspace did not enable, and because it can't change anything, several nodes can be observed in parallel.
+
 ### Cross-source type alignment
 
 At map time, `TypeAligner` compares entity-type nodes across sources and emits weighted `RESOLVES_TO` edges. Alignment is heuristic-first, LLM-assisted only in the ambiguous band:
@@ -155,17 +175,29 @@ Before each query, the top-k relevant memory notes are retrieved via vector sear
 
 ---
 
+## The graph follows you into ordinary chat
+
+The SCG is not search-only. Once `scg.enabled` is on and at least one source is mapped, every ordinary Mewbo session (CLI, console chat, channels) gets three graph tools: `scg_route`, `scg_observe`, and `scg_memory`. There is nothing extra to configure. Mapping the first source flips a live process; no restart is needed.
+
+The intended loop is **route, observe, act, deposit**. The agent routes to find entry pathways, observes the typed hops around them, acts with the connector tools it already has, then deposits what it learned through `scg_memory` so the next task starts ahead. Each deposit carries a polarity: `positive` boosts that pathway in future routing, `dead_end` damps it.
+
+Scope differs by session kind. A workspace-bound search run reads only its workspace's sources. A plain chat session is unscoped and reads the whole graph. Deposits are attributed accordingly: workspace runs label theirs `ws:<id>`, plain sessions label theirs `session:<id>`, and both feed the same shared memory layer every future run draws on.
+
+---
+
 ## Search tiers
 
-Every search runs at one of three tiers, selectable per query:
+Every search runs at one of three tiers, selectable per query. The tier is the run's single knob. It sets the decomposition budget, the probe fan-out, and the model the run thinks with.
 
-| Tier | Sub-query decomposition | Probe fan-out | Best for |
-|---|---|---|---|
-| **Fast** | 1 | 2 | Quick lookups; known-answer retrieval |
-| **Auto** (default) | 2–3 | 3 | General multi-source questions |
-| **Deep** | 3–5 | 5 | Exhaustive research; cross-source synthesis |
+| Tier | Sub-query decomposition | Probe fan-out | Default model | Best for |
+|---|---|---|---|---|
+| **Fast** | 1 | 2 | `openai/gpt-5.4-nano` | Quick lookups; known-answer retrieval |
+| **Auto** (default) | 2–3 | 3 | `openai/claude-sonnet-4-6` | General multi-source questions |
+| **Deep** | 3–5 | 5 | `openai/gpt-5.5` | Exhaustive research; cross-source synthesis |
 
-Tiers control decomposition depth and probe fan-out only. There are no verification rounds and no consensus voting. Each probe agent queries its connector directly and returns what it finds. Connector returns are ground truth: if a pathway returns data, the answer is grounded in it; if it returns nothing, the pathway is marked as a miss in the trace.
+The model mapping lives at `scg.traversal.tier_models` (keys `fast`, `auto`, `deep`) and is editable in Settings like any other config key. Probe agents inherit the session model, so one tier choice moves the whole run, coordinator and probes alike. A blank mapping or an unrecognised tier falls back to `llm.default_model`, never an error. Where a request offers an explicit `model` override, it wins over the tier map.
+
+Tiers add no verification rounds and no consensus voting. Each probe agent queries its connector directly and returns what it finds. Connector returns are ground truth: if a pathway returns data, the answer is grounded in it; if it returns nothing, the pathway is marked as a miss in the trace.
 
 ---
 
@@ -192,6 +224,10 @@ Agentic Search is transparent by design. Alongside each answer:
 - **Related questions**: the obvious next questions, one click away.
 - **People**: who authored, merged, or reported the artefacts behind the answer, pulled straight from the sources.
 
+### Share a run with a link
+
+Every run has a stable, shareable URL: `/search?ws=<workspace>&run=<run>`. Opening it loads the saved run directly: the synthesis, results, and trace render from a single durable snapshot, then live updates attach if the run is still in flight. The link is deterministic and multi-user: it resolves the same run for anyone with access, survives a server restart, and re-opens to the exact answer (linked to its underlying session for auditing). A link to a run that no longer exists returns a clean "not found" rather than an error page.
+
 ---
 
 ## Programmatic access via MCP
@@ -200,7 +236,7 @@ Agentic Search is accessible through the [MCP server](clients-mcp.md), so extern
 
 | Tool | What it does |
 |---|---|
-| `list_search_workspaces` | List your saved workspaces. Returns each workspace's id, name, and connected sources. |
+| `list_search_workspaces` | List your saved workspaces. Returns each workspace's id, name, and connected sources. Pass an optional query string to filter by name, description, or past-query text. |
 | `search` | Run a query against a workspace and receive a cited answer. Pass the workspace id or name; optionally scope to a specific project. |
 | `get_search_run` | Fetch the result of a prior search run. Useful for long-running searches or replaying past results. |
 
@@ -214,6 +250,16 @@ Results come back at two detail tiers: **`answer`** (synthesis plus a compact re
 ## Availability
 
 Agentic Search lives in the **Mewbo Console**, reachable from the top navigation next to Tasks and Wiki. It reads the MCP servers you've already configured (the same connections used everywhere else in Mewbo) and groups them into workspaces.
+
+### Enabling search
+
+Orchestrated search ships disabled. To turn it on:
+
+1. Enable the **SCG** switch in Settings (the `scg.enabled` key).
+2. Open **Sources** on the Search landing page and **map** each source you want searchable. Mapping introspects the source's schema and builds its capability subgraph. Progress streams live and survives a page reload.
+3. Pick a **tier** (Fast / Auto / Deep) next to the search bar; the default comes from `scg.traversal.default_tier`.
+
+Until search is enabled and at least one source is mapped, queries run against bundled demo fixtures so you can explore the surface. The switch to real orchestrated runs takes effect on the next query, no restart required.
 
 > [!NOTE] Going deeper
 > Search reuses the same primitives as the rest of the engine. See [External Tools (MCP)](features-mcp.md) for how connected sources are configured, and [Sub-agents](features-agents.md) for the parallel fan-out and the hypervisor that bounds it.

@@ -49,14 +49,18 @@ class _FakeModel:
         self._chunks = chunks
         self.bind_tools_calls: list[Any] = []
         self.astream_messages: list[Any] = []
+        self.astream_config: Any = None
 
     def bind_tools(self, tools: list[Any], **kwargs: Any) -> _FakeModel:
         """Record the call so tests can assert it was never called."""
         self.bind_tools_calls.append(tools)
         return self
 
-    async def astream(self, messages: list[Any]) -> AsyncIterator[AIMessageChunk]:  # type: ignore[override]
+    async def astream(  # type: ignore[override]
+        self, messages: list[Any], config: Any = None
+    ) -> AsyncIterator[AIMessageChunk]:
         self.astream_messages = list(messages)
+        self.astream_config = config
         for chunk in self._chunks:
             yield chunk
 
@@ -261,6 +265,42 @@ class TestDraftStreamer:
             collected = self._run(_collect(streamer.astream("q")))
 
         assert collected == ["block1", "block2"]
+
+    def test_langfuse_callback_attached_to_astream(self):
+        """The streamed generation carries the Langfuse ``config`` so it EXPORTS (#87).
+
+        ``langfuse_session_context`` only PROPAGATES attributes; the streamed
+        generation must ATTACH the ``CallbackHandler`` or nothing exports. We stub
+        ``langfuse_invoke_config`` with a sentinel and assert ``astream`` got it.
+        """
+        sentinel = object()
+        fake_config = {"callbacks": [sentinel]}
+        chunks = _make_chunks("ok")
+        fake, patcher = _patch_build_chat_model(chunks)
+
+        streamer = DraftStreamer()
+        with patcher, patch(
+            "mewbo_core.draft_stream.langfuse_invoke_config", return_value=fake_config
+        ):
+            self._run(_collect(streamer.astream("q")))
+
+        assert fake.astream_config is fake_config, (
+            "DraftStreamer.astream must pass the langfuse invoke config (callbacks) "
+            f"to model.astream; got {fake.astream_config!r}"
+        )
+
+    def test_langfuse_disabled_astream_config_none(self):
+        """Langfuse off (``{}``) → astream config degrades to ``None`` (tool-light no-op)."""
+        chunks = _make_chunks("ok")
+        fake, patcher = _patch_build_chat_model(chunks)
+
+        streamer = DraftStreamer()
+        with patcher, patch(
+            "mewbo_core.draft_stream.langfuse_invoke_config", return_value={}
+        ):
+            self._run(_collect(streamer.astream("q")))
+
+        assert fake.astream_config is None
 
 
 # ---------------------------------------------------------------------------

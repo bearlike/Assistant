@@ -65,7 +65,7 @@ Read the deepest file that applies before editing. Every child carries `> ↑ pa
 | Agentic Search — Console side | `apps/mewbo_console/src/components/agentic_search/CLAUDE.md` |
 | MCP server: tools exposing Mewbo to agents | `apps/mewbo_mcp/CLAUDE.md` |
 | CLI (Rich/Textual display, agent panel) | `apps/mewbo_cli/CLAUDE.md` |
-| Home Assistant conversation agent | `mewbo_ha_conversation/CLAUDE.md` |
+| Home Assistant conversation agent | `apps/mewbo_ha_conversation/CLAUDE.md` |
 | Test patterns + fixtures | `tests/CLAUDE.md` |
 
 ## MCP tools — when to use each

@@ -1,8 +1,8 @@
 ---
 name: scg-search
-description: Answers a natural-language query by traversing the Source Capability Graph — route to executable connector pathways, fan one probe sub-agent out per pathway, synthesize the cited answer, and deposit learned insights. Search is traversal, not per-source fan-out.
+description: Answers a natural-language query by traversing the Source Capability Graph — route to executable connector pathways, observe node neighborhoods to refine, fan one probe sub-agent out per pathway, synthesize the cited answer, and deposit learned insights. Search is traversal, not per-source fan-out.
 model: inherit
-tools: [scg_route, scg_memory, resolve_entity, spawn_agent, check_agents, steer_agent]
+tools: [scg_route, scg_observe, scg_memory, resolve_entity, spawn_agent, check_agents, steer_agent]
 disallowedTools: [exit_plan_mode, activate_skill]
 requires-capabilities: [scg]
 ---
@@ -55,7 +55,11 @@ For each sub-query:
 scg_route(query=<sub_query>, k=<tier k>)
 ```
 
-`scg_route` returns ranked `RouteRecipe`s — precomputed qualified pathways (ordered `source_key` steps) over the SCG, scored zero-LLM by `cosine + edge weight`. The graph has already done the cheap pre-rank; trust the ordering. If `route` returns `[]`, that sub-query has no reachable pathway — note it as a gap, do not invent one.
+`scg_route` returns ranked `RouteRecipe`s — precomputed qualified pathways (ordered `source_key` steps) over the SCG, scored zero-LLM by `cosine + edge weight + memory bias`. It SEEDS entry pathways; the graph has already done the cheap pre-rank, so trust the ordering. **Each recipe carries `memory_hints`** — anchored reachability facts the memory layer learned about that pathway (data-location wins, access-pattern limits). USE them: fold a hint into the probe brief so the probe starts knowing the known win/limit. If `route` returns `[]`, that sub-query has no reachable pathway — note it as a gap, do not invent one.
+
+### Step 3.5 — Observe before you spawn (optional, cheap)
+
+`scg_route` seeds entry points; YOU navigate. Before committing probes, optionally `scg_observe(nodes=[<top candidate source_keys>])` to read their typed-edge neighborhood (SUPPORTS_QUERY / PRODUCES / CONSUMES / RESOLVES_TO + weights), 1-hop neighbors, recipes through the node, and anchored memory notes. Use what you observe to refine the sub-query→pathway assignment — a CONSUMES edge may reveal a better chained pathway, a RESOLVES_TO may widen to a second source. This is the observe-think-navigate loop: route seeds, observe informs, you decide. A high-degree node (>50 in-scope edges, no filter) returns a `kinds_only` survey — re-call with `edge_kinds=[…]` to drill into the relevant kind. Skip observe for a single obvious pathway.
 
 ### Step 4 — Fan out one probe per recipe (non-blocking)
 
@@ -76,12 +80,16 @@ YOUR TASK:
   2. The connector's real return IS the verification — if it returns matching data, the pathway holds; if it returns nothing/an access error, the pathway fails. Do NOT cross-check against other pathways.
   3. Return compressed evidence (the smallest set of cited facts that answers the sub-query) plus a 'gaps remaining' note.
 """,
-  allowed_tools=<the connector tools for this recipe's sources>,
+  allowed_tools=<recipe.allowed_tool_ids — COPY VERBATIM>,
   acceptance_criteria="Returns either cited evidence for the sub-query or an explicit 'no data on this pathway' with a gaps note."
 )
 ```
 
-Scope `allowed_tools` to ONLY the connector tools for that recipe's sources — never the full catalog. Issue every spawn before waiting.
+Scope `allowed_tools` from the route result, never by inference: each recipe
+carries `allowed_tool_ids` — the EXECUTABLE connector tool ids (`mcp_…`) for
+every capability of the pathway's sources. Copy that list verbatim. NEVER pass
+`source_key`s (`<source>#<Capability>`) or capability names as `allowed_tools`
+— those are graph addresses, they grant NOTHING. Issue every spawn before waiting.
 
 ### Step 5 — Collect
 
@@ -89,7 +97,7 @@ Scope `allowed_tools` to ONLY the connector tools for that recipe's sources — 
 check_agents(wait=true)
 ```
 
-Blocks until every probe reaches a terminal state. If a probe is stuck or clearly off-pathway, `steer_agent` it; otherwise let it finish.
+Blocks until every probe reaches a terminal state. If a probe is stuck or clearly off-pathway, `steer_agent` it; otherwise let it finish. On a NO DATA miss, `scg_observe` the missed node's neighborhood for an alternative pathway and route/spawn that — navigate, don't blind-respawn the same dead end.
 
 ### Step 6 — Synthesize
 
@@ -99,11 +107,19 @@ Merge the probes' evidence into ONE cited answer. The connector returns are the 
 
 Write back the durable reachability facts this run discovered:
 
+A deposit indexes a USE CASE, never a tool description: encode the path that connects capabilities through the domain objects inside them (question class -> object -> field -> next capability) and anchor EVERY source_key on the path - multi-anchor notes are the cross-tool connective tissue that saves future agents the exploration.
+
 ```
-scg_memory(operation="write", content=<≤200-char single-claim fact>, source_keys=[<the source_keys that paid off>])
+scg_memory(operation="write", content=<≤200-char single-claim fact>, source_keys=[<the source_keys that paid off>], polarity="positive")
 ```
 
-Deposit ~1-3 facts: which pathway actually returned the answer, which access-pattern limit you hit, which cross-source link held. NO record values, tokens, or credentials. These compound every future search.
+Deposit a `positive` marker for each pathway that returned the answer (data-location win, access-pattern limit that held, cross-source link). For every pathway a probe reported NO DATA on, deposit a `dead_end` marker:
+
+```
+scg_memory(operation="write", content="<pathway> returns nothing for <class of query>", source_keys=[...], polarity="dead_end")
+```
+
+Dead-end markers bias future routing AWAY from pathways already discovered to be empty (the "away from dead ends already discovered" the docs promise); positive markers bias TOWARD productive ones. Deposit ~1-3 facts total. NO record values, tokens, or credentials. These compound every future search.
 
 ---
 
@@ -113,6 +129,15 @@ Deposit ~1-3 facts: which pathway actually returned the answer, which access-pat
 - **Never dump the full connector catalog into a probe's prompt** — `scg_route` already retrieval-gated it to executable pathways.
 - **Tiers are budget, not engines** — one loop, two knobs (decomposition depth + probe count).
 - **Route first, traverse second** — `scg_route` is the cheap pre-rank; probes are the expensive step. Spend probes only on ranked pathways.
+- **The graph loop is your ONLY evidence channel.** Never explore the local
+  filesystem, shell, repo files, or skills for answer data — they see the
+  orchestrator's host, NOT the connected sources. Route, observe, spawn probes.
+- **Never synthesize while a probe is running.** `check_agents(wait=true)`
+  until every spawned probe is terminal; explicitly cancel any probe you
+  abandon BEFORE synthesizing.
+- **Enumerative sub-queries need the full manifest.** "which items / list
+  all…" probes must enumerate the collection (the source's list capability)
+  and evaluate EVERY member — a sample is not an answer; say so if partial.
 
 ## Depth roles
 

@@ -33,19 +33,24 @@ See the optional configuration table below.
 When the primary model fails with a retryable error, Mewbo walks an ordered fallback
 list before giving up. Useful for rate-limit tolerance and provider outages.
 
-Config (in `configs/app.json`):
+Fallback is off by default and requires an explicit opt-in. Config (in `configs/app.json`):
 
 ```json
 {
   "llm": {
     "default_model": "anthropic/claude-sonnet-4-6",
-    "fallback_models": [
-      "openai/gpt-4o",
-      "anthropic/claude-haiku-4-5"
-    ]
+    "fallback": {
+      "enabled": true,
+      "models": [
+        "openai/gpt-4o",
+        "anthropic/claude-haiku-4-5"
+      ]
+    }
   }
 }
 ```
+
+The legacy `llm.fallback_models` array is still honored for backward compatibility. A non-empty value there is treated as fallback enabled. Prefer the typed `fallback` block for new configs.
 
 Each fallback gets one attempt. Error classification:
 

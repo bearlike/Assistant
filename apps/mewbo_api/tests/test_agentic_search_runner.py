@@ -106,3 +106,75 @@ def test_record_persisted_completed_with_payload(store):
     assert persisted.payload.run_id == run.run_id
     assert persisted.payload.status == "completed"
     assert persisted.total_ms > 0
+
+
+def test_no_duplicate_result_events_in_log(store):
+    """Each result id appears exactly once in the run event log (issue #82)."""
+    run, ws = _seed_run(store, sources=["notion", "github", "drive", "linear", "filesystem"])
+    EchoSearchRunner().start(run, ws, store=store)
+
+    result_ids = [
+        (e.get("result") or {}).get("id")
+        for e in store.load_run_events(run.run_id)
+        if e.get("type") == "result"
+    ]
+    assert result_ids, "echo runner must emit result events"
+    assert len(result_ids) == len(set(result_ids)), (
+        f"duplicate result ids reached the log: {result_ids}"
+    )
+
+
+def test_result_append_is_idempotent_by_id(store):
+    """A re-appended result (same id) is a no-op — the dedup guard (issue #82).
+
+    Simulates the real-world double-projection paths the issue names — an SSE
+    replay+tail boundary, a re-drive, or a settle-time reconciliation re-emitting
+    a result that already landed. The store guard must collapse it so the event
+    log (which the SSE transport replays and the console reducer merges) stays
+    duplicate-free by construction. A *different* id still appends.
+    """
+    from mewbo_api.agentic_search import events
+    from mewbo_api.agentic_search.schemas import SearchResult
+
+    run, _ = _seed_run(store, sources=["notion"])
+    r = SearchResult(id="r1", source="notion", kind="docs", title="One")
+    first_idx = store.append_run_event(run.run_id, events.result(item=r))
+    # Re-append the SAME result id — must be a no-op returning the original idx.
+    again_idx = store.append_run_event(run.run_id, events.result(item=r))
+    assert again_idx == first_idx
+
+    logged = [
+        e for e in store.load_run_events(run.run_id) if e.get("type") == "result"
+    ]
+    assert len(logged) == 1, "the duplicate result must not be written a second time"
+
+    # A genuinely different result still appends past the guard.
+    r2 = SearchResult(id="r2", source="notion", kind="docs", title="Two")
+    store.append_run_event(run.run_id, events.result(item=r2))
+    ids = [
+        (e.get("result") or {}).get("id")
+        for e in store.load_run_events(run.run_id)
+        if e.get("type") == "result"
+    ]
+    assert ids == ["r1", "r2"]
+
+
+def test_non_result_events_are_not_deduped(store):
+    """Non-result events (agent_line, answer_delta) still append every time.
+
+    The guard is scoped to ``result`` events only — repeated trace/answer events
+    are legitimately distinct emissions and must not be collapsed.
+    """
+    from mewbo_api.agentic_search import events
+    from mewbo_api.agentic_search.schemas import TraceLine
+
+    run, _ = _seed_run(store, sources=["notion"])
+    line = TraceLine(t_ms=0, text="scanning")
+    store.append_run_event(run.run_id, events.agent_line(agent_id="a1", line=line))
+    store.append_run_event(run.run_id, events.agent_line(agent_id="a1", line=line))
+    store.append_run_event(run.run_id, events.answer_delta(text="hello "))
+    store.append_run_event(run.run_id, events.answer_delta(text="hello "))
+
+    logged = store.load_run_events(run.run_id)
+    assert sum(1 for e in logged if e.get("type") == "agent_line") == 2
+    assert sum(1 for e in logged if e.get("type") == "answer_delta") == 2

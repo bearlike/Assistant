@@ -42,7 +42,28 @@ if TYPE_CHECKING:
 
 
 class ScgMemoryArgs(BaseModel):
-    """Read or write a connector insight over the SCG learned layer."""
+    """Read or deposit a connector insight over the SCG's learned-memory layer.
+
+    This is the flywheel that makes the graph compound: after you ACT on what
+    `scg_route`/`scg_observe` surfaced, deposit what you LEARNED so the next task
+    (search, structured, or plain chat) inherits it. `operation="write"` records
+    one durable reachability fact anchored to `source_keys`, with `polarity`:
+    `positive` (this pathway produced results — future routing boosts it) or
+    `dead_end` (it returned nothing for this question — routing damps it).
+    `operation="read"` embeds a query and returns the top-k learned insights to
+    seed your planning. A note's job is to INDEX A USE CASE, never to describe
+    a tool: encode the path that connects capabilities through the domain
+    objects inside them ("for question class Q about object O, traverse
+    capability A's field f into capability B") and anchor it to EVERY
+    source_key on the path — multi-anchor notes are the graph's cross-tool
+    connective tissue, and each one pre-pays exploration so future agents
+    traverse instead of rediscovering (fewer tool calls, fewer tokens).
+    Deposit propositional facts about WHERE/HOW to reach data (a binding, a
+    constraint, a working parameter shape) — NEVER a record value, token, or
+    credential. A deposit from any session is attributed to the bound
+    workspace, or to the session when unscoped, and is visible to every future
+    task — so user-deployed tasks curate the shared graph toward their purpose.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -65,6 +86,14 @@ class ScgMemoryArgs(BaseModel):
         description=(
             "``write``: the ``<source_id>#<Qualified.Name>`` anchors the insight "
             "hangs off (must resolve to live SCG nodes to be retrievable)."
+        ),
+    )
+    polarity: Literal["positive", "dead_end"] = Field(
+        default="positive",
+        description=(
+            "``write``: ``positive`` (this pathway produced results — boost it) or "
+            "``dead_end`` (it returned nothing for this question — damp it). Biases "
+            "future routing."
         ),
     )
     k: int = Field(default=10, ge=1, le=50, description="``read``: max insights.")
@@ -116,7 +145,7 @@ class ScgMemoryTool(SessionToolBase):
             return self._unavailable(args.operation, str(exc))
         try:
             if args.operation == "write":
-                return self._write(bridge, CONNECTOR_SLUG, args)
+                return self._write(bridge, CONNECTOR_SLUG, args, self._session_id)
             return self._read(bridge, CONNECTOR_SLUG, args)
         except Exception as exc:  # noqa: BLE001 — surface as a structured error
             return err_result("internal", str(exc))
@@ -143,17 +172,37 @@ class ScgMemoryTool(SessionToolBase):
         return ok_result(payload)
 
     @staticmethod
-    def _write(bridge: ScgMemoryBridge, slug: str, args: ScgMemoryArgs) -> MockSpeaker:
+    def _write(
+        bridge: ScgMemoryBridge, slug: str, args: ScgMemoryArgs, session_id: str
+    ) -> MockSpeaker:
         """Deposit one connector insight anchored to ``source_keys``.
 
         ``write_insight`` returns an :class:`IngestResult` (one claim per atomic
         fact); report its ``ok`` flag + the per-claim ``{action, node_id}`` so the
         agent sees whether the fact was created/merged/rejected.
+
+        Polarity + attribution ride the deposit. ``polarity`` (positive vs
+        dead_end, #76) is read from the validated arg so a "this pathway returned
+        nothing" note damps future routing. Attribution is the AMBIENT
+        :class:`ScgScope` workspace when one is bound (a workspace-scoped run);
+        an UNSCOPED ordinary session (CLI/console/channel, #83-B) has no bound
+        workspace, so the deposit falls back to a ``session:<id>`` attribution
+        label — reusing the same ``labels`` mechanism as ``ws:<id>`` (NO new
+        field, NO partition; a cross-session read still surfaces the note). The
+        learned layer thus stays attributable to which task curated it regardless
+        of whether the session was workspace-bound.
         """
+        from mewbo_graph.scg.scope import ScgScope  # noqa: PLC0415
+
+        workspace = ScgScope.workspace()
+        attribution = None if workspace else [f"session:{session_id}"]
         result = bridge.write_insight(
             slug,
             args.content or "",
             source_keys=list(args.source_keys),
+            polarity=args.polarity,
+            workspace=workspace,
+            labels=attribution,
         )
         return ok_result(
             {

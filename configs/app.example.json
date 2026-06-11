@@ -147,27 +147,14 @@
     }
   },
   "wiki": {
-    "enabled": false,
-    "clone_dir": "",
-    "indexing": {
-      "default_depth": "comprehensive",
-      "default_language": "en",
-      "max_files": 10000,
-      "max_file_size_kb": 512,
-      "planner_model": "",
-      "page_model": "",
-      "max_parallel_pages": 5
-    },
+    "default_model": "",
+    "default_qa_model": "",
+    "default_depth": "comprehensive",
+    "default_language": "en",
     "embedding": {
       "enabled": true,
       "model": "openai/text-embedding-3-small",
-      "batch_size": 64,
-      "dimensions": 1536
-    },
-    "qa": {
-      "default_model": "",
-      "retrieval_k": 6,
-      "answer_ttl_days": 30
+      "batch_size": 64
     },
     "memory": {
       "enabled": true,
@@ -191,8 +178,13 @@
       "page_regen": 0.70,
       "new_page_min": 5,
       "require_scope_confirm": false
-    },
-    "grounder_paths": [".mewbo/wiki.json", ".devin/wiki.json"]
+    }
+  },
+  "scg": {
+    "enabled": false,
+    "traversal": {
+      "default_tier": "auto"
+    }
   },
   "projects": {}
 }
