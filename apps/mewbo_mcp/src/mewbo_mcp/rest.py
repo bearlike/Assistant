@@ -1,9 +1,11 @@
 """Thin async HTTP client for the Mewbo REST API.
 
-One small wrapper centralizes the token pass-through contract: every request
+One small wrapper centralizes the request-header contract: every request
 forwards the caller's token as ``X-API-Key`` (the header the REST API
-expects — see ``apps/mewbo_api/backend.py:_request_credential``). Tools never
-construct headers themselves; they go through :class:`RestClient`.
+expects — see ``apps/mewbo_api/backend.py:_request_credential``) and stamps the
+originating surface as ``X-Mewbo-Surface: mcp`` so MCP-invoked sessions are
+tagged ``surface:mcp``. Tools never construct headers themselves; they go
+through :class:`RestClient`.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ class RestError(Exception):
 
 
 class RestClient:
-    """Async client that injects the caller's token as ``X-API-Key``.
+    """Async client: injects the caller's token as ``X-API-Key`` + surface ``X-Mewbo-Surface: mcp``.
 
     Construct one per tool call with the authenticated token. The client is an
     async context manager so the underlying connection is always closed.
@@ -44,9 +46,14 @@ class RestClient:
         # risk is handled upstream by the lowered poll budgets (#41) — each is held
         # strictly under this read ceiling so the tool returns a resumable handle
         # before any transport/proxy timeout.
+        # ``X-Mewbo-Surface`` stamps the originating client surface onto every
+        # session run (the API defaults it to ``"api"``); sending ``"mcp"`` here
+        # tags MCP-invoked sessions — create/followup/structured_query — as
+        # ``surface:mcp`` in Langfuse. Set once alongside ``X-API-Key`` so it
+        # rides every request and tools never construct headers themselves.
         self._client = httpx.AsyncClient(
             base_url=base_url,
-            headers={"X-API-Key": token},
+            headers={"X-API-Key": token, "X-Mewbo-Surface": "mcp"},
             timeout=httpx.Timeout(timeout, connect=10.0),
             transport=transport,
         )

@@ -110,6 +110,25 @@ class AgenticSearchStoreBase(abc.ABC):
     def list_workspaces(self) -> list[Workspace]:
         """Return all workspaces in stable (created_at) order."""
 
+    def search_workspaces(self, query: str) -> list[Workspace]:
+        """Filter workspaces by case-insensitive substring match on *query*.
+
+        Matches over the name, the description, and each past-query's text.
+        Concrete on the base — one load-and-filter over ``list_workspaces`` so
+        both backends share the matching rule (fine at this scale). A blank
+        *query* returns everything.
+        """
+        needle = query.strip().lower()
+        if not needle:
+            return self.list_workspaces()
+        return [
+            ws
+            for ws in self.list_workspaces()
+            if needle in ws.name.lower()
+            or needle in ws.desc.lower()
+            or any(needle in pq.q.lower() for pq in ws.past_queries)
+        ]
+
     @abc.abstractmethod
     def get_workspace(self, workspace_id: str) -> Workspace | None:
         """Return one workspace, or None if absent."""
@@ -148,6 +167,28 @@ class AgenticSearchStoreBase(abc.ABC):
     def append_past_query(self, workspace_id: str, entry: PastQuery) -> None:
         """Prepend *entry* to the workspace history, capped at ``PAST_QUERY_CAP``."""
 
+    # -- Virtual MCP config (per workspace, secrets behind the encode seam) --
+
+    @abc.abstractmethod
+    def save_workspace_mcp_config(
+        self, workspace_id: str, blob: dict[str, Any]
+    ) -> None:
+        """Persist the encoded virtual-MCP-config *blob* for *workspace_id*.
+
+        The blob is opaque here (the :class:`WorkspaceMcpConfig` encode seam owns
+        its shape); the store only persists/returns it. Secret-bearing — kept in
+        its own isolated surface (mode-0600 JSON file / dedicated Mongo
+        collection), the :class:`CredentialStore` stance.
+        """
+
+    @abc.abstractmethod
+    def get_workspace_mcp_config(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the encoded virtual-MCP-config blob for *workspace_id*, or None."""
+
+    @abc.abstractmethod
+    def delete_workspace_mcp_config(self, workspace_id: str) -> bool:
+        """Delete *workspace_id*'s virtual MCP config; True if one existed."""
+
     @abc.abstractmethod
     def update_past_query(
         self, workspace_id: str, run_id: str, *, status: str, results: int
@@ -172,9 +213,49 @@ class AgenticSearchStoreBase(abc.ABC):
     def list_runs(self, workspace_id: str | None = None) -> list[RunRecord]:
         """Return runs, optionally filtered to *workspace_id*."""
 
-    @abc.abstractmethod
     def append_run_event(self, run_id: str, event: dict[str, Any]) -> int:
-        """Append *event* to the run event log; return the monotonic idx."""
+        """Append *event* to the run event log; return the monotonic idx.
+
+        Concrete on the base so BOTH backends share the one idempotency guard
+        (issue #82): a ``result`` event whose id is already present in the run's
+        event log is a no-op — the existing idx is returned, nothing is written.
+        This is the single honest seam where result de-duplication lives. The
+        run event log IS the normalized search-event stream the SSE transport
+        replays and the console reducer merges, so a re-drive, an SSE
+        replay+tail boundary, or a settle-time reconciliation can never land the
+        same result twice (the "duplicate result cards / linked hover" symptom).
+        Every other event type passes straight through to the raw primitive.
+        """
+        if event.get("type") == "result":
+            result_id = (event.get("result") or {}).get("id")
+            if result_id is not None:
+                existing = self._existing_result_idx(run_id, result_id)
+                if existing is not None:
+                    return existing
+        return self._append_run_event_raw(run_id, event)
+
+    def _existing_result_idx(self, run_id: str, result_id: str) -> int | None:
+        """Return the idx of an already-logged ``result`` with *result_id*, else None.
+
+        Reads the run's event log (the same source the SSE stream replays) and
+        scans for a ``result`` event carrying *result_id*. Concrete on the base
+        so the dedup rule never drifts between backends; the per-event-type read
+        keeps the scan cheap (result counts are small — a handful per run).
+        """
+        for ev in self.load_run_events(run_id):
+            if ev.get("type") == "result" and (ev.get("result") or {}).get("id") == result_id:
+                idx = ev.get("idx")
+                return int(idx) if idx is not None else None
+        return None
+
+    @abc.abstractmethod
+    def _append_run_event_raw(self, run_id: str, event: dict[str, Any]) -> int:
+        """Append *event* unconditionally; return the monotonic idx.
+
+        The per-backend write primitive. Callers use :meth:`append_run_event`
+        (which carries the result-dedup guard); this raw form is the override
+        point only.
+        """
 
     @abc.abstractmethod
     def load_run_events(
@@ -266,6 +347,19 @@ class JsonAgenticSearchStore(AgenticSearchStoreBase):
     def _map_job_events_path(self, job_id: str) -> Path:
         return self._map_job_dir(job_id) / "events.jsonl"
 
+    def _mcp_config_dir(self) -> Path:
+        """Directory holding per-workspace virtual MCP config (mode 0700)."""
+        d = self.root_dir / "mcp_configs"
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            d.chmod(0o700)
+        except OSError:  # pragma: no cover — best-effort on exotic filesystems
+            pass
+        return d
+
+    def _mcp_config_path(self, workspace_id: str) -> Path:
+        return self._mcp_config_dir() / f"{workspace_id}.json"
+
     def _save_ws(self, ws: Workspace) -> None:
         self._ws_path(ws.id).write_text(
             ws.model_dump_json(indent=2), encoding="utf-8"
@@ -353,6 +447,39 @@ class JsonAgenticSearchStore(AgenticSearchStoreBase):
             ]
             self._save_ws(ws.model_copy(update={"past_queries": history}))
 
+    # -- Virtual MCP config -------------------------------------------------
+
+    def save_workspace_mcp_config(
+        self, workspace_id: str, blob: dict[str, Any]
+    ) -> None:
+        """Persist the encoded virtual MCP config *blob* at mode 0600."""
+        path = self._mcp_config_path(workspace_id)
+        path.write_text(json.dumps(blob, indent=2), encoding="utf-8")
+        try:
+            path.chmod(0o600)
+        except OSError:  # pragma: no cover
+            pass
+
+    def get_workspace_mcp_config(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the encoded virtual MCP config blob for *workspace_id*, or None."""
+        path = self._mcp_config_path(workspace_id)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            logging.warning("Skipping malformed workspace MCP config at %s", path)
+            return None
+
+    def delete_workspace_mcp_config(self, workspace_id: str) -> bool:
+        """Delete *workspace_id*'s virtual MCP config; True if one existed."""
+        path = self._mcp_config_path(workspace_id)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
     # -- Runs ---------------------------------------------------------------
 
     def create_run(self, run: RunRecord) -> None:
@@ -439,7 +566,7 @@ class JsonAgenticSearchStore(AgenticSearchStoreBase):
                 out.append(rec)
         return out
 
-    def append_run_event(self, run_id: str, event: dict[str, Any]) -> int:
+    def _append_run_event_raw(self, run_id: str, event: dict[str, Any]) -> int:
         """Append *event* to the run event log; return the monotonic idx."""
         return self._append_jsonl_event(self._events_path(run_id), event)
 
@@ -526,6 +653,7 @@ class MongoAgenticSearchStore(AgenticSearchStoreBase):
     EVENTS = "agentic_search_run_events"
     MAP_JOBS = "agentic_search_map_jobs"
     MAP_JOB_EVENTS = "agentic_search_map_job_events"
+    MCP_CONFIGS = "agentic_search_workspace_mcp_configs"
 
     def __init__(
         self,
@@ -582,6 +710,12 @@ class MongoAgenticSearchStore(AgenticSearchStoreBase):
         self._col(self.MAP_JOB_EVENTS).create_index(
             [("job_id", ASCENDING), ("idx", ASCENDING)],
             name="ix_map_job_events_job_idx",
+            unique=True,
+            background=True,
+        )
+        self._col(self.MCP_CONFIGS).create_index(
+            [("workspace_id", ASCENDING)],
+            name="ix_ws_mcp_config_ws",
             unique=True,
             background=True,
         )
@@ -672,6 +806,35 @@ class MongoAgenticSearchStore(AgenticSearchStoreBase):
             {"$set": {"past_queries": [pq.model_dump() for pq in history]}},
         )
 
+    # -- Virtual MCP config -------------------------------------------------
+
+    def save_workspace_mcp_config(
+        self, workspace_id: str, blob: dict[str, Any]
+    ) -> None:
+        """Persist the encoded virtual MCP config *blob* (upsert by workspace_id)."""
+        self._col(self.MCP_CONFIGS).replace_one(
+            {"workspace_id": workspace_id},
+            {"workspace_id": workspace_id, "blob": blob},
+            upsert=True,
+        )
+
+    def get_workspace_mcp_config(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the encoded virtual MCP config blob for *workspace_id*, or None."""
+        doc = self._col(self.MCP_CONFIGS).find_one(
+            {"workspace_id": workspace_id}, {"_id": 0, "blob": 1}
+        )
+        blob = doc.get("blob") if doc else None
+        return blob if isinstance(blob, dict) else None
+
+    def delete_workspace_mcp_config(self, workspace_id: str) -> bool:
+        """Delete *workspace_id*'s virtual MCP config; True if one existed."""
+        return (
+            self._col(self.MCP_CONFIGS)
+            .delete_one({"workspace_id": workspace_id})
+            .deleted_count
+            > 0
+        )
+
     # -- Runs ---------------------------------------------------------------
 
     def create_run(self, run: RunRecord) -> None:
@@ -703,7 +866,7 @@ class MongoAgenticSearchStore(AgenticSearchStoreBase):
         cursor = self._col(self.RUNS).find(query, {"_id": 0}).sort("created_at", -1)
         return [RunRecord.model_validate(clean_for_model(d, RunRecord)) for d in cursor]
 
-    def append_run_event(self, run_id: str, event: dict[str, Any]) -> int:
+    def _append_run_event_raw(self, run_id: str, event: dict[str, Any]) -> int:
         """Append *event* to the run event log; return the monotonic idx."""
         idx = self._atomic_next_idx(self.RUNS, "run_id", run_id)
         self._col(self.EVENTS).insert_one({"run_id": run_id, "idx": idx, **event})

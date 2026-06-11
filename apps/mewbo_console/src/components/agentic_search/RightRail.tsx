@@ -1,4 +1,4 @@
-import { ArrowUpRight, ChevronRight, Layers, Sparkles, Users } from "lucide-react"
+import { ArrowUpRight, ChevronRight, Layers, Sparkles, Users, Workflow } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 import type {
@@ -19,6 +19,8 @@ interface RightRailProps {
   traceActive: boolean
   onShowTrace: () => void
   onAsk: (query: string) => void
+  /** Open the workspace's capability graph (#79). */
+  onShowGraph?: () => void
 }
 
 export function RightRail({
@@ -30,6 +32,7 @@ export function RightRail({
   traceActive,
   onShowTrace,
   onAsk,
+  onShowGraph,
 }: RightRailProps) {
   const progress = runProgress(agents, done)
 
@@ -79,56 +82,72 @@ export function RightRail({
             style={{ width: `${progress * 100}%` }}
           />
         </div>
+        {onShowGraph && (
+          <button
+            type="button"
+            onClick={onShowGraph}
+            className="w-full flex items-center gap-2 px-4 py-2.5 border-t border-[hsl(var(--border))] hover:bg-[hsl(var(--accent))] transition-colors text-left"
+          >
+            <Workflow className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
+            <span className="text-sm font-medium flex-1">Capability graph</span>
+            <ChevronRight className="h-3 w-3 opacity-60" />
+          </button>
+        )}
       </div>
 
-      <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-[var(--elev-2)] hover:shadow-[var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow">
-        <div className="flex items-center gap-2 mb-2">
-          <Sparkles className="h-3.5 w-3.5" />
-          <span className="text-sm font-medium">Related questions</span>
+      {/* Hide-when-empty: related questions arrive with `answer_ready`. */}
+      {related.length > 0 && (
+        <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-[var(--elev-2)] hover:shadow-[var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow">
+          <div className="flex items-center gap-2 mb-2">
+            <Sparkles className="h-3.5 w-3.5" />
+            <span className="text-sm font-medium">Related questions</span>
+          </div>
+          <ul className="space-y-0.5">
+            {related.map((q, i) => (
+              <li key={i}>
+                <button
+                  type="button"
+                  onClick={() => onAsk(q)}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-[13px] hover:bg-[hsl(var(--accent))] transition-colors group"
+                >
+                  <span className="flex-1">{q}</span>
+                  <ArrowUpRight className="h-3 w-3 opacity-40 group-hover:opacity-100 group-hover:text-[hsl(var(--primary))] transition-opacity flex-none" />
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
-        <ul className="space-y-0.5">
-          {related.map((q, i) => (
-            <li key={i}>
-              <button
-                type="button"
-                onClick={() => onAsk(q)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-[13px] hover:bg-[hsl(var(--accent))] transition-colors group"
-              >
-                <span className="flex-1">{q}</span>
-                <ArrowUpRight className="h-3 w-3 opacity-40 group-hover:opacity-100 group-hover:text-[hsl(var(--primary))] transition-opacity flex-none" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
+      )}
 
-      <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-[var(--elev-2)] hover:shadow-[var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow">
-        <div className="flex items-center gap-2 mb-2">
-          <Users className="h-3.5 w-3.5" />
-          <span className="text-sm font-medium">People</span>
-        </div>
-        <ul className="space-y-1.5">
-          {people.map((p, i) => (
-            <li key={i} className="flex items-center gap-2 text-xs">
-              <span
-                className="inline-flex items-center justify-center h-7 w-7 rounded-full font-mono font-semibold text-[10px]"
-                style={{
-                  background: `hsl(var(--agent-${p.color}) / 0.18)`,
-                  color: `hsl(var(--agent-${p.color}))`,
-                }}
-              >
-                {p.initials}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-medium truncate">{p.name}</div>
-                <div className="text-[11px] text-[hsl(var(--muted-foreground))] truncate">
-                  {p.role}
+      {people.length > 0 && (
+        <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-[var(--elev-2)] hover:shadow-[var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow">
+          <div className="flex items-center gap-2 mb-2">
+            <Users className="h-3.5 w-3.5" />
+            <span className="text-sm font-medium">People</span>
+          </div>
+          <ul className="space-y-1.5">
+            {people.map((p, i) => (
+              <li key={i} className="flex items-center gap-2 text-xs">
+                <span
+                  className="inline-flex items-center justify-center h-7 w-7 rounded-full font-mono font-semibold text-[10px]"
+                  style={{
+                    background: `hsl(var(--agent-${p.color}) / 0.18)`,
+                    color: `hsl(var(--agent-${p.color}))`,
+                  }}
+                >
+                  {p.initials}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-medium truncate">{p.name}</div>
+                  <div className="text-[11px] text-[hsl(var(--muted-foreground))] truncate">
+                    {p.role}
+                  </div>
                 </div>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </aside>
   )
 }

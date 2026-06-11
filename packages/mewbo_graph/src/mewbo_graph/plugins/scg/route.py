@@ -31,9 +31,29 @@ from mewbo_graph.plugins.scg._core import (
 if TYPE_CHECKING:
     from mewbo_core.classes import ActionStep
 
+    from mewbo_graph.scg.memory_bias import ScgMemoryBias
+    from mewbo_graph.scg.store import ScgStore
+    from mewbo_graph.scg.types import RouteRecipe
+
+# Cap the anchored usage-hints carried per recipe — the route result must stay
+# compact (the probe needs a few "how to call this right" notes, not the whole
+# learned corpus). Mirrors ScgMemoryBias' own per-key cap.
+_MAX_HINTS_PER_RECIPE = 3
+
 
 class ScgRouteArgs(BaseModel):
-    """Route a natural-language sub-query to ranked SCG RouteRecipes."""
+    """Route a sub-query to ranked SCG entry pathways (the strategic-search seed).
+
+    The Source Capability Graph is a living map of which connectors can reach what
+    (typed hops + a learned-memory layer) — use it to PLAN before you act on any
+    task that spans tools/sources. The loop: `scg_route` ranks ENTRY recipes for a
+    sub-query (cheap cosine + edge weight, biased by what past tasks learned),
+    `scg_observe` reads a node's typed hops so you pick the next step, you ACT
+    (run the connector tools / fan out probes), then `scg_memory` deposits — with
+    polarity — what worked or dead-ended so future tasks inherit it. This tool is
+    step one: pass a natural-language sub-query, get up to `k` recipes (each with
+    its source toolbox + any anchored usage hints). Read-only.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -62,17 +82,62 @@ class ScgRouteTool(SessionToolBase):
         except ValidationError as ve:
             return err_result("validation", str(ve))
         try:
-            recipes = ScgCore.router(ScgCore.store()).route(args.query, k=args.k)
+            store = ScgCore.store()
+            # route_with_memory carries the learned-memory bias (#76) so each
+            # recipe can surface its anchored usage hints without a second lookup.
+            recipes, bias = ScgCore.router(store).route_with_memory(
+                args.query, k=args.k
+            )
+            payload = [self._enrich(store, r, bias) for r in recipes]
         except ImportError:
             return err_result("internal", SCG_CORE_UNAVAILABLE)
         except Exception as exc:  # noqa: BLE001 — surface as a structured error
             return err_result("internal", str(exc))
-        return ok_result(
-            {
-                "count": len(recipes),
-                "recipes": [r.model_dump(mode="json") for r in recipes],
-            }
+        return ok_result({"count": len(recipes), "recipes": payload})
+
+    @staticmethod
+    def _enrich(
+        store: ScgStore, recipe: RouteRecipe, bias: ScgMemoryBias
+    ) -> dict[str, object]:
+        """A recipe plus the probe's deterministic tool scope + learned hints.
+
+        ``source_ids`` are the connectors on the pathway; ``source_capabilities``
+        are EVERY capability of those sources — the probe's ``allowed_tools``
+        scope. A probe scoped to only the step tools cannot chain a lookup
+        within its own source (the first live run failed exactly this way), so
+        the route result carries the full per-source toolbox and the playbook
+        copies it instead of leaving the scope to model inference.
+
+        ``memory_hints`` (#76) are the capped anchored connector insights for the
+        pathway — short "how to call this right" parameter-usage guidance the
+        orchestrator/probe reads inline, so it never needs a second ``scg_memory``
+        read. Absent (omitted) when the learned layer has nothing for the pathway.
+        """
+        from mewbo_core.tool_registry import mcp_tool_id  # noqa: PLC0415
+
+        data = recipe.model_dump(mode="json")
+        source_ids = sorted({step.split("#", 1)[0] for step in recipe.steps})
+        per_source = [
+            (sid, node.name)
+            for sid in source_ids
+            for node in store.query_nodes(source_id=sid, kind="capability")
+        ]
+        data["source_ids"] = source_ids
+        data["source_capabilities"] = sorted(name for _, name in per_source)
+        # The EXECUTABLE allowlist, derived via the core id convention — the
+        # playbook copies this verbatim into the probe spawn's `allowed_tools`.
+        # Leaving the source_key→tool-id transformation to model inference made
+        # small models pass graph addresses as tool ids (granting nothing) —
+        # the run-c52e9597 NO-DATA failure.
+        data["allowed_tool_ids"] = sorted(
+            {mcp_tool_id(sid, name) for sid, name in per_source}
         )
+        hints = bias.hints_for_steps(recipe.steps)[:_MAX_HINTS_PER_RECIPE]
+        if hints:
+            data["memory_hints"] = [
+                {"source_key": h.source_key, "text": h.text} for h in hints
+            ]
+        return data
 
 
 __all__ = ["ScgRouteArgs", "ScgRouteTool"]

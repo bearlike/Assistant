@@ -19,7 +19,7 @@ install_all() {
     uv pip install -e .[dev]
     uv pip install -e packages/mewbo_core -e packages/mewbo_tools \
         -e apps/mewbo_api -e apps/mewbo_cli \
-        -e mewbo_ha_conversation
+        -e apps/mewbo_ha_conversation
 }
 
 case ${1:-} in
@@ -42,7 +42,7 @@ case ${1:-} in
         uv pip install -e packages/mewbo_tools
         ;;
     ha)
-        uv pip install -e mewbo_ha_conversation
+        uv pip install -e apps/mewbo_ha_conversation
         ;;
     *)
         print_usage

@@ -31,6 +31,11 @@
       "class": "ScgRouteTool"
     },
     {
+      "tool_id": "scg_observe",
+      "module": "mewbo_graph.plugins.scg.observe",
+      "class": "ScgObserveTool"
+    },
+    {
       "tool_id": "scg_memory",
       "module": "mewbo_graph.plugins.scg.memory",
       "class": "ScgMemoryTool"

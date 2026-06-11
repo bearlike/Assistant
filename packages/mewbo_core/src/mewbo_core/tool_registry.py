@@ -569,6 +569,19 @@ def _sanitize_tool_id(server_name: str, tool_name: str) -> str:
     return re.sub(r"_+", "_", raw).strip("_")
 
 
+def mcp_tool_id(server_name: str, tool_name: str) -> str:
+    """Public alias for the canonical ``mcp_<server>_<tool>`` id convention.
+
+    Anything that must NAME an executable MCP tool outside the registry (the
+    SCG route projection emitting a probe's ``allowed_tools``, allowlist
+    builders, trace labels) must derive the id HERE — never by string-mangling
+    a ``source_key``. A graph ``source_key`` (``<source>#<Capability>``) is a
+    graph address, not a tool id; passing it to ``allowed_tools`` silently
+    grants nothing (the run-c52e9597 probe failure).
+    """
+    return _sanitize_tool_id(server_name, tool_name)
+
+
 def _built_in_manifest_entries() -> list[dict[str, object]]:
     ha_status = resolve_home_assistant_status()
     entries: list[dict[str, object]] = [

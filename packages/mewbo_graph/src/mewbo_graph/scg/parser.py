@@ -34,9 +34,11 @@ from mewbo_core.common import get_logger
 from mewbo_graph.wiki.embedder import make_embedder
 
 from .entity_resolution import TypeAligner
+from .manifest import ManifestHash
 from .providers.base import SourceStructureProvider, StructureProviderRegistry
 from .store import ScgStore
 from .types import (
+    RouteRecipe,
     ScgEdge,
     ScgEmbedding,
     ScgNode,
@@ -107,17 +109,45 @@ class ScgParser:
 
         Clean re-map: every prior node/edge/recipe/embedding for this source is
         deleted first, so re-indexing replaces rather than accumulates. The
-        descriptor is persisted so later ``link_sources`` / re-maps can find it.
+        descriptor is persisted (with its tool-list :class:`ManifestHash` stamped
+        on ``schema_version``) so later ``link_sources`` / re-maps can find it and
+        the workspace-save drift check can compare the live surface against the
+        mapped one (#81-C).
         """
         graph = self._registry.build(descriptor)
+        graph.recipes.extend(self._default_recipes(graph))
+
+        # Stamp the manifest fingerprint so a later live tool-list hash can detect
+        # drift without re-introspecting the mapped graph. Idempotent: re-mapping
+        # the SAME surface re-stamps the SAME hash (the descriptor is a value).
+        stamped = descriptor.model_copy(
+            update={"schema_version": ManifestHash.of_descriptor_raw(descriptor.raw)}
+        )
 
         self._store.delete_source(descriptor.source_id)
         self._store.upsert_nodes(graph.nodes)
         self._store.upsert_edges(graph.edges)
         self._store.upsert_recipes(graph.recipes)
-        self._store.upsert_source(descriptor)
+        self._store.upsert_source(stamped)
         self._embed_nodes(graph.nodes)
         return graph
+
+    @staticmethod
+    def _default_recipes(graph: StructureGraph) -> list[RouteRecipe]:
+        """Single-step recipes for capabilities the provider left recipe-less.
+
+        ``ScgRouter.route`` only ranks persisted recipes, so a capability
+        without one is unroutable — a graph with zero recipes routes nothing.
+        Every capability is trivially a one-step pathway to itself; providers
+        that emit richer multi-capability recipes stay authoritative (their
+        keys are skipped here).
+        """
+        covered = {r.source_key for r in graph.recipes}
+        return [
+            RouteRecipe(source_key=node.source_key, steps=[node.source_key])
+            for node in graph.nodes
+            if node.kind == "capability" and node.source_key not in covered
+        ]
 
     # -- cross-source RESOLVES_TO ------------------------------------------
 

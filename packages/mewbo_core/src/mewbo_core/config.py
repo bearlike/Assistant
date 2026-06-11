@@ -1703,6 +1703,74 @@ def _wiki_config_default() -> WikiConfig:
     return WikiConfig.model_validate({})
 
 
+class ScgTierModelsConfig(BaseModel):
+    """Per-tier model mapping — the tier picks the brain, not just the budget.
+
+    A tier maps to the LLM that drives the whole run (orchestrator session AND
+    its probe sub-agents, which inherit the session model). An empty string
+    falls back to ``llm.default_model``. An explicit per-request ``model``
+    override (where the endpoint offers one) always wins over the tier map.
+    """
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Tier models"})
+
+    fast: str = Field(
+        "openai/gpt-5.4-nano",
+        description="Model for `fast` tier runs (cheap, low-latency).",
+    )
+    auto: str = Field(
+        "openai/claude-sonnet-4-6",
+        description="Model for `auto` tier runs (balanced default).",
+    )
+    deep: str = Field(
+        "openai/gpt-5.5",
+        description="Model for `deep` tier runs (exhaustive research).",
+    )
+
+
+class ScgTraversalConfig(BaseModel):
+    """Traversal defaults for SCG search (the per-run tier budget knob)."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Traversal"})
+
+    default_tier: Literal["fast", "auto", "deep"] = Field(
+        "auto",
+        description=(
+            "Default search tier — one budget knob over decomposition depth "
+            "and probe fan-out. Overridable per run."
+        ),
+    )
+    tier_models: ScgTierModelsConfig = Field(
+        default_factory=lambda: ScgTierModelsConfig.model_validate({}),
+        description="Which LLM each search tier runs on (fast/auto/deep).",
+    )
+
+
+class ScgConfig(BaseModel):
+    """Operator-facing knobs for the Source Capability Graph (agentic search)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"title": "SCG", "x-group": "workspace", "x-order": 3},
+    )
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Master switch for the SCG feature (source mapping and "
+            "orchestrated agentic-search runs)."
+        ),
+    )
+    traversal: ScgTraversalConfig = Field(
+        default_factory=lambda: ScgTraversalConfig.model_validate({}),
+        description="Traversal defaults (the per-run search tier).",
+    )
+
+
+def _scg_config_default() -> ScgConfig:
+    return ScgConfig.model_validate({})
+
+
 # ---------------------------------------------------------------------------
 # Curation annotation contract (drives the faceted Settings UI)
 # ---------------------------------------------------------------------------
@@ -1788,6 +1856,10 @@ class AppConfig(BaseModel):
     wiki: WikiConfig = Field(
         default_factory=_wiki_config_default,
         description="Wiki subsystem defaults and embedding behavior.",
+    )
+    scg: ScgConfig = Field(
+        default_factory=_scg_config_default,
+        description="Source Capability Graph feature gate and search-tier default.",
     )
     hooks: HooksConfig = Field(
         default_factory=_hooks_config_default,

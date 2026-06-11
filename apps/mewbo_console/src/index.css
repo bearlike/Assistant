@@ -124,6 +124,7 @@
     --graph-memory: 168 55% 52%;        /* teal — memory-orchestration layer */
     --graph-edge-anchor: 210 12% 60%;   /* dashed cross-layer ANCHORS tie */
     --graph-edge-relates: 45 70% 58%;   /* entity/memory RELATES edge */
+    --graph-scg-unmapped: 220 6% 46%;   /* muted slate — unmapped SCG source ghost */
   }
 
   .light {
@@ -239,6 +240,7 @@
     --graph-memory: 168 55% 40%;
     --graph-edge-anchor: 210 14% 50%;
     --graph-edge-relates: 42 72% 48%;
+    --graph-scg-unmapped: 220 8% 58%;
   }
 }
 
@@ -610,6 +612,56 @@
 }
 .composer-shell[data-command-mode="true"][data-focused="true"] {
   box-shadow: 0 0 0 4px hsl(var(--primary) / 0.15);
+}
+
+/* ── Agentic Search composer surface (shared kit) ───────────────────────────
+   Sibling of `.composer-shell`: same family, same focus language. The Search
+   composer (`ui/composer-shell.tsx` → `composerSurface()`) is a CARD surface
+   (border-strong hairline + an `--elev-N` base shadow) that BLOOMS on focus
+   into a primary-tinted halo, exactly like the Tasks composer's
+   `[data-focused="true"]` glow — so the two composers read as one family.
+
+   Halo strength is picked by `data-halo` (set via `composerSurfaceData`; the
+   base elevation is baked into the Tailwind shadow class). Focus-within layers a
+   stronger elevation + a primary halo ring + a tinted border — the "expand"
+   bloom — and transitions over 200ms ease-out (mirrors `.composer-shell`).
+   `prefers-reduced-motion` kills the transition (the console kills every
+   keyframe/transition under it). */
+.composer-surface {
+  border: 1px solid hsl(var(--border-strong));
+  transition: box-shadow 200ms ease-out, border-color 200ms ease-out;
+}
+.composer-surface:focus-within {
+  border-color: hsl(var(--primary) / 0.55);
+}
+/* Bloom target per base elevation — focus layers the stronger elevation under
+   a 4px primary halo. Soft bars (elev-1 pill/compact) bloom to elev-2; strong
+   bars (elev-2 hero) bloom to elev-3, with a touch more halo opacity. */
+.composer-surface[data-halo="soft"]:focus-within {
+  box-shadow: var(--elev-2), 0 0 0 4px hsl(var(--primary) / 0.10);
+}
+.composer-surface[data-halo="strong"]:focus-within {
+  box-shadow: var(--elev-3), 0 0 0 4px hsl(var(--primary) / 0.12);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-surface { transition: none; }
+}
+
+/* Suggestions dropdown — Google-suggest entrance. The list reads as an
+   extension of the composer surface "panning out from underneath": it grows
+   from its top edge (origin-top scale-y + a small upward translate) while
+   fading in, ~160ms ease-out. One-shot on open (mounts only when `acOpen`),
+   so it never loops while idle. Killed under prefers-reduced-motion. */
+@keyframes composer-suggest-in {
+  from { opacity: 0; transform: translateY(-4px) scaleY(0.96); }
+  to   { opacity: 1; transform: translateY(0)    scaleY(1); }
+}
+.composer-suggest {
+  transform-origin: top center;
+  animation: composer-suggest-in 160ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-suggest { animation: none; }
 }
 
 /* Composer dissolves UP into the conversation — no top hairline. The base

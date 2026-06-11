@@ -89,8 +89,8 @@ def test_json_map_job_update(tmp_path):
     """update_map_job patches fields and returns the updated record."""
     store = _store(tmp_path)
     store.create_map_job(_job_record())
-    updated = store.update_map_job("job-1", status="mapping", node_count=5)
-    assert updated.status == "mapping"
+    updated = store.update_map_job("job-1", status="running", node_count=5)
+    assert updated.status == "running"
     assert updated.node_count == 5
     # Verify on disk.
     again = store.get_map_job("job-1")

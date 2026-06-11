@@ -139,6 +139,7 @@ def _cmd_summarize(context: CommandContext, args: list[str]) -> bool:
     task_queue = context.runtime.run_sync(
         user_query=user_query,
         session_id=context.state.session_id,
+        source_platform="cli",
     )
     context.console.print(Panel(task_queue.task_result or "", title="Summary"))
     return True
@@ -194,6 +195,7 @@ def _run_recovery(context: CommandContext, action: str) -> bool:
         model_name=context.state.model_name,
         tool_registry=context.tool_registry,
         mode=context.state.mode,
+        source_platform="cli",
     )
     if task_queue.task_result:
         context.console.print(Panel(task_queue.task_result, title="Response"))
@@ -320,6 +322,7 @@ def _cmd_edit(context: CommandContext, args: list[str]) -> bool:
         model_name=context.state.model_name,
         tool_registry=context.tool_registry,
         mode=context.state.mode,
+        source_platform="cli",
     )
     if task_queue.task_result:
         context.console.print(Panel(task_queue.task_result, title="Response"))

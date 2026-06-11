@@ -123,7 +123,7 @@ knobs exposed to callers — fewer knobs = better fast-model agentic accessibili
 - `list_projects` — `GET /api/projects`: registered config + managed projects with `name`/`project_id` + canonical git `repo`/`aliases`. The discovery surface for `create_session`'s `project`.
 
 **E. Mewbo Search — multi-source workspace search**
-- `list_search_workspaces` — `GET /api/agentic_search/workspaces`, projected compact (`id/name/desc/sources/recent_query_count`). **Drops `instructions` and the full `past_queries`** — `instructions` is untrusted prompt input and must not leak to a consuming agent; the history is console state.
+- `list_search_workspaces` — `GET /api/agentic_search/workspaces`, projected compact (`id/name/desc/sources/recent_query_count`). Optional `query` forwards as `?q=` (the API's case-insensitive substring filter over name/description/past-query text). **Drops `instructions` and the full `past_queries`** — `instructions` is untrusted prompt input and must not leak to a consuming agent; the history is console state.
 - `search(query, workspace, project?, detail?)` — resolves `workspace` (id OR case-insensitive name) → `POST /api/agentic_search/runs` → awaits a terminal run, then projects the `RunPayload`.
 - `get_search_run(run_id, detail?)` — `GET /api/agentic_search/runs/<id>`; same projection (replay / deep-link, or re-read an async run that returned `running`).
 
@@ -138,11 +138,14 @@ Non-obvious decisions for this group:
 **F. Structured query — schema-constrained synthesis**
 - `structured_query(query, schema, workspace?, tool_ids?)` — `POST /v1/structured`
   (async run-handle). The server runs an agentic session (model may call grounding
-  tools) and emits a JSON-Schema-validated object. Returns `{run_id, status,
-  output?}`; `bounded_poll`s `GET /v1/structured/<run_id>` for a slow run, else
-  resume via `get_structured_run(run_id)`. Atomic class
+  tools) and emits a JSON-Schema-validated object. A `workspace` that is a mapped
+  Mewbo Search workspace goes GRAPH-FIRST (#77): route→probe→aggregate→emit, and
+  the result carries additive `provenance` (recipes routed, probes run). Returns
+  `{run_id, status, output?, provenance?}`; `bounded_poll`s `GET /v1/structured/<run_id>`
+  for a slow run, else resume via `get_structured_run(run_id)`. Atomic class
   `StructuredQueryTools(RestClient)`; the MCP-tool param is `tool_ids` (not
   `tools`) to avoid shadowing the `tools` module — forwarded as the body's `tools`.
+  `_shape` passes `provenance` through verbatim alongside `output`/`workspace`/`error`.
 - `get_structured_run(run_id)` — `GET /v1/structured/<run_id>`; resume/replay a run.
 
 ## `timeline.py` — DRY pairing with the console

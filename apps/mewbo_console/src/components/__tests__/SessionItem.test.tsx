@@ -94,3 +94,17 @@ describe("SessionItem — recovery affordance", () => {
     );
   });
 });
+
+describe("SessionItem — capability & workspace transparency", () => {
+  it("renders a chip per scoped capability and the workspace id", () => {
+    renderItem({ ...base, capabilities: ["scg"], workspace: "ws-7870f5ab" });
+    expect(screen.getByText("scg")).toBeInTheDocument();
+    expect(screen.getByText("ws-7870f5ab")).toBeInTheDocument();
+  });
+
+  it("renders no capability/workspace chips for a plain session", () => {
+    renderItem({ ...base, capabilities: [], workspace: null });
+    expect(screen.queryByText("scg")).toBeNull();
+    expect(screen.queryByText(/^ws-/)).toBeNull();
+  });
+});

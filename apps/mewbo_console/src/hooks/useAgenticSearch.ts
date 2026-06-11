@@ -9,15 +9,24 @@ import {
   createWorkspace,
   deleteWorkspace,
   getRun,
+  getScgStatus,
+  getWorkspaceGraph,
+  listMapJobs,
   listSources,
+  listWorkspaceRuns,
   listWorkspaces,
+  startMapJob,
   startRun,
+  streamMapJob,
   streamRun,
   updateWorkspace,
   type RunInput,
   type StartRunResult,
 } from "../api/agenticSearch"
 import type {
+  MapJobEvent,
+  MapJobPhase,
+  MapJobRecord,
   PastQuery,
   RunAnswer,
   RunPayload,
@@ -30,21 +39,30 @@ import type {
 
 const SOURCES_KEY = ["agentic-search", "sources"] as const
 const WORKSPACES_KEY = ["agentic-search", "workspaces"] as const
+const SCG_KEY = ["agentic-search", "scg"] as const
 const runKey = (runId: string | null) =>
   ["agentic-search", "run", runId] as const
+const mapJobsKey = (sourceId: string | null) =>
+  ["agentic-search", "map-jobs", sourceId] as const
+const workspaceRunsKey = (workspaceId: string | null) =>
+  ["agentic-search", "workspace-runs", workspaceId] as const
+const workspaceGraphKey = (workspaceId: string | null) =>
+  ["agentic-search", "workspace-graph", workspaceId] as const
 
 export function useSources() {
   return useQuery({
     queryKey: SOURCES_KEY,
     queryFn: listSources,
-    staleTime: Infinity, // catalog is static for the mock; cheap to keep
+    // The catalog is live (configured servers + SCG tool overrides); map-job
+    // completion invalidates SOURCES_KEY so freshly-mapped tools show up.
+    staleTime: 60_000,
   })
 }
 
 export function useWorkspaces() {
   return useQuery({
     queryKey: WORKSPACES_KEY,
-    queryFn: listWorkspaces,
+    queryFn: () => listWorkspaces(),
     staleTime: 60_000,
   })
 }
@@ -115,6 +133,33 @@ export function useStartRun() {
   })
 }
 
+/**
+ * A workspace's persisted run history. Pass `null` to keep the query idle —
+ * callers (e.g. the workspace-card popover) enable it lazily on open.
+ */
+export function useWorkspaceRuns(workspaceId: string | null) {
+  return useQuery({
+    queryKey: workspaceRunsKey(workspaceId),
+    queryFn: () => listWorkspaceRuns(workspaceId as string),
+    enabled: Boolean(workspaceId),
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * The workspace-scoped SCG multiplex graph (#79). Pass `null` to keep the query
+ * idle — the graph dialog enables it lazily on open. Invalidated alongside the
+ * SCG/map-job queries so a freshly-mapped source shows up in an open graph.
+ */
+export function useWorkspaceGraph(workspaceId: string | null) {
+  return useQuery({
+    queryKey: workspaceGraphKey(workspaceId),
+    queryFn: () => getWorkspaceGraph(workspaceId as string),
+    enabled: Boolean(workspaceId),
+    staleTime: 60_000,
+  })
+}
+
 /** Durable run snapshot — powers reload / deep-link rehydration. */
 export function useRun(runId: string | null) {
   return useQuery({
@@ -123,6 +168,132 @@ export function useRun(runId: string | null) {
     enabled: Boolean(runId),
     staleTime: 60_000,
   })
+}
+
+// ── SCG introspection + map-source jobs ─────────────────────────────────────
+
+/** SCG introspection (`GET /scg`). `enabled: false` when the feature is off. */
+export function useScgStatus(enabled = true) {
+  return useQuery({
+    queryKey: SCG_KEY,
+    queryFn: getScgStatus,
+    enabled,
+    staleTime: 60_000,
+  })
+}
+
+/** A map job that hasn't reached a terminal status yet. */
+export function isMapJobActive(job: MapJobRecord | undefined): boolean {
+  return job != null && (job.status === "queued" || job.status === "running")
+}
+
+/**
+ * Latest-first map jobs for a source. Polls while the newest job is still
+ * active — the reload-safe fallback when the SSE stream isn't (yet) attached.
+ */
+export function useMapJobs(sourceId: string | null) {
+  return useQuery({
+    queryKey: mapJobsKey(sourceId),
+    queryFn: () => listMapJobs(sourceId as string),
+    enabled: Boolean(sourceId),
+    refetchInterval: (query) =>
+      isMapJobActive(query.state.data?.[0]) ? 2_000 : false,
+  })
+}
+
+/** Start a map-source (SCG indexing) job for one connector. */
+export function useStartMapJob() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ sourceId, sourceType }: { sourceId: string; sourceType: string }) =>
+      startMapJob(sourceId, { source_type: sourceType }),
+    onSuccess: (_res, { sourceId }) =>
+      qc.invalidateQueries({ queryKey: mapJobsKey(sourceId) }),
+  })
+}
+
+/** Folded UI state from the map-job SSE stream (phase updates + terminal). */
+export interface MapJobStreamState {
+  phase: MapJobPhase | null
+  done: boolean
+  failed: boolean
+  error: { code: string; message: string; hint?: string } | null
+}
+
+const initialMapJobStreamState: MapJobStreamState = {
+  phase: null,
+  done: false,
+  failed: false,
+  error: null,
+}
+
+function reduceMapJob(
+  state: MapJobStreamState,
+  event: MapJobEvent | { type: "reset" }
+): MapJobStreamState {
+  switch (event.type) {
+    case "reset":
+      return initialMapJobStreamState
+    case "phase":
+      return { ...state, phase: event.name }
+    case "run_done":
+      return { ...state, done: true, failed: event.status === "failed" }
+    case "cancelled":
+      return { ...state, done: true }
+    case "error":
+      return { ...state, done: true, failed: true, error: event.error }
+    default:
+      return state
+  }
+}
+
+/**
+ * Consume a map job's SSE event log into folded phase state. Mirrors
+ * `useRunStream`: one `AbortController` per job, terminal event ends the fold.
+ * On stream end the job-list, SCG, and source-catalog snapshots are invalidated
+ * so the polling fallback, mapped-source badges, and SCG-driven tool ids catch
+ * up immediately.
+ */
+export function useMapJobStream(sourceId: string | null, jobId: string | null) {
+  const qc = useQueryClient()
+  const [state, dispatch] = useReducer(reduceMapJob, initialMapJobStreamState)
+
+  useEffect(() => {
+    if (!sourceId || !jobId) return
+    const ctrl = new AbortController()
+    let cancelled = false
+    dispatch({ type: "reset" }) // a new job must not inherit the old fold
+    ;(async () => {
+      try {
+        for await (const event of streamMapJob(sourceId, { jobId, signal: ctrl.signal })) {
+          if (cancelled) break
+          dispatch(event)
+        }
+      } catch (err) {
+        if (!ctrl.signal.aborted) {
+          dispatch({
+            type: "error",
+            error: {
+              code: "internal",
+              message: err instanceof Error ? err.message : String(err),
+            },
+          })
+        }
+      } finally {
+        if (!cancelled) {
+          void qc.invalidateQueries({ queryKey: mapJobsKey(sourceId) })
+          void qc.invalidateQueries({ queryKey: SCG_KEY })
+          void qc.invalidateQueries({ queryKey: SOURCES_KEY })
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+      ctrl.abort()
+    }
+  }, [sourceId, jobId, qc])
+
+  return state
 }
 
 // ── Run streaming reducer ────────────────────────────────────────────────────
@@ -134,7 +305,13 @@ export interface RunStreamState {
   sessionId: string | null
   workspaceId: string | null
   query: string
-  /** Wall-clock ms when `run_started` arrived — real elapsed basis. */
+  /** True once the stream has folded ANY event — the authoritative "the live
+   *  leg is attached, stop showing 'Starting search…'" signal. Decoupled from
+   *  `runId` so a missed/buffered `run_started` opener can't wedge the view:
+   *  the run view flips to the trace as soon as the first frame (e.g.
+   *  `agent_start`) lands, not only on the server's `run_started` echo (#80). */
+  attached: boolean
+  /** Wall-clock ms when the first event arrived — real elapsed basis. */
   startedAt: number | null
   results: RunPayload["results"]
   /** Per-source agents keyed by agent_id, in arrival order. */
@@ -158,11 +335,12 @@ const emptyAnswer: RunAnswer = {
   sources_count: 0,
 }
 
-const initialRunStreamState: RunStreamState = {
+export const initialRunStreamState: RunStreamState = {
   runId: null,
   sessionId: null,
   workspaceId: null,
   query: "",
+  attached: false,
   startedAt: null,
   results: [],
   trace: [],
@@ -176,8 +354,35 @@ const initialRunStreamState: RunStreamState = {
   error: null,
 }
 
-function reduceRun(state: RunStreamState, event: SearchEvent): RunStreamState {
+/** Synthetic action the hook dispatches the moment it begins streaming a run.
+ *  Seeds the known `runId` (the stream arg) so the view attaches WITHOUT having
+ *  to wait for the server's `run_started` echo, and resets the fold for a new
+ *  run id. Carries no server payload — real fields fill in as events fold. */
+interface RunStreamAttach {
+  type: "attach"
+  runId: string
+}
+
+/** Flip `attached` (and start the clock + status) the first time a real SSE
+ *  frame folds — covers the case where the `run_started` opener was buffered /
+ *  dropped and `agent_start` (or any frame) arrives first, so the view never
+ *  wedges on "Starting search…" while events are demonstrably streaming. */
+function ensureAttached(state: RunStreamState): RunStreamState {
+  if (state.attached) return state
+  return { ...state, attached: true, startedAt: Date.now(), status: "running" }
+}
+
+/** Exported for unit tests — components must render from this folded state. */
+export function reduceRun(
+  state: RunStreamState,
+  event: SearchEvent | RunStreamAttach
+): RunStreamState {
   switch (event.type) {
+    case "attach":
+      // New run id → fresh fold seeded with the known id. Same id (effect
+      // re-run / replay) → keep the accumulated fold, don't wipe it.
+      if (state.runId === event.runId && state.attached) return state
+      return { ...initialRunStreamState, runId: event.runId }
     case "run_started":
       return {
         ...initialRunStreamState,
@@ -185,10 +390,12 @@ function reduceRun(state: RunStreamState, event: SearchEvent): RunStreamState {
         sessionId: event.session_id,
         workspaceId: event.workspace_id,
         query: event.query,
+        attached: true,
         startedAt: Date.now(),
         status: "running",
       }
     case "agent_start": {
+      state = ensureAttached(state)
       if (state.trace.some((a) => a.agent_id === event.agent_id)) return state
       const agent: TraceAgent = {
         id: event.agent_id,
@@ -200,7 +407,8 @@ function reduceRun(state: RunStreamState, event: SearchEvent): RunStreamState {
       }
       return { ...state, trace: [...state.trace, agent] }
     }
-    case "agent_line":
+    case "agent_line": {
+      state = ensureAttached(state)
       return {
         ...state,
         trace: state.trace.map((a) =>
@@ -209,7 +417,9 @@ function reduceRun(state: RunStreamState, event: SearchEvent): RunStreamState {
             : a
         ),
       }
-    case "agent_done":
+    }
+    case "agent_done": {
+      state = ensureAttached(state)
       return {
         ...state,
         trace: state.trace.map((a) =>
@@ -231,23 +441,30 @@ function reduceRun(state: RunStreamState, event: SearchEvent): RunStreamState {
             : a
         ),
       }
-    case "result":
-      // Idempotent on idx-replay: skip a result we've already folded in.
+    }
+    case "result": {
+      state = ensureAttached(state)
+      // Idempotent on idx-replay AND defensive against duplicate `result`
+      // events (echo replay / snapshot+SSE merge): dedup strictly by id (#82).
       if (state.results.some((r) => r.id === event.result.id)) return state
       return { ...state, results: [...state.results, event.result] }
+    }
     case "answer_delta":
       // Streaming typewriter: appends until `answer_ready` replaces it.
       return state.answerReady
         ? state
-        : { ...state, answer: { ...state.answer, tldr: state.answer.tldr + event.text } }
+        : {
+            ...ensureAttached(state),
+            answer: { ...state.answer, tldr: state.answer.tldr + event.text },
+          }
     case "answer_ready":
-      return { ...state, answer: event.answer, answerReady: true }
+      return { ...ensureAttached(state), answer: event.answer, answerReady: true }
     case "run_done":
-      return { ...state, status: event.status, totalMs: event.total_ms, done: true }
+      return { ...ensureAttached(state), status: event.status, totalMs: event.total_ms, done: true }
     case "cancelled":
-      return { ...state, status: "cancelled", done: true }
+      return { ...ensureAttached(state), status: "cancelled", done: true }
     case "error":
-      return { ...state, status: "failed", error: event.error, done: true }
+      return { ...ensureAttached(state), status: "failed", error: event.error, done: true }
     default:
       return state
   }
@@ -267,6 +484,10 @@ export function useRunStream(runId: string | null) {
     const ctrl = new AbortController()
     controllerRef.current = ctrl
     let cancelled = false
+    // Seed the known run id into the fold immediately. `attached` still waits
+    // for the first real frame, but this binds the stream state to THIS run id
+    // so a stale fold from a previous run id is dropped on switch.
+    dispatch({ type: "attach", runId })
     ;(async () => {
       try {
         for await (const event of streamRun(runId, { signal: ctrl.signal })) {

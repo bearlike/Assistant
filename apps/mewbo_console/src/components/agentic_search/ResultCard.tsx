@@ -3,12 +3,12 @@ import {
   ChevronUp,
   ExternalLink,
   FileText,
-  Link as LinkIcon,
   PlayCircle,
   Sparkles,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
+import { CopyButton } from "../CopyButton"
 import type { SearchResult, SourceCatalogEntry } from "../../types/agenticSearch"
 import { SrcAvatar } from "./SrcAvatar"
 
@@ -32,6 +32,26 @@ const REL_DOT_COLORS: Record<"high" | "med" | "low", string> = {
   high: "hsl(var(--success))",
   med: "hsl(var(--primary))",
   low: "hsl(var(--muted-foreground))",
+}
+
+// Snippets carry exactly two inline highlight conventions: <mark> and <code>.
+// Parse those tokens explicitly into elements; everything else (including any
+// other tag) renders as literal text — no raw HTML injection.
+const SNIPPET_TOKEN = /<(mark|code)>([\s\S]*?)<\/\1>/g
+
+function renderSnippet(snippet: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = []
+  let last = 0
+  let m: RegExpExecArray | null
+  SNIPPET_TOKEN.lastIndex = 0
+  while ((m = SNIPPET_TOKEN.exec(snippet)) !== null) {
+    if (m.index > last) nodes.push(snippet.slice(last, m.index))
+    const Tag = m[1] as "mark" | "code"
+    nodes.push(<Tag key={m.index}>{m[2]}</Tag>)
+    last = m.index + m[0].length
+  }
+  if (last < snippet.length) nodes.push(snippet.slice(last))
+  return nodes
 }
 
 export function ResultCard({
@@ -84,14 +104,9 @@ export function ResultCard({
       <h3 className="mt-1 text-base font-medium text-[hsl(var(--foreground))] hover:text-[hsl(var(--primary))] transition-colors cursor-pointer">
         {result.title}
       </h3>
-      <p
-        className="mt-1 text-[13.5px] leading-relaxed text-[hsl(var(--muted-foreground))] [&_mark]:bg-[hsl(var(--primary)/0.18)] [&_mark]:text-[hsl(var(--primary))] [&_mark]:rounded-sm [&_mark]:px-0.5 [&_code]:font-mono [&_code]:text-[12.5px] [&_code]:bg-[hsl(var(--muted))] [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded"
-        // Snippet content is server-controlled mock data with <mark> and
-        // <code> tags. When real search lands and results may include
-        // user-influenced content, switch to structured tokens or
-        // sanitized rendering.
-        dangerouslySetInnerHTML={{ __html: result.snippet }}
-      />
+      <p className="mt-1 text-[13.5px] leading-relaxed text-[hsl(var(--muted-foreground))] [&_mark]:bg-[hsl(var(--primary)/0.18)] [&_mark]:text-[hsl(var(--primary))] [&_mark]:rounded-sm [&_mark]:px-0.5 [&_code]:font-mono [&_code]:text-[12.5px] [&_code]:bg-[hsl(var(--muted))] [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded">
+        {renderSnippet(result.snippet)}
+      </p>
 
       {expanded && result.image && (
         <div className="mt-3">
@@ -172,9 +187,12 @@ export function ResultCard({
           {expanded ? "Less" : "More"}
           {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
         </button>
-        <span className="inline-flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <span className="inline-flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
           <IconLink title="Open" href={result.url} icon={<ExternalLink className="h-3 w-3" />} />
-          <IconLink title="Copy link" icon={<LinkIcon className="h-3 w-3" />} />
+          {/* Copies the external source URL (not a console deep link). The
+              shared CopyButton owns clipboard + feedback; it already stops
+              click propagation so the card doesn't toggle. */}
+          <CopyButton text={result.url} label="Copy link" className="h-6 w-6 rounded" />
           <IconLink title="Ask follow-up" icon={<Sparkles className="h-3 w-3" />} />
         </span>
       </footer>
@@ -193,6 +211,7 @@ function IconLink({
 }) {
   const cls =
     "inline-flex items-center justify-center h-6 w-6 rounded hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
+  // Inner controls must not also toggle the card.
   const stopClick = (e: React.MouseEvent) => e.stopPropagation()
   if (href) {
     return (

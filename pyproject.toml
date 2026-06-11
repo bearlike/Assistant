@@ -49,16 +49,13 @@ docs = [
   # Mewbo brand chrome, Ask AI panel, sidebar nav-icons, prefetch
   # speculation, ToC rail, dual-mode search modal, full SEO.
   #
-  # The URL below is permanent — it points at the moving `latest-master`
-  # release, which the fork's release.yaml workflow republishes on every
-  # push to master. uv.lock pins the exact wheel content hash, so docs
-  # builds stay reproducible until the lock is refreshed:
+  # Pin the immutable tag-release wheel, never `latest-master`: that rolling
+  # release renames its asset on every version bump (the filename embeds the
+  # version), 404ing the old URL and breaking builds. To upgrade: tag a new
+  # vX.Y.Z in the fork, update this URL, then refresh the lock:
   #
   #   uv lock --upgrade-package mkdocs-shadcn-mewbo
-  #
-  # For a strictly-pinned build (no auto-tracking), swap this URL for the
-  # commit-<sha> release URL surfaced in the corresponding workflow run.
-  "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.2.1-py3-none-any.whl",
+  "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.3.0/mkdocs_shadcn_mewbo-1.3.0-py3-none-any.whl",
   "mkdocstrings[python]",
   "pymdown-extensions>=10.20.1",
 ]
@@ -76,20 +73,22 @@ mewbo-graph = { workspace = true }
 mewbo-cli = { path = "apps/mewbo_cli", editable = true }
 mewbo-api = { path = "apps/mewbo_api", editable = true }
 mewbo-mcp = { path = "apps/mewbo_mcp", editable = true }
-mewbo-ha-conversation = { path = "mewbo_ha_conversation", editable = true }
+mewbo-ha-conversation = { path = "apps/mewbo_ha_conversation", editable = true }
 
 [build-system]
 requires = ["hatchling>=1.25.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mewbo_workspace"]
+# Metadata-only root meta-package: ships the `mewbo` entry point and dist
+# metadata (mewbo_core.config.get_version fallback) with no package files.
+bypass-selection = true
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 extend-exclude = [
-  "mewbo_ha_conversation/translations",
+  "apps/mewbo_ha_conversation/translations",
   "vendor",
   "scripts",
 ]
@@ -113,7 +112,7 @@ files = [
   "apps/mewbo_api/src/mewbo_api/**/*.py",
   "apps/mewbo_mcp/src/mewbo_mcp/**/*.py",
   "apps/mewbo_cli/src/mewbo_cli/**/*.py",
-  "mewbo_ha_conversation/**/*.py",
+  "apps/mewbo_ha_conversation/**/*.py",
 ]
 explicit_package_bases = true
 mypy_path = ["."]

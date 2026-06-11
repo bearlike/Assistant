@@ -903,6 +903,16 @@ def test_list_search_workspaces_drops_console_only_fields(fake_rest):
     # instructions (untrusted) and full past_queries never reach the consumer.
     assert "instructions" not in eng
     assert "past_queries" not in eng
+    # No query → no ?q= forwarded.
+    assert fake.find("GET", _WS).params == {}
+
+
+def test_list_search_workspaces_passes_query_filter_through(fake_rest):
+    """An optional query forwards verbatim as the API's ?q= substring filter."""
+    fake = fake_rest.on("GET", _WS, _workspaces_payload())
+    out = run(tools.SearchTools(fake.client()).list_workspaces(query="eng"))
+    assert fake.find("GET", _WS).params == {"q": "eng"}
+    assert out["workspaces"][0]["id"] == "ws-eng"
 
 
 def test_search_resolves_by_name_and_returns_answer_tier(fake_rest):
@@ -1175,6 +1185,24 @@ def test_structured_query_omits_optional_fields(fake_rest):
     run(tools.StructuredQueryTools(fake.client()).query(query="hi", schema=schema))
     req = fake.find("POST", "/v1/structured")
     assert req.json == {"query": "hi", "schema": schema}
+
+
+def test_get_structured_run_carries_graph_provenance(fake_rest):
+    """A graph-first run's pathway/probe ``provenance`` flows through the projection (#77)."""
+    provenance = {
+        "recipes_routed": 2,
+        "probes_run": 3,
+        "probe_status": {"p1": "completed", "p2": "completed", "p3": "no_data"},
+    }
+    fake = fake_rest.on(
+        "GET",
+        "/v1/structured/s9:r1",
+        {"run_id": "s9:r1", "status": "completed", "output": {"x": 1},
+         "provenance": provenance},
+    )
+    out = run(tools.StructuredQueryTools(fake.client()).get_run(run_id="s9:r1"))
+    assert out["provenance"] == provenance
+    assert out["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------

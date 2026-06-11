@@ -27,7 +27,7 @@
 uv sync --extra ha
 ```
 
-To use it in Home Assistant, install `mewbo_ha_conversation/` as a custom component
+To use it in Home Assistant, install `apps/mewbo_ha_conversation/` as a custom component
 and point it at the Mewbo API URL + API key.
 
 [Link to GitHub Repository](https://github.com/bearlike/Assistant)

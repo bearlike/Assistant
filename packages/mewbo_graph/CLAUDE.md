@@ -21,7 +21,7 @@ and `mewbo_api`. If you find yourself adding `import mewbo_api` (or
 |---|---|
 | `wiki/` | tree-sitter code graph (`graph.py` + `graph_queries/*.scm`), multiplex atomic-note memory (`memory.py`, `memory_types.py`, `structure_provider.py`, `retriever.py`), the dual JSON/Mongo `WikiStoreBase` (`store.py`), the wiki domain/wire models (`types.py`), the litellm `Embedder`, the ephemeral `CloneTokenCache` (`tokens.py`), and `QaFinalizer` (`qa.py` — reconcile a Q&A answer snapshot from its event log + close it; lives here, not the API, because it mutates `QaAnswer`+store, so the terminal `wiki_emit_block` calls it down-layer alongside the API's session-end net). `resolve_qa_ctx` falls back to the latest `structured_workspace` context event when a session is not a registered QA answer, so a `StructuredResponder`-grounded run resolves a slug-only ctx and wiki grounding tools work instead of returning "wiki QA ctx not found" (#51 — `structured_workspace` was written but read by nothing until this fix). `QaMemoryDepositor` (also `qa.py`) closes the QA→memory flywheel: post-answer it distills the cited answer into atomic notes via `InsightIngestor.ingest(condense=True)` anchored to the cited code entities — best-effort, idempotent, fired from the API session-end net off the latency path (reuses the ingestor; no second fan-out). `catalog.py:CatalogIngestor` — programmatic non-git ingestion (pages + nodes + embeddings, deterministic upsert). |
 | `entities/` | abstract-entity layer — `types` (Entity/EntityRelation/EntityMention/EntityRecommendation; deterministic id = `sha1(normalized_name\|type)`), the generalized `ResolutionLadder` + `EntityResolver`, `EntityMinter`, `EntityAnchorResolver`. Lives in the SAME multiplex store (`WikiStoreBase`) as code symbols + connector schemas + notes — NO parallel store/ER. |
-| `scg/` | the Source Capability Graph reachability engine — `types`, `store`, `providers/*`, `parser`, `router`, `entity_resolution`, `memory_bridge`, plus the `MapPhaseSink` DI seam (`map_phase.py`). |
+| `scg/` | the Source Capability Graph reachability engine — `types`, `store`, `providers/*`, `parser`, `router`, `entity_resolution`, `memory_bridge`, `scope` (#75), plus the `MapPhaseSink` DI seam (`map_phase.py`). The store stays GLOBAL per-source — flat `{source_id}#` keys, content-addressed node ids — **deliberately NOT partitioned by workspace** (`docs/features-search.md`: the SCG is one tenant of the shared multiplex graph; the wiki/search memory layers cross-pollinate). #75 makes a workspace a **scoped VIEW**, not a store copy: `ScgScope` (`scope.py`) carries a source-id allowlist on a `ContextVar` and `ScgRouter.route` drops any candidate recipe whose steps reach an out-of-scope source — so per-source mappings are shared (a re-map benefits every workspace) while routing/insights stay workspace-isolated. The ambient ContextVar is the seam BECAUSE the `scg` plugin tools (un-owned, call `ScgCore.store()`/`ScgCore.router()` with no scope arg) must stay untouched; the search drive binds the scope for its worker thread. |
 | `plugins/{wiki,scg}/` | the capability-gated SessionTools + AgentDefs that drive the above. They ship **with the substrate they wrap** (not in the core wheel) so they import it **down**. |
 
 Product-level decisions stay in the subsystem docs — read them before editing
@@ -102,6 +102,27 @@ a connector subgraph from a raw descriptor. They share a name root and nothing
 else. The SCG memory bridge MUST hand `InsightIngestor` a `ScgAnchorResolver`
 (which implements the *former* over `source_key`) or connector insights are
 written then silently dropped on read — see the scg subsystem doc.
+
+`ScgMemoryBridge` deposits through the shared `InsightIngestor`
+(`corpus="connector"`, anchored to capability `source_key`s). Its
+`ScgAnchorResolver` resolves a `source_key` KIND-AGNOSTICALLY over
+`_ANCHORABLE_KINDS=(capability, entity_type)` because `node_id=sha1(source_key|kind)`
+— an MCP-tool-list source is `capability`-only, so a fixed-`entity_type` probe
+dropped every anchor (#81-A: notes written, ANCHORS edge never created, silently
+dropped on read). `ScgParser.parse_source` stamps `ManifestHash` (`manifest.py`)
+on `schema_version` so a workspace-save drift check can re-map (#81-C). #76 (LANDED) makes
+routing memory-aware: `ScgRouter` takes an OPTIONAL `memory_bridge` + blends a
+`ScgMemoryBias` term into `cosine+edge` — a vector read + polarity-weighted sum,
+NO LLM (zero-LLM core preserved, best-effort/empty without embeddings,
+`ScgScope`-respecting). Polarity rides existing `MemoryNode.labels` as `scg:<pol>`
+(positive `+0.6` / dead_end `-0.8`, asymmetric; NO new field); `boost_for_steps`
+= MAX over steps; `route_with_memory→(recipes,bias)` lets `scg_route` project
+capped anchored HINTS. `ScgGraphView` (`graph_view.py`) = the SCG multiplex
+assembler mirroring `KnowledgeGraphView` (schema+memory for a source-id scope,
+cross-ANCHORS via `ScgAnchorResolver`, self-contained `to_wire` — no Flask,
+`auth_scope` redacted — for the #79 `…/workspaces/<id>/graph` route). Workspace
+is a `ws:<id>` attribution label (ambient `ScgScope.workspace()`), NEVER a
+partition.
 
 ## Abstract entities — durable decisions (Gitea #35)
 

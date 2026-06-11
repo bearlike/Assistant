@@ -29,3 +29,7 @@ include = [
   "strings.json",
   "translations/**",
 ]
+# Flat layout: this directory IS the package (HA custom-component style), so
+# `packages` above matches nothing and the wheel is metadata-only. Editable
+# installs expose the import by putting the parent dir (apps/) on sys.path.
+dev-mode-dirs = [".."]

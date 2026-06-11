@@ -13,7 +13,7 @@ Stubs only I/O (real network, SMTP, IMAP, Docker).  Exercises:
   _handle_email marks-SEEN even on None parse, system_context content
 - _normalize_origin: standard-port stripping, http/https, port preservation
 - _build_help_text, _format_project_list
-- _find_channel_context / _extract_final_answer
+- _find_channel_context / extract_final_answer
 - init_channels: NC Talk + email branch wiring
 """
 
@@ -772,7 +772,7 @@ def test_cmd_usage_formats_token_budget(route_env: tuple) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _find_channel_context / _extract_final_answer
+# _find_channel_context / extract_final_answer
 # ---------------------------------------------------------------------------
 
 
@@ -803,32 +803,32 @@ class TestChannelContextHelpers:
         ]
         assert _find_channel_context(events) is None
 
-    def test_extract_final_answer_on_error(self) -> None:
-        from mewbo_api.channels.routes import _extract_final_answer
+    def testextract_final_answer_on_error(self) -> None:
+        from mewbo_api.channels.routes import extract_final_answer
 
-        result = _extract_final_answer([], "Something went wrong")
+        result = extract_final_answer([], "Something went wrong")
         assert "error" in result.lower()
 
-    def test_extract_final_answer_from_completion(self) -> None:
-        from mewbo_api.channels.routes import _extract_final_answer
+    def testextract_final_answer_from_completion(self) -> None:
+        from mewbo_api.channels.routes import extract_final_answer
 
         events = [
             {"type": "completion", "payload": {"task_result": "Done!"}},
         ]
-        assert _extract_final_answer(events, None) == "Done!"
+        assert extract_final_answer(events, None) == "Done!"
 
-    def test_extract_final_answer_from_assistant(self) -> None:
-        from mewbo_api.channels.routes import _extract_final_answer
+    def testextract_final_answer_from_assistant(self) -> None:
+        from mewbo_api.channels.routes import extract_final_answer
 
         events = [
             {"type": "assistant", "payload": {"text": "Here is my answer."}},
         ]
-        assert _extract_final_answer(events, None) == "Here is my answer."
+        assert extract_final_answer(events, None) == "Here is my answer."
 
-    def test_extract_final_answer_empty_events_no_error(self) -> None:
-        from mewbo_api.channels.routes import _extract_final_answer
+    def testextract_final_answer_empty_events_no_error(self) -> None:
+        from mewbo_api.channels.routes import extract_final_answer
 
-        assert _extract_final_answer([], None) == ""
+        assert extract_final_answer([], None) == ""
 
 
 # ---------------------------------------------------------------------------

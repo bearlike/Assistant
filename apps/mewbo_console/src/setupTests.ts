@@ -10,6 +10,14 @@ vi.mock("virtual:pwa-register/react", () => ({
   }),
 }));
 
+// jsdom lacks ResizeObserver — stub it for components that observe layout (e.g. cmdk)
+class ResizeObserverStub {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+globalThis.ResizeObserver = globalThis.ResizeObserver ?? ResizeObserverStub;
+
 // jsdom lacks matchMedia — stub it for hooks that use media queries (e.g. useIsMobile)
 Object.defineProperty(window, "matchMedia", {
   writable: true,

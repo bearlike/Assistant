@@ -4,11 +4,16 @@
 
 import { API_BASE, API_KEY } from "./client"
 import { sseStream } from "./sse"
+import type { WorkspaceGraph } from "../components/agentic_search/graph/types"
 import type {
+  MapJobEvent,
+  MapJobRecord,
   RunPayload,
   RunRecord,
   RunStatus,
+  ScgStatus,
   SearchEvent,
+  SearchTier,
   SourceCatalogEntry,
   Workspace,
   WorkspaceInput,
@@ -94,7 +99,8 @@ export interface RunInput {
   workspace_id: string
   query: string
   project?: string
-  model?: string
+  /** Search budget tier; the server defaults to `scg.default_tier` (auto). */
+  tier?: SearchTier
 }
 
 /** Result of starting a run — the synchronous `POST /runs` envelope. */
@@ -119,6 +125,31 @@ export async function startRun(input: RunInput): Promise<StartRunResult> {
   return readJson<StartRunResult>(res)
 }
 
+/**
+ * Fetch the workspace-scoped SCG multiplex graph (#79). Returns the layer-tagged
+ * nodes/edges projection (schema + memory + entity), with unmapped sources as
+ * ghost nodes. Degrades gracefully server-side — an unmapped / SCG-disabled
+ * workspace returns an empty-schema payload (every source in ``stats.unmapped``),
+ * never an error; only an unknown workspace 404s.
+ */
+export async function getWorkspaceGraph(workspaceId: string): Promise<WorkspaceGraph> {
+  const res = await fetch(
+    withBase(`/api/agentic_search/workspaces/${encodeURIComponent(workspaceId)}/graph`),
+    { headers: jsonHeaders() }
+  )
+  return readJson<WorkspaceGraph>(res)
+}
+
+/** List a workspace's persisted run history (most recent first). */
+export async function listWorkspaceRuns(workspaceId: string): Promise<RunRecord[]> {
+  const res = await fetch(
+    withBase(`/api/agentic_search/workspaces/${encodeURIComponent(workspaceId)}/runs`),
+    { headers: jsonHeaders() }
+  )
+  const payload = await readJson<{ runs: RunRecord[] }>(res)
+  return payload.runs
+}
+
 /** Fetch a durable run snapshot (reload / deep-link rehydration). */
 export async function getRun(runId: string): Promise<RunRecord> {
   const res = await fetch(
@@ -139,6 +170,72 @@ export function streamRun(
 ): AsyncGenerator<SearchEvent> {
   return sseStream<SearchEvent>(
     `/api/agentic_search/runs/${encodeURIComponent(runId)}/events`,
+    { base: API_BASE, apiKey: API_KEY, signal: options.signal }
+  )
+}
+
+// ── SCG introspection + map-source (indexing) jobs ──────────────────────────
+
+/**
+ * `GET /scg` introspection. The route 503s while `scg.enabled` is off — map
+ * that to `{enabled: false}` so the console renders a setup hint, not an error.
+ */
+export async function getScgStatus(): Promise<ScgStatus> {
+  const res = await fetch(withBase("/api/agentic_search/scg"), {
+    headers: jsonHeaders(),
+  })
+  if (res.status === 503) return { enabled: false, counts: null, sources: [] }
+  return readJson<ScgStatus>(res)
+}
+
+/** Start a map-source (SCG indexing) job. Returns the job record + id. */
+export async function startMapJob(
+  sourceId: string,
+  input: { source_type: string }
+): Promise<{ job: MapJobRecord; job_id: string }> {
+  const res = await fetch(
+    withBase(`/api/agentic_search/sources/${encodeURIComponent(sourceId)}/map`),
+    { method: "POST", headers: jsonHeaders(), body: JSON.stringify(input) }
+  )
+  return readJson<{ job: MapJobRecord; job_id: string }>(res)
+}
+
+/** List map jobs for a source, latest-first (reload-safe snapshot read). */
+export async function listMapJobs(sourceId: string): Promise<MapJobRecord[]> {
+  const res = await fetch(
+    withBase(`/api/agentic_search/sources/${encodeURIComponent(sourceId)}/map/jobs`),
+    { headers: jsonHeaders() }
+  )
+  const payload = await readJson<{ jobs: MapJobRecord[] }>(res)
+  return payload.jobs
+}
+
+/** Fetch a single map-job record. */
+export async function getMapJob(
+  sourceId: string,
+  jobId: string
+): Promise<MapJobRecord> {
+  const res = await fetch(
+    withBase(
+      `/api/agentic_search/sources/${encodeURIComponent(sourceId)}/map/jobs/${encodeURIComponent(jobId)}`
+    ),
+    { headers: jsonHeaders() }
+  )
+  const payload = await readJson<{ job: MapJobRecord }>(res)
+  return payload.job
+}
+
+/**
+ * Stream a map job's event log over SSE (phase updates + terminal events).
+ * `jobId` selects a specific job; otherwise the source's newest job streams.
+ */
+export function streamMapJob(
+  sourceId: string,
+  options: { jobId?: string; signal?: AbortSignal } = {}
+): AsyncGenerator<MapJobEvent> {
+  const qs = options.jobId ? `?job_id=${encodeURIComponent(options.jobId)}` : ""
+  return sseStream<MapJobEvent>(
+    `/api/agentic_search/sources/${encodeURIComponent(sourceId)}/map/events${qs}`,
     { base: API_BASE, apiKey: API_KEY, signal: options.signal }
   )
 }

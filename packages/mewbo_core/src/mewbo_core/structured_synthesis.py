@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Protocol
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from mewbo_core.common import get_logger
+from mewbo_core.components import langfuse_invoke_config
 from mewbo_core.config import get_config_value
 from mewbo_core.llm import build_chat_model
 from mewbo_core.structured_response import (
@@ -208,8 +209,19 @@ class StructuredSynthesizer:
             HumanMessage(content=query),
         ]
 
+        # Attach the Langfuse CallbackHandler so this generation EXPORTS (the
+        # surrounding ``langfuse_session_context`` only propagates attributes; with
+        # no observation created inside, nothing lands in the trace — #87). Reads
+        # the contextvar session/trace the recorder opened, so the generation joins
+        # the session-grouped trace. ``{}`` (no-op config) when Langfuse is off.
+        invoke_config = langfuse_invoke_config(
+            user_id="mewbo-structured-fast",
+            session_id="structured-fast",
+            trace_name="mewbo-structured-fast",
+        )
+
         # 4. First model call ---------------------------------------------------
-        response = await bound_model.ainvoke(messages)
+        response = await bound_model.ainvoke(messages, config=invoke_config or None)
         result = await self._handle_response(response, emit)
         if result is not None:
             return result, citations
@@ -233,7 +245,7 @@ class StructuredSynthesizer:
             response,
             HumanMessage(content=reask_content),
         ]
-        response2 = await bound_model.ainvoke(messages)
+        response2 = await bound_model.ainvoke(messages, config=invoke_config or None)
         result2 = await self._handle_response(response2, emit)
         if emit.failed:
             raise StructuredResponseError(

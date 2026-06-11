@@ -14,11 +14,18 @@ Parity with the echo runner (its sequence is the reference shape):
     run_started → (agent_start → agent_line* → agent_done)* → result*
                 → answer_delta* → answer_ready → run_done | error
 
-Synchronous semantics (mirrors :class:`EchoSearchRunner`): :meth:`start` drives
-the session to completion via ``runtime.run_sync`` and appends a terminal event
-(``run_done`` / ``error``) before returning — the run event log stays the single
-authoritative status channel (no second channel; the SSE generator tails the
-same log identically for echo and orchestrated runs).
+Asynchronous semantics (mirrors :class:`MapSourceJob`): :meth:`start` appends
+``run_started``, seeds the session, and launches the drive on the runtime's
+managed background worker (``runtime.start_command`` — the same ``RunRegistry``
+seam ``start_async`` rides, serialized per session and cancellable via
+``should_cancel``), returning a ``running`` snapshot promptly. The worker
+settles the run when the session ends — terminal status from
+``runtime.summarize_session`` (the engine's single status chokepoint), terminal
+event appended event-first — so the run event log stays the single
+authoritative status channel (the SSE generator tails it; the MCP facade polls
+the snapshot) and ``runtime.cancel(session_id)`` actually reaches a registered
+``RunHandle`` (a bare ``run_sync`` never registers one, which made cancel a
+no-op by construction and let a dead worker strand a ``running`` record).
 
 Security invariants (spec §6 / subsystem CLAUDE.md):
 
@@ -38,64 +45,45 @@ Security invariants (spec §6 / subsystem CLAUDE.md):
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Literal
 
 from mewbo_core.common import get_logger
 from mewbo_core.permissions import auto_approve
+from mewbo_core.session_event_bus import get_session_event_bus
 
 from .. import events
 from ..runner import _typewriter_chunks
 from ..schemas import (
+    TERMINAL_RUN_STATUSES,
     AnswerSynthesis,
     RunPayload,
     RunRecord,
     SearchResult,
     TraceAgent,
-    TraceLine,
     Workspace,
     utc_now_iso,
 )
 from .config import ScgConfig
+from .playbooks import load_playbook
+from .run_streamer import ProbeTrace, RunEventStreamer
+from .workspace_binding import WorkspaceGraphBinding
 
 logging = get_logger(name="api.agentic_search.scg.orchestrated_runner")
 
-# The tier budget knob the ``scg-search`` agent reads (decomposition depth +
-# probe fan-out). ``Auto`` is the default — a single loop, three knob settings,
-# never three engines (spec §8 WITHDRAWN: no parallel proof-search engine).
-SearchTier = Literal["Fast", "Auto", "Deep"]
-_DEFAULT_TIER: SearchTier = "Auto"
-_VALID_TIERS: frozenset[str] = frozenset({"Fast", "Auto", "Deep"})
-
-# Traversal verbs the search agent always needs, independent of which connector
-# tools a run's sources unlock. Unioned with the run's scoped connector grant.
-_TRAVERSAL_TOOLS: tuple[str, ...] = (
-    "scg_route",
-    "scg_memory",
-    "spawn_agent",
-    "check_agents",
-    "steer_agent",
-)
-
-# The capability-gated AgentDef this runner drives (see scg-search.md frontmatter
-# ``requires-capabilities: [scg]``); advertised via the session context event.
-_SEARCH_CAPABILITY = "scg"
+RunTerminalStatus = Literal["completed", "failed", "cancelled"]
 
 
 class OrchestratedSearchRunner:
-    """Synchronous ``SearchRunner`` backed by a real ``scg-search`` session.
+    """Async ``SearchRunner`` backed by a real ``scg-search`` session.
 
     Dependency-light by design: the only collaborator is the ``SessionRuntime``
     passed through ``start(..., runtime=...)`` (so tests inject a fake runtime
     feeding a canned transcript — no LLM, no real session). State per run lives
-    on the store's event log, not on the instance, so one runner is reusable.
-
-    The default tier is :data:`_DEFAULT_TIER`; a per-run override may be supplied
-    at construction (the route/façade picks it from the request).
+    on the store's event log + record, not on the instance — including the tier
+    (the budget knob rides ``RunRecord.tier``, never the runner) — so one
+    runner is reusable.
     """
-
-    def __init__(self, *, tier: SearchTier = _DEFAULT_TIER) -> None:
-        """Bind the default search tier (budget knob) for runs this drives."""
-        self.tier: SearchTier = tier if tier in _VALID_TIERS else _DEFAULT_TIER
 
     # -- SearchRunner Protocol ---------------------------------------------
 
@@ -106,15 +94,18 @@ class OrchestratedSearchRunner:
         *,
         store: Any,
         runtime: Any = None,
+        source_platform: str | None = None,
     ) -> RunPayload:
-        """Drive *run* via a real ``scg-search`` session; return the snapshot.
+        """Launch *run* on the runtime's managed worker; return a running snapshot.
 
         Appends ``run_started`` immediately, then either (a) fails fast with an
         ``error`` terminal when the feature is disabled or no runtime is wired,
-        or (b) starts the capability-scoped session, drives it to completion,
-        translates the transcript into the normalized event sequence, and
-        appends the terminal event. The returned :class:`RunPayload` is also
-        persisted onto the record.
+        or (b) seeds the capability-scoped session, patches the real session id
+        onto the record (so ``POST /runs/<id>/cancel`` → ``runtime.cancel``
+        reaches the registry handle), and starts the drive via
+        ``runtime.start_command``. The worker appends every subsequent event and
+        settles the terminal state — the returned payload is a ``running``
+        snapshot, never the terminal one.
         """
         store.append_run_event(
             run.run_id,
@@ -142,123 +133,194 @@ class OrchestratedSearchRunner:
                 message="No SessionRuntime wired for the orchestrated runner.",
             )
 
+        # The workspace binding seam (#77): the ONE place a workspace confers the
+        # ``scg`` capability + graph traversal tools + the source scope. The same
+        # seam the structured graph-first path reuses.
+        binding = WorkspaceGraphBinding.for_workspace(workspace, run.allowed_tools)
+
         try:
-            session_id = self._drive_session(run, workspace, runtime=runtime)
+            session_id = self._seed_session(
+                run, binding, runtime=runtime, source_platform=source_platform
+            )
         except Exception as exc:  # noqa: BLE001 — surface as a structured error
-            logging.warning("scg-search run %s failed to drive: %s", run.run_id, exc)
+            logging.warning("scg-search run %s failed to seed: %s", run.run_id, exc)
+            return self._fail(run, store=store, code="internal", message=str(exc))
+
+        # Patch the REAL session id before returning so the cancel route can
+        # reach the registry handle while the worker drives.
+        run = run.model_copy(update={"session_id": session_id})
+        store.update_run(run.run_id, session_id=session_id)
+
+        # Live projection (#77): subscribe to the backing session's event bus
+        # BEFORE the drive so each probe's ``sub_agent`` event is projected onto
+        # the run log AS it happens — the console reveals lanes live instead of
+        # waiting for the whole run to finish. Reuses the SideStage SessionEventBus
+        # seam, not a new transport.
+        streamer = RunEventStreamer(
+            run_id=run.run_id, store=store, bus=get_session_event_bus()
+        )
+        streamer.subscribe(session_id)
+
+        def _drive(cancel_event: threading.Event) -> None:
+            """Run the session to completion on the worker; settle the run."""
+            try:
+                streamer.start()
+                with binding.scope():
+                    runtime.run_sync(
+                        session_id=session_id,
+                        user_query=self._render_user_query(run.query, run.tier),
+                        # The tier picks the brain (fast→nano / auto→sonnet /
+                        # deep→frontier via scg.traversal.tier_models); None
+                        # (blank/unknown) falls back to llm.default_model.
+                        # Probes inherit the session model.
+                        model_name=ScgConfig.model_for_tier(run.tier),
+                        allowed_tools=binding.allowed_tools(),
+                        skill_instructions=load_playbook("scg-search"),
+                        approval_callback=auto_approve,
+                        should_cancel=cancel_event.is_set,
+                    )
+                streamer.stop()
+                records = runtime.load_events(session_id)
+                summary = runtime.summarize_session(session_id)
+                self._settle(
+                    run,
+                    store=store,
+                    session_id=session_id,
+                    records=records,
+                    summary=summary,
+                    streamer=streamer,
+                )
+            except Exception as exc:  # noqa: BLE001 — settle as structured failure
+                streamer.stop()
+                logging.warning(
+                    "scg-search run %s failed to drive: %s", run.run_id, exc
+                )
+                self._fail(run, store=store, code="internal", message=str(exc))
+
+        if not runtime.start_command(session_id, _drive):
+            # The registry refused (a run is already active on the session).
             return self._fail(
-                run, store=store, code="internal", message=str(exc)
+                run,
+                store=store,
+                code="busy",
+                message="session already has an active run",
             )
 
-        records = runtime.load_events(session_id)
-        return self._translate(run, store=store, session_id=session_id, records=records)
+        return RunPayload(
+            run_id=run.run_id,
+            session_id=session_id,
+            query=run.query,
+            workspace_id=run.workspace_id,
+            status="running",
+            tier=run.tier,
+        )
 
-    # -- Session drive ------------------------------------------------------
+    # -- Session seeding ------------------------------------------------------
 
-    def _drive_session(
-        self, run: RunRecord, workspace: Workspace, *, runtime: Any
+    def _seed_session(
+        self,
+        run: RunRecord,
+        binding: WorkspaceGraphBinding,
+        *,
+        runtime: Any,
+        source_platform: str | None = None,
     ) -> str:
-        """Resolve + seed a capability-scoped session and run it to completion.
+        """Resolve + seed a capability-scoped session; return its id.
 
-        Returns the resolved session id (patched onto the record). The query +
-        tier seed the user turn; the untrusted workspace instructions are
-        attached as a labelled context event ONLY — never the system prompt.
+        The scg-search playbook is the trusted ``skill_instructions`` extension
+        (passed at drive time); the capability advertisement + the untrusted
+        workspace instructions ride the binding's context events — the latter
+        as a labelled context event ONLY, never the system prompt.
+
+        The session tag is ``agentic_search:run:<run_id>`` so ``TraceProvenance``
+        classifies it ``search`` / ``session_type=search_run`` — NOT the
+        ``scg_map`` mislabel the old ``agentic_search:scg:`` tag produced (a
+        search RUN is not a map; ``scg:map:`` is the mapper's own tag). #77.
+
+        ``source_platform`` (when the route forwards it) is stamped as the
+        session's surface context event so the Langfuse trace reads
+        ``surface:<platform>`` instead of ``surface:unknown`` (#77).
         """
-        session_tag = f"agentic_search:scg:{run.run_id}"
+        session_tag = f"agentic_search:run:{run.run_id}"
         session_id = runtime.resolve_session(session_tag=session_tag)
 
-        # Advertise the ``scg`` capability so spawn_agent can look up the
+        # Capability advertisement + quarantined untrusted instructions — the
+        # ONE seam (#77). Advertising ``scg`` lets spawn_agent look up the
         # scg-search / scg-path-probe AgentDefs (gating mirrors wiki jobs.py).
-        runtime.append_context_event(
-            session_id, {"client_capabilities": [_SEARCH_CAPABILITY]}
-        )
-
-        # Untrusted prompt input — kept OUT of the system prompt. Attached as an
-        # explicitly-labelled context event the agent may consult via tools.
-        if workspace.instructions:
+        for context in binding.context_events:
+            runtime.append_context_event(session_id, context)
+        if source_platform:
             runtime.append_context_event(
-                session_id,
-                {"untrusted_workspace_instructions": workspace.instructions},
+                session_id, {"source_platform": source_platform}
             )
-
-        allowed_tools = self._allowed_tools(run.allowed_tools)
-        user_query = self._render_user_query(run.query, self.tier)
-
-        runtime.run_sync(
-            session_id=session_id,
-            user_query=user_query,
-            model_name=None,
-            allowed_tools=allowed_tools,
-            approval_callback=auto_approve,
-        )
         return session_id
 
     @staticmethod
-    def _allowed_tools(scoped: list[str]) -> list[str]:
-        """Union the run's scoped connector grant with the SCG traversal verbs.
+    def _render_user_query(query: str, tier: str) -> str:
+        """Render the user turn carrying the query + tier knob for scg-search.
 
-        ``scoped`` is the path-capability grant on the record (sources ∩
-        ``filter_specs``); the traversal verbs are appended so the search agent
-        can route + fan out. De-duplicated, selection order preserved.
+        The wire tier is lowercase (``fast|auto|deep``); the playbook's knob
+        vocabulary is capitalized (``Fast | Auto | Deep``), so capitalize here.
         """
-        seen: set[str] = set()
-        out: list[str] = []
-        for tool_id in (*scoped, *_TRAVERSAL_TOOLS):
-            if tool_id not in seen:
-                seen.add(tool_id)
-                out.append(tool_id)
-        return out
+        return (
+            f"query: {query}\ntier: {tier.capitalize()}\n\n"
+            "Proceed per the scg-search playbook."
+        )
 
-    @staticmethod
-    def _render_user_query(query: str, tier: SearchTier) -> str:
-        """Render the user turn carrying the query + tier knob for scg-search."""
-        return f"query: {query}\ntier: {tier}\n\nProceed per the scg-search playbook."
+    # -- Transcript → event protocol settle ---------------------------------
 
-    # -- Transcript → event protocol translation ---------------------------
-
-    def _translate(
+    def _settle(
         self,
         run: RunRecord,
         *,
         store: Any,
         session_id: str,
         records: list[dict[str, Any]],
-    ) -> RunPayload:
-        """Project a finished session transcript onto the run event log.
+        summary: dict[str, Any],
+        streamer: RunEventStreamer | None = None,
+    ) -> RunPayload | None:
+        """Reconcile a finished session transcript onto the run event log.
 
-        ``sub_agent`` lifecycle events become the per-pathway trace
-        (``agent_start`` / ``agent_line`` / ``agent_done``); the final assistant
-        answer becomes the ``answer_delta*`` typewriter + ``answer_ready``; the
-        run's terminal state becomes ``run_done`` / ``error``. The accumulated
-        :class:`RunPayload` is persisted onto the record.
+        The worker's one terminal path (event first, snapshot second — the
+        ``MapSourceJob._settle`` stance). The per-pathway trace
+        (``agent_start`` / ``agent_line`` / ``agent_done``) is now streamed LIVE
+        by :class:`RunEventStreamer` as each probe runs; settle only
+        RECONCILES — :meth:`RunEventStreamer.reconcile_missing` flushes any agent
+        the live stream did not already emit (a fast run whose ``completion``
+        landed before the consumer drained, a bus drop, or a fake-runtime test
+        with no live bus). The final assistant answer becomes the
+        ``answer_delta*`` typewriter + ``answer_ready``; the terminal status
+        comes from *summary* (see :meth:`_run_status`). A record the cancel
+        route already settled is left untouched — never a second terminal event.
         """
+        if self._already_settled(store, run.run_id):
+            return None
+
         trace = self._build_trace(records)
-        for agent in trace:
-            store.append_run_event(
-                run.run_id,
-                events.agent_start(
-                    agent_id=agent.agent_id,
-                    source_id=agent.source_id,
-                    name=agent.name,
-                    slot=agent.slot,
-                ),
-            )
-            for line in agent.lines:
+        if streamer is not None:
+            streamer.reconcile_missing(trace)
+        else:
+            # No live streamer (defensive / legacy call): emit the full trace.
+            for agent in trace:
                 store.append_run_event(
-                    run.run_id, events.agent_line(agent_id=agent.agent_id, line=line)
+                    run.run_id,
+                    events.agent_start(
+                        agent_id=agent.agent_id,
+                        source_id=agent.source_id,
+                        name=agent.name,
+                        slot=agent.slot,
+                    ),
                 )
-            # A probe that emitted any trace line did work — the console must not
-            # grey it out as empty on a successful run. ``results_count`` stays 0
-            # (probes synthesize into the answer, they don't emit result cards),
-            # so ``empty`` reflects whether the lane produced output, not hits.
-            store.append_run_event(
-                run.run_id,
-                events.agent_done(
-                    agent_id=agent.agent_id,
-                    results_count=0,
-                    empty=not agent.lines,
-                ),
-            )
+                for line in agent.lines:
+                    store.append_run_event(
+                        run.run_id, events.agent_line(agent_id=agent.agent_id, line=line)
+                    )
+                store.append_run_event(
+                    run.run_id,
+                    events.agent_done(
+                        agent_id=agent.agent_id, results_count=0, empty=not agent.lines
+                    ),
+                )
 
         # Results: the SCG search synthesizes a cited answer rather than emitting
         # per-source result cards (the connector return is the verifier, not a
@@ -266,19 +328,24 @@ class OrchestratedSearchRunner:
         # carries them. The trace + answer are the live surfaces today.
         results: list[SearchResult] = []
 
-        status, answer_text, err = self._terminal(records)
+        status = self._run_status(summary)
+        answer_text, err = self._task_result(records)
         answer = AnswerSynthesis(tldr=answer_text, sources_count=len(results))
+
+        if status == "failed":
+            return self._fail(
+                run,
+                store=store,
+                code="agent_error",
+                message=err
+                or f"run ended: {summary.get('done_reason') or 'unknown'}",
+            )
 
         if status == "completed":
             for chunk in _typewriter_chunks(answer_text):
                 if chunk:
                     store.append_run_event(run.run_id, events.answer_delta(text=chunk))
             store.append_run_event(run.run_id, events.answer_ready(answer=answer))
-
-        if status == "failed":
-            return self._fail(
-                run, store=store, code="agent_error", message=err or "run failed"
-            )
 
         store.append_run_event(
             run.run_id, events.run_done(status=status, total_ms=0)
@@ -289,6 +356,7 @@ class OrchestratedSearchRunner:
             query=run.query,
             workspace_id=run.workspace_id,
             status=status,
+            tier=run.tier,
             total_ms=0,
             answer=answer if status == "completed" else AnswerSynthesis(),
             results=results,
@@ -301,7 +369,49 @@ class OrchestratedSearchRunner:
             completed_at=utc_now_iso(),
             payload=payload,
         )
+        store.update_past_query(
+            run.workspace_id, run.run_id, status=status, results=len(results)
+        )
         return payload
+
+    @staticmethod
+    def _already_settled(store: Any, run_id: str) -> bool:
+        """True when the record is already terminal (e.g. the cancel route won)."""
+        record = store.get_run(run_id)
+        return record is not None and record.status in TERMINAL_RUN_STATUSES
+
+    @staticmethod
+    def _run_status(summary: dict[str, Any]) -> RunTerminalStatus:
+        """Project ``summarize_session``'s vocabulary onto the run statuses.
+
+        ``summarize_session`` is the engine's single status chokepoint — never
+        re-derive status from the raw completion payload (that drift shipped
+        two bugs: non-success ``done_reason`` values coerced to ``completed``,
+        and a guard on a ``"cancelled"`` spelling the engine never emits — the
+        loop says ``"canceled"``). Mapping: ``completed`` → ``completed``;
+        ``canceled`` → ``cancelled``; every other summary status (``failed`` /
+        ``incomplete`` / ``awaiting_approval`` / ``idle``) is a non-success
+        terminal → ``failed``.
+
+        One wrinkle: the settle executes INSIDE the worker ``start_command``
+        registered, so the summary's ``is_running`` override reports our own
+        still-alive drive thread as ``running``. The turn itself is finished
+        (``run_sync`` returned), so fall back to the ``done_reason`` the
+        summary forwards verbatim — same chokepoint, minus the
+        self-observation override; ``completed``/``canceled`` are the only
+        success/cancel reasons the loop emits.
+        """
+        status = str(summary.get("status") or "")
+        if status == "running":
+            reason = str(summary.get("done_reason") or "")
+            if reason == "canceled":
+                return "cancelled"
+            return "completed" if reason == "completed" else "failed"
+        if status == "completed":
+            return "completed"
+        if status == "canceled":
+            return "cancelled"
+        return "failed"
 
     @staticmethod
     def _build_trace(records: list[dict[str, Any]]) -> list[TraceAgent]:
@@ -321,52 +431,41 @@ class OrchestratedSearchRunner:
             agent_id = str(payload.get("agent_id") or "")
             if not agent_id:
                 continue
-            action = str(payload.get("action") or "")
             if agent_id not in agents:
                 order.append(agent_id)
                 agents[agent_id] = TraceAgent(
                     id=agent_id,
                     agent_id=agent_id,
-                    name=str(payload.get("model") or "scg-path-probe"),
-                    source_id=str(payload.get("parent_id") or ""),
+                    name=ProbeTrace.lane_name(payload),
+                    source_id=ProbeTrace.source_id(payload),
                     slot=len(order) - 1,
                 )
-            detail = str(payload.get("detail") or action)
-            agents[agent_id].lines.append(
-                TraceLine(
-                    t_ms=0,
-                    glyph="✓" if action == "stop" else "·",
-                    text=detail,
-                    done=action == "stop",
-                )
-            )
+            # ONE projection shared with the live streamer (DRY) so a settle-time
+            # reconciled lane is byte-identical to one that streamed live.
+            agents[agent_id].lines.append(ProbeTrace.line(payload))
         return [agents[a] for a in order]
 
     @staticmethod
-    def _terminal(
+    def _task_result(
         records: list[dict[str, Any]],
-    ) -> tuple[Literal["completed", "failed", "cancelled"], str, str | None]:
-        """Derive ``(status, answer_text, error)`` from the session transcript.
+    ) -> tuple[str, str | None]:
+        """Extract ``(answer_text, error)`` from the last ``completion`` event.
 
-        Reads the last ``completion`` event: a ``done_reason`` of ``error`` /
-        ``cancelled`` maps to that terminal; anything else is ``completed`` with
-        the completion text as the synthesized answer. A transcript with no
-        completion event (never ran) is treated as a failure.
+        Status is NOT derived here — that comes from ``summarize_session``
+        (see :meth:`_run_status`). The summary doesn't carry ``task_result``,
+        so the raw payload (``{done, done_reason, task_result, error?,
+        last_error?}`` — orchestrator.py; there is no ``text`` key) is read for
+        the synthesized answer + error detail only.
         """
         completion: dict[str, Any] | None = None
         for rec in records:
             if rec.get("type") == "completion":
                 completion = rec.get("payload") or {}
         if completion is None:
-            return "failed", "", "no completion event in transcript"
-
-        text = str(completion.get("text") or "")
-        reason = str(completion.get("done_reason") or "")
-        if reason in ("cancelled", "canceled"):
-            return "cancelled", "", None
-        if reason == "error" or completion.get("error"):
-            return "failed", "", str(completion.get("error") or text or "run errored")
-        return "completed", text, None
+            return "", "no completion event in transcript"
+        text = str(completion.get("task_result") or "")
+        err = completion.get("error") or completion.get("last_error")
+        return text, str(err) if err else None
 
     # -- Failure terminal ---------------------------------------------------
 
@@ -375,19 +474,24 @@ class OrchestratedSearchRunner:
     ) -> RunPayload:
         """Append an ``error`` terminal + persist a failed snapshot; return it.
 
-        The single failure path for every early-out and caught exception, so the
-        event log always closes with exactly one terminal event (no second
-        status channel).
+        The single failure path for every early-out, caught exception, and
+        non-success terminal, so the event log always closes with exactly one
+        terminal event (no second status channel). A no-op (beyond returning
+        the failed payload) when the record is already terminal — the cancel
+        route settles first and must never be followed by a second terminal.
         """
-        store.append_run_event(run.run_id, events.error(code=code, message=message))
         payload = RunPayload(
             run_id=run.run_id,
             session_id=run.session_id,
             query=run.query,
             workspace_id=run.workspace_id,
             status="failed",
+            tier=run.tier,
             error=message,
         )
+        if self._already_settled(store, run.run_id):
+            return payload
+        store.append_run_event(run.run_id, events.error(code=code, message=message))
         store.update_run(
             run.run_id,
             status="failed",
@@ -395,7 +499,10 @@ class OrchestratedSearchRunner:
             error=message,
             payload=payload,
         )
+        store.update_past_query(
+            run.workspace_id, run.run_id, status="failed", results=0
+        )
         return payload
 
 
-__all__ = ["OrchestratedSearchRunner", "SearchTier"]
+__all__ = ["OrchestratedSearchRunner"]

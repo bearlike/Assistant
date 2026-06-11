@@ -165,3 +165,40 @@ def test_run_validates_inputs():
         headers=_auth(),
     )
     assert bad_ws.status_code == 400
+
+
+def test_search_workspaces_filters_name_desc_and_history():
+    """?q= filters case-insensitively over name, description and past queries."""
+    client = backend.app.test_client()
+
+    def _ids(q: str) -> set[str]:
+        response = client.get(
+            f"/api/agentic_search/workspaces?q={q}", headers=_auth()
+        )
+        assert response.status_code == 200
+        return {w["id"] for w in response.get_json()["workspaces"]}
+
+    assert _ids("ENGINEERING") == {"eng-docs"}  # name, case-insensitive
+    assert _ids("gtm") == {"product"}  # description
+    assert _ids("permissioning") == {"eng-docs"}  # past-query text
+    assert _ids("zzz-no-match") == set()
+
+
+def test_search_workspaces_blank_query_returns_all():
+    """A missing/blank q keeps the unfiltered listing (response shape unchanged)."""
+    client = backend.app.test_client()
+    unfiltered = client.get("/api/agentic_search/workspaces", headers=_auth())
+    blank = client.get("/api/agentic_search/workspaces?q=", headers=_auth())
+    assert blank.status_code == 200
+    assert {w["id"] for w in blank.get_json()["workspaces"]} == {
+        w["id"] for w in unfiltered.get_json()["workspaces"]
+    }
+
+
+def test_store_search_workspaces_shared_filter():
+    """The base-class filter matches the route semantics for both backends."""
+    st = store.get_store()
+    assert [w.id for w in st.search_workspaces("Home-Ops")] == ["home-ops"]
+    assert [w.id for w in st.search_workspaces("  ")] == [
+        w.id for w in st.list_workspaces()
+    ]

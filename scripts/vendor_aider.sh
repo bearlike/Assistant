@@ -3,7 +3,7 @@ set -euo pipefail
 
 AIDER_REF=${AIDER_REF:-4bf56b77145b0be593ed48c3c90cdecead217496}
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-VENDOR_DIR="$ROOT_DIR/vendor/aider"
+VENDOR_DIR="$ROOT_DIR/packages/mewbo_tools/vendor/aider"
 
 FILES=(
   "aider/coders/editblock_coder.py"
@@ -41,6 +41,10 @@ cat > "$VENDOR_DIR/README.md" <<README
 This directory vendors a minimal subset of Aider (https://github.com/Aider-AI/aider)
 needed for the Mewbo edit-block adapter. It is intentionally small and updated
 via scripts/vendor_aider.sh.
+
+These files are a verbatim upstream reference snapshot and are never imported
+at runtime. The adapted, importable copies live under
+packages/mewbo_tools/src/mewbo_tools/ (aider_bridge/ and vendor/aider/).
 
 Pinned upstream commit: ${AIDER_REF}
 

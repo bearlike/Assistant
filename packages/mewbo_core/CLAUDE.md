@@ -86,6 +86,86 @@ lives in this package.
   event no longer advertises them. The API `/recover` dispatches **origin-aware**:
   a session backing a recoverable wiki indexing job → checkpoint `WikiResume`
   (skip-if-done), everything else → generic continue/retry.
+  - **`continue` truncation anchors on the last `recovery` marker, NOT the last
+    `completion` (#84).** Its only job is to drop a STALE PRIOR continue attempt
+    (the `recovery` audit event + the synthetic turn it drove) so the transcript
+    doesn't accrete duplicate recovery prompts. Anchoring on the last *completion*
+    was a latent data-loss bug: a run killed mid-flight (process restart) emits no
+    completion for its turn, so the anchor fell back to the PREVIOUS completed turn
+    and `truncate_after` physically deleted the entire interrupted turn — its user
+    message and every tool call/result. That presented as a console "prior traces
+    hidden" bug (the FE faithfully rendered a transcript the backend had erased).
+    No prior `recovery` marker ⇒ nothing stale ⇒ preserve everything; the
+    interrupted turn stays an open turn the continuation resumes from. Lesson: a
+    recovery/stitch that DELETES transcript must key off a marker that is present
+    ONLY when there is genuinely something stale to delete, never off a terminal
+    event that a crash can skip.
+
+## Trace provenance — filterable Langfuse tags (one seam, one classifier)
+
+Every execution path funnels through ONE observability entry point:
+`components.py:langfuse_session_context`, opened once in `Orchestrator.run`. Its
+`langfuse_propagate` (a thin wrap of Langfuse `propagate_attributes`) attaches
+tags+metadata to **every** child observation — nested LangChain CallbackHandler
+generations AND `langfuse_trace_span` spans (planning/context/tools) — because
+propagation is contextvar-based. **So enrich filterability HERE, never at
+per-call-site handlers.** The seam stays taxonomy-free: it propagates whatever
+`tags`/`metadata` it is handed and never learns the prefixes.
+
+- `session_provenance.py:TraceProvenance` is the single classifier (pure, no I/O,
+  sibling to `SessionOrigin`). `derive(tags, context, surface)` folds a session's
+  three durable signals into filter chips + metadata. `tags` = low-cardinality
+  `key:value` chips (`origin`/`product`/`session_type`/`surface`/`project`/`repo`/
+  `branch`/`workspace`/`model`); `metadata` = the superset incl. high-card ids
+  (`wiki_id`/`search_id`/`vcs_*`/`channel_id`/`thread_id`), `worktree`, and
+  `capabilities`. Tags win over context on overlap (a `vcs:<owner/repo>` tag's
+  repo supersedes a bare context `repo`); an unrecognised manual `/tag` label is
+  skipped so it never masks the real product. `origin` is the console enum
+  (`user`/`wiki`/`search`/`channel`/`structured`/`draft`); `product` refines it
+  (adds `vcs`, which has no coarse origin). **Adding an origin is a three-site
+  lockstep:** the `SessionOrigin` member + its `classify` tag-prefix, the
+  `_ORIGIN_PRODUCT` map, and (if the tag carries sub-kind/ids) a `_facets_from_tags`
+  arm — plus the console mirror (`types.ts` union, `ORIGIN_FILTERS`,
+  `SessionOriginBadge` Record, all exhaustive). Tag a session at creation
+  (the robust signal) — context fallback only catches un-tagged paths. The
+  realtime surfaces use `structured:run`/`structured:fast`/`draft:stream`: the
+  tag's 2nd segment becomes `session_type` so the three structured-family
+  variants stay individually filterable under one `structured`/`draft` product.
+  Search has three distinct `session_type`s under product `search` (#77): a RUN
+  `agentic_search:run:`→`search_run`, a MAP-source job `scg:map:`→`scg_map`, and
+  the legacy `agentic_search:scg:`→`scg_map` arm — a search RUN must never read as
+  a map (the old `agentic_search:scg:` run tag was the mislabel; the runner now
+  tags `agentic_search:run:`).
+- **`source_platform` IS the client-surface channel** — the existing param on
+  `start_async`/`run_sync` → `Orchestrator.run`. Each entry point stamps it:
+  in-process callers (CLI) pass the kwarg; HTTP clients (console/mcp/HA) send an
+  `X-Mewbo-Surface` header the API reads (default `api`) — mirror
+  `X-Mewbo-Capabilities` and keep it in the CORS allow-headers or it's dropped
+  cross-origin. Channels pass their platform; vcs-pickup derives `github`/`gitea`
+  from the forge host. Surface precedence in `derive`: explicit param > context
+  `source_platform` > `vcs:`-tag forge > `unknown` (kept visible, not dropped, so
+  un-stamped paths are findable).
+- `project = managed:<uuid>` is an ephemeral worktree → emitted as the `worktree`
+  metadata facet, never a (high-card) `project` chip.
+- **Runtime-granted capabilities must be OVERLAID into `derive`'s context (#84).**
+  `derive` reads `client_capabilities` from the merged context — i.e. only the
+  CLIENT-ADVERTISED set. A capability granted at runtime (the #83-B `scg`
+  provider) is live in the run yet absent from context, so it would vanish from
+  the trace's `capabilities` facet. `Orchestrator.run` therefore overlays the
+  AUGMENTED set (`_session_capabilities`, advertised ∪ provider grants) into the
+  context dict it hands `derive` — keeping `derive` a pure `(tags, context,
+  surface)` transform while making the grant filterable. The corollary on the
+  landing-page side: `summarize_session` surfaces the advertised `capabilities` +
+  `workspace` as top-level keys for per-row chips, but deliberately does NOT probe
+  the runtime predicate per session (a live store read in a session LIST is the
+  wrong tradeoff) — the grant is durable only in the trace, ephemeral on the list.
+- **DRY seam:** `SessionStoreBase.merge_context_events` is the one context reducer
+  (most-recent payload wins), shared by `latest_context` (trace path) and
+  `summarize_session` (origin/recovery path).
+- Derivation runs at run start; apps write context/tags BEFORE invoking the
+  runtime, so they're present. A brand-new session minted inside `run()` (CLI
+  first turn) only has surface+origin until its first context event exists — by
+  design, not a bug.
 
 ## Built-in plugins
 
@@ -197,11 +277,30 @@ the emit — the model just wasn't *forced* to call it and would finish in prose
 `SystemMessage`, reusing the emit tool's own reask machinery) when `payload`
 is still `None` — only then raise. No `tool_choice`, no new control loop;
 consistent with the structured-output invariant above. `StructuredResponder.run`
-and `.start_async` share one `_prepare()` builder (DRY). `start_async` exists so
+and `.start_async` share one `_prepare()` builder (DRY) — the SOLE provenance
+stamp seam: it tags the session `structured:run` (`STRUCTURED_RUN_TAG`) and writes
+the `source_platform` context event from the responder's `source_platform` field
+(set by the route from `X-Mewbo-Surface`). Stamp once here and MCP `structured_query`
+is covered for free. `start_async` exists so
 `/v1/structured` is async-recoverable: `SessionRuntime.start_async` now MINTS and
 RETURNS a storeless per-run `run_id = "<session_id>:r<seq>"` (was `bool`; `""`
 still means "refused, busy" so `if not started:` callers are unbroken). The
-session transcript IS the run record — no parallel run store.
+session transcript IS the run record — no parallel run store. (Tag a session you
+already hold via `runtime.tag_session`, the write-only sibling of
+`resolve_session`'s tag *resolution* — never reuse a constant tag as a resolution
+key or two runs collide onto one session.)
+
+**Graph-first structured seam (#77) — additive, keeps core graph-free.**
+`StructuredResponder` gained four optional, app-injected fields so a search
+workspace can drive it graph-first without core importing the SCG engine:
+`capabilities` (override the default `wiki` advertisement with `["scg"]`),
+`context_events` (extra binding context, e.g. quarantined instructions),
+`extra_instructions` (a trusted playbook PREPENDED to `FORCE_EMIT_DIRECTIVE` in
+the one `skill_instructions` slot), and `scope_factory` (a context-manager
+factory — the `ScgScope` source scope — wrapped around each `_drive`). All
+default to the historical wiki behaviour. The app side
+(`agentic_search/scg/graph_structured_runner.py`) supplies them via
+`WorkspaceGraphBinding`; the terminal stays the schema-validated `emit_result`.
 
 **`done_reason` on success = `"completed"`, not `"awaiting_approval"`.** The loop
 reads `SessionTool.terminal_reason()` (default `"awaiting_approval"` — the
@@ -222,7 +321,10 @@ reask, reusing `build_emit_schema` + `EmitStructuredResponseTool.handle`) and
 `bind_tools`). Retrieval grounding is injected via the `GroundingProvider`
 Protocol so **core stays graph-free** (the concrete `WikiGroundingProvider`
 lives in the app). `model_name None → config default` (build_chat_model
-requires a `str`).
+requires a `str`). Both stay store-free here; the app session-backs them with
+write-behind persistence via `RealtimeSessionRecorder` (#78 — see
+`apps/mewbo_api/CLAUDE.md`), keeping the latency-critical synthesis in core
+unburdened by a session store.
 
 ## Capability gating
 
@@ -238,6 +340,36 @@ When you add a new capability:
 2. Have the producer (the caller that creates the session) advertise
    it via `runtime.append_context_event(session_id, {"client_capabilities": [...]})`.
 3. Have the consumer (the agent definition or tool) filter on it.
+
+**Runtime grants (#83-B).** A capability can also be granted by a RUNTIME
+predicate instead of a client advertisement: `register_session_capability_provider`
+is a down-only push seam (mirrors `plugins.register_builtin_root`) that an
+optional library above core uses to grant a capability when a live condition
+holds. `Orchestrator._session_capabilities` is the single read-point — it unions
+`augment_session_capabilities(...)` over the advertised set, so the grant lands in
+ONE seam and flows through the unchanged `requires-capabilities` gate (no
+per-tool filtering). `mewbo_graph` registers the `scg` provider (granted once
+`scg.enabled` + a source is mapped) so the scg reasoning tools reach ordinary
+sessions. Providers are best-effort (a raising predicate is logged + skipped).
+
+**Capability gating has TWO enforcement surfaces — gate BOTH (#84).** A
+capability gates (a) the AgentDef/skill CATALOGS via `filter_by_capabilities`
+(catalog render + `spawn_agent`/`activate_skill` lookups read `session_caps`), AND
+(b) the per-agent SESSION-TOOL build. These are independent gates. For a long
+time only (a) consulted capabilities; `SessionToolRegistry.build_for` selected
+tools **purely by `allowed_tools`**, so a capability-gated plugin SessionTool
+(`scg_*`, manifest `requires-capabilities: ["scg"]`) was invisible to a session
+that got the capability by RUNTIME GRANT rather than an explicit `allowed_tools`
+entry. The bug only bit re-engagement: the original run worked because it
+*spawned* `scg-mapper` sub-agents (whose AgentDef lists the tools in
+`allowed_tools`), but the ROOT agent — which an interrupted-then-continued run
+tries to deposit from directly — never had them and answered `TOOLS-MISSING`. The
+fix threads the plugin's `requires_capabilities` onto its `SessionToolFactory`
+(via `load_entry(..., requires_capabilities=)`, fed from `pc.manifest` in the
+orchestrator's existing `fan_out.components` loop) and unions an allowlist gate
+with a capability gate inside `build_for(session_capabilities=)`. **Rule:** any
+new gate that decides "can this agent see X" must read `session_capabilities`,
+not just `allowed_tools` — a runtime grant reaches the former, never the latter.
 
 ## Hooks
 
@@ -310,6 +442,13 @@ flags (`x-secret` write-only, `x-protected` never-exposed, `x-advanced`) go on
 the scalar `Field(...)` and survive. Full contract: the comment block above
 `AppConfig`. The API's `ConfigSchemaView` reads these; the console's
 `SettingsModel` mirrors them.
+
+**`AppConfig` is `extra="ignore"`** — an unknown top-level block in `app.json`
+is silently dropped at `model_validate`, and `get_config_value` walks one
+`getattr` per dotted key, so a new feature section is physically un-enableable
+until it becomes a typed `AppConfig` field whose nesting matches the accessor's
+dotted path (e.g. `scg.traversal.default_tier` needs a `traversal` submodel,
+not a flat field).
 
 Two corollaries that bit during the Settings UI refinement (#30):
 - **The `$ref`-drop trap has an exception: collection fields.** A `dict[str, X]`

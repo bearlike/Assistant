@@ -1,11 +1,11 @@
-> ↑ [root /CLAUDE.md](../CLAUDE.md)
+> ↑ [root /CLAUDE.md](../../CLAUDE.md)
 
 # Mewbo HA Conversation - Project Guidance
 
-Scope: this file applies to `mewbo_ha_conversation/` (home automation integration).
+Scope: this file applies to `apps/mewbo_ha_conversation/` (home automation integration).
 
 ## Runtime flow
-- Entry point for API calls: `mewbo_ha_conversation/api.py`.
+- Entry point for API calls: `apps/mewbo_ha_conversation/api.py`.
 - Uses an async HTTP client + timeout helper to call `POST /api/query` on the Mewbo API.
 - Returns a parsed `MewboQueryResponse` to the home automation host.
 

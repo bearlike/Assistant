@@ -87,20 +87,35 @@ class MongoSessionStore(SessionStoreBase):
     def create_session(self) -> str:
         """Create a new session document and return its identifier."""
         session_id = uuid.uuid4().hex
-        self._col("sessions").insert_one(
+        self.ensure_session(session_id)
+        return session_id
+
+    def ensure_session(self, session_id: str) -> None:
+        """Idempotently materialise the ``sessions`` document for a known id.
+
+        ``append_event`` only writes the ``events`` collection, so a session
+        whose id was minted outside ``create_session`` (the realtime recorder)
+        has events but no ``sessions`` document — invisible to ``list_sessions``,
+        which reads the ``sessions`` collection. This upsert creates the record
+        once. ``$setOnInsert`` means a replay never resets ``created_at`` or
+        clears an ``archived_at`` already set on the existing doc (true no-op).
+        """
+        self._col("sessions").update_one(
+            {"_id": session_id},
             {
-                "_id": session_id,
-                "created_at": _utc_now(),
-                "archived_at": None,
-                "summary": None,
-                "summary_updated_at": None,
-                "title": None,
-                "title_updated_at": None,
-            }
+                "$setOnInsert": {
+                    "created_at": _utc_now(),
+                    "archived_at": None,
+                    "summary": None,
+                    "summary_updated_at": None,
+                    "title": None,
+                    "title_updated_at": None,
+                }
+            },
+            upsert=True,
         )
         # Create local directory for attachments.
         os.makedirs(os.path.join(self.root_dir, session_id), exist_ok=True)
-        return session_id
 
     def session_dir(self, session_id: str) -> str:
         """Return the local attachment directory for a session."""

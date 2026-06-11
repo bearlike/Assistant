@@ -39,10 +39,88 @@ def test_get_run_snapshot_after_post(client, auth_headers):
     assert record["payload"]["query"] == "fresh query"
 
 
+def test_get_run_snapshot_is_self_sufficient(client, auth_headers):
+    """GET /runs/<id> carries everything a cold deep-link needs to render.
+
+    The shareable ``/search?ws=…&run=…`` URL opens with a single
+    ``GET /runs/<id>`` (snapshot) + SSE attach — never a POST — so the snapshot
+    must be self-sufficient for a browser with no other context: top-level
+    workspace_id / query / tier / status / created_at / session_id plus the
+    result/answer payload block. This locks the deep-link contract additively
+    (the console reads these top-level; do not move them under ``payload``).
+    """
+    started = _start_run(client, auth_headers, workspace_id="eng-docs", query="deep link q")
+    run_id = started["run_id"]
+
+    snap = client.get(f"/api/agentic_search/runs/{run_id}", headers=auth_headers)
+    assert snap.status_code == 200
+    record = snap.get_json()["run"]
+    # Top-level identity + render context — no second request required.
+    assert record["run_id"] == run_id
+    assert record["workspace_id"] == "eng-docs"
+    assert record["query"] == "deep link q"
+    assert record["tier"] in {"fast", "auto", "deep"}
+    assert record["status"] == "completed"
+    assert record["created_at"]
+    # session_id links the URL-addressed run to its auditable session (#74).
+    assert record["session_id"]
+    # The result/answer payload is present and itself self-describing.
+    payload = record["payload"]
+    assert payload is not None
+    assert payload["workspace_id"] == "eng-docs"
+    assert payload["query"] == "deep link q"
+    assert payload["session_id"] == record["session_id"]
+    assert payload["tier"] == record["tier"]
+    assert "answer" in payload
+    assert "results" in payload
+
+
+def test_get_run_survives_cold_store(client, auth_headers):
+    """A run snapshot is durable: a fresh store over the same dir still reads it.
+
+    Models an api restart / a second worker — the run store is file/Mongo
+    backed, not memory-only, so a shared URL must not 404 after a deploy. We
+    drive a real run through the routes, then re-open a brand-new
+    ``JsonAgenticSearchStore`` pointed at the SAME root and confirm the terminal
+    snapshot (incl. the persisted payload) is intact.
+    """
+    started = _start_run(client, auth_headers, query="durable q")
+    run_id = started["run_id"]
+
+    live = store.get_store()
+    cold = store.JsonAgenticSearchStore(root_dir=live.root_dir)
+    record = cold.get_run(run_id)
+    assert record is not None
+    assert record.run_id == run_id
+    assert record.query == "durable q"
+    assert record.status == "completed"
+    assert record.payload is not None
+    assert record.payload.query == "durable q"
+
+
+def test_get_run_no_per_user_scoping(client, auth_headers):
+    """The snapshot read has no per-session/per-user scoping (shareable URL).
+
+    Any holder of a valid API key resolves the same run by id — the contract a
+    multi-user shared URL relies on. We assert the route resolves a run created
+    in one request from an independent request with the same credential and no
+    extra context (workspace/session are NOT required in the GET).
+    """
+    run_id = _start_run(client, auth_headers, workspace_id="eng-docs")["run_id"]
+    # A second, independent GET with only the run id + the api key resolves it.
+    snap = client.get(f"/api/agentic_search/runs/{run_id}", headers=auth_headers)
+    assert snap.status_code == 200
+    assert snap.get_json()["run"]["run_id"] == run_id
+
+
 def test_get_run_unknown_404s(client, auth_headers):
-    """GET /runs/<id> for an unknown id is a 404, not a 500."""
+    """GET /runs/<id> for an unknown id is a clean 404 envelope, not a 500."""
     resp = client.get("/api/agentic_search/runs/run-does-not-exist", headers=auth_headers)
     assert resp.status_code == 404
+    body = resp.get_json()
+    # A structured JSON body (never a raw Werkzeug HTML 500/404 page).
+    assert isinstance(body, dict)
+    assert "message" in body
 
 
 def test_cancel_completed_run_returns_cancelled_false(client, auth_headers):

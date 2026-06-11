@@ -12,6 +12,8 @@ Asserts:
 * it scopes ``allowed_tools`` to the scg-mapper tool set + auto-approves;
 * the UNTRUSTED descriptor stays OUT of the system-prompt extension;
 * no secret is persisted (only a redacted ``auth_scope``);
+* the driven session settles the lifecycle ``queued → running →
+  completed|failed`` AND closes the map-job event log with a terminal event;
 * phase transitions dual-write through ``MapJobProgress.emit_phase`` (event log
   AND snapshot), and a fake parse populates node/edge counts on the snapshot;
 * the ``scg.enabled`` gate (default off) refuses to start.
@@ -21,6 +23,7 @@ NEVER spawns a real LLM/session.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pytest
@@ -36,17 +39,29 @@ from mewbo_api.agentic_search.store import JsonAgenticSearchStore
 # ── Fake runtime (no real session / LLM) ────────────────────────────────────
 
 
+class _StubTaskQueue:
+    """The slice of ``TaskQueue`` the drive reads back: ``last_error``."""
+
+    def __init__(self, last_error: str | None = None) -> None:
+        self.last_error = last_error
+
+
 class _FakeRuntime:
     """Records the seam calls ``MapSourceJob.start`` makes; spawns nothing.
 
     ``resolve_session`` returns a deterministic id derived from the tag so the
     same tag resolves to the same session across calls (the reattach contract).
-    ``start_async`` captures its kwargs instead of running the loop.
+    ``start_command`` captures the drive target instead of running it — tests
+    invoke ``drive()`` explicitly to settle the lifecycle; ``run_sync`` captures
+    its kwargs and returns a stub ``TaskQueue``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, last_error: str | None = None) -> None:
         self.context_events: list[tuple[str, dict[str, object]]] = []
-        self.start_calls: list[dict[str, Any]] = []
+        self.run_sync_kwargs: dict[str, Any] | None = None
+        self.command_targets: list[tuple[str, Any]] = []
+        self.accept_commands = True
+        self._last_error = last_error
         self._by_tag: dict[str, str] = {}
 
     def resolve_session(self, *, session_tag: str | None = None, **_: object) -> str:
@@ -56,9 +71,20 @@ class _FakeRuntime:
     def append_context_event(self, session_id: str, context: dict[str, object]) -> None:
         self.context_events.append((session_id, context))
 
-    def start_async(self, **kwargs: Any) -> bool:
-        self.start_calls.append(kwargs)
+    def start_command(self, session_id: str, target: Any) -> bool:
+        if not self.accept_commands:
+            return False
+        self.command_targets.append((session_id, target))
         return True
+
+    def run_sync(self, **kwargs: Any) -> _StubTaskQueue:
+        self.run_sync_kwargs = kwargs
+        return _StubTaskQueue(last_error=self._last_error)
+
+    def drive(self) -> None:
+        """Run the captured background target synchronously (the worker step)."""
+        for _, target in self.command_targets:
+            target(threading.Event())
 
 
 @pytest.fixture
@@ -66,17 +92,11 @@ def _scg_enabled(monkeypatch):
     """Force ``scg.enabled`` on (it defaults off; the gate is exercised separately).
 
     The enable gate flows through ``ScgConfig.enabled`` (the single SCG config
-    read-point); ``get_config_value`` is still patched for the ``llm`` default
-    model lookup the façade does directly.
+    read-point). No ``llm`` config patch: the façade passes ``model`` straight
+    through (``None`` resolves canonically downstream, never at the call site).
     """
     import mewbo_api.agentic_search.scg.map_job as map_job_mod
 
-    def _fake_cfg(*keys, default=None):
-        if keys == ("llm", "default_model"):
-            return "fake/model"
-        return default
-
-    monkeypatch.setattr(map_job_mod, "get_config_value", _fake_cfg)
     monkeypatch.setattr(map_job_mod.ScgConfig, "enabled", staticmethod(lambda: True))
 
 
@@ -120,16 +140,16 @@ def test_start_advertises_scg_capability(tmp_path, _scg_enabled):
 
 
 def test_start_scopes_tools_and_auto_approves(tmp_path, _scg_enabled):
-    """start passes the scg-mapper tool set + an auto-approval callback."""
+    """The driven session gets the scg-mapper tool set + auto-approval."""
     from mewbo_core.permissions import auto_approve
 
     store = JsonAgenticSearchStore(root_dir=tmp_path)
     runtime = _FakeRuntime()
 
     MapSourceJob.start(_input(), store=store, runtime=runtime)
+    runtime.drive()
 
-    assert len(runtime.start_calls) == 1
-    call = runtime.start_calls[0]
+    call = runtime.run_sync_kwargs
     assert call["allowed_tools"] == MAPPER_TOOLS
     assert "scg_introspect_source" in call["allowed_tools"]
     assert "scg_finalize_map" in call["allowed_tools"]
@@ -144,10 +164,23 @@ def test_start_uses_session_tag_and_model_override(tmp_path, _scg_enabled):
     job = MapSourceJob.start(
         _input(), store=store, runtime=runtime, model="anthropic/opus"
     )
+    runtime.drive()
 
-    call = runtime.start_calls[0]
+    call = runtime.run_sync_kwargs
     assert call["session_id"] == f"sess-scg:map:{job.job_id}"
     assert call["model_name"] == "anthropic/opus"
+
+
+def test_start_passes_none_model_through(tmp_path, _scg_enabled):
+    """No explicit model → ``model_name=None`` — resolved canonically downstream
+    (llm.default_model → engine default), never a provider literal here."""
+    store = JsonAgenticSearchStore(root_dir=tmp_path)
+    runtime = _FakeRuntime()
+
+    MapSourceJob.start(_input(), store=store, runtime=runtime)
+    runtime.drive()
+
+    assert runtime.run_sync_kwargs["model_name"] is None
 
 
 # ── security: untrusted descriptor + no secrets ─────────────────────────────
@@ -164,12 +197,56 @@ def test_descriptor_stays_out_of_system_prompt(tmp_path, _scg_enabled):
         store=store,
         runtime=runtime,
     )
+    runtime.drive()
 
-    call = runtime.start_calls[0]
+    call = runtime.run_sync_kwargs
     # The playbook (trusted system-prompt extension) must not carry the descriptor.
     assert secret_marker not in (call["skill_instructions"] or "")
     # It DOES travel in the user query (the parsed contract), kept separate.
     assert secret_marker in call["user_query"]
+
+
+def test_nl_context_seeds_user_query_not_system_prompt(tmp_path, _scg_enabled):
+    """Workspace NL context rides the user query as UNTRUSTED, never the playbook."""
+    from mewbo_api.agentic_search.scg.map_job import SourceNlContext
+
+    store = JsonAgenticSearchStore(root_dir=tmp_path)
+    runtime = _FakeRuntime()
+    instr = "PREFER_GITEA_SEARCH_ISSUES_FOR_REPO_LOOKUPS"
+    desc = "incident-triage-workspace-prose"
+
+    MapSourceJob.start(
+        _input(
+            descriptor={"tools": [{"name": "search_issues"}]},
+            nl_context=SourceNlContext(
+                workspace_instructions=instr, workspace_description=desc
+            ),
+        ),
+        store=store,
+        runtime=runtime,
+    )
+    runtime.drive()
+
+    call = runtime.run_sync_kwargs
+    # The NL context is data in the user turn (the enrich seed)...
+    assert instr in call["user_query"]
+    assert desc in call["user_query"]
+    assert "UNTRUSTED" in call["user_query"]
+    # ...and NEVER in the trusted system-prompt extension (the playbook).
+    assert instr not in (call["skill_instructions"] or "")
+
+
+def test_no_nl_context_keeps_user_query_free_of_enrich_block(tmp_path, _scg_enabled):
+    """A map with no NL context renders no WORKSPACE NL CONTEXT block (legacy parity)."""
+    store = JsonAgenticSearchStore(root_dir=tmp_path)
+    runtime = _FakeRuntime()
+    MapSourceJob.start(
+        _input(descriptor={"tools": [{"name": "search_issues"}]}),
+        store=store,
+        runtime=runtime,
+    )
+    runtime.drive()
+    assert "WORKSPACE NL CONTEXT" not in runtime.run_sync_kwargs["user_query"]
 
 
 def test_no_secret_persisted_only_auth_scope(tmp_path, _scg_enabled):
@@ -203,7 +280,7 @@ def test_start_refuses_when_scg_disabled(tmp_path, monkeypatch):
         MapSourceJob.start(_input(), store=store, runtime=runtime)
     # Nothing was created or started.
     assert store.list_map_jobs() == []
-    assert runtime.start_calls == []
+    assert runtime.command_targets == []
 
 
 # ── phase progress: dual write + fake parse counts ──────────────────────────
@@ -238,13 +315,13 @@ def test_fake_parse_populates_node_and_edge_counts(tmp_path, _scg_enabled):
     # mirroring scg_build_structure → update_map_job(node_count=..., edge_count=...).
     MapJobProgress.emit_phase(store, job.job_id, "parse")
     store.update_map_job(
-        job.job_id, status="mapping", node_count=9, edge_count=4
+        job.job_id, status="running", node_count=9, edge_count=4
     )
     MapJobProgress.emit_phase(store, job.job_id, "finalize")
-    store.update_map_job(job.job_id, status="complete", completed_at="2026-06-06T00:00:00Z")
+    store.update_map_job(job.job_id, status="completed", completed_at="2026-06-06T00:00:00Z")
 
     final = store.get_map_job(job.job_id)
-    assert final.status == "complete"
+    assert final.status == "completed"
     assert final.phase == "finalize"
     assert final.node_count == 9
     assert final.edge_count == 4
@@ -253,6 +330,81 @@ def test_fake_parse_populates_node_and_edge_counts(tmp_path, _scg_enabled):
         "parse",
         "finalize",
     ]
+
+
+# ── lifecycle settle: queued → running → completed|failed ──────────────────
+
+
+def test_driven_session_settles_completed(tmp_path, _scg_enabled):
+    """A clean session end settles the job ``completed`` + a terminal event.
+
+    Regression: nothing ever moved the status off ``queued`` and the map SSE
+    log never received a terminal event, so streams only died by idle timeout.
+    """
+    store = JsonAgenticSearchStore(root_dir=tmp_path)
+    runtime = _FakeRuntime()
+    job = MapSourceJob.start(_input(), store=store, runtime=runtime)
+    assert store.get_map_job(job.job_id).status == "queued"
+
+    runtime.drive()
+
+    final = store.get_map_job(job.job_id)
+    assert final.status == "completed"
+    assert final.started_at is not None
+    assert final.completed_at is not None
+    assert final.error is None
+    events = store.load_map_job_events(job.job_id)
+    assert events[-1]["type"] == "run_done"
+    assert events[-1]["status"] == "completed"
+
+
+def test_session_error_settles_failed(tmp_path, _scg_enabled):
+    """A session that ends with ``last_error`` settles ``failed`` + error event."""
+    store = JsonAgenticSearchStore(root_dir=tmp_path)
+    runtime = _FakeRuntime(last_error="connector auth failed")
+    job = MapSourceJob.start(_input(), store=store, runtime=runtime)
+
+    runtime.drive()
+
+    final = store.get_map_job(job.job_id)
+    assert final.status == "failed"
+    assert final.error == {"code": "agent_error", "message": "connector auth failed"}
+    events = store.load_map_job_events(job.job_id)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["error"]["code"] == "agent_error"
+
+
+def test_drive_exception_settles_failed(tmp_path, _scg_enabled):
+    """A crashed drive (run_sync raises) still settles ``failed`` — never queued."""
+
+    class _Boom(_FakeRuntime):
+        def run_sync(self, **kwargs: Any) -> _StubTaskQueue:
+            raise RuntimeError("session blew up")
+
+    store = JsonAgenticSearchStore(root_dir=tmp_path)
+    runtime = _Boom()
+    job = MapSourceJob.start(_input(), store=store, runtime=runtime)
+
+    runtime.drive()
+
+    final = store.get_map_job(job.job_id)
+    assert final.status == "failed"
+    assert final.error == {"code": "internal", "message": "session blew up"}
+    assert store.load_map_job_events(job.job_id)[-1]["type"] == "error"
+
+
+def test_refused_start_settles_failed_busy(tmp_path, _scg_enabled):
+    """A registry refusal (session busy) settles ``failed`` instead of zombie-queued."""
+    store = JsonAgenticSearchStore(root_dir=tmp_path)
+    runtime = _FakeRuntime()
+    runtime.accept_commands = False
+
+    job = MapSourceJob.start(_input(), store=store, runtime=runtime)
+
+    assert job.status == "failed"
+    assert job.error["code"] == "busy"
+    assert store.get_map_job(job.job_id).status == "failed"
+    assert store.load_map_job_events(job.job_id)[-1]["type"] == "error"
 
 
 # ── get ─────────────────────────────────────────────────────────────────────

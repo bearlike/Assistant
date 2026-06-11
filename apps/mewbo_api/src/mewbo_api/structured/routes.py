@@ -15,6 +15,7 @@ envelope — never an empty ``failed:`` string, a raw exception, or the internal
 """
 from __future__ import annotations
 
+import dataclasses
 import time
 from collections.abc import Callable
 from typing import Any
@@ -27,6 +28,29 @@ from mewbo_core.structured_response import (
     StructuredResponder,
     StructuredResponseError,
 )
+from pydantic import BaseModel, Field
+
+from mewbo_api.request_context import request_surface
+
+
+class RunProvenance(BaseModel):
+    """Graph-first pathway/probe provenance for a structured run (#77).
+
+    The additive audit trail a graph-first ``/v1/structured`` run surfaces in its
+    GET payload — the story "graph consulted → probes executed → emit". Pure
+    projection of the session transcript (``scg_route`` tool results +
+    ``sub_agent`` lifecycle), so it is typed wire, not a bag of dicts. Absent
+    (``None``) for a plain/wiki-grounded run that fanned no probes.
+    """
+
+    recipes_routed: int = Field(
+        0, description="Count of scg_route calls that proposed pathways."
+    )
+    probes_run: int = Field(0, description="Distinct probe sub-agents spawned.")
+    probe_status: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-probe agent_id → terminal status (or 'running').",
+    )
 
 logging = get_logger(name="api.structured.routes")
 
@@ -93,7 +117,11 @@ def _load_structured_output(session_id: str) -> object | None:
     """
     if _runtime is None:
         return None
-    events = _runtime.session_store.load_transcript(session_id)
+    return _structured_output_from(_runtime.session_store.load_transcript(session_id))
+
+
+def _structured_output_from(events: list[dict[str, Any]]) -> object | None:
+    """The LATEST ``structured_output`` payload in an already-loaded transcript."""
     payload: object | None = None
     for event in events:
         if event.get("type") == STRUCTURED_OUTPUT_EVENT:
@@ -106,13 +134,79 @@ def _is_validation_error_payload(payload: object) -> bool:
     return isinstance(payload, dict) and _VALIDATION_ERROR_KEY in payload
 
 
+def _provenance_from(events: list[dict[str, Any]]) -> RunProvenance | None:
+    """Summarize the graph-first probe fan-out from an already-loaded transcript.
+
+    Reconstructs the pathway/probe provenance for a graph-first structured run
+    (#77) from the same transcript the result is read from: which probe
+    sub-agents ran (``sub_agent`` events) and how many ``scg_route`` calls routed
+    pathways (``tool_result`` events). ADDITIVE — returns ``None`` for a
+    non-graph (wiki-grounded or plain) run that fanned no probes, so the wire
+    shape only carries provenance when there is something to carry.
+    """
+    probes: dict[str, str] = {}
+    routes = 0
+    for event in events:
+        etype = event.get("type")
+        raw = event.get("payload")
+        payload: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        if etype == "sub_agent":
+            agent_id = str(payload.get("agent_id") or "")
+            if agent_id and str(payload.get("action")) == "stop":
+                probes[agent_id] = str(payload.get("status") or "completed")
+            elif agent_id:
+                probes.setdefault(agent_id, "running")
+        elif etype == "tool_result" and str(payload.get("tool_id")) == "scg_route":
+            routes += 1
+    if not probes and not routes:
+        return None
+    return RunProvenance(
+        recipes_routed=routes, probes_run=len(probes), probe_status=probes
+    )
+
+
 _request_model = structured_ns.model(
-    "StructuredRequest",
+    "StructuredQueryRequest",
     {
-        "query": fields.String(required=True, description="Natural-language request"),
-        "schema": fields.Raw(required=True, description="JSON Schema for the output object"),
-        "workspace": fields.String(required=False, description="Wiki slug / SCG scope"),
-        "tools": fields.List(fields.String, required=False, description="Tool allowlist"),
+        "query": fields.String(
+            required=True,
+            description="Natural-language request to answer.",
+            example="List the public HTTP endpoints and what each one returns.",
+        ),
+        "schema": fields.Raw(
+            required=True,
+            description="JSON Schema the output object must validate against.",
+            example={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "endpoints": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["summary"],
+            },
+        ),
+        "workspace": fields.String(
+            required=False,
+            description=(
+                "Wiki slug or search workspace that grounds the run. A workspace mapped "
+                "to an indexed search workspace also grants graph traversal tools."
+            ),
+            example="my-project",
+        ),
+        "tools": fields.List(
+            fields.String,
+            required=False,
+            description="Allowlist of tool ids the run may use. Omit for the default set.",
+            example=["wiki_search"],
+        ),
+        "model": fields.String(
+            required=False,
+            description=(
+                "Optional model override. Any configured LiteLLM model id; a non-string "
+                "value is ignored and the configured default is used."
+            ),
+            example="openai/gpt-5.4-nano",
+        ),
     },
 )
 
@@ -122,8 +216,25 @@ class StructuredResource(Resource):
     """Kick off a schema-constrained agentic synthesis and return a run handle."""
 
     @structured_ns.expect(_request_model)
+    @structured_ns.response(200, "Run handle, with output attached when the run completed inline")
+    @structured_ns.response(400, "Missing or invalid query or schema")
+    @structured_ns.response(401, "Missing or invalid API key")
+    @structured_ns.response(409, "A structured run is already active for this session")
+    @structured_ns.response(422, "The run could not be started")
+    @structured_ns.response(500, "The run failed to start")
+    @structured_ns.response(503, "Structured responses are not configured on this server")
     def post(self) -> tuple[dict, int]:
-        """Validate the request, start the run async, short-await a fast result."""
+        """Run a structured query.
+
+        Starts an agentic run that answers the query with a JSON object validating
+        against the supplied schema. The response always carries a run handle of the
+        form `<session_id>:r<seq>`. The request waits briefly before returning, so
+        fast runs come back inline with status `completed` and the output attached.
+        Slower runs return status `running`: poll GET /v1/structured/{run_id}, or
+        attach to GET /api/sessions/{session_id}/stream using the part of the handle
+        before the first colon. The optional `model` field accepts any configured
+        LiteLLM model id; a non-string value is ignored.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         if _runtime is None:
@@ -138,13 +249,12 @@ class StructuredResource(Resource):
         workspace = data.get("workspace") if isinstance(data.get("workspace"), str) else None
         raw_tools = data.get("tools")
         tools = [str(t) for t in raw_tools if t] if isinstance(raw_tools, list) else None
+        # Optional LiteLLM model override (e.g. ``openai/gpt-5.4-nano``); a
+        # non-string is ignored → the configured default is used. Matches the
+        # draft-route idiom (``/v1/draft/stream``).
+        model = data.get("model") if isinstance(data.get("model"), str) else None
 
-        responder = StructuredResponder(
-            runtime=_runtime,
-            schema=schema,
-            workspace=workspace,
-            allowed_tools=tools,
-        )
+        responder = self._build_responder(schema, workspace, tools, model)
         try:
             run_id = responder.start_async(query)
         except StructuredResponseError as exc:
@@ -168,6 +278,91 @@ class StructuredResource(Resource):
         return {"run_id": run_id, "status": "running", "workspace": workspace}, 200
 
     @staticmethod
+    def _build_responder(
+        schema: dict[str, Any],
+        workspace: str | None,
+        tools: list[str] | None,
+        model: str | None = None,
+    ) -> StructuredResponder:
+        """Build the structured responder, routing graph-first when eligible.
+
+        When ``workspace`` resolves to a mapped Agentic Search workspace and SCG
+        is enabled, the run goes GRAPH-FIRST (#77): the same agentic session, but
+        granted the ``scg`` capability + graph traversal tools + the workspace
+        source scope, driven by the ``scg-search-structured`` playbook so it
+        routes → fans probes out → aggregates → emits a schema-validated object.
+        Otherwise (a wiki slug, an unmapped/unknown workspace, or SCG off) the
+        default wiki-grounded ``StructuredResponder`` path is used — the wire
+        shape is identical either way, the graph-first provenance is additive.
+
+        ``model`` (an optional LiteLLM name) overrides the configured default for
+        this run. It is applied at the ONE route seam below so it covers BOTH
+        paths: the default responder takes it at construction; the graph-first
+        responder (assembled by ``agentic_search``, which this app must not edit)
+        gets it via ``dataclasses.replace`` after it is returned. ``None`` leaves
+        the responder's ``model_name`` untouched → the configured default.
+
+        The whole graph-first probe is import-guarded + best-effort: ANY failure
+        resolving the workspace degrades silently to the default path, so a
+        graph-less install or a search-store hiccup never breaks ``/v1/structured``.
+        """
+        surface = request_surface()
+        if workspace:
+            responder = StructuredResource._graph_first_responder(
+                schema, workspace, tools, surface
+            )
+            if responder is not None:
+                # One seam, both paths: override the model the graph-first
+                # responder was built with (a frozen dataclass → ``replace``).
+                if model:
+                    responder = dataclasses.replace(responder, model_name=model)
+                return responder
+        return StructuredResponder(
+            runtime=_runtime,
+            schema=schema,
+            workspace=workspace,
+            allowed_tools=tools,
+            model_name=model,
+            source_platform=surface,
+        )
+
+    @staticmethod
+    def _graph_first_responder(
+        schema: dict[str, Any],
+        workspace: str,
+        tools: list[str] | None,
+        surface: str,
+    ) -> StructuredResponder | None:
+        """Return a graph-first responder iff *workspace* is an eligible SCG one.
+
+        ``None`` ⇒ not a (mapped, enabled) search workspace; the caller falls
+        back to the default grounding path. Import-guarded so a graph-less
+        install simply never takes the graph-first branch.
+        """
+        try:
+            from mewbo_api.agentic_search.scg.graph_structured_runner import (
+                GraphStructuredRunner,
+            )
+            from mewbo_api.agentic_search.store import get_store
+        except ImportError:
+            return None
+        try:
+            runner = GraphStructuredRunner(store=get_store())
+            ws = runner.workspace_for(workspace)
+            if ws is None or not runner.is_graph_eligible(ws):
+                return None
+            return runner.build_responder(
+                ws,
+                runtime=_runtime,
+                schema=schema,
+                tools=tools,
+                source_platform=surface,
+            )
+        except Exception as exc:  # noqa: BLE001 — fall back to default grounding
+            logging.warning("graph-first structured resolution failed: {}", exc)
+            return None
+
+    @staticmethod
     def _await_fast_output(session_id: str) -> object | None:
         """Poll the transcript briefly for a fast completion; None if not ready."""
         deadline = time.monotonic() + _FAST_AWAIT_SECONDS
@@ -188,8 +383,28 @@ class StructuredResource(Resource):
 class StructuredRunResource(Resource):
     """Resolve a run handle to its latest structured output or status."""
 
+    @structured_ns.doc(
+        params={
+            "run_id": (
+                "Run handle returned by POST /v1/structured, "
+                "in the form <session_id>:r<seq>."
+            )
+        }
+    )
+    @structured_ns.response(200, "Run status, with output and provenance once completed")
+    @structured_ns.response(401, "Missing or invalid API key")
+    @structured_ns.response(404, "No run exists for this handle")
+    @structured_ns.response(422, "The run finished without a valid structured output")
+    @structured_ns.response(503, "Structured responses are not configured on this server")
     def get(self, run_id: str) -> tuple[dict, int]:
-        """Return ``{run_id, status, output?, error?}`` for a run handle."""
+        """Get a structured run.
+
+        Resolves a run handle to its current state. While the run is in flight the
+        body is `{run_id, status}`. Once a validated output exists the status is
+        `completed` and the output is attached; graph-grounded runs also carry a
+        `provenance` object summarizing the pathways routed and probes executed.
+        A run that ends without a valid output returns 422 with an error envelope.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         if _runtime is None:
@@ -203,7 +418,9 @@ class StructuredRunResource(Resource):
         if session_id not in _runtime.session_store.list_sessions():
             return {"run_id": run_id, **_error(404, f"run {run_id} not found")[0]}, 404
         try:
-            output = _load_structured_output(session_id)
+            # ONE transcript read per GET (output + provenance derive from it).
+            events = _runtime.session_store.load_transcript(session_id)
+            output = _structured_output_from(events)
             status = str(_runtime.summarize_session(session_id).get("status", "running"))
         except Exception as exc:  # noqa: BLE001 — surface as a structured error
             logging.warning("structured status read failed: {}", exc)
@@ -215,7 +432,18 @@ class StructuredRunResource(Resource):
             # any payload that passes the validation-error gate IS a completed
             # run, even if the session is still technically "running" (brief race
             # between the transcript append and the session-end event).
-            return {"run_id": run_id, "status": "completed", "output": output}, 200
+            body: dict[str, Any] = {
+                "run_id": run_id,
+                "status": "completed",
+                "output": output,
+            }
+            # Graph-first runs (#77) carry additive pathway/probe provenance: the
+            # auditor sees graph consulted → probes executed → emit. Absent for a
+            # plain/wiki run that fanned no probes.
+            provenance = _provenance_from(events)
+            if provenance is not None:
+                body["provenance"] = provenance.model_dump()
+            return body, 200
 
         if output is not None and _is_validation_error_payload(output):
             # The emit tool gave up after the reask cap — a structured failure.

@@ -10,11 +10,14 @@ Covers:
 
 * ``POST /sources/<id>/map`` starts a job (record + ``job_id``, 202) when SCG is
   enabled, and 503s when the ``scg.enabled`` gate is off;
+* ``GET /sources/<id>/map/jobs`` lists snapshots latest-first and
+  ``GET /sources/<id>/map/jobs/<job_id>`` returns one (404 on mismatch);
 * ``GET /scg`` returns node/edge/source counts + the mapped-source list;
 * ``GET /sources/<id>/map/events`` replays the map-job event log over SSE
   (REUSING ``RunSseGenerator`` against ``load_map_job_events``);
-* with ``scg.enabled=false`` the default :class:`SearchRunner` stays the echo
-  replay (the orchestrated runner is NOT registered at init).
+* ``POST /runs`` accepts + echoes the per-run ``tier`` budget knob;
+* :func:`get_search_runner` resolves PER RUN — echo while disabled / unmapped,
+  orchestrated once a source is mapped (no restart), explicit override wins.
 
 NEVER spawns a real LLM/session.
 """
@@ -24,10 +27,8 @@ from __future__ import annotations
 import pytest
 from mewbo_api import backend
 from mewbo_api.agentic_search import store as store_mod
-from mewbo_api.agentic_search.routes import (
-    ScgConfig,
-    _maybe_register_orchestrated_runner,
-)
+from mewbo_api.agentic_search.routes import ScgConfig
+from mewbo_api.agentic_search.runner import set_search_runner
 from mewbo_api.agentic_search.scg.map_progress import MapJobProgress
 from mewbo_api.agentic_search.schemas import MapJobRecord
 from mewbo_graph.scg import store as scg_store_mod
@@ -35,12 +36,14 @@ from mewbo_graph.scg import store as scg_store_mod
 
 @pytest.fixture(autouse=True)
 def _reset_stores():
-    """Reset both the run store and the SCG structure store between tests."""
+    """Reset the run store, SCG structure store, and runner override between tests."""
     store_mod.reset_for_tests()
     scg_store_mod.reset_for_tests()
+    set_search_runner(None)
     yield
     store_mod.reset_for_tests()
     scg_store_mod.reset_for_tests()
+    set_search_runner(None)
 
 
 @pytest.fixture
@@ -116,6 +119,26 @@ def test_map_source_validation_error_is_400(monkeypatch, _scg_on):
         "/api/agentic_search/sources/github/map", json={}, headers=_auth()
     )
     assert resp.status_code == 400
+
+
+def test_map_source_text_type_rejected_422(monkeypatch, _scg_on):
+    """source_type "text" 422s up-front — its provider is never registered.
+
+    ``StructureProviderRegistry.with_defaults()`` excludes the schemaless
+    ``LlmStructureProvider`` (it needs an injected LLM), so a "text" map job
+    would always fail in-session at ``scg_build_structure``. The contract is
+    honest instead: a structured 422 before any job/session starts.
+    """
+    client = backend.app.test_client()
+    resp = client.post(
+        "/api/agentic_search/sources/github/map",
+        json={"source_type": "text", "descriptor": {"description": "a blurb"}},
+        headers=_auth(),
+    )
+    assert resp.status_code == 422
+    assert "not yet supported" in resp.get_json()["message"]
+    # No job record was created.
+    assert store_mod.get_store().list_map_jobs(source_id="github") == []
 
 
 def test_map_source_requires_auth(_scg_on):
@@ -222,61 +245,187 @@ def test_map_events_unknown_job_id_404s(_scg_on):
     assert resp.status_code == 404
 
 
-# ── default runner stays Echo while disabled ────────────────────────────────
+# ── map-job snapshot routes ──────────────────────────────────────────────────
 
 
-def test_default_runner_stays_echo_when_scg_disabled(monkeypatch):
-    """With scg.enabled=false the orchestrated runner is NOT registered at init."""
-    from mewbo_api.agentic_search.runner import (
-        EchoSearchRunner,
-        get_search_runner,
-        set_search_runner,
+def test_list_map_jobs_latest_first(_scg_on):
+    """GET /sources/<id>/map/jobs returns {"jobs": [...]} latest-first."""
+    st = store_mod.get_store()
+    st.create_map_job(
+        MapJobRecord(
+            job_id="map-old", source_id="github", source_type="openapi",
+            created_at="2026-06-01T00:00:00+00:00",
+        )
+    )
+    st.create_map_job(
+        MapJobRecord(
+            job_id="map-new", source_id="github", source_type="openapi",
+            created_at="2026-06-02T00:00:00+00:00",
+        )
+    )
+    st.create_map_job(
+        MapJobRecord(job_id="map-other", source_id="linear", source_type="openapi")
     )
 
-    monkeypatch.setattr(ScgConfig, "enabled", staticmethod(lambda: False))
-    set_search_runner(EchoSearchRunner())  # known starting point
+    client = backend.app.test_client()
+    resp = client.get("/api/agentic_search/sources/github/map/jobs", headers=_auth())
+    assert resp.status_code == 200
+    jobs = resp.get_json()["jobs"]
+    assert [j["job_id"] for j in jobs] == ["map-new", "map-old"]
 
-    _maybe_register_orchestrated_runner()
+
+def test_get_map_job_snapshot_and_404s(_scg_on):
+    """GET /sources/<id>/map/jobs/<job_id> returns {"job": ...}; 404 on mismatch."""
+    st = store_mod.get_store()
+    st.create_map_job(
+        MapJobRecord(job_id="map-1", source_id="github", source_type="openapi")
+    )
+
+    client = backend.app.test_client()
+    resp = client.get(
+        "/api/agentic_search/sources/github/map/jobs/map-1", headers=_auth()
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["job"]["job_id"] == "map-1"
+    assert resp.get_json()["job"]["status"] == "queued"
+
+    # Unknown job id → 404; known job under the WRONG source → 404.
+    assert (
+        client.get(
+            "/api/agentic_search/sources/github/map/jobs/ghost", headers=_auth()
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            "/api/agentic_search/sources/linear/map/jobs/map-1", headers=_auth()
+        ).status_code
+        == 404
+    )
+
+
+# ── POST /runs tier knob ─────────────────────────────────────────────────────
+
+
+def _any_workspace_id(client) -> str:
+    """A seeded demo workspace id (the store seeds when empty)."""
+    body = client.get("/api/agentic_search/workspaces", headers=_auth()).get_json()
+    return body["workspaces"][0]["id"]
+
+
+def test_post_run_accepts_and_echoes_tier():
+    """POST /runs threads the tier onto the run payload (echo runner ignores it)."""
+    client = backend.app.test_client()
+    ws_id = _any_workspace_id(client)
+    resp = client.post(
+        "/api/agentic_search/runs",
+        json={"workspace_id": ws_id, "query": "q", "tier": "deep"},
+        headers=_auth(),
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["run"]["tier"] == "deep"
+
+
+def test_post_run_threads_tier_to_runner_record():
+    """The runner receives the tier ON THE RUN RECORD — never frozen on the
+    runner instance (the per-run budget knob contract)."""
+    from mewbo_api.agentic_search.runner import EchoSearchRunner
+
+    seen: dict[str, str] = {}
+
+    class _CaptureRunner(EchoSearchRunner):
+        def start(self, run, workspace, *, store, runtime=None, source_platform=None):
+            seen["tier"] = run.tier
+            return super().start(
+                run, workspace, store=store, runtime=runtime,
+                source_platform=source_platform,
+            )
+
+    set_search_runner(_CaptureRunner())
+    client = backend.app.test_client()
+    ws_id = _any_workspace_id(client)
+    resp = client.post(
+        "/api/agentic_search/runs",
+        json={"workspace_id": ws_id, "query": "q", "tier": "fast"},
+        headers=_auth(),
+    )
+    assert resp.status_code == 200
+    assert seen["tier"] == "fast"
+
+
+def test_post_run_defaults_tier_from_config():
+    """An absent tier falls back to the configured scg default (``auto``)."""
+    client = backend.app.test_client()
+    ws_id = _any_workspace_id(client)
+    resp = client.post(
+        "/api/agentic_search/runs",
+        json={"workspace_id": ws_id, "query": "q"},
+        headers=_auth(),
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["run"]["tier"] == "auto"
+
+
+def test_post_run_invalid_tier_400s():
+    """A tier outside fast|auto|deep is a 400."""
+    client = backend.app.test_client()
+    ws_id = _any_workspace_id(client)
+    resp = client.post(
+        "/api/agentic_search/runs",
+        json={"workspace_id": ws_id, "query": "q", "tier": "turbo"},
+        headers=_auth(),
+    )
+    assert resp.status_code == 400
+    assert "tier" in resp.get_json()["message"]
+
+
+# ── per-run runner resolution (no startup registration) ─────────────────────
+
+
+def test_runner_resolves_echo_when_scg_disabled(monkeypatch):
+    """With scg.enabled=false every run resolves to the echo replay."""
+    from mewbo_api.agentic_search.runner import EchoSearchRunner, get_search_runner
+
+    monkeypatch.setattr(ScgConfig, "enabled", staticmethod(lambda: False))
 
     assert isinstance(get_search_runner(), EchoSearchRunner)
 
 
-def test_orchestrated_runner_registered_when_enabled_and_mapped(monkeypatch):
-    """SCG enabled + a mapped source swaps in the OrchestratedSearchRunner."""
-    from mewbo_api.agentic_search.runner import (
-        EchoSearchRunner,
-        get_search_runner,
-        set_search_runner,
-    )
+def test_runner_resolves_orchestrated_once_source_mapped(monkeypatch):
+    """Mapping the first source flips resolution to orchestrated — NO restart.
+
+    Regression: the swap used to happen only at init, so a process that mapped
+    its first source stayed in echo mode until restarted.
+    """
+    from mewbo_api.agentic_search.runner import EchoSearchRunner, get_search_runner
     from mewbo_api.agentic_search.scg.orchestrated_runner import (
         OrchestratedSearchRunner,
     )
     from mewbo_graph.scg.types import SourceDescriptor
 
     monkeypatch.setattr(ScgConfig, "enabled", staticmethod(lambda: True))
-    set_search_runner(EchoSearchRunner())
+
+    # Empty graph → echo (nothing to route).
+    assert isinstance(get_search_runner(), EchoSearchRunner)
+
     scg_store_mod.get_scg_store().upsert_source(
         SourceDescriptor(source_id="github", source_type="openapi", raw={})
     )
 
-    _maybe_register_orchestrated_runner()
-
+    # Same live process, next resolution → orchestrated.
     assert isinstance(get_search_runner(), OrchestratedSearchRunner)
-    # Restore the echo default so other tests are unaffected.
-    set_search_runner(EchoSearchRunner())
 
 
-def test_orchestrated_runner_not_registered_when_no_source(monkeypatch):
-    """SCG enabled but an EMPTY graph keeps the echo runner (nothing to route)."""
-    from mewbo_api.agentic_search.runner import (
-        EchoSearchRunner,
-        get_search_runner,
-        set_search_runner,
-    )
+def test_explicit_runner_override_wins(monkeypatch):
+    """A set_search_runner override (the test seam) beats per-run resolution."""
+    from mewbo_api.agentic_search.runner import EchoSearchRunner, get_search_runner
+    from mewbo_graph.scg.types import SourceDescriptor
 
     monkeypatch.setattr(ScgConfig, "enabled", staticmethod(lambda: True))
-    set_search_runner(EchoSearchRunner())
+    scg_store_mod.get_scg_store().upsert_source(
+        SourceDescriptor(source_id="github", source_type="openapi", raw={})
+    )
+    pinned = EchoSearchRunner()
+    set_search_runner(pinned)
 
-    _maybe_register_orchestrated_runner()
-
-    assert isinstance(get_search_runner(), EchoSearchRunner)
+    assert get_search_runner() is pinned

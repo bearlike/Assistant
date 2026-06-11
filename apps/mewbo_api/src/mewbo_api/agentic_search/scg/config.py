@@ -1,75 +1,54 @@
-"""``ScgConfig`` — the single read-point for SCG config code-defaults.
+"""``ScgConfig`` — the single read-point for SCG config.
 
 The whole SCG feature is opt-in behind ``scg.enabled`` (default ``False``); the
-traversal budget knobs and the map-source depth cap live under the same ``scg``
-namespace the already-committed deterministic core reads (``map_job.py`` /
-``orchestrated_runner.py`` / ``entity_resolution.py`` all key off ``scg.*``).
-
-This atomic class centralizes those reads + their code-defaults in one place so
-no module hand-spells a config key or a default twice (DRY). Every value falls
-back to a spec-calibrated default, so a config file edit is **never required** —
-the defaults ship the feature off, with sane traversal budgets when enabled.
+default search tier lives under the same ``scg`` namespace. Defaults are NOT
+re-spelled here: ``get_config_value`` resolves through the typed
+:class:`mewbo_core.config.ScgConfig` model, whose field defaults are the single
+default source — a config file edit is **never required** (the model ships the
+feature off with a sane tier).
 """
 
 from __future__ import annotations
 
 from mewbo_core.config import get_config_value
 
-# Spec-calibrated code-defaults (#19 — "Implementation Plan v2"). The feature
-# ships off; the traversal knobs are one budget surface over the single loop.
-_DEFAULT_ENABLED = False
-_DEFAULT_MAP_MAX_DEPTH = 3
-_DEFAULT_BEAM_WIDTH = 3
-_DEFAULT_TRAVERSAL_MAX_DEPTH = 4
-_DEFAULT_TIER = "auto"
-
 
 class ScgConfig:
-    """Read-only accessor over the ``scg.*`` config namespace + its defaults.
+    """Read-only accessor over the ``scg.*`` config namespace.
 
     All-staticmethod by design: there is no per-instance state — these are pure
-    reads of the process config with a baked-in default, so callers spell the
-    *intent* (``ScgConfig.enabled()``) rather than a key path + magic default.
+    reads of the process config, so callers spell the *intent*
+    (``ScgConfig.enabled()``) rather than a key path.
     """
 
     @staticmethod
     def enabled() -> bool:
         """Master gate — is the SCG feature turned on? (default ``False``)."""
-        return bool(get_config_value("scg", "enabled", default=_DEFAULT_ENABLED))
-
-    @staticmethod
-    def map_max_depth() -> int:
-        """Max introspection depth when mapping a source (default ``3``)."""
-        return int(
-            get_config_value("scg", "map_max_depth", default=_DEFAULT_MAP_MAX_DEPTH)
-        )
-
-    @staticmethod
-    def beam_width() -> int:
-        """Best-first traversal beam width (default ``3``)."""
-        return int(
-            get_config_value(
-                "scg", "traversal", "beam_width", default=_DEFAULT_BEAM_WIDTH
-            )
-        )
-
-    @staticmethod
-    def traversal_max_depth() -> int:
-        """Max traversal hop depth (default ``4``)."""
-        return int(
-            get_config_value(
-                "scg", "traversal", "max_depth", default=_DEFAULT_TRAVERSAL_MAX_DEPTH
-            )
-        )
+        return bool(get_config_value("scg", "enabled"))
 
     @staticmethod
     def default_tier() -> str:
         """Default search tier budget knob (default ``"auto"``)."""
-        return str(
-            get_config_value(
-                "scg", "traversal", "default_tier", default=_DEFAULT_TIER
-            )
-        )
+        return str(get_config_value("scg", "traversal", "default_tier"))
+
+    @staticmethod
+    def model_for_tier(tier: str | None) -> str | None:
+        """The LLM a tier runs on, or ``None`` for the configured default.
+
+        The tier is the run's single user-facing knob; it picks the brain
+        (fast→nano-class, auto→sonnet-class, deep→frontier) alongside the
+        decomposition/fan-out budget. ``None`` (blank mapping or unknown
+        tier) defers to ``llm.default_model`` — never raises, so a bad tier
+        string degrades to the default model rather than failing the run.
+        """
+        if not tier:
+            return None
+        try:
+            value = get_config_value("scg", "traversal", "tier_models", tier.lower())
+        except Exception:  # noqa: BLE001 — unknown tier key ⇒ default model
+            return None
+        text = str(value or "").strip()
+        return text or None
 
 
 __all__ = ["ScgConfig"]

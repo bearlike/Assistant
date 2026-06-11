@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-__all__ = ["plugins_root", "register_builtin_plugins"]
+__all__ = ["plugins_root", "register_builtin_plugins", "register_runtime_capabilities"]
 
 
 def plugins_root() -> Path:
@@ -40,7 +40,25 @@ def register_builtin_plugins() -> None:
     register_builtin_root(plugins_root())
 
 
+def register_runtime_capabilities() -> None:
+    """Register the library's runtime capability providers with core (#83-B).
+
+    Idempotent and down-only. Currently the ``scg`` provider: it surfaces the
+    ``scg`` capability (and so the ``scg_route`` / ``scg_observe`` / ``scg_memory``
+    reasoning tools) to ORDINARY sessions whenever ``scg.enabled`` is on AND a
+    source is mapped — without the client advertising it. The provider callable
+    only late-imports the SCG store INSIDE its body, so wiring it here pulls in
+    nothing heavy at import time and a core-only install stays safe.
+    """
+    from mewbo_graph.plugins.scg import register_scg_capability
+
+    register_scg_capability()
+
+
 # Self-register on import: any host that imports `mewbo_graph` (the API under
 # the `wiki` extra, or a test importing a submodule) gets the wiki/scg plugin
-# suites discovered, without core ever importing up to find them. Idempotent.
+# suites discovered AND the runtime capability providers wired into core's
+# session-init read-point — without core ever importing up to find them.
+# Idempotent.
 register_builtin_plugins()
+register_runtime_capabilities()

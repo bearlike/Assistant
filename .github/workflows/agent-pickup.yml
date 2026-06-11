@@ -1,0 +1,230 @@
+# Agent Pickup — start a Mewbo agent session when the bot is assigned to, or
+# @mentioned on, an issue or pull request. Runs on BOTH GitHub Actions and
+# Gitea Actions (the expression/payload differences are handled inline).
+#
+# Required repository secrets:
+#   MEWBO_API_URL    — base URL of the Mewbo API (e.g. https://mewbo.example.com)
+#   MEWBO_API_TOKEN  — API key sent as X-API-Key
+# Required repository variables:
+#   AGENT_BOT_LOGIN  — bot account login to watch for (e.g. mewbo-ai)
+# Optional repository variables:
+#   AGENT_PROJECT       — Mewbo project key override (defaults to owner/repo)
+#   AGENT_MODEL         — LLM model override
+#   AGENT_MODE          — "plan" or "act"
+#   AGENT_TLS_NO_VERIFY — "true" to skip TLS verification on curl calls
+#                         (self-hosted Gitea/Mewbo behind an internal CA the
+#                         runner image does not trust)
+#
+# See docs/ci-agent-pickup.md for setup, token scopes, and the test plan.
+
+name: Agent Pickup
+
+on:
+  issues:
+    types: [assigned]
+  pull_request:
+    types: [assigned]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue or pull request number to hand to the agent
+        required: true
+        type: string
+      prompt:
+        description: Optional override for the agent pickup prompt
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: agent-pickup-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  start-session:
+    name: Start Mewbo session
+    # Guard layers:
+    #  - workflow_dispatch is always allowed (manual override).
+    #  - assignment events: GitHub carries the just-assigned user in
+    #    event.assignee; Gitea's payload has no top-level assignee, so fall
+    #    back to the item's assignees list.
+    #  - comment events: only when the comment mentions @AGENT_BOT_LOGIN and
+    #    was not written by the bot itself (self-trigger loop guard).
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        vars.AGENT_BOT_LOGIN != '' &&
+        (
+          (
+            (github.event_name == 'issues' || github.event_name == 'pull_request') &&
+            (
+              github.event.assignee.login == vars.AGENT_BOT_LOGIN ||
+              contains(github.event.issue.assignees.*.login, vars.AGENT_BOT_LOGIN) ||
+              contains(github.event.pull_request.assignees.*.login, vars.AGENT_BOT_LOGIN)
+            )
+          ) ||
+          (
+            github.event_name == 'issue_comment' &&
+            contains(github.event.comment.body, format('@{0}', vars.AGENT_BOT_LOGIN)) &&
+            github.event.comment.user.login != vars.AGENT_BOT_LOGIN
+          )
+        )
+      )
+    runs-on: ubuntu-latest
+    env:
+      MEWBO_API_URL: ${{ secrets.MEWBO_API_URL }}
+      MEWBO_API_TOKEN: ${{ secrets.MEWBO_API_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      AGENT_BOT_LOGIN: ${{ vars.AGENT_BOT_LOGIN }}
+      AGENT_PROJECT: ${{ vars.AGENT_PROJECT }}
+      AGENT_MODEL: ${{ vars.AGENT_MODEL }}
+      AGENT_MODE: ${{ vars.AGENT_MODE }}
+      AGENT_TLS_NO_VERIFY: ${{ vars.AGENT_TLS_NO_VERIFY }}
+      EVENT_NAME: ${{ github.event_name }}
+      REPOSITORY: ${{ github.repository }}
+      SERVER_URL: ${{ github.server_url }}
+      API_URL: ${{ github.api_url }}
+      # Item fields (empty for the event shapes that lack them).
+      ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
+      ITEM_URL: ${{ github.event.issue.html_url || github.event.pull_request.html_url }}
+      ITEM_TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+      ITEM_BODY: ${{ github.event.issue.body || github.event.pull_request.body }}
+      ITEM_IS_PR: ${{ (github.event_name == 'pull_request' || github.event.issue.pull_request) && 'true' || 'false' }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      ASSIGNEE_LOGIN: ${{ github.event.assignee.login }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+      COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+      TRIGGER_PROMPT: ${{ inputs.prompt }}
+    steps:
+      - name: Validate configuration
+        run: |
+          test -n "$MEWBO_API_URL" || { echo "MEWBO_API_URL secret is required" >&2; exit 1; }
+          test -n "$MEWBO_API_TOKEN" || { echo "MEWBO_API_TOKEN secret is required" >&2; exit 1; }
+          test -n "$ISSUE_NUMBER" || { echo "issue number could not be determined" >&2; exit 1; }
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq jq
+          fi
+
+      - name: Resolve item details
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl_flags=()
+          case "${AGENT_TLS_NO_VERIFY,,}" in true|1|yes) curl_flags+=(-k) ;; esac
+          # Gitea act_runner may leave github.api_url empty; derive it.
+          api="$API_URL"
+          if [[ -z "$api" ]]; then
+            if [[ "$SERVER_URL" == "https://github.com" ]]; then
+              api="https://api.github.com"
+            else
+              api="${SERVER_URL%/}/api/v1"
+            fi
+          fi
+          echo "VCS_API=$api" >> "$GITHUB_ENV"
+
+          # workflow_dispatch carries only a number — fetch the rest. The
+          # /issues/{n} shape is identical on GitHub and Gitea, and both
+          # accept the workflow token via "Authorization: token ...".
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            item=$(curl "${curl_flags[@]}" --fail-with-body --silent --show-error \
+              -H "Authorization: token $GH_TOKEN" \
+              "$api/repos/$REPOSITORY/issues/$ISSUE_NUMBER")
+            {
+              echo "ITEM_URL=$(jq -r '.html_url // ""' <<<"$item")"
+              echo "ITEM_TITLE=$(jq -r '.title // ""' <<<"$item")"
+              echo "ITEM_IS_PR=$(jq -r 'if .pull_request then "true" else "false" end' <<<"$item")"
+            } >> "$GITHUB_ENV"
+            {
+              echo "ITEM_BODY<<MEWBO_EOF_BODY"
+              jq -r '.body // ""' <<<"$item"
+              echo "MEWBO_EOF_BODY"
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Resolve pull request branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          # pull_request events carry head/base inline; comment- and
+          # dispatch-triggered PR pickups must look them up.
+          curl_flags=()
+          case "${AGENT_TLS_NO_VERIFY,,}" in true|1|yes) curl_flags+=(-k) ;; esac
+          if [[ "${ITEM_IS_PR:-false}" == "true" && -z "${HEAD_REF:-}" ]]; then
+            pr=$(curl "${curl_flags[@]}" --fail-with-body --silent --show-error \
+              -H "Authorization: token $GH_TOKEN" \
+              "$VCS_API/repos/$REPOSITORY/pulls/$ISSUE_NUMBER")
+            {
+              echo "HEAD_REF=$(jq -r '.head.ref // ""' <<<"$pr")"
+              echo "BASE_REF=$(jq -r '.base.ref // ""' <<<"$pr")"
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Start Mewbo session
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl_flags=()
+          case "${AGENT_TLS_NO_VERIFY,,}" in true|1|yes) curl_flags+=(-k) ;; esac
+          provider="gitea"
+          [[ "$SERVER_URL" == "https://github.com" ]] && provider="github"
+          kind="issue"
+          [[ "${ITEM_IS_PR:-false}" == "true" ]] && kind="pull_request"
+
+          payload=$(jq -n \
+            --arg repository "$REPOSITORY" \
+            --arg kind "$kind" \
+            --argjson number "$ISSUE_NUMBER" \
+            --arg provider "$provider" \
+            --arg api_url "$VCS_API" \
+            --arg event "$EVENT_NAME" \
+            --arg url "${ITEM_URL:-}" \
+            --arg title "${ITEM_TITLE:-}" \
+            --arg body "${ITEM_BODY:-}" \
+            --arg comment "${COMMENT_BODY:-}" \
+            --arg comment_author "${COMMENT_AUTHOR:-}" \
+            --arg assignee "${ASSIGNEE_LOGIN:-}" \
+            --arg bot_login "${AGENT_BOT_LOGIN:-}" \
+            --arg head_ref "${HEAD_REF:-}" \
+            --arg base_ref "${BASE_REF:-}" \
+            --arg project "${AGENT_PROJECT:-}" \
+            --arg model "${AGENT_MODEL:-}" \
+            --arg mode "${AGENT_MODE:-}" \
+            --arg prompt "${TRIGGER_PROMPT:-}" \
+            '{
+              repository: $repository,
+              kind: $kind,
+              number: $number,
+              provider: $provider,
+              api_url: $api_url,
+              event: $event,
+              url: $url,
+              title: $title,
+              body: ($body | if length > 20000 then .[:20000] + "\n[truncated]" else . end),
+              comment: ($comment | if length > 20000 then .[:20000] + "\n[truncated]" else . end),
+              comment_author: $comment_author,
+              assignee: $assignee,
+              bot_login: $bot_login,
+              head_ref: $head_ref,
+              base_ref: $base_ref,
+              project: $project,
+              model: $model,
+              mode: $mode,
+              prompt: $prompt
+            } | with_entries(select(.value != "" and .value != null))')
+
+          response=$(curl "${curl_flags[@]}" --fail-with-body --silent --show-error \
+            -X POST "${MEWBO_API_URL%/}/api/automation/vcs-pickup" \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: $MEWBO_API_TOKEN" \
+            --data "$payload")
+          echo "$response" | jq .
+          session_id=$(jq -r '.session_id // empty' <<<"$response")
+          test -n "$session_id" || { echo "no session_id in response" >&2; exit 1; }
+          echo "Started/continued Mewbo session: $session_id"

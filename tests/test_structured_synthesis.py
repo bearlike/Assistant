@@ -289,3 +289,58 @@ def test_citation_is_frozen():
     c = Citation(id="x", kind="page", snippet="s", score=0.5, source="src")
     with pytest.raises((AttributeError, TypeError)):
         c.id = "y"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Test 9: Langfuse callback is attached to the model invoke (#87)
+# ---------------------------------------------------------------------------
+
+
+def test_synthesize_attaches_langfuse_callback_to_invoke():
+    """The synthesis ``ainvoke`` carries the Langfuse ``config`` so it EXPORTS.
+
+    ``langfuse_session_context`` only PROPAGATES attributes; with no observation
+    created inside, nothing reaches Langfuse (the #87 defect: realtime synthesis
+    traced nothing). The fix attaches the ``CallbackHandler`` at the invoke seam.
+    We stub ``langfuse_invoke_config`` (the import-guarded helper) with a sentinel
+    handler and assert the model invoke received it via ``config``.
+    """
+    sentinel_handler = object()
+    fake_config = {"callbacks": [sentinel_handler], "metadata": {"k": "v"}}
+
+    synthesizer = StructuredSynthesizer(model_name="test-model")
+    responses = [_emit_response({"name": "Ada"})]
+    model, bound = _stub_model(responses)
+
+    with (
+        patch("mewbo_core.structured_synthesis.build_chat_model", return_value=model),
+        patch(
+            "mewbo_core.structured_synthesis.langfuse_invoke_config",
+            return_value=fake_config,
+        ),
+    ):
+        asyncio.run(synthesizer.synthesize("Who is Ada?", _PERSON_SCHEMA))
+
+    # The invoke received the langfuse config (callbacks attached → trace exports).
+    assert bound.ainvoke.await_count == 1
+    _args, kwargs = bound.ainvoke.call_args
+    assert kwargs.get("config") is fake_config, (
+        "synthesize() must pass the langfuse invoke config (with the CallbackHandler) "
+        f"to ainvoke; got config={kwargs.get('config')!r}"
+    )
+
+
+def test_synthesize_disabled_langfuse_passes_no_config():
+    """When Langfuse is off (``{}``), the invoke config degrades to ``None`` (no-op)."""
+    synthesizer = StructuredSynthesizer(model_name="test-model")
+    responses = [_emit_response({"name": "Ada"})]
+    model, bound = _stub_model(responses)
+
+    with (
+        patch("mewbo_core.structured_synthesis.build_chat_model", return_value=model),
+        patch("mewbo_core.structured_synthesis.langfuse_invoke_config", return_value={}),
+    ):
+        asyncio.run(synthesizer.synthesize("Who is Ada?", _PERSON_SCHEMA))
+
+    _args, kwargs = bound.ainvoke.call_args
+    assert kwargs.get("config") is None, "empty config must pass through as None"

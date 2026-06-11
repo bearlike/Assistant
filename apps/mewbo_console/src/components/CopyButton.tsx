@@ -10,9 +10,11 @@ import { Button } from './ui/button';
  * appends absolute-positioning and dark-theme color tweaks so the copy icon
  * sits correctly inside the terminal chrome.
  */
-export function CopyButton({ text, className = '', children }: {
+export function CopyButton({ text, className = '', label = 'Copy', children }: {
   text: string;
   className?: string;
+  /** Accessible name (aria-label + title) — e.g. "Copy answer", "Copy link". */
+  label?: string;
   children?: React.ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -30,7 +32,8 @@ export function CopyButton({ text, className = '', children }: {
       iconOnly={!children}
       leadingIcon={icon}
       onClick={handleCopy}
-      aria-label="Copy"
+      aria-label={label}
+      title={label}
       className={className}
     >
       {children}

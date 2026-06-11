@@ -1,5 +1,8 @@
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import {
+  AlertCircle,
+  AlertTriangle,
+  CircleSlash,
   Clock,
   Code,
   FileText,
@@ -12,10 +15,13 @@ import {
   Target,
 } from "lucide-react"
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { cn } from "@/lib/utils"
+import { CopyButton } from "../CopyButton"
 import type {
   ResultKind,
   RunPayload,
+  SearchTier,
   SourceCatalogEntry,
   Workspace,
 } from "../../types/agenticSearch"
@@ -50,7 +56,16 @@ interface ResultsPanelProps {
   /** Final cited synthesis has landed (`answer_ready`). */
   answerReady: boolean
   isLoading: boolean
+  tier: SearchTier
+  onTierChange: (tier: SearchTier) => void
+  /** A new run submission is in flight (mutation pending). */
+  submitting?: boolean
   onRun: (query: string) => void
+  /** Replay a stored run by id (GET snapshot) — past-query suggestions use
+   *  this instead of re-running. */
+  onOpenRun?: (runId: string) => void
+  /** Open the workspace's capability graph (#79). */
+  onOpenGraph?: () => void
   onPickWorkspace: (workspace: Workspace) => void
   onOpenCreate: () => void
   onOpenConfig: (workspace: Workspace) => void
@@ -66,7 +81,12 @@ export function ResultsPanel({
   done,
   answerReady,
   isLoading,
+  tier,
+  onTierChange,
+  submitting = false,
   onRun,
+  onOpenRun,
+  onOpenGraph,
   onPickWorkspace,
   onOpenCreate,
   onOpenConfig,
@@ -76,11 +96,55 @@ export function ResultsPanel({
   const [activeKind, setActiveKind] = useState<"all" | ResultKind>("all")
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [highlightId, setHighlightId] = useState<string | null>(null)
+  const barRef = useRef<HTMLDivElement | null>(null)
+
+  // Run lifecycle, straight off the folded stream / snapshot state.
+  const failed = run.status === "failed"
+  const cancelled = run.status === "cancelled"
+  const hasAnswerContent =
+    run.answer.tldr.length > 0 || run.answer.bullets.length > 0
+
+  const focusBar = () => {
+    barRef.current?.querySelector<HTMLInputElement>("input")?.focus()
+  }
+  // Follow-up keeps the workspace and clears the bar for a fresh question;
+  // refine pre-fills the bar with the run's query for editing. Both submit
+  // through the existing run-start path (runs are independent — no session
+  // continuation on the server contract).
+  const handleFollowUp = () => {
+    setPending("")
+    focusBar()
+  }
+  const handleRefine = () => {
+    setPending(run.query)
+    focusBar()
+  }
+  // Explicit re-run of THIS exact query (#80): distinct from replaying the
+  // stored run — it fires a fresh POST /runs for the same text. Disabled while
+  // a submission is already in flight or the workspace has no sources.
+  const handleRunAgain = () => {
+    if (submitting || workspace.sources.length === 0) return
+    submit(run.query)
+  }
 
   // Every result in `run.results` has already arrived over SSE — visibility is
   // the full set, no fake `elapsed`-based reveal. While agents are still
   // running we show a couple of skeleton cards as a streaming affordance.
-  const visibleResults = run.results
+  //
+  // Belt-and-suspenders dedup by unique result id (#82): the stream reducer
+  // already drops duplicate `result` ids, but a snapshot↔SSE merge (or a
+  // backend echo replay) could still hand a list with repeats. Two cards
+  // sharing an id render the same React key AND the same `result-<id>` DOM id —
+  // that id collision is what makes hovering one "light up" its twin. Keep the
+  // FIRST occurrence so identity is strictly per-id.
+  const visibleResults = useMemo(() => {
+    const seen = new Set<string>()
+    return run.results.filter((r) => {
+      if (seen.has(r.id)) return false
+      seen.add(r.id)
+      return true
+    })
+  }, [run.results])
   const runningAgents = run.trace.filter((a) => agentSnapshot(a).running).length
   const skeletons = done ? 0 : Math.min(2, Math.max(runningAgents, run.trace.length === 0 ? 1 : 0))
 
@@ -116,17 +180,36 @@ export function ResultsPanel({
           the search bar stays capped at 570px and centered as a focal point. */}
       <div className="sticky top-0 z-10 bg-[hsl(var(--background)/0.92)] backdrop-blur-md border-b border-[hsl(var(--border))]">
         <div className="mx-auto max-w-[1320px] px-6 py-3">
-          <div className="mx-auto max-w-[570px]">
+          <div ref={barRef} className="mx-auto max-w-[570px]">
             <SearchBar
               value={pending}
               onChange={setPending}
               onSubmit={submit}
+              onReplay={onOpenRun}
               workspace={workspace}
               workspaces={workspaces}
               onPickWorkspace={onPickWorkspace}
               onNewWorkspace={onOpenCreate}
+              tier={tier}
+              onTierChange={onTierChange}
+              submitting={submitting}
               compact
             />
+            {workspace.sources.length === 0 && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-[hsl(var(--destructive))]">
+                <AlertTriangle className="h-3.5 w-3.5 flex-none" />
+                <span>
+                  This workspace has no sources — new searches can't run.{" "}
+                  <button
+                    type="button"
+                    onClick={() => onOpenConfig(workspace)}
+                    className="underline underline-offset-2 hover:opacity-80"
+                  >
+                    Add sources
+                  </button>
+                </span>
+              </div>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] italic font-mono text-[hsl(var(--muted-foreground))]">
               <span className="font-medium text-[hsl(var(--foreground))] truncate max-w-[40%]">
                 "{run.query}"
@@ -138,8 +221,17 @@ export function ResultsPanel({
               </span>
               <span aria-hidden>·</span>
               <span>
-                {(elapsedMs / 1000).toFixed(1)}s {done ? "· complete" : "· streaming"}
+                {(elapsedMs / 1000).toFixed(1)}s ·{" "}
+                {!done ? "streaming" : failed ? "failed" : cancelled ? "cancelled" : "complete"}
               </span>
+              {run.run_id && (
+                <CopyButton
+                  text={`${window.location.origin}/search?run=${encodeURIComponent(run.run_id)}`}
+                  className="not-italic h-7 px-2 text-[11px] font-mono"
+                >
+                  Copy link
+                </CopyButton>
+              )}
               <button
                 type="button"
                 onClick={() => onOpenConfig(workspace)}
@@ -176,22 +268,41 @@ export function ResultsPanel({
               Loading run…
             </div>
           )}
-          <div className="mb-6">
-            <AnswerCard
-              answer={run.answer}
-              results={visibleResults}
-              sources={sources}
-              ready={answerReady}
-              elapsedMs={elapsedMs}
-              onCiteClick={handleCite}
-              onAsk={() => {
-                const el = document.querySelector<HTMLInputElement>(
-                  ".sticky input[type='text'], .sticky input"
-                )
-                el?.focus()
-              }}
-            />
-          </div>
+
+          {/* Terminal edge states, straight off run.status / run.error. */}
+          {failed && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Search failed</AlertTitle>
+              <AlertDescription>
+                {run.error || "The run ended with an error before completing."}
+              </AlertDescription>
+            </Alert>
+          )}
+          {cancelled && (
+            <div className="mb-4 flex items-center gap-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.4)] px-4 py-3 text-sm text-[hsl(var(--muted-foreground))]">
+              <CircleSlash className="h-4 w-4 flex-none" />
+              Search was cancelled. Results below are partial.
+            </div>
+          )}
+
+          {/* The synthesis card renders only when there is (or will be) answer
+              content — a run that died before any answer_delta shows its
+              terminal state above instead of a forever-pulsing skeleton. */}
+          {(!done || hasAnswerContent) && (
+            <div className="mb-6">
+              <AnswerCard
+                answer={run.answer}
+                results={visibleResults}
+                sources={sources}
+                ready={answerReady}
+                done={done}
+                elapsedMs={elapsedMs}
+                onCiteClick={handleCite}
+                onAsk={handleFollowUp}
+              />
+            </div>
+          )}
 
           <div className="mb-4">
             <FilterRail
@@ -202,6 +313,23 @@ export function ResultsPanel({
           </div>
 
           <div className="space-y-3">
+            {/* Deliberate zero-results state for a finished run. Failed and
+                cancelled runs surface their own terminal blocks above. */}
+            {done && !failed && !cancelled && visibleResults.length === 0 && (
+              <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">
+                <div className="font-medium text-[hsl(var(--foreground))]">No results</div>
+                <p className="mt-1 text-xs [text-wrap:balance]">
+                  None of this workspace's sources returned a match for this query.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleRefine}
+                  className="mt-3 text-[hsl(var(--primary))] hover:underline text-xs"
+                >
+                  Refine query
+                </button>
+              </div>
+            )}
             {filtered.length === 0 && visibleResults.length > 0 && (
               <div className="text-sm text-[hsl(var(--muted-foreground))] py-4 text-center">
                 No <b>{KINDS.find((k) => k.id === activeKind)?.name}</b> results in this query.{" "}
@@ -238,9 +366,22 @@ export function ResultsPanel({
               <span className="flex-1 h-px bg-[hsl(var(--border))]" />
               <span>End of results</span>
               <span aria-hidden>·</span>
-              <button type="button" className="hover:text-[hsl(var(--primary))]">Ask a follow-up</button>
+              <button type="button" onClick={handleFollowUp} className="hover:text-[hsl(var(--primary))]">
+                Ask a follow-up
+              </button>
               <span aria-hidden>·</span>
-              <button type="button" className="hover:text-[hsl(var(--primary))]">Refine query</button>
+              <button type="button" onClick={handleRefine} className="hover:text-[hsl(var(--primary))]">
+                Refine query
+              </button>
+              <span aria-hidden>·</span>
+              <button
+                type="button"
+                onClick={handleRunAgain}
+                disabled={submitting || workspace.sources.length === 0}
+                className="hover:text-[hsl(var(--primary))] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Run again
+              </button>
               <span className="flex-1 h-px bg-[hsl(var(--border))]" />
             </div>
           )}
@@ -255,6 +396,7 @@ export function ResultsPanel({
           traceActive={!done}
           onShowTrace={() => setTraceOpen(true)}
           onAsk={(q) => submit(q)}
+          onShowGraph={onOpenGraph}
         />
       </div>
 

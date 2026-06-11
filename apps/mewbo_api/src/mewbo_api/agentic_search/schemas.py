@@ -38,9 +38,15 @@ TERMINAL_RUN_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cance
 # Result kinds the console knows how to render (filter rail in ResultsPanel).
 ResultKindLiteral = Literal["docs", "code", "threads", "design", "tickets", "web"]
 
+# The per-run search-tier budget knob (decomposition depth + probe fan-out).
+# Lowercase on the wire; defaults to ``scg`` config ``default_tier``.
+SearchTierLiteral = Literal["fast", "auto", "deep"]
+SEARCH_TIERS: frozenset[str] = frozenset({"fast", "auto", "deep"})
+
 # Coarse map-source (SCG indexing) lifecycle — the durable status bucket of a
-# map job. Mirrors ``RunStatus`` but tracks the indexing pipeline, not a search.
-MapJobStatus = Literal["queued", "mapping", "linking", "finalizing", "complete", "failed"]
+# map job: ``queued → running → completed|failed``. Fine-grained pipeline
+# progress lives on ``phase`` (``MapJobPhase``), never here.
+MapJobStatus = Literal["queued", "running", "completed", "failed"]
 
 # Fine-grained SCG map phase (parallels the wiki's six-phase model). ``phase``
 # is the live progress state; ``status`` above is the coarse lifecycle bucket.
@@ -71,10 +77,14 @@ class _Wire(BaseModel):
 class SourceCatalogEntry(_Wire):
     """One MCP-style connector the search agent can fan out across.
 
-    ``available`` / ``unavailable_reason`` let the console grey-out a persisted
-    workspace source that is no longer configured instead of silently dropping
-    it. ``tool_ids`` is the seam to tool scoping — the orchestration team maps a
-    selected source to the concrete tool ids the run is allowed to call.
+    ``available`` / ``unavailable_reason`` let the console grey-out a configured
+    source whose tool discovery failed instead of silently dropping it (the
+    catalog is live-first; a source that is neither configured nor a demo
+    fixture is omitted). ``tool_ids`` is the seam to tool scoping — the
+    orchestration team maps a selected source to the concrete tool ids the run
+    is allowed to call.
+    ``source_type`` is the SCG descriptor kind a map job should use (live MCP
+    servers advertise ``mcp_tool_list``; the console defaults absent values).
     """
 
     id: str
@@ -83,6 +93,7 @@ class SourceCatalogEntry(_Wire):
     bg: str = "#191919"
     glyph: str = "?"
     desc: str = ""
+    source_type: str | None = None
     available: bool = True
     unavailable_reason: str | None = None
     tool_ids: list[str] = Field(default_factory=list)
@@ -135,6 +146,96 @@ class Workspace(_Wire):
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
     past_queries: list[PastQuery] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Virtual MCP config (DB-persisted, per workspace) — #75
+# ---------------------------------------------------------------------------
+
+
+class McpServerDef(BaseModel):
+    """One resolved MCP server in a workspace's virtual MCP config.
+
+    The persisted source-of-truth for what a run on this workspace may reach: a
+    server *name* plus the resolved transport coordinates. ``headers`` / ``env``
+    are the ONLY secret-bearing fields — they are stored behind the
+    :class:`WorkspaceMcpConfig` encode seam and **always redacted outward**
+    (:meth:`redacted`); the wire/graph/event surfaces never see their values.
+
+    Not ``extra="forbid"`` on purpose: the merged ``.mcp.json`` server def is an
+    open shape (transport-specific keys vary across MCP transports), so an
+    unknown key is preserved as opaque ``extra`` rather than rejected — but only
+    the recognised secret fields are ever redacted.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(min_length=1)
+    transport: str | None = None
+    url: str | None = None
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    headers: dict[str, str] = Field(default_factory=dict)
+    env: dict[str, str] = Field(default_factory=dict)
+
+    def redacted(self) -> dict[str, Any]:
+        """Return an outward projection with every secret value masked.
+
+        ``headers`` / ``env`` keys are preserved (the SHAPE of the auth is not a
+        secret — that you send an ``Authorization`` header is fine to surface),
+        but each value is replaced with ``"***"`` so a token never appears in a
+        descriptor, run event, or wire payload (the ``ScgNode.auth_scope``
+        stance). The redacted dict is safe to log / emit / persist anywhere.
+        """
+        blob = self.model_dump(mode="json")
+        blob["headers"] = {k: "***" for k in self.headers}
+        blob["env"] = {k: "***" for k in self.env}
+        return blob
+
+    def auth_scope(self) -> str | None:
+        """A redacted one-line auth descriptor (e.g. ``"header:Authorization"``).
+
+        Mirrors :attr:`ScgNode.auth_scope` — names *which* auth a server carries
+        without ever revealing the credential, so the SCG/run surfaces can show
+        "authenticated" without a secret.
+        """
+        scopes = [f"header:{k}" for k in self.headers] + [f"env:{k}" for k in self.env]
+        return ", ".join(sorted(scopes)) or None
+
+
+class WorkspaceMcpConfigRecord(_Wire):
+    """The durable virtual MCP config for ONE workspace (#75).
+
+    Persisted in the agentic_search store namespace (JSON file / Mongo
+    collection, the :class:`CredentialStore` dual-backend pattern). ``servers``
+    is the resolved selection — server name → :class:`McpServerDef` — built from
+    ``Workspace.sources`` ∩ the merged MCP config at save/attach time. The
+    secret-bearing fields are stored behind the :class:`WorkspaceMcpConfig`
+    encode seam; only the redacted projection is ever returned outward.
+    """
+
+    workspace_id: str
+    servers: list[McpServerDef] = Field(default_factory=list)
+    updated_at: str = Field(default_factory=utc_now_iso)
+    # Fingerprint of the workspace prose (``instructions`` + ``desc``) that last
+    # drove a map-time enrich. Server-internal map-lifecycle bookkeeping — the
+    # NL-context sibling of ``SourceDescriptor.schema_version`` (the tool-list
+    # ManifestHash). Empty until the first enrich-bearing save; a change gates an
+    # idempotent re-enrich of the workspace's mapped sources (#83). Never a
+    # secret, never echoed outward.
+    nl_fingerprint: str = ""
+
+    def server_names(self) -> list[str]:
+        """The resolved server names this workspace grants (selection order)."""
+        return [s.name for s in self.servers]
+
+    def redacted(self) -> dict[str, Any]:
+        """An outward projection — every server's secrets masked (safe to emit)."""
+        return {
+            "workspace_id": self.workspace_id,
+            "updated_at": self.updated_at,
+            "servers": [s.redacted() for s in self.servers],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +371,7 @@ class RunPayload(_Wire):
     query: str
     workspace_id: str
     status: RunStatus = "completed"
+    tier: SearchTierLiteral = "auto"
     total_ms: int = 0
     answer: AnswerSynthesis = Field(default_factory=AnswerSynthesis)
     results: list[SearchResult] = Field(default_factory=list)
@@ -293,6 +395,7 @@ class RunRecord(_Wire):
     workspace_id: str
     query: str
     status: RunStatus = "queued"
+    tier: SearchTierLiteral = "auto"
     created_at: str = Field(default_factory=utc_now_iso)
     started_at: str | None = None
     completed_at: str | None = None
@@ -382,6 +485,8 @@ __all__ = [
     "OUTPUT_CONTRACT_VERSION",
     "RunStatus",
     "TERMINAL_RUN_STATUSES",
+    "SearchTierLiteral",
+    "SEARCH_TIERS",
     "MapJobStatus",
     "MapJobPhase",
     "MapJobRecord",
@@ -391,6 +496,8 @@ __all__ = [
     "PastQuery",
     "WorkspaceInput",
     "Workspace",
+    "McpServerDef",
+    "WorkspaceMcpConfigRecord",
     "ResultRef",
     "ResultInsight",
     "ResultImage",

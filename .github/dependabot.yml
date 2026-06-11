@@ -145,7 +145,7 @@ updates:
       include: "scope"
 
   - package-ecosystem: "pip"
-    directory: "/mewbo_ha_conversation"
+    directory: "/apps/mewbo_ha_conversation"
     schedule:
       interval: "weekly"
       day: "monday"

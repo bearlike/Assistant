@@ -80,6 +80,45 @@ def scg_store(tmp_path: Path) -> JsonScgStore:
 
 
 @pytest.fixture()
+def capability_scg_store(tmp_path: Path) -> JsonScgStore:
+    """An SCG store seeded with ``capability`` nodes — the MCP-tool-list shape.
+
+    This is the kind an MCP-tool-list source maps to (every tool → one
+    ``capability`` node), and the kind the deployed graph carried when connector
+    insights were written edge-less: the resolver hard-coded ``entity_type`` and
+    silently dropped every ``capability`` anchor. The seam test MUST seed this
+    shape — seeding ``entity_type`` (as the legacy fixture did) is exactly the
+    stub that hid the bug.
+    """
+    store = JsonScgStore(root_dir=tmp_path / "scg")
+    store.upsert_nodes(
+        [
+            ScgNode(
+                source_key="wikidata#execute_sparql",
+                kind="capability",
+                source_id="wikidata",
+                name="execute_sparql",
+            ),
+            ScgNode(
+                source_key="wikidata#search_items",
+                kind="capability",
+                source_id="wikidata",
+                name="search_items",
+            ),
+        ]
+    )
+    return store
+
+
+@pytest.fixture()
+def capability_bridge(wiki_store, capability_scg_store: JsonScgStore) -> ScgMemoryBridge:
+    """A bridge over a ``capability``-only SCG (the deployed MCP-tool-list shape)."""
+    b = ScgMemoryBridge(wiki_store=wiki_store, embedder=_FakeEmbedder(), llm=None)
+    b.resolver = ScgAnchorResolver(capability_scg_store)
+    return b
+
+
+@pytest.fixture()
 def bridge(wiki_store, scg_store: JsonScgStore) -> ScgMemoryBridge:
     """A bridge wired to the real wiki store, a fake embedder, and no LLM."""
     b = ScgMemoryBridge(wiki_store=wiki_store, embedder=_FakeEmbedder(), llm=None)
@@ -183,3 +222,153 @@ def test_read_insights_empty_when_no_connector_notes(bridge: ScgMemoryBridge) ->
     """No connector notes ⇒ empty result (BM25/cosine over an empty pool)."""
     qvec = _FakeEmbedder().embed_query("anything")
     assert bridge.read_insights(CONNECTOR_SLUG, qvec, k=5) == []
+
+
+# ── polarity + workspace attribution (#76) ───────────────────────────────────
+
+
+def test_write_records_default_positive_polarity(bridge: ScgMemoryBridge) -> None:
+    """A deposit with no explicit polarity reads back as positive evidence."""
+    from mewbo_graph.scg.memory_bridge import polarity_label, polarity_of
+
+    res = bridge.write_insight(
+        CONNECTOR_SLUG, "github Repo is queryable by id", source_keys=["github#Repo"]
+    )
+    qvec = _FakeEmbedder().embed_query("repo id github")
+    note = next(n for n in bridge.read_insights(CONNECTOR_SLUG, qvec, k=5))
+    assert res.ok
+    assert polarity_label("positive") in note.labels
+    assert polarity_of(note) == "positive"
+
+
+def test_write_dead_end_polarity_round_trips(bridge: ScgMemoryBridge) -> None:
+    """A dead-end deposit carries the dead_end label and reads back as dead_end."""
+    from mewbo_graph.scg.memory_bridge import polarity_label, polarity_of
+
+    bridge.write_insight(
+        CONNECTOR_SLUG, "github Issue search by user returns nothing here",
+        source_keys=["github#Issue"], polarity="dead_end",
+    )
+    qvec = _FakeEmbedder().embed_query("issue user github")
+    note = next(n for n in bridge.read_insights(CONNECTOR_SLUG, qvec, k=5))
+    assert polarity_label("dead_end") in note.labels
+    assert polarity_of(note) == "dead_end"
+
+
+def test_write_workspace_is_attribution_not_partition(bridge: ScgMemoryBridge) -> None:
+    """A workspace tag is recorded as a label but never partitions reads.
+
+    The note is deposited under workspace ``ws-a`` but a plain (workspace-less)
+    read still surfaces it — cross-pollination, per ``docs/features-search.md``.
+    """
+    bridge.write_insight(
+        CONNECTOR_SLUG, "github Repo field id is bound",
+        source_keys=["github#Repo"], workspace="ws-a",
+    )
+    qvec = _FakeEmbedder().embed_query("repo id github")
+    note = next(n for n in bridge.read_insights(CONNECTOR_SLUG, qvec, k=5))
+    assert "ws:ws-a" in note.labels  # attribution recorded
+    # No partition: a read with no workspace bound still returns the note.
+    assert "github Repo field id is bound" == note.content
+
+
+# ── capability-anchored deposits (the deployed MCP-tool-list bug, #81-A) ─────
+#
+# The REAL seam: an MCP-tool-list source maps every tool to a ``capability``
+# node, but the resolver used to hard-code ``ScgNode.make_id(source_key,
+# "entity_type")`` — deriving a node id that never existed for a capability —
+# so every connector anchor was dropped, no ANCHORS edge was written, and
+# ``memory_vector_search`` (default ``exclude_invalidated=True``) silently
+# dropped the note on read. These tests pin the capability shape so the fix
+# can't regress; they would all FAIL against the pre-fix resolver.
+
+
+def test_capability_anchor_creates_live_anchors_edge(
+    capability_bridge: ScgMemoryBridge, wiki_store
+) -> None:
+    """(1) A capability source_key anchor produces a live ANCHORS edge."""
+    res = capability_bridge.write_insight(
+        CONNECTOR_SLUG,
+        "github issue rate limit field applies",
+        source_keys=["wikidata#execute_sparql"],
+    )
+    assert res.ok
+    node_id = res.claims[0].node_id
+    assert node_id is not None
+    edges = wiki_store.list_memory_edges(CONNECTOR_SLUG, node_id=node_id)
+    anchors = [e for e in edges if e.type == "ANCHORS"]
+    assert [e.target for e in anchors] == ["wikidata#execute_sparql"]
+    # The anchor was NOT dropped — no "dropped unresolved anchor" warning.
+    assert not any("dropped unresolved anchor" in w for w in res.claims[0].warnings)
+
+
+def test_capability_anchor_persists_embedding(
+    capability_bridge: ScgMemoryBridge, wiki_store
+) -> None:
+    """(2) The deposit persists a connector embedding for the note."""
+    res = capability_bridge.write_insight(
+        CONNECTOR_SLUG,
+        "github issue field id is bound",
+        source_keys=["wikidata#search_items"],
+    )
+    node_id = res.claims[0].node_id
+    # The embedding is keyed by node_id under the connector slug; a brute-force
+    # vector search over the whole pool must surface it.
+    qvec = _FakeEmbedder().embed_query("github issue field id")
+    found = wiki_store.memory_vector_search(CONNECTOR_SLUG, qvec, k=10)
+    assert any(e.node_id == node_id for e in found)
+
+
+def test_capability_anchor_round_trips_via_read_insights(
+    capability_bridge: ScgMemoryBridge,
+) -> None:
+    """(3) read_insights returns the capability-anchored note (edge-gated read)."""
+    capability_bridge.write_insight(
+        CONNECTOR_SLUG,
+        "github issue user rate limit",
+        source_keys=["wikidata#execute_sparql"],
+    )
+    qvec = _FakeEmbedder().embed_query("github issue user rate limit")
+    hits = capability_bridge.read_insights(CONNECTOR_SLUG, qvec, k=5)
+    assert "github issue user rate limit" in [n.content for n in hits]
+
+
+def test_capability_note_surfaces_in_scg_graph_view_memory_layer(
+    capability_bridge: ScgMemoryBridge, wiki_store, capability_scg_store: JsonScgStore
+) -> None:
+    """(4) ScgGraphView includes the note + cross ANCHORS in the memory layer."""
+    from mewbo_graph.scg.graph_view import ScgGraphView
+
+    res = capability_bridge.write_insight(
+        CONNECTOR_SLUG,
+        "github issue rate limit field applies",
+        source_keys=["wikidata#execute_sparql"],
+    )
+    note_id = res.claims[0].node_id
+
+    view = ScgGraphView.for_scope(
+        capability_scg_store, wiki_store, source_ids=["wikidata"]
+    )
+    # The note is in the memory layer (it had an in-scope live anchor).
+    assert note_id in {n.node_id for n in view.memory_nodes}
+    # A reconciled cross-layer ANCHORS edge ties the note to the capability node.
+    cap_node_id = ScgNode.make_id("wikidata#execute_sparql", "capability")
+    assert (note_id, cap_node_id) in view.cross_edges
+    wire = view.to_wire()
+    assert wire["stats"]["perLayer"]["memory"] >= 1
+
+
+def test_read_anchored_insights_returns_score_and_anchors(
+    bridge: ScgMemoryBridge,
+) -> None:
+    """The bias-feed read returns (note, score, anchors) with the live anchor."""
+    bridge.write_insight(
+        CONNECTOR_SLUG, "github Repo is queryable by id", source_keys=["github#Repo"]
+    )
+    qvec = _FakeEmbedder().embed_query("repo id github")
+    rows = bridge.read_anchored_insights(CONNECTOR_SLUG, qvec, k=5)
+    assert rows
+    note, score, anchors = rows[0]
+    assert note.content == "github Repo is queryable by id"
+    assert anchors == ["github#Repo"]
+    assert score > 0.0  # the query overlaps the note's vocabulary
