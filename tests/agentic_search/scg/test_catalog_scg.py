@@ -10,9 +10,10 @@ is enabled. These tests pin every branch:
   ``entries`` (∩ ``filter_specs``), overriding the demo fallback.
 * **SCG absent + seeding on** — resolution falls back to the fixtures demo tools
   (still ∩ availability for ``tools_for``), without error.
-* **SCG absent + seeding off** — a production install reports the source with
-  ``available=False`` (honest "not indexed"), never a hardcoded guess.
-* **Unconfigured source** — still returned, never omitted.
+* **SCG absent + seeding off** — a production install drops the demo fixtures
+  from the catalog and resolves no tools, never a hardcoded guess (live
+  configured MCP servers are covered in ``test_catalog_live_sources.py``).
+* **Unconfigured demo source (seeding on)** — still returned, never omitted.
 
 The store is the real JSON backend under a tmp dir (no MongoDB). ``filter_specs``
 runs against the real built-in registry, so the intersection is asserted against
@@ -163,17 +164,14 @@ def test_tools_for_unknown_source_is_skipped() -> None:
 def test_seeding_off_unmapped_source_has_no_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With demo seeding off, an unmapped source resolves to no tools.
+    """With demo seeding off, a demo source resolves to no tools.
 
     No hardcoded guess in production: ``tools_for`` is empty and ``entries``
-    reports the source ``available=False``.
+    lists only configured MCP servers — the demo fixtures vanish entirely.
     """
     monkeypatch.setattr(catalog_mod, "seeding_enabled", lambda: False)
     assert SourceCatalog.tools_for(["filesystem"]) == []
-    entry = next(e for e in SourceCatalog.entries() if e.id == "filesystem")
-    assert entry.available is False
-    assert entry.unavailable_reason
-    assert entry.tool_ids == []
+    assert all(e.id != "filesystem" for e in SourceCatalog.entries())
 
 
 def test_seeding_off_scg_still_resolves(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -96,7 +96,7 @@ const ICON_PATHS: Record<GraphNodeKind, IconElement[]> = {
   ],
 };
 
-function makeIconUri(paths: IconElement[]): string {
+export function makeIconUri(paths: IconElement[]): string {
   const inner = paths
     .map(([tag, attrs]) => {
       const a = Object.entries(attrs)
@@ -111,6 +111,8 @@ function makeIconUri(paths: IconElement[]): string {
     `stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
+
+export type { IconElement };
 
 const ICON_URI: Record<GraphNodeKind, string> = {
   File: makeIconUri(ICON_PATHS.File),
@@ -217,12 +219,44 @@ export type NodeClickHandler = (node: {
   neighbors: NeighborInfo[];
 }) => void;
 
+// ── Render config (injectable — wiki vs SCG) ──────────────────────────
+//
+// The renderer ENGINE (cytoscape lifecycle, focus, filter, layout, theming)
+// is domain-agnostic; only the per-kind palette / glyph / shape and the
+// kind→layer map differ between the wiki code graph and the search SCG. They
+// are bundled into a ``GraphRenderConfig`` so a second consumer (the Agentic
+// Search workspace graph, #79) reuses the whole engine by supplying its own
+// maps — no fork of the 700-line renderer. ``kindVar``/``edgeVar`` are CSS
+// var names (``--graph-*``), ``iconUri`` is a data-URI per kind, ``shape`` is
+// the optional non-disc silhouette, ``layerForKind`` drives the per-layer
+// toggle. Defaults are the wiki maps so existing call sites are unchanged.
+export interface GraphRenderConfig {
+  /** data-URI glyph per node kind (omit a kind → bare disc). */
+  iconUri: Record<string, string>;
+  /** CSS var name (``--graph-*``) for the node fill, per kind. */
+  kindVar: Record<string, string>;
+  /** CSS var name for the line/arrow colour, per edge kind. */
+  edgeVar: Record<string, string>;
+  /** Optional non-disc silhouette per kind (round-rectangle / hexagon / …).
+   *  The per-layer toggle (kind→layer grouping) is the SCREEN's concern — the
+   *  engine only needs the visual maps, so no layer map lives here. */
+  shape?: Record<string, string>;
+}
+
+const WIKI_RENDER_CONFIG: GraphRenderConfig = {
+  iconUri: ICON_URI,
+  kindVar: KIND_VAR,
+  edgeVar: EDGE_VAR,
+  shape: { Entity: "round-rectangle", Memory: "round-hexagon", External: "round-diamond" },
+};
+
 // ── Renderer ──────────────────────────────────────────────────────────
 
 export class KnowledgeGraphRenderer {
   // ── State (atomic attributes) ────────────────────────────────────
   private cy: Core | null = null;
   private readonly container: HTMLElement;
+  private readonly config: GraphRenderConfig;
   private nodeClickHandler: NodeClickHandler | null = null;
   private hiddenKinds: Set<GraphNodeKind> = new Set();
   private hiddenEdgeKinds: Set<GraphEdgeKind> = new Set();
@@ -232,9 +266,11 @@ export class KnowledgeGraphRenderer {
 
   // ── Construction ─────────────────────────────────────────────────
 
-  constructor(container: HTMLElement) {
+  /** *config* defaults to the wiki maps; the SCG screen injects its own. */
+  constructor(container: HTMLElement, config: GraphRenderConfig = WIKI_RENDER_CONFIG) {
     ensureFcose();
     this.container = container;
+    this.config = config;
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────
@@ -249,7 +285,7 @@ export class KnowledgeGraphRenderer {
     this.cy = cytoscape({
       container: this.container,
       elements,
-      style: KnowledgeGraphRenderer.buildStylesheet(),
+      style: KnowledgeGraphRenderer.buildStylesheet(this.config),
       layout: KnowledgeGraphRenderer.layoutOptions(graph.nodes.length),
       wheelSensitivity: 0.2,
       minZoom: 0.1,
@@ -304,7 +340,7 @@ export class KnowledgeGraphRenderer {
   /** Re-apply themed styles when ``light`` toggles on <html>. */
   applyTheme(): void {
     if (!this.cy) return;
-    this.cy.style(KnowledgeGraphRenderer.buildStylesheet()).update();
+    this.cy.style(KnowledgeGraphRenderer.buildStylesheet(this.config)).update();
   }
 
   /** Destroy the Cytoscape instance and detach listeners. Safe to call twice. */
@@ -516,8 +552,9 @@ export class KnowledgeGraphRenderer {
 
   /** The layer a node kind belongs to. */
   static layerForKind(kind: GraphNodeKind): GraphLayer {
-    return KIND_LAYER[kind];
+    return KIND_LAYER[kind] ?? "ast";
   }
+
 
 
   /** Position the initial viewport so discs read at a usable size.
@@ -602,8 +639,12 @@ export class KnowledgeGraphRenderer {
 
   /** Stylesheet — colours resolved once from CSS vars, then used as static
    *  per-kind selector overlays. Cytoscape doesn't resolve ``var(--…)`` on
-   *  its <canvas>, so the var → hex conversion has to happen here. */
-  static buildStylesheet(): cytoscape.StylesheetJson {
+   *  its <canvas>, so the var → hex conversion has to happen here. Reads
+   *  ``this.config`` so wiki + SCG palettes diverge without forking the engine. */
+  static buildStylesheet(
+    config: GraphRenderConfig = WIKI_RENDER_CONFIG,
+  ): cytoscape.StylesheetJson {
+    const { kindVar, edgeVar, iconUri, shape = {} } = config;
     const sizeFor = (n: cytoscape.NodeSingular): number => {
       const d = (n.data("degree") as number) ?? 0;
       return Math.min(60, 28 + 6 * Math.log2(1 + d));
@@ -613,33 +654,24 @@ export class KnowledgeGraphRenderer {
     const bg = cssVar("--background");
     const primary = cssVar("--primary");
 
-    // Per-kind overlays — static colour + icon URI. Non-AST layers get a
-    // distinct silhouette (round-rectangle / hexagon) so the entity &
-    // memory layers read apart from the AST discs at a glance.
-    const SHAPE: Partial<Record<GraphNodeKind, string>> = {
-      Entity: "round-rectangle",
-      Memory: "round-hexagon",
-      External: "round-diamond",
-    };
-    const kindOverlays = (Object.keys(KIND_VAR) as GraphNodeKind[]).map(
-      (kind) => ({
-        selector: `node[kind = "${kind}"]`,
-        style: {
-          "background-color": cssVar(KIND_VAR[kind]),
-          "background-image": ICON_URI[kind],
-          ...(SHAPE[kind] ? { shape: SHAPE[kind] } : {}),
-        },
-      }),
-    );
-    const edgeOverlays = (Object.keys(EDGE_VAR) as GraphEdgeKind[]).map(
-      (kind) => ({
-        selector: `edge[kind = "${kind}"]`,
-        style: {
-          "line-color": cssVar(EDGE_VAR[kind]),
-          "target-arrow-color": cssVar(EDGE_VAR[kind]),
-        },
-      }),
-    );
+    // Per-kind overlays — static colour + icon URI. Non-disc layers get a
+    // distinct silhouette (round-rectangle / hexagon) so they read apart
+    // from the primary discs at a glance.
+    const kindOverlays = Object.keys(kindVar).map((kind) => ({
+      selector: `node[kind = "${kind}"]`,
+      style: {
+        "background-color": cssVar(kindVar[kind]),
+        ...(iconUri[kind] ? { "background-image": iconUri[kind] } : {}),
+        ...(shape[kind] ? { shape: shape[kind] } : {}),
+      },
+    }));
+    const edgeOverlays = Object.keys(edgeVar).map((kind) => ({
+      selector: `edge[kind = "${kind}"]`,
+      style: {
+        "line-color": cssVar(edgeVar[kind]),
+        "target-arrow-color": cssVar(edgeVar[kind]),
+      },
+    }));
 
     return [
       {

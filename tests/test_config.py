@@ -49,6 +49,27 @@ def test_get_config_merges_file_and_override(tmp_path):
     assert section.get("api_key") == "key"
 
 
+def test_scg_section_survives_config_load(tmp_path):
+    """An ``scg`` block in app.json must land on AppConfig (regression: the
+    section was silently dropped by ``extra="ignore"``, making the feature
+    master switch impossible to turn on)."""
+    target = tmp_path / "app.json"
+    target.write_text(json.dumps({"scg": {"enabled": True}}), encoding="utf-8")
+    set_app_config_path(target)
+
+    assert get_config().scg.enabled is True
+    assert get_config_value("scg", "enabled") is True
+    # The exact nested key path the SCG accessor reads, with the model default.
+    assert get_config_value("scg", "traversal", "default_tier") == "auto"
+
+
+def test_scg_defaults_ship_disabled():
+    """The SCG feature defaults off with the spec-calibrated tier default."""
+    config = AppConfig()
+    assert config.scg.enabled is False
+    assert config.scg.traversal.default_tier == "auto"
+
+
 def test_llm_validate_models_skips_when_no_api_base():
     """Skip model listing gracefully when api_base is empty."""
     llm = LLMConfig(api_base="", api_key="key")

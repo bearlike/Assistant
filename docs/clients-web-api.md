@@ -24,33 +24,16 @@ API notes:
 - Protected routes require `X-API-Key` matching `api.master_token` in `configs/app.json`.
 - Session runtime endpoints support async runs and event polling.
 - `X-Mewbo-Capabilities` is an optional request header advertising what the client can render. See [Client capability negotiation](#client-capability-negotiation) below.
+- `X-Mewbo-Surface` is an optional request header naming the client surface (for example `console` or `mcp`). The API stamps it onto the session and its traces, so observability filters can slice by surface. The header is on the CORS allow-list, so browser clients can send it cross-origin. Omitting it defaults to `api`.
 
-Core endpoints:
+The complete endpoint catalog lives in the [REST API Reference](rest-api.md). It is generated from the live server, so every parameter, response shape, and request sample there is current with the code. The shape of the surface, conceptually:
 
-- `POST /api/sessions` create a session
-- `POST /api/sessions/{session_id}/query` enqueue a query or core command
-- `GET /api/sessions/{session_id}/events?after=...` poll events (event kinds include `widget_ready` for capability-gated widget output; see [Widgets in the timeline](#widgets-in-the-timeline))
-- `GET /api/sessions` list sessions (defaults to non-archived, non-empty)
-- `GET /api/sessions?include_archived=1` include archived sessions
-- `POST /api/sessions/{session_id}/archive` archive a session
-- `DELETE /api/sessions/{session_id}/archive` unarchive a session
-- `POST /api/query` synchronous endpoint
-- `GET /api/tools` list tool registry entries
-- `GET /api/notifications` list notifications
-- `POST /api/notifications/dismiss` dismiss notifications
-- `POST /api/notifications/clear` clear notifications
-- `POST /api/sessions/{session_id}/attachments` upload attachments
-- `POST /api/sessions/{session_id}/share` create share link
-- `POST /api/sessions/{session_id}/export` export session payload
-- `GET /api/share/{token}` fetch shared session data
-- `POST /api/webhooks/<platform>` inbound webhook for chat platforms (HMAC auth, not API key). See [Nextcloud Talk](clients-nextcloud-talk.md) and [Email](clients-email.md) for setup. Slash commands: `/help`, `/usage`, `/new`, `/switch-project`.
-- `GET /api/plugins` list installed plugins and their components
-- `GET /api/plugins/marketplace` list available plugins from configured marketplaces
-- `POST /api/plugins/marketplace` install a plugin from a marketplace
-- `DELETE /api/plugins/<name>` uninstall a plugin
-- `POST /api/sessions/{session_id}/ide` launch a Web IDE (code-server) container for a session
-- `DELETE /api/sessions/{session_id}/ide` stop the Web IDE container
-- `POST /api/sessions/{session_id}/ide/extend` extend the IDE session TTL
+- **Sessions** are the core resource. Create, list, fork, query, steer, interrupt, archive, share, and export them. Follow progress through event polling or the SSE stream. Event kinds include `widget_ready` for capability-gated widget output; see [Widgets in the timeline](#widgets-in-the-timeline).
+- **Projects, branches, and worktrees** decide where a session runs. See [Multi-project support](#multi-project-support) and [Branches & Worktrees](features-worktrees.md).
+- **Configuration and keys**: read and patch the app config, manage revocable API keys. See [Configuration API](#configuration-api-and-the-settings-screen) below.
+- **Plugins**: list installed plugins, browse marketplaces, install and uninstall.
+- **Webhooks**: `POST /api/webhooks/<platform>` receives inbound chat-platform messages (HMAC auth, not API key). See [Nextcloud Talk](clients-nextcloud-talk.md) and [Email](clients-email.md) for setup. Slash commands: `/help`, `/usage`, `/new`, `/switch-project`.
+- **Web IDE**: launch, stop, and extend a per-session code-server container.
 
 ## Run the Console
 ```bash
@@ -122,6 +105,27 @@ POST /api/sessions
 In the console, each message input has a model selector. Submit with a different model
 to use it for that turn only. The session's default model is unchanged.
 
+### Per-run fallback models
+
+Each query can carry its own fallback ladder. Pass `fallback_models` in the request context:
+
+```json
+POST /api/sessions/{id}/query
+{
+  "query": "...",
+  "context": {
+    "model": "openai/gpt-5.5",
+    "fallback_models": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-nano"]
+  }
+}
+```
+
+When the primary model keeps failing, the run escalates down the list in order. Omit the field, or send an empty list, to defer to the configured fallback policy. In the console, the composer's **Fallback** tab controls the same list.
+
+## Realtime endpoints
+
+Two sibling endpoints serve low-latency callers. `POST /v1/structured/fast` returns a grounded, schema-constrained answer in a single round-trip. `POST /v1/draft/stream` streams draft tokens over SSE. Both are documented with the structured-output family in [Structured Outputs](features-structured-outputs.md).
+
 ## Sharing and export
 
 ```
@@ -162,6 +166,22 @@ The console supports multiple projects that appear as virtual workspaces shared 
 </div>
 
 Create and switch projects from the **Projects** page or the project selector in the ConfigMenu. In the REST API, projects are identified by the working directory path you pass in the session context.
+
+A session can also be anchored to a specific branch of a project, or run inside an isolated git worktree so parallel sessions never collide. See [Branches & Worktrees](features-worktrees.md).
+
+## Configuration API and the Settings screen
+
+The app configuration is readable and writable over REST:
+
+```
+GET   /api/config          → { "config": {...}, "secrets": {...} }
+PATCH /api/config          → apply a partial update, validate, persist
+GET   /api/config/schema   → JSON Schema for the configuration
+```
+
+Reads are redacted. Secret values (API keys, tokens) are never returned. Instead, the `secrets` map reports whether each secret is set, keyed by dotted path, for example `"llm.api_key": true`. Secrets stay writable through `PATCH`. Protected fields can be neither read nor written; a `PATCH` touching one returns `403`. An update that fails validation returns `422` with the errors and persists nothing.
+
+The console's **Settings** screen sits directly on these endpoints. It is schema-driven: the backend's config schema defines the sections, grouping, and field types, so a new config option surfaces in the UI without frontend changes. Secret fields render as write-only inputs that show set or unset state, never the value. Each section saves independently.
 
 ## Notifications
 

@@ -220,6 +220,33 @@ def test_json_persistence_survives_fresh_instance(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Mongo store — shared ?q= workspace filter (mongomock fakes only the server)
+# ---------------------------------------------------------------------------
+
+
+def test_mongo_search_workspaces_shared_filter():
+    """search_workspaces matches name/desc/past-query text on the Mongo backend.
+
+    The base-class filter loads through the backend's real ``list_workspaces``,
+    so this pins the Mongo read path too — mongomock stands in for the server
+    only (the one I/O boundary), no live URI required.
+    """
+    mongomock = pytest.importorskip("mongomock")
+    store = MongoAgenticSearchStore(
+        client=mongomock.MongoClient(), database="mewbo_test_agentic"
+    )
+    eng = store.create_workspace(WorkspaceInput(name="Engineering Docs"))
+    prod = store.create_workspace(WorkspaceInput(name="Product", desc="gtm planning"))
+    store.append_past_query(eng.id, PastQuery(q="permissioning model", run_id="run-1"))
+
+    assert [w.id for w in store.search_workspaces("ENGINEERING")] == [eng.id]
+    assert [w.id for w in store.search_workspaces("gtm")] == [prod.id]
+    assert [w.id for w in store.search_workspaces("permissioning")] == [eng.id]
+    assert store.search_workspaces("zzz-no-match") == []
+    assert {w.id for w in store.search_workspaces("  ")} == {eng.id, prod.id}
+
+
+# ---------------------------------------------------------------------------
 # Mongo store — same CRUD contract, skipped unless a live URI is configured
 # ---------------------------------------------------------------------------
 

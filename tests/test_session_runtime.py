@@ -335,6 +335,78 @@ def test_resolve_recovery_query_retry_truncates_failed_turn(tmp_path):
     assert not any(e["type"] == "recovery" for e in transcript)
 
 
+def test_resolve_recovery_query_continue_preserves_interrupted_turn(tmp_path):
+    """#84: ``continue`` keeps an interrupted turn that emitted NO completion.
+
+    A run killed mid-flight (api restart) writes its tool work but never a
+    ``completion`` for that turn. Anchoring the truncation on the LAST completion
+    fell back to the PREVIOUS completed turn and deleted the entire interrupted
+    turn — its user message and every tool call/result — which the console then
+    rendered as "prior traces hidden". The continuation must resume from the
+    intact turn, so those traces have to survive.
+    """
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    # Turn 1 — completed cleanly.
+    store.append_event(session_id, {"type": "user", "payload": {"text": "T1"}})
+    store.append_event(session_id, {"type": "assistant", "payload": {"text": "a1"}})
+    store.append_event(
+        session_id,
+        {"type": "completion", "payload": {"done": True, "done_reason": "completed"}},
+    )
+    # Turn 2 — interrupted mid-run: tool work, NO completion.
+    store.append_event(session_id, {"type": "user", "payload": {"text": "T2"}})
+    store.append_event(
+        session_id,
+        {"type": "tool_result", "payload": {"tool_id": "scg_memory", "result": "ok"}},
+    )
+
+    runtime.resolve_recovery_query(session_id, "continue")
+
+    transcript = store.load_transcript(session_id)
+    user_texts = [e["payload"]["text"] for e in transcript if e["type"] == "user"]
+    assert user_texts == ["T1", "T2"]  # the interrupted turn's user message survives
+    assert any(
+        e["type"] == "tool_result"
+        and e["payload"].get("tool_id") == "scg_memory"
+        for e in transcript
+    ), "interrupted turn's tool traces must be preserved"
+
+
+def test_resolve_recovery_query_continue_drops_stale_prior_attempt(tmp_path):
+    """A SECOND ``continue`` drops the stale prior recovery attempt + its turn.
+
+    The truncation's real job: keep the transcript from accreting duplicate
+    recovery prompts. When a prior ``recovery`` marker exists, re-continuing cuts
+    from just before it — removing the stale synthetic continue-turn while
+    keeping the real work that preceded it.
+    """
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "real work"}})
+    store.append_event(
+        session_id,
+        {"type": "tool_result", "payload": {"tool_id": "x", "result": "ok"}},
+    )
+    # A prior continue attempt: its recovery marker + the synthetic turn it drove.
+    store.append_event(session_id, {"type": "recovery", "payload": {"action": "continue"}})
+    store.append_event(
+        session_id, {"type": "user", "payload": {"text": "stale continue prompt"}}
+    )
+    store.append_event(session_id, {"type": "assistant", "payload": {"text": "stale"}})
+
+    runtime.resolve_recovery_query(session_id, "continue")
+
+    transcript = store.load_transcript(session_id)
+    user_texts = [e["payload"]["text"] for e in transcript if e["type"] == "user"]
+    # The stale continue prompt is gone; the real work survives.
+    assert "stale continue prompt" not in user_texts
+    assert "real work" in user_texts
+    assert any(e["type"] == "tool_result" for e in transcript)
+
+
 def test_resolve_recovery_query_continue_generic_prompt(tmp_path):
     """``continue`` returns a terse, stable recovery prompt.
 

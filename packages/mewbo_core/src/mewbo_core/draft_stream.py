@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from mewbo_core.common import get_logger
+from mewbo_core.components import langfuse_invoke_config
 from mewbo_core.config import get_config_value
 from mewbo_core.llm import build_chat_model
 
@@ -108,7 +109,18 @@ class DraftStreamer:
             len(query),
         )
 
-        async for chunk in model.astream(messages):
+        # Attach the Langfuse CallbackHandler so the streamed generation EXPORTS
+        # (the surrounding ``langfuse_session_context`` only propagates attributes
+        # — #87). Built ONCE before the stream, so TTFT never pays for a per-token
+        # cost; the handler exports asynchronously off the hot path. ``{}`` (no-op)
+        # when Langfuse is disabled, so the tool-light invariant is preserved.
+        invoke_config = langfuse_invoke_config(
+            user_id="mewbo-draft-stream",
+            session_id="draft-stream",
+            trace_name="mewbo-draft-stream",
+        )
+
+        async for chunk in model.astream(messages, config=invoke_config or None):
             delta = _extract_text_delta(chunk)
             if delta:
                 yield delta

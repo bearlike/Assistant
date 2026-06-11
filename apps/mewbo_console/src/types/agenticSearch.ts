@@ -4,6 +4,10 @@
 /** Coarse run lifecycle — mirrors the BE `RunStatus` literal. */
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled"
 
+/** Search budget knob (decomposition depth + probe fan-out) — one knob, no
+ *  verification rounds. Sent as `tier` on `POST /runs`; default is `auto`. */
+export type SearchTier = "fast" | "auto" | "deep"
+
 export interface SourceCatalogEntry {
   id: string
   name: string
@@ -16,6 +20,8 @@ export interface SourceCatalogEntry {
   unavailable_reason?: string | null
   /** Concrete tool ids this source maps to (tool-scoping seam). */
   tool_ids?: string[]
+  /** SCG provider dispatch key (e.g. "mcp_tool_list") for map jobs. */
+  source_type?: string
 }
 
 export interface PastQuery {
@@ -134,6 +140,8 @@ export interface RunPayload {
   query: string
   workspace_id: string
   status?: RunStatus
+  /** Echo of the requested search tier (`POST /runs` body `tier`). */
+  tier?: SearchTier
   total_ms: number
   answer: RunAnswer
   results: SearchResult[]
@@ -163,6 +171,46 @@ export interface RunRecord {
   allowed_tools: string[]
   output_contract_version: string
   payload: RunPayload | null
+}
+
+// ── SCG (Source Capability Graph) introspection + map jobs ─────────────────
+
+/** Coarse map-job lifecycle — queued → running → completed | failed. */
+export type MapJobStatus = "queued" | "running" | "completed" | "failed"
+
+/** Fine-grained SCG map phase (the five-phase map pipeline). */
+export type MapJobPhase = "connect" | "introspect" | "parse" | "link" | "finalize"
+
+/** Durable map-source (SCG indexing) job record — mirrors the BE `MapJobRecord`. */
+export interface MapJobRecord {
+  job_id: string
+  source_id: string
+  source_type: string
+  status: MapJobStatus
+  /** Live progress phase; `null` until the first phase event. */
+  phase?: MapJobPhase | null
+  phase_started_at?: string | null
+  node_count: number
+  edge_count: number
+  /** Redacted `{code, message}` descriptor only — never a secret. */
+  error?: { code: string; message: string } | null
+  created_at: string
+  started_at?: string | null
+  completed_at?: string | null
+}
+
+/** One mapped source as reported by `GET /scg`. */
+export interface ScgSource {
+  source_id: string
+  source_type: string
+}
+
+/** `GET /scg` introspection. `enabled: false` models the 503 "SCG disabled"
+ *  response so the console can render a setup hint instead of an error. */
+export interface ScgStatus {
+  enabled: boolean
+  counts: { sources: number; nodes: number; edges: number; recipes: number } | null
+  sources: ScgSource[]
 }
 
 // ── SSE event protocol ──────────────────────────────────────────────────────
@@ -243,3 +291,13 @@ export type SearchEvent =
 
 /** Event types that terminate the stream. */
 export const TERMINAL_SEARCH_EVENTS = ["run_done", "error", "cancelled"] as const
+
+/** Map-job phase update on the map events SSE route. */
+export interface MapPhaseEvent {
+  type: "phase"
+  name: MapJobPhase
+}
+
+/** Map-job event stream — phase updates plus the shared terminal events
+ *  (the map-job log rides the same `RunSseGenerator` as runs). */
+export type MapJobEvent = MapPhaseEvent | RunDoneEvent | SearchErrorEvent | CancelledEvent

@@ -17,9 +17,11 @@ Mewbo runs as a local CLI, a REST API + web console, or a containerised stack. P
 The CLI is the fastest way to start a local session.
 
 ```bash
-uv sync --extra cli
+uv sync
 uv run mewbo
 ```
+
+The CLI is part of the base install. No extra is needed.
 
 For a global install so `mewbo` works from anywhere:
 ```bash
@@ -46,7 +48,7 @@ uv run mewbo-api
 cd apps/mewbo_console && npm run dev
 ```
 
-The console proxies `/api/` requests to the API at `127.0.0.1:5125` by default.
+The dev console proxies `/api/` requests to the API at `127.0.0.1:5124` by default. That is the API's local port. Port 5125 is the Docker host port only (see the [Docker quick-start](#docker-quickstart)).
 
 See [Console + API](clients-web-api.md) for configuration, auth, and session management.
 
@@ -68,12 +70,14 @@ Installs every optional component plus test/docs tooling.
 uv sync --all-extras --all-groups
 ```
 
+The CLI and core tools ship with the base install. The optional extras are:
+
 | Extra | What it adds |
 |-------|-------------|
-| `cli` | Terminal UI, Rich approval dialogs |
-| `api` | Flask REST API, Flask-RESTX, Gunicorn |
-| `ha` | Home Assistant integration |
-| `tools` | Full MCP tools bundle |
+| `api` | REST API server (Flask, Flask-RESTX, Gunicorn), the backend for the web console |
+| `ha` | Home Assistant conversation integration |
+| `wiki` | Wiki + search graph substrate via `mewbo-graph` (tree-sitter, rank-bm25, numpy) |
+| `mcp` | Standalone MCP server wrapping the REST API |
 | `--all-extras` | All of the above |
 | `--all-groups` | Dev + test + docs groups |
 

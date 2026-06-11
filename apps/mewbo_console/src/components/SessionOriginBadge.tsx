@@ -9,6 +9,8 @@ const ORIGIN_META: Record<SessionOrigin, { label: string; color: string }> = {
   wiki: { label: 'Wiki', color: 'blue' },
   search: { label: 'Search', color: 'cyan' },
   channel: { label: 'Channel', color: 'emerald' },
+  structured: { label: 'Structured', color: 'violet' },
+  draft: { label: 'Draft', color: 'teal' },
 };
 
 // Channel sessions name their platform instead of the generic "Channel".

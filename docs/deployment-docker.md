@@ -1,6 +1,6 @@
 # Docker Compose Deployment
 
-The recommended way to run Mewbo in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single `docker compose up` starts the full stack. It includes the API, console, MongoDB, and the nginx proxy for the Web IDE feature.
+The recommended way to run Mewbo in a persistent environment. Pre-built images for the API, console, and base layer are published to GHCR. A single `docker compose up` starts the full stack. It includes the API, the MCP server, the console, MongoDB, and the nginx proxy for the Web IDE feature.
 
 ## Quick Start
 
@@ -24,7 +24,7 @@ HOST_UID=1000                            # output of `id -u`
 docker compose pull && docker compose up -d
 ```
 
-The console is available at `http://localhost:3001`. The API is at `http://localhost:5125`.
+The console is available at `http://localhost:3001`. The API is at `http://localhost:5125`. The MCP server listens on `http://localhost:5127`.
 
 ## Environment Variables
 
@@ -45,29 +45,36 @@ All variables live in `docker.env` (copied from `docker.example.env`).
 | `MONGO_PORT` | No | `27018` | Host port MongoDB is exposed on. |
 | `MONGO_INITDB_ROOT_USERNAME` | No | `mewbo` | MongoDB root username. |
 | `MONGO_INITDB_ROOT_PASSWORD` | No | `mewbo` | MongoDB root password. Change this in production. |
+| `MEWBO_AGENTIC_SEARCH_SEED` | No | `1` | Agentic Search demo-data seeding. Set `0` to disable it, so a production install lists only workspaces and sources you actually configured. |
 
 LLM provider keys, Langfuse credentials, and other runtime settings belong in `configs/app.json`, not `docker.env`. See [Configuration](configuration.md).
 
 ## Services
 
-The Compose file defines four services:
+The Compose file defines five services:
 
 | Service | Image | Default port | Purpose |
 |---------|-------|-------------|---------|
 | `api` | `ghcr.io/bearlike/mewbo-api` | `5125` | Gunicorn + Flask REST API. Runs as `HOST_UID:HOST_GID`. |
+| `mewbo-mcp` | `ghcr.io/bearlike/mewbo-mcp` | `5127` | MCP server for external agents. A thin shim that proxies tool calls to the API. |
 | `console` | `ghcr.io/bearlike/mewbo-console` | `3001` | nginx serving the React SPA. Proxies `/api/` to the API. |
 | `mongo` | `mongo:7` | `27018` (host) | MongoDB for session storage and Web IDE state. |
 | `ide-proxy` | `nginx:1.27-alpine` | `127.0.0.1:5126` | nginx reverse proxy for per-session code-server containers. |
 
-Both `api` and `console` use **host networking** (`network_mode: host`), so they share `127.0.0.1` with the host. The `ide-proxy` runs on the `mewbo-ide` bridge network and is bound to loopback by default.
+The `api`, `mewbo-mcp`, and `console` services use **host networking** (`network_mode: host`), so they share `127.0.0.1` with the host. The `ide-proxy` runs on the `mewbo-ide` bridge network and is bound to loopback by default.
+
+The `mewbo-mcp` service reads the same `docker.env` as the API, so its `MASTER_API_TOKEN` always matches. It also mounts the same `api-data` volume and so shares the API's key store. API keys issued via `POST /api/keys` are therefore valid on the MCP server too.
 
 ## Named Volumes
 
 | Volume | Mounted at | Contains |
 |--------|-----------|---------|
-| `api-data` | `/app/data` | Session transcripts and summaries. |
+| `api-data` | `/app/data` | Session transcripts and summaries. Shared with `mewbo-mcp` for the key store. |
 | `mongo-data` | `/data/db` (MongoDB) | MongoDB data files. |
 | `plans-data` | `/tmp/mewbo/plans` | Plan-mode scratch files (survive restarts). |
+| `wiki-clones` | `/tmp/mewbo/wiki/clones` | Git clones made by wiki indexing (survive restarts). |
+
+All named volumes survive `docker compose down`. They are cleared only by `docker compose down -v` or `docker volume rm`.
 
 ## Mounting Project Directories
 
@@ -96,10 +103,11 @@ services:
 
 Scripts in `docker/init.d/` are run inside the `api` container before Gunicorn starts (sorted lexicographically by filename). Scripts are **sourced** (not executed), so they can export environment variables into the API process environment. A failing script logs a warning and allows startup to continue.
 
-The included script:
+The included scripts:
 
 | Script | Purpose |
 |--------|---------|
+| `05-trust-internal-ca.sh` | If a PEM root CA is mounted at `/usr/local/share/ca-certificates/*.crt` (the `.crt` extension is required), rebuilds the system trust bundle and points Python HTTPS clients at it. Lets `git clone` and API calls verify hosts behind a private CA without disabling verification. |
 | `10-git-setup.sh` | If `GITHUB_TOKEN` is set and `gh` is installed, configures `git credential.helper` for non-interactive auth. Also sets `git config --global safe.directory '*'` so volume-mounted repos are trusted regardless of file ownership. |
 
 To add your own scripts, mount the `docker/init.d/` directory in your override file (see example above) and add `.sh` files there. The API image does not need to be rebuilt.
@@ -129,7 +137,8 @@ docker compose up --build -d
 | Image | Purpose |
 |-------|---------|
 | `ghcr.io/bearlike/mewbo-api` | REST API (Gunicorn + Flask). |
+| `ghcr.io/bearlike/mewbo-mcp` | MCP server (port 5127). Exposes Mewbo to external agents. |
 | `ghcr.io/bearlike/mewbo-console` | Web console (nginx + React SPA). |
-| `ghcr.io/bearlike/mewbo-base` | Base image with Python, Node, and core packages. Used as build arg for the API image. |
+| `ghcr.io/bearlike/mewbo-base` | Base image with Python, Node, and core packages. Used as build arg for the API and MCP images. |
 
 For production TLS, CORS hardening, and observability setup, see [Production Setup](deployment-production.md).

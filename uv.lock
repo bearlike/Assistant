@@ -2538,7 +2538,7 @@ provides-extras = ["treesitter", "retrieval", "full"]
 [[package]]
 name = "mewbo-ha-conversation"
 version = "0.0.13"
-source = { editable = "mewbo_ha_conversation" }
+source = { editable = "apps/mewbo_ha_conversation" }
 dependencies = [
     { name = "aiohttp" },
     { name = "async-timeout" },
@@ -2665,7 +2665,7 @@ requires-dist = [
     { name = "mewbo-api", extras = ["wiki"], marker = "extra == 'wiki'", editable = "apps/mewbo_api" },
     { name = "mewbo-cli", editable = "apps/mewbo_cli" },
     { name = "mewbo-core", editable = "packages/mewbo_core" },
-    { name = "mewbo-ha-conversation", marker = "extra == 'ha'", editable = "mewbo_ha_conversation" },
+    { name = "mewbo-ha-conversation", marker = "extra == 'ha'", editable = "apps/mewbo_ha_conversation" },
     { name = "mewbo-mcp", marker = "extra == 'mcp'", editable = "apps/mewbo_mcp" },
     { name = "mewbo-tools", editable = "packages/mewbo_tools" },
 ]
@@ -2692,7 +2692,7 @@ docs = [
     { name = "mike" },
     { name = "mkdocs" },
     { name = "mkdocs-callouts", specifier = ">=1.16.0" },
-    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.2.1-py3-none-any.whl" },
+    { name = "mkdocs-shadcn-mewbo", url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.3.0/mkdocs_shadcn_mewbo-1.3.0-py3-none-any.whl" },
     { name = "mkdocstrings", extras = ["python"] },
     { name = "pymdown-extensions", specifier = ">=10.20.1" },
 ]
@@ -2789,8 +2789,8 @@ wheels = [
 
 [[package]]
 name = "mkdocs-shadcn-mewbo"
-version = "1.2.1"
-source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.2.1-py3-none-any.whl" }
+version = "1.3.0"
+source = { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.3.0/mkdocs_shadcn_mewbo-1.3.0-py3-none-any.whl" }
 dependencies = [
     { name = "bottle" },
     { name = "gitpython" },
@@ -2798,7 +2798,7 @@ dependencies = [
     { name = "pymdown-extensions" },
 ]
 wheels = [
-    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/latest-master/mkdocs_shadcn_mewbo-1.2.1-py3-none-any.whl", hash = "sha256:5ab3541475050d1000018f244bb62ab1266a8d01ee31ba5dc7405e0a5fc85f22" },
+    { url = "https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.3.0/mkdocs_shadcn_mewbo-1.3.0-py3-none-any.whl", hash = "sha256:049b68fd86fffd7d4d66934606c62b07566d7dfbb638952199d47594a88eb144" },
 ]
 
 [package.metadata]

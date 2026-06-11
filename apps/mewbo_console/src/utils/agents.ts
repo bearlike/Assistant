@@ -24,5 +24,7 @@ export const BADGE_COLOR_MAP: Record<string, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-600',
   blue: 'border-blue-500/30 bg-blue-500/10 text-blue-600',
   cyan: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-600',
+  violet: 'border-violet-500/30 bg-violet-500/10 text-violet-600',
+  teal: 'border-teal-500/30 bg-teal-500/10 text-teal-600',
   muted: 'border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]',
 };

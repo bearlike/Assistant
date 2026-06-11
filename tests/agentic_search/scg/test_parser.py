@@ -30,6 +30,7 @@ from mewbo_graph.scg.providers import (
 from mewbo_graph.scg.store import JsonScgStore
 from mewbo_graph.scg.types import (
     CapabilityBinding,
+    RouteRecipe,
     ScgNode,
     SourceDescriptor,
     StructureGraph,
@@ -204,6 +205,33 @@ def test_parse_source_persists_nodes_edges_and_embeddings(
     assert len(embedder.embedded) == len(nodes)
 
 
+def test_parse_source_backfills_single_step_recipes(store: JsonScgStore) -> None:
+    """Every recipe-less capability gets a one-step recipe to itself.
+
+    ``ScgRouter.route`` ranks ONLY persisted recipes, so a provider that emits
+    none (both default providers) left the whole source unroutable — the first
+    live mapped source routed zero pathways. Pin the backfill at the parser
+    seam so any provider's capabilities are routable.
+    """
+    parser = _parser(store, _FakeEmbedder())
+    parser.parse_source(_producer_consumer_descriptor())
+
+    recipes = {r.source_key: r for r in store.list_recipes()}
+    assert set(recipes) == {"crm#find_user", "crm#get_orders"}
+    assert recipes["crm#find_user"].steps == ["crm#find_user"]
+
+    # Provider-supplied recipes stay authoritative — the backfill skips them.
+    covered = StructureGraph(
+        nodes=[
+            ScgNode(
+                source_key="x#cap", kind="capability", source_id="x", name="cap"
+            )
+        ],
+        recipes=[RouteRecipe(source_key="x#cap", steps=["x#cap", "x#other"])],
+    )
+    assert ScgParser._default_recipes(covered) == []
+
+
 def test_parse_source_embed_text_includes_name_doc_and_examples(
     store: JsonScgStore,
 ) -> None:
@@ -239,6 +267,42 @@ def test_reparse_same_source_replaces_no_duplicates(store: JsonScgStore) -> None
     assert len(store.query_nodes(source_id="github")) == first_nodes
     assert len(store.list_edges(source="github")) == first_edges
     assert len(store.list_embeddings()) == first_emb
+
+
+def test_parse_source_stamps_manifest_hash_on_descriptor(store: JsonScgStore) -> None:
+    """parse_source stamps the tool-list ManifestHash onto schema_version (#81-C)."""
+    from mewbo_graph.scg.manifest import ManifestHash
+
+    desc = _producer_consumer_descriptor()
+    _parser(store, _FakeEmbedder()).parse_source(desc)
+
+    stored = next(s for s in store.list_sources() if s.source_id == "crm")
+    assert stored.schema_version == ManifestHash.of_descriptor_raw(desc.raw)
+
+
+def test_reparse_same_surface_keeps_same_manifest_hash(store: JsonScgStore) -> None:
+    """Re-mapping the identical surface re-stamps the identical hash (idempotent)."""
+    parser = _parser(store, _FakeEmbedder())
+    parser.parse_source(_producer_consumer_descriptor())
+    first = next(s for s in store.list_sources() if s.source_id == "crm").schema_version
+    parser.parse_source(_producer_consumer_descriptor())
+    second = next(s for s in store.list_sources() if s.source_id == "crm").schema_version
+    assert first == second and first is not None
+
+
+def test_reparse_drifted_surface_restamps_new_hash(store: JsonScgStore) -> None:
+    """A re-map of a DRIFTED surface stamps a different hash (drift is detectable)."""
+    parser = _parser(store, _FakeEmbedder())
+    parser.parse_source(_producer_consumer_descriptor())
+    before = next(s for s in store.list_sources() if s.source_id == "crm").schema_version
+    shrunk = SourceDescriptor(
+        source_id="crm",
+        source_type="mcp_tool_list",
+        raw={"tools": [{"name": "find_user", "inputSchema": {}}]},
+    )
+    parser.parse_source(shrunk)
+    after = next(s for s in store.list_sources() if s.source_id == "crm").schema_version
+    assert before != after
 
 
 def test_reparse_drops_removed_capability(store: JsonScgStore) -> None:

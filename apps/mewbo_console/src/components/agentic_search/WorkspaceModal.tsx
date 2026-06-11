@@ -128,25 +128,38 @@ export function WorkspaceModal({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
               {sources.map((s) => {
                 const on = !!enabled[s.id]
+                const unavailable = s.available === false
                 return (
                   <div
                     key={s.id}
+                    title={unavailable ? s.unavailable_reason ?? "Source unavailable" : undefined}
                     className={cn(
                       "flex items-center gap-2.5 p-2.5 rounded-md border transition-colors",
                       on
                         ? "border-[hsl(var(--border-strong))] bg-[hsl(var(--accent))]"
-                        : "border-[hsl(var(--border))] bg-[hsl(var(--background))]"
+                        : "border-[hsl(var(--border))] bg-[hsl(var(--background))]",
+                      unavailable && "opacity-50"
                     )}
                   >
                     <SrcAvatar source={s} size={26} />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{s.name}</div>
+                      <div className="flex items-center gap-1.5 text-sm font-medium">
+                        <span className="truncate">{s.name}</span>
+                        {unavailable && (
+                          <span className="text-[10px] uppercase tracking-wider font-mono text-[hsl(var(--muted-foreground))]">
+                            unavailable
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-[hsl(var(--muted-foreground))] truncate">
                         {s.desc}
                       </div>
                     </div>
                     <Switch
                       checked={on}
+                      // An unavailable source can still be toggled OFF so a dead
+                      // connector can be removed from the workspace.
+                      disabled={unavailable && !on}
                       onCheckedChange={(v) => setEnabled((prev) => ({ ...prev, [s.id]: v }))}
                       aria-label={`Toggle ${s.name}`}
                     />
@@ -157,9 +170,9 @@ export function WorkspaceModal({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="ws-instructions">Instructions</Label>
+            <Label htmlFor="ws-instructions">Purpose &amp; instructions</Label>
             <p className="text-xs text-[hsl(var(--muted-foreground))]">
-              Guidance the search agent follows when querying this workspace's connections.
+              Codifies what this workspace's graph is for — editing it re-indexes the graph.
             </p>
             <Textarea
               id="ws-instructions"

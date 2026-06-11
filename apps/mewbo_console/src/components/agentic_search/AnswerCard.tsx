@@ -1,8 +1,15 @@
-import { ArrowUpRight, Copy, Share, Sparkles, ThumbsUp } from "lucide-react"
+import { ArrowUpRight, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 
+import { CopyButton } from "../CopyButton"
 import type { RunAnswer, SearchResult, SourceCatalogEntry } from "../../types/agenticSearch"
 import { SrcAvatar } from "./SrcAvatar"
+
+/** Render the answer as Markdown for the clipboard (tldr + bullet list). */
+function answerToMarkdown(answer: RunAnswer): string {
+  const bullets = answer.bullets.map((b) => `- ${b.text}`).join("\n")
+  return bullets ? `${answer.tldr}\n\n${bullets}` : answer.tldr
+}
 
 interface AnswerCardProps {
   answer: RunAnswer
@@ -10,6 +17,9 @@ interface AnswerCardProps {
   sources: SourceCatalogEntry[]
   /** Final cited synthesis has landed (`answer_ready`). */
   ready: boolean
+  /** Run reached a terminal state — stops the streaming affordances even
+   *  when no final answer ever landed (failed / cancelled mid-synthesis). */
+  done: boolean
   /** Real elapsed ms since run start — display only. */
   elapsedMs: number
   onCiteClick: (resultId: string) => void
@@ -21,13 +31,17 @@ export function AnswerCard({
   results,
   sources,
   ready,
+  done,
   elapsedMs,
   onCiteClick,
   onAsk,
 }: AnswerCardProps) {
   // The tldr streams in via `answer_delta` even before `ready`; bullets are
   // only meaningful once the final cited block lands (`answer_ready`).
-  const streaming = answer.tldr.length > 0 && !ready
+  // A terminal run without `answer_ready` (cancelled / failed mid-synthesis)
+  // renders its partial tldr statically — no live cursor, no pulse.
+  const streaming = answer.tldr.length > 0 && !ready && !done
+  const partial = !ready && done
   const visibleBullets = ready ? answer.bullets.length : 0
 
   return (
@@ -35,7 +49,7 @@ export function AnswerCard({
       className={cn(
         "relative rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-[var(--elev-2)]",
         "before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-r before:bg-[hsl(var(--primary))]",
-        !ready && "before:animate-pulse"
+        !ready && !done && "before:animate-pulse"
       )}
     >
       <header className="flex items-start gap-3 mb-3">
@@ -47,23 +61,24 @@ export function AnswerCard({
           <span className="text-xs font-mono text-[hsl(var(--muted-foreground))]">
             {ready
               ? `${answer.sources_count} sources · ${(elapsedMs / 1000).toFixed(1)}s`
+              : partial
+              ? "partial"
               : "synthesising…"}
           </span>
         </div>
         <div className="flex items-center gap-1 text-[hsl(var(--muted-foreground))]">
-          <IconButton title="Copy answer">
-            <Copy className="h-3.5 w-3.5" />
-          </IconButton>
-          <IconButton title="Share">
-            <Share className="h-3.5 w-3.5" />
-          </IconButton>
-          <IconButton title="Helpful">
-            <ThumbsUp className="h-3.5 w-3.5" />
-          </IconButton>
+          {/* Copies the synthesized answer as Markdown (tldr + bullets).
+              Sharing the run lives in the ResultsPanel header "Copy link". */}
+          <CopyButton text={answerToMarkdown(answer)} label="Copy answer" />
         </div>
       </header>
 
-      {!ready && !streaming ? (
+      {partial && answer.tldr.length > 0 ? (
+        // Terminal-without-final-answer: the partial tldr, frozen.
+        <p className="text-[15px] leading-relaxed max-w-[64ch] text-[hsl(var(--foreground))] [text-wrap:pretty]">
+          {answer.tldr}
+        </p>
+      ) : !ready && !streaming ? (
         <div className="space-y-2">
           <SkeletonLine width="90%" />
           <SkeletonLine width="70%" />
@@ -126,19 +141,6 @@ export function AnswerCard({
         </>
       )}
     </section>
-  )
-}
-
-function IconButton({ children, title }: { children: React.ReactNode; title: string }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      className="inline-flex items-center justify-center h-6 w-6 rounded-md hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
-    >
-      {children}
-    </button>
   )
 }
 

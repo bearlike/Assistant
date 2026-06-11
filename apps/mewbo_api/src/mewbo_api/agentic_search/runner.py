@@ -7,17 +7,22 @@ snapshot. :class:`EchoSearchRunner` is the dev/default strategy — it replays t
 prototype fixtures over the real event log + store, so the whole console↔API
 integration works end-to-end with no LLM.
 
-The real ``OrchestratedSearchRunner`` (other team) starts a tool-scoped
-``SessionRuntime`` session and translates its transcript events into this same
-event protocol (see ``events.py`` builders). Swap it in with
-:func:`set_search_runner`; the routes call :func:`get_search_runner` and stay
-agnostic to which strategy is wired.
+The real ``OrchestratedSearchRunner`` starts a tool-scoped ``SessionRuntime``
+session and translates its transcript events into this same event protocol
+(see ``events.py`` builders). The active runner is resolved **per run** by
+:func:`get_search_runner` (orchestrated iff ``scg.enabled`` AND at least one
+source is mapped — so mapping the first source flips a live process out of
+echo mode with no restart); an explicit :func:`set_search_runner` override
+(the test seam) always wins. The routes/façade stay agnostic to which
+strategy resolves.
 """
 
 from __future__ import annotations
 
 import threading
 from typing import Any, Protocol
+
+from mewbo_core.common import get_logger
 
 from . import events, fixtures
 from .schemas import (
@@ -32,6 +37,8 @@ from .schemas import (
     Workspace,
     utc_now_iso,
 )
+
+logging = get_logger(name="api.agentic_search.runner")
 
 
 class SearchRunner(Protocol):
@@ -49,8 +56,16 @@ class SearchRunner(Protocol):
         *,
         store: Any,
         runtime: Any = None,
+        source_platform: str | None = None,
     ) -> RunPayload:
-        """Execute (or launch) the run; return the current normalized snapshot."""
+        """Execute (or launch) the run; return the current normalized snapshot.
+
+        ``source_platform`` (optional) is the originating client surface
+        (console/mcp/api) — the orchestrated runner stamps it as the session's
+        ``source_platform`` context event so the Langfuse trace carries
+        ``surface:<platform>`` instead of ``surface:unknown`` (#77). The echo
+        runner ignores it.
+        """
         ...
 
 
@@ -88,9 +103,10 @@ class EchoSearchRunner:
         *,
         store: Any,
         runtime: Any = None,
+        source_platform: str | None = None,
     ) -> RunPayload:
         """Replay fixtures as a real (instant) event stream; return the payload."""
-        _ = runtime  # echo runner needs no session/LLM
+        _ = runtime, source_platform  # echo runner needs no session/LLM/surface
         enabled = set(workspace.sources)
 
         results = [
@@ -162,6 +178,7 @@ class EchoSearchRunner:
             query=run.query,
             workspace_id=run.workspace_id,
             status="completed",
+            tier=run.tier,
             total_ms=fixtures.DEMO_TOTAL_MS,
             answer=answer,
             results=results,
@@ -202,18 +219,42 @@ class EchoSearchRunner:
 # Active-runner registry
 # ---------------------------------------------------------------------------
 
-_runner: SearchRunner = EchoSearchRunner()
+# Explicit override (the test seam / manual swap); None → per-run resolution.
+_runner: SearchRunner | None = None
 _runner_lock = threading.Lock()
 
 
 def get_search_runner() -> SearchRunner:
-    """Return the active search runner (echo by default)."""
+    """Resolve the active runner — called per run, never frozen at startup.
+
+    An explicit :func:`set_search_runner` override always wins. Otherwise the
+    orchestrated runner is chosen when ``scg.enabled`` is on AND the SCG store
+    holds at least one mapped source — so mapping the first source takes effect
+    on the next run with no process restart. Resolution is failure-soft: any
+    import/store error keeps the echo default (mirrors the namespace wiring in
+    ``backend.py``); the cheap ``scg.enabled`` flag is checked first so a
+    disabled deployment never touches the SCG store.
+    """
     with _runner_lock:
-        return _runner
+        if _runner is not None:
+            return _runner
+    try:
+        from .scg.config import ScgConfig
+
+        if ScgConfig.enabled():
+            from mewbo_graph.scg.store import get_scg_store
+
+            from .scg.orchestrated_runner import OrchestratedSearchRunner
+
+            if get_scg_store().list_sources():
+                return OrchestratedSearchRunner()
+    except Exception as exc:  # pragma: no cover — resolution fail-soft
+        logging.warning("orchestrated runner resolution skipped: {}", exc)
+    return EchoSearchRunner()
 
 
-def set_search_runner(runner: SearchRunner) -> None:
-    """Register the active runner — the orchestration team swaps in the real one."""
+def set_search_runner(runner: SearchRunner | None) -> None:
+    """Pin an explicit runner override; ``None`` restores per-run resolution."""
     global _runner
     with _runner_lock:
         _runner = runner

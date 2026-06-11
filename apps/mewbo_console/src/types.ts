@@ -121,7 +121,7 @@ export type SessionExport = {
   created_at?: string;
 };
 /** Coarse provenance of a session — mirrors core ``SessionOrigin``. */
-export type SessionOrigin = 'user' | 'wiki' | 'search' | 'channel';
+export type SessionOrigin = 'user' | 'wiki' | 'search' | 'channel' | 'structured' | 'draft';
 
 export type SessionSummary = {
   session_id: string;
@@ -133,6 +133,14 @@ export type SessionSummary = {
   context?: SessionContext;
   /** How the session was spawned; absent on legacy summaries → treat as "user". */
   origin?: SessionOrigin;
+  /**
+   * Capabilities the session was scoped to (advertised set on its context).
+   * Surfaced so the landing page shows e.g. that a session reasoned over the
+   * SCG. Absent/empty on legacy or plain sessions.
+   */
+  capabilities?: string[];
+  /** Search/structured workspace id the session ran against, if any. */
+  workspace?: string | null;
   archived?: boolean;
   /**
    * True iff the session is NOT running, did not successfully complete, and has

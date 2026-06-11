@@ -136,6 +136,152 @@ class TestBuildFor:
 
 
 # ---------------------------------------------------------------------------
+# build_for — capability gate (Gitea #84: runtime-granted capability bridge)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildForCapabilityGate:
+    """A capability-gated session tool surfaces from the session caps alone.
+
+    Regression for #84: a runtime capability grant (the #83-B ``scg`` provider)
+    unions the capability into ``session_capabilities``, but session tools were
+    selected ONLY by ``allowed_tools`` — so the root agent of an ordinary
+    session never got ``scg_*`` and answered ``TOOLS-MISSING`` on re-engagement.
+    These tests pin the bridge at the real ``build_for`` seam.
+    """
+
+    def _gated_registry(self) -> SessionToolRegistry:
+        reg = SessionToolRegistry()
+        reg.register(
+            SessionToolFactory(
+                tool_id="a",
+                build=lambda sid, el: _FakeSessionToolA(session_id=sid, event_logger=el),
+                requires_capabilities=("scg",),
+            )
+        )
+        reg.register(
+            SessionToolFactory(
+                tool_id="b",
+                build=lambda sid, el: _FakeSessionToolB(session_id=sid, event_logger=el),
+            )
+        )
+        return reg
+
+    def test_capability_grant_builds_gated_tool_without_allowlist(self):
+        """``scg`` in session caps builds the gated tool even with no allowlist.
+
+        Pre-fix this returned ``[]`` (``allowed_tools`` was the sole gate), which
+        is exactly the #84 failure: the runtime grant never reached the build.
+        """
+        reg = self._gated_registry()
+        tools = reg.build_for(
+            None,
+            session_id="s1",
+            event_logger=None,
+            session_capabilities=("scg",),
+        )
+        assert [t.tool_id for t in tools] == ["a"]
+
+    def test_ungated_tool_stays_allowlist_only(self):
+        """A tool with no ``requires_capabilities`` is NOT built by caps alone."""
+        reg = self._gated_registry()
+        tools = reg.build_for(
+            None,
+            session_id="s1",
+            event_logger=None,
+            session_capabilities=("scg",),
+        )
+        assert "b" not in [t.tool_id for t in tools]
+
+    def test_missing_capability_withholds_gated_tool(self):
+        """No matching capability ⇒ the gated tool stays hidden (no allowlist)."""
+        reg = self._gated_registry()
+        assert reg.build_for(None, session_id="s1", event_logger=None) == []
+        assert (
+            reg.build_for(
+                None, session_id="s1", event_logger=None, session_capabilities=("wiki",)
+            )
+            == []
+        )
+
+    def test_allowlist_and_capability_union_without_duplicates(self):
+        """A tool selected by BOTH gates is instantiated exactly once."""
+        reg = self._gated_registry()
+        tools = reg.build_for(
+            ["a", "b"],
+            session_id="s1",
+            event_logger=None,
+            session_capabilities=("scg",),
+        )
+        ids = [t.tool_id for t in tools]
+        assert sorted(ids) == ["a", "b"]
+        assert ids.count("a") == 1
+
+    def test_partial_capability_subset_required(self):
+        """A multi-capability gate needs the FULL subset present in session caps."""
+        reg = SessionToolRegistry()
+        reg.register(
+            SessionToolFactory(
+                tool_id="a",
+                build=lambda sid, el: _FakeSessionToolA(session_id=sid, event_logger=el),
+                requires_capabilities=("scg", "wiki"),
+            )
+        )
+        # Only one of two required caps present → withheld.
+        assert (
+            reg.build_for(
+                None, session_id="s1", event_logger=None, session_capabilities=("scg",)
+            )
+            == []
+        )
+        # Both present → built.
+        tools = reg.build_for(
+            None,
+            session_id="s1",
+            event_logger=None,
+            session_capabilities=("scg", "wiki"),
+        )
+        assert [t.tool_id for t in tools] == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# load_entry — capability stamping
+# ---------------------------------------------------------------------------
+
+
+class TestLoadEntryCapabilityStamp:
+    def test_load_entry_stamps_requires_capabilities(self):
+        """``load_entry(..., requires_capabilities=)`` makes the tool cap-gated."""
+        module_name = "mewbo_test_session_tools_cap_fixture"
+        mod = types.ModuleType(module_name)
+        mod._FakeSessionTool = _FakeSessionTool  # type: ignore[attr-defined]
+        sys.modules[module_name] = mod
+        try:
+            reg = SessionToolRegistry()
+            reg.load_entry(
+                {
+                    "tool_id": "fake_tool",
+                    "module": module_name,
+                    "class": "_FakeSessionTool",
+                },
+                requires_capabilities=("scg",),
+            )
+            # No allowlist, but the capability is present → built.
+            tools = reg.build_for(
+                None,
+                session_id="s1",
+                event_logger=None,
+                session_capabilities=("scg",),
+            )
+            assert len(tools) == 1
+            assert tools[0].tool_id == "fake_tool"
+            # Without the capability → withheld.
+            assert reg.build_for(None, session_id="s1", event_logger=None) == []
+        finally:
+            sys.modules.pop(module_name, None)
+
+
+# ---------------------------------------------------------------------------
 # load_entry
 # ---------------------------------------------------------------------------
 

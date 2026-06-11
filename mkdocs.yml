@@ -9,6 +9,17 @@ theme:
   favicon: logos/favicon.ico
   icon: logos/logo-transparent.svg
 
+  # Header tab rail (theme >= 1.3.0): fused below the top utility row, one
+  # sticky surface. The API Reference tab lands on the full-page Scalar app
+  # (docs/rest-api.md, rendered via the theme's app.html template).
+  header_tabs:
+    - label: Documentation
+      icon: lucide:book-open
+      url: .
+    - label: API Reference
+      icon: lucide:braces
+      url: rest-api/
+
   # Mewbo brand-fork (mkdocs-shadcn-mewbo) configuration ────────────────
   ai:
     deepwiki_repo: bearlike/Assistant
@@ -52,6 +63,7 @@ theme:
     Capabilities: lucide:sparkles
     "Workspace & Execution": lucide:hammer
     "Built-in Tools": lucide:wrench
+    "Branches & Worktrees": lucide:git-fork
     "Web IDE": lucide:code-xml
     Widgets: lucide:panel-left
     "Code Intelligence": lucide:zap
@@ -82,7 +94,8 @@ theme:
     "Architecture Overview": lucide:blocks
     "Session Runtime": lucide:cpu
     "Building a Client": lucide:hammer
-    "API Reference": lucide:book-open-text
+    "REST API": lucide:globe
+    "Python Reference": lucide:book-open-text
 
 hooks:
   - docs/hooks/schema_to_md.py
@@ -118,6 +131,7 @@ plugins:
         python:
           paths:
             - .
+            - apps
             - packages/mewbo_core/src
             - packages/mewbo_tools/src
             - packages/mewbo_graph/src
@@ -155,6 +169,7 @@ nav:
       - Home Assistant: clients-home-assistant.md
       - Nextcloud Talk: clients-nextcloud-talk.md
       - Email: clients-email.md
+      - CI Agent Pickup: ci-agent-pickup.md
   - Knowledge & Discovery:
       - Agentic Wiki: features-wiki.md
       - Agentic Search: features-search.md
@@ -162,6 +177,7 @@ nav:
   - Capabilities:
       - Workspace & Execution:
           - Built-in Tools: features-builtin-tools.md
+          - Branches & Worktrees: features-worktrees.md
           - Web IDE: features-web-ide.md
           - Widgets: features-widgets.md
           - Code Intelligence: features-lsp.md
@@ -186,5 +202,6 @@ nav:
       - Architecture Overview: core-orchestration.md
       - Session Runtime: session-runtime.md
       - Building a Client: developer-guide.md
-      - API Reference: reference.md
+      - REST API: rest-api.md
+      - Python Reference: reference.md
   - Troubleshooting: troubleshooting.md

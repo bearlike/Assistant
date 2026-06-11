@@ -27,6 +27,8 @@ const ORIGIN_FILTERS: { origin: SessionOrigin; label: string }[] = [
   { origin: 'channel', label: 'Channels' },
   { origin: 'wiki', label: 'Wiki' },
   { origin: 'search', label: 'Search' },
+  { origin: 'structured', label: 'Structured' },
+  { origin: 'draft', label: 'Draft' },
 ];
 const DEFAULT_VISIBLE_ORIGINS: SessionOrigin[] = ['user', 'channel'];
 interface HomeViewProps {

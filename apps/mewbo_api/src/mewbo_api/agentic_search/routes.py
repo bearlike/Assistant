@@ -21,6 +21,8 @@ Run lifecycle (durable run store + normalized SSE projection):
 SCG indexing (Source Capability Graph — gated on ``scg.enabled``):
 
 - ``POST   /sources/<id>/map``        start a map-source (SCG indexing) job
+- ``GET    /sources/<id>/map/jobs``   map-job snapshots (latest first)
+- ``GET    /sources/<id>/map/jobs/<job_id>`` one map-job snapshot
 - ``GET    /sources/<id>/map/events`` SSE over the map-job event log
 - ``GET    /scg``                     introspection — node/edge counts + sources
 
@@ -35,16 +37,20 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from flask import Response, request, stream_with_context
-from flask_restx import Namespace, Resource
+from flask_restx import Namespace, Resource, fields
 from mewbo_core.common import get_logger
 from pydantic import ValidationError
+
+from mewbo_api.request_context import request_surface
 
 from . import store as store_mod
 from .catalog import SourceCatalog
 from .events import RunSseGenerator
+from .mcp_config import WorkspaceMcpConfig
 from .runs import SearchRun
 from .scg.config import ScgConfig
-from .schemas import WorkspaceInput
+from .schemas import SEARCH_TIERS, WorkspaceInput
+from .source_sync import WorkspaceSourceSync
 
 logging = get_logger(name="api.agentic_search.routes")
 
@@ -65,22 +71,136 @@ agentic_ns = Namespace(
 )
 
 
+# -- Request models (documentation only — handlers validate via Pydantic) ----
+
+workspace_create_request = agentic_ns.model(
+    "WorkspaceCreateRequest",
+    {
+        "name": fields.String(
+            required=True,
+            description="Human-readable workspace name.",
+            example="Engineering systems",
+        ),
+        "desc": fields.String(
+            description="Short description shown in workspace lists.",
+            default="",
+            example="Issues, code and docs for the platform team",
+        ),
+        "sources": fields.List(
+            fields.String,
+            description=(
+                "Ids of the sources to enable, from GET /api/agentic_search/sources. "
+                "Defaults to no sources."
+            ),
+            example=["github", "linear"],
+        ),
+        "instructions": fields.String(
+            description=(
+                "Guidance applied to every run in this workspace, such as preferred "
+                "repositories or terminology."
+            ),
+            default="",
+        ),
+    },
+)
+
+workspace_patch_request = agentic_ns.model(
+    "WorkspacePatchRequest",
+    {
+        "name": fields.String(description="New workspace name."),
+        "desc": fields.String(description="New short description."),
+        "sources": fields.List(
+            fields.String,
+            description=(
+                "Replacement list of enabled source ids. Changing the selection can "
+                "start background mapping of newly enabled sources."
+            ),
+        ),
+        "instructions": fields.String(description="Replacement run guidance."),
+    },
+)
+
+search_run_create_request = agentic_ns.model(
+    "SearchRunCreateRequest",
+    {
+        "workspace_id": fields.String(
+            required=True,
+            description="Workspace to search, returned by POST /api/agentic_search/workspaces.",
+        ),
+        "query": fields.String(
+            required=True,
+            description="Natural-language search query.",
+            example="Which services call the billing API?",
+        ),
+        "tier": fields.String(
+            description=(
+                "Search depth: `fast`, `auto` or `deep`. The tier also picks the model "
+                "that drives the run. Defaults to the server's configured tier."
+            ),
+            enum=["fast", "auto", "deep"],
+            example="auto",
+        ),
+        "project": fields.String(
+            description="Optional project name that scopes connector configuration.",
+        ),
+    },
+)
+
+source_map_request = agentic_ns.model(
+    "SourceMapRequest",
+    {
+        "source_type": fields.String(
+            required=True,
+            description=(
+                "Kind of connector being mapped, for example `mcp_tool_list`. "
+                "`text` is not yet supported and returns 422."
+            ),
+            example="mcp_tool_list",
+        ),
+        "descriptor": fields.Raw(
+            description=(
+                "The connector's self-description, such as an MCP tool list or an "
+                "OpenAPI document. Optional for `mcp_tool_list` sources, where it is "
+                "built from the connector's live tool list when omitted."
+            ),
+        ),
+        "auth_scope": fields.String(
+            description=(
+                "Redacted label for the auth the connector carries, for example "
+                "`oauth:repo`. Never a token or credential."
+            ),
+            example="oauth:repo",
+        ),
+        "model": fields.String(
+            description="Optional model override for the mapping session, as a LiteLLM model name.",
+        ),
+        "nl_context": fields.Raw(
+            description=(
+                "Optional workspace prose that seeds the mapping step, with "
+                "`workspace_instructions` and `workspace_description` keys. Usually "
+                "injected automatically when a workspace is saved."
+            ),
+        ),
+    },
+)
+
+
 def init_agentic_search(
     api: object, require_api_key: AuthGuard, runtime: Any = None
 ) -> None:
     """Wire the namespace + capture the auth guard and the session runtime.
 
-    When ``scg.enabled`` is on AND the SCG already holds at least one mapped
-    source, swap the active :class:`SearchRunner` from the default echo replay to
-    the real :class:`OrchestratedSearchRunner` (graph-routed traversal over a
-    ``scg-search`` session). With the feature off — or with an empty graph — the
-    echo runner stays the default so the console↔API loop still works with no LLM.
+    The active :class:`SearchRunner` is NOT chosen here — ``get_search_runner``
+    resolves it per run (orchestrated iff ``scg.enabled`` AND ≥1 mapped source),
+    so mapping the first source takes effect without a process restart.
     """
     global _require_api_key, _runtime
     _require_api_key = require_api_key
     _runtime = runtime
     api.add_namespace(agentic_ns, path="/api/agentic_search")  # type: ignore[attr-defined]
-    _maybe_register_orchestrated_runner()
+    from .graph_routes import init_agentic_search_graph  # noqa: PLC0415
+
+    init_agentic_search_graph(api, require_api_key, runtime)  # #79 workspace graph
     _register_map_phase_sink()
 
 
@@ -113,33 +233,6 @@ def _register_map_phase_sink() -> None:
     MapPhaseSink.register(_write)
 
 
-def _maybe_register_orchestrated_runner() -> None:
-    """Register the orchestrated runner iff SCG is enabled + a source is mapped.
-
-    Failure-soft, mirroring the other namespace wiring in ``backend.py``: a
-    missing pymongo / store error never blocks startup — the echo runner simply
-    stays active. The check is gated first on the cheap ``scg.enabled`` flag so a
-    disabled deployment never touches the SCG store.
-    """
-    if not ScgConfig.enabled():
-        return
-    try:
-        from mewbo_graph.scg.store import get_scg_store
-
-        from .runner import set_search_runner
-        from .scg.orchestrated_runner import OrchestratedSearchRunner, SearchTier
-
-        if not get_scg_store().list_sources():
-            return  # nothing mapped yet — keep the echo runner as the default
-        # Config tier is lowercase (``"auto"``); the runner's knob is capitalized.
-        # The runner normalizes any unknown value back to its default, so pass the
-        # raw capitalized value straight through — no second validation table here.
-        tier = cast("SearchTier", ScgConfig.default_tier().capitalize())
-        set_search_runner(OrchestratedSearchRunner(tier=tier))
-    except Exception as exc:  # pragma: no cover — startup fail-soft
-        logging.warning("orchestrated runner registration skipped: {}", exc)
-
-
 def _validation_error(exc: ValidationError) -> tuple[dict, int]:
     """Render a Pydantic error as a 400 with a readable message."""
     errors = exc.errors()
@@ -157,9 +250,28 @@ def _validation_error(exc: ValidationError) -> tuple[dict, int]:
 class SourcesResource(Resource):
     """The MCP-style connector catalog the search agent fans out across."""
 
-    @agentic_ns.doc("list_sources")
+    @agentic_ns.doc(
+        "list_sources",
+        params={
+            "project": {
+                "description": "Project name that scopes the catalog to that "
+                "project's connector configuration.",
+                "in": "query",
+                "type": "string",
+            }
+        },
+    )
+    @agentic_ns.response(200, "The source catalog.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
     def get(self) -> tuple[dict, int]:
-        """Return the source catalog, optionally scoped to ``?project=``."""
+        """List available sources.
+
+        Returns the catalog of connectors a workspace can enable. Each entry
+        describes one source: its id, display name, type and availability.
+        A configured source whose discovery failed stays listed with
+        `available` false rather than being omitted. Pass `project` to scope
+        the catalog to one project's configuration.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         project = request.args.get("project")
@@ -174,17 +286,56 @@ class SourcesResource(Resource):
 class WorkspacesResource(Resource):
     """Collection endpoint for workspaces."""
 
-    @agentic_ns.doc("list_workspaces")
+    @agentic_ns.doc(
+        "list_workspaces",
+        params={
+            "q": {
+                "description": "Case-insensitive filter matched against workspace "
+                "name, description and past-query text.",
+                "in": "query",
+                "type": "string",
+            }
+        },
+    )
+    @agentic_ns.response(200, "Matching workspaces.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
     def get(self) -> tuple[dict, int]:
-        """List all workspaces."""
+        """List workspaces.
+
+        Returns all saved workspaces, each with its enabled sources,
+        instructions and recent query history. Pass `q` to filter by name,
+        description or past-query text.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
-        workspaces = [w.model_dump() for w in store_mod.get_store().list_workspaces()]
-        return {"workspaces": workspaces}, 200
+        q = request.args.get("q")
+        st = store_mod.get_store()
+        found = st.search_workspaces(q) if q else st.list_workspaces()
+        return {"workspaces": [w.model_dump() for w in found]}, 200
 
-    @agentic_ns.doc("create_workspace")
+    @agentic_ns.doc(
+        "create_workspace",
+        params={
+            "project": {
+                "description": "Project name used when auto-mapping newly "
+                "enabled sources.",
+                "in": "query",
+                "type": "string",
+            }
+        },
+    )
+    @agentic_ns.expect(workspace_create_request)
+    @agentic_ns.response(201, "Workspace created.")
+    @agentic_ns.response(400, "Malformed or invalid request body.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
     def post(self) -> tuple[dict, int]:
-        """Create a new workspace."""
+        """Create a workspace.
+
+        A workspace names a set of enabled sources plus optional run
+        instructions. Creating one also refreshes its connector configuration
+        and may start mapping newly enabled live sources in the background.
+        The new workspace is returned with its generated `id`.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         body = request.get_json(silent=True) or {}
@@ -194,7 +345,18 @@ class WorkspacesResource(Resource):
             data = WorkspaceInput.model_validate(body)
         except ValidationError as exc:
             return _validation_error(exc)
-        workspace = store_mod.get_store().create_workspace(data)
+        st = store_mod.get_store()
+        workspace = st.create_workspace(data)
+        # Refresh the persisted virtual MCP config + auto-map newly-enabled live
+        # sources into the GLOBAL SCG (best-effort, idempotent — #75).
+        WorkspaceSourceSync.on_workspace_saved(
+            store=st,
+            workspace_id=workspace.id,
+            new_sources=list(workspace.sources),
+            prev_sources=None,
+            runtime=_runtime,
+            project=request.args.get("project"),
+        )
         return {"workspace": workspace.model_dump()}, 201
 
 
@@ -202,9 +364,33 @@ class WorkspacesResource(Resource):
 class WorkspaceItemResource(Resource):
     """Per-workspace endpoint."""
 
-    @agentic_ns.doc("update_workspace")
+    @agentic_ns.doc(
+        "update_workspace",
+        params={
+            "workspace_id": "Workspace id returned by "
+            "POST /api/agentic_search/workspaces.",
+            "project": {
+                "description": "Project name used when auto-mapping newly "
+                "enabled sources.",
+                "in": "query",
+                "type": "string",
+            },
+        },
+    )
+    @agentic_ns.expect(workspace_patch_request)
+    @agentic_ns.response(200, "The updated workspace.")
+    @agentic_ns.response(400, "Malformed request body.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(404, "Workspace not found.")
     def patch(self, workspace_id: str) -> tuple[dict, int]:
-        """Apply a partial update to a workspace."""
+        """Update a workspace.
+
+        Applies a partial update: only `name`, `desc`, `sources` and
+        `instructions` are writable, and omitted fields keep their current
+        values. Changing the source selection or the instructions can start
+        background re-mapping of the affected sources. Returns the full
+        updated workspace.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         body = request.get_json(silent=True) or {}
@@ -212,18 +398,66 @@ class WorkspaceItemResource(Resource):
             return {"message": "request body must be a JSON object"}, 400
         if body.get("sources") is not None and not isinstance(body["sources"], list):
             return {"message": "sources must be a list of source ids"}, 400
-        workspace = store_mod.get_store().update_workspace(workspace_id, body)
+        st = store_mod.get_store()
+        # Capture the prior selection + prose BEFORE the update so the source-sync
+        # hook can map only the newly-enabled sources (#75) and detect an
+        # instructions/desc change that should re-seed the map-time enrich (#83).
+        existing = st.get_workspace(workspace_id)
+        prev_sources = list(existing.sources) if existing is not None else None
+        prev_prose = (
+            (existing.instructions or "", existing.desc or "")
+            if existing is not None
+            else None
+        )
+        workspace = st.update_workspace(workspace_id, body)
         if workspace is None:
             return {"message": "workspace not found"}, 404
+        # The hook is the graph-lifecycle seam: a sources change OR an
+        # instructions/desc edit can re-drive the map+enrich. An instructions-only
+        # PATCH carries no ``sources`` key, so the old sources-only gate skipped
+        # it (the #83 gap). Fire whenever the selection or the prose moved; the
+        # hook is idempotent + in-flight-guarded, so a no-op PATCH still fires
+        # nothing downstream.
+        prose_changed = prev_prose is not None and prev_prose != (
+            workspace.instructions or "",
+            workspace.desc or "",
+        )
+        if body.get("sources") is not None or prose_changed:
+            WorkspaceSourceSync.on_workspace_saved(
+                store=st,
+                workspace_id=workspace.id,
+                new_sources=list(workspace.sources),
+                prev_sources=prev_sources,
+                runtime=_runtime,
+                project=request.args.get("project"),
+            )
         return {"workspace": workspace.model_dump()}, 200
 
-    @agentic_ns.doc("delete_workspace")
+    @agentic_ns.doc(
+        "delete_workspace",
+        params={
+            "workspace_id": "Workspace id returned by "
+            "POST /api/agentic_search/workspaces.",
+        },
+    )
+    @agentic_ns.response(200, "Workspace deleted.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(404, "Workspace not found.")
     def delete(self, workspace_id: str) -> tuple[dict, int]:
-        """Delete a workspace."""
+        """Delete a workspace.
+
+        Removes the workspace and its stored connector configuration,
+        including any auth material that configuration carried. Past runs
+        remain readable by id. The response confirms the deleted id.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
-        if not store_mod.get_store().delete_workspace(workspace_id):
+        st = store_mod.get_store()
+        if not st.delete_workspace(workspace_id):
             return {"message": "workspace not found"}, 404
+        # Drop the secret-bearing virtual config alongside the workspace so no
+        # orphaned auth material lingers in the isolated config store (#75).
+        WorkspaceMcpConfig.delete(st, workspace_id)
         return {"workspace_id": workspace_id, "deleted": True}, 200
 
 
@@ -231,9 +465,23 @@ class WorkspaceItemResource(Resource):
 class WorkspaceRunsResource(Resource):
     """Recent runs for a workspace (history inspection / replay)."""
 
-    @agentic_ns.doc("list_workspace_runs")
+    @agentic_ns.doc(
+        "list_workspace_runs",
+        params={
+            "workspace_id": "Workspace id returned by "
+            "POST /api/agentic_search/workspaces.",
+        },
+    )
+    @agentic_ns.response(200, "Recent runs, newest first.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
     def get(self, workspace_id: str) -> tuple[dict, int]:
-        """List recent runs for *workspace_id* (newest first)."""
+        """List runs for a workspace.
+
+        Returns the workspace's recent run records, newest first. Use it to
+        rebuild run history in a client; fetch one run with
+        `GET /runs/{run_id}` for the full snapshot. An unknown workspace id
+        yields an empty list.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         runs = [r.model_dump() for r in store_mod.get_store().list_runs(workspace_id)]
@@ -248,8 +496,22 @@ class RunsResource(Resource):
     """Create + drive a search run scoped to a workspace."""
 
     @agentic_ns.doc("create_run")
+    @agentic_ns.expect(search_run_create_request)
+    @agentic_ns.response(200, "Run started; body carries the run snapshot plus its ids.")
+    @agentic_ns.response(400, "Malformed body, missing field, or unknown tier.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(404, "Workspace not found.")
     def post(self) -> tuple[dict, int]:
-        """Start a run. Returns the run id + the normalized payload (back-compat)."""
+        """Start a search run.
+
+        Runs the search agent over the workspace's enabled sources. The
+        response always carries `run_id`, `session_id`, `status` and the full
+        `run` snapshot. An orchestrated run returns `running` promptly and
+        settles through the event stream or by polling `GET /runs/{run_id}`;
+        the echo path settles synchronously as `completed`. Set `tier` to
+        trade depth for latency; the tier also picks the model that drives
+        the run.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         body = request.get_json(silent=True) or {}
@@ -261,6 +523,9 @@ class RunsResource(Resource):
             return {"message": "workspace_id is required"}, 400
         if not isinstance(query, str) or not query.strip():
             return {"message": "query is required"}, 400
+        tier = body.get("tier")
+        if tier is not None and tier not in SEARCH_TIERS:
+            return {"message": "tier must be one of fast|auto|deep"}, 400
         project = body.get("project")
         payload = SearchRun.start(
             workspace_id=workspace_id,
@@ -268,6 +533,8 @@ class RunsResource(Resource):
             store=store_mod.get_store(),
             runtime=_runtime,
             project=project if isinstance(project, str) else None,
+            tier=tier,
+            source_platform=request_surface(),
         )
         if payload is None:
             return {"message": "workspace not found"}, 404
@@ -283,9 +550,21 @@ class RunsResource(Resource):
 class RunItemResource(Resource):
     """Per-run snapshot endpoint."""
 
-    @agentic_ns.doc("get_run")
+    @agentic_ns.doc(
+        "get_run",
+        params={"run_id": "Run id returned by POST /api/agentic_search/runs."},
+    )
+    @agentic_ns.response(200, "The run snapshot.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(404, "Run not found.")
     def get(self, run_id: str) -> tuple[dict, int]:
-        """Return the run record + its accumulated payload."""
+        """Get a run.
+
+        Returns the durable run snapshot: status, query, tier, timestamps and
+        the results and answer accumulated so far. Safe to poll while a run
+        is `running`, and self-sufficient for reload, share and deep-link
+        views with no other context.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         record = SearchRun.get(run_id, store=store_mod.get_store())
@@ -298,9 +577,21 @@ class RunItemResource(Resource):
 class RunCancelResource(Resource):
     """Cancel a run."""
 
-    @agentic_ns.doc("cancel_run")
+    @agentic_ns.doc(
+        "cancel_run",
+        params={"run_id": "Run id returned by POST /api/agentic_search/runs."},
+    )
+    @agentic_ns.response(200, "Cancellation attempted; `cancelled` reports the outcome.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(404, "Run not found.")
     def post(self, run_id: str) -> tuple[dict, int]:
-        """Cancel *run_id*; best-effort cancels the backing session when real."""
+        """Cancel a run.
+
+        Requests cancellation of an in-flight run and, best effort, the
+        session backing it. The `cancelled` flag in the response is false
+        when the run had already settled, in which case nothing changes.
+        The terminal state still arrives on the event stream and snapshot.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         st = store_mod.get_store()
@@ -314,9 +605,37 @@ class RunCancelResource(Resource):
 class RunEventsResource(Resource):
     """Normalized SSE event stream for a run (replay-from-start + live tail)."""
 
-    @agentic_ns.doc("stream_run_events")
+    @agentic_ns.doc(
+        "stream_run_events",
+        params={
+            "run_id": "Run id returned by POST /api/agentic_search/runs.",
+            "after_idx": {
+                "description": "Replay only events with an index greater than "
+                "this value. Defaults to -1, a full replay from the start.",
+                "in": "query",
+                "type": "integer",
+            },
+            "api_key": {
+                "description": "API key, for EventSource clients that cannot "
+                "set the X-API-Key header.",
+                "in": "query",
+                "type": "string",
+            },
+        },
+    )
+    @agentic_ns.response(200, "Server-sent event stream of run events.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(404, "Run not found.")
     def get(self, run_id: str) -> Any:
-        """Stream typed search events as ``text/event-stream``."""
+        """Stream run events.
+
+        Server-sent events (`text/event-stream`): replays the run's
+        append-only event log from the start, then tails it live until a
+        terminal event. Each frame's `id` line carries the event index, so a
+        dropped connection resumes with `after_idx` or the `Last-Event-ID`
+        header. Because EventSource cannot set headers, the API key is also
+        accepted as the `api_key` query parameter.
+        """
         if (auth := _require_api_key()) is not None:
             return auth
         st = store_mod.get_store()
@@ -342,20 +661,42 @@ class RunEventsResource(Resource):
 class SourceMapResource(Resource):
     """Start a map-source (SCG indexing) job for one connector."""
 
-    @agentic_ns.doc("map_source")
+    @agentic_ns.doc(
+        "map_source",
+        params={
+            "source_id": "Source id from GET /api/agentic_search/sources.",
+            "project": {
+                "description": "Project name used to locate the connector when "
+                "building a descriptor from its live tool list.",
+                "in": "query",
+                "type": "string",
+            },
+        },
+    )
+    @agentic_ns.expect(source_map_request)
+    @agentic_ns.response(202, "Map job accepted; track it via the job and event endpoints.")
+    @agentic_ns.response(400, "Malformed or invalid request body.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(422, "Unsupported source type, or no connector available to introspect.")
+    @agentic_ns.response(503, "Source Capability Graph is disabled, or the mapper is unavailable.")
     def post(self, source_id: str) -> tuple[dict, int]:
-        """Start a :class:`MapSourceJob`; return the record + ``job_id``.
+        """Map a source.
 
-        Gated on ``scg.enabled`` (503 when off). The path ``source_id`` plus the
-        JSON body (``source_type``, optional ``descriptor`` / ``auth_scope`` /
-        ``model``) form the map contract; ``descriptor`` is an UNTRUSTED schema
-        the job carries in the user query, never the system prompt.
+        Starts a background job that indexes the connector's schema into the
+        Source Capability Graph, which makes the source routable by search
+        runs. The job is asynchronous: the response carries a `job_id` to
+        poll via `GET /sources/{source_id}/map/jobs/{job_id}` or to follow on
+        the map event stream. When `descriptor` is omitted for an
+        `mcp_tool_list` source, one is built from the connector's live tool
+        list; a source with no configured connector returns 422 instead.
+        Returns 503 when `scg.enabled` is off.
         """
         if (auth := _require_api_key()) is not None:
             return auth
         if not ScgConfig.enabled():
             return {"message": "SCG is disabled (set scg.enabled=true)"}, 503
 
+        from .scg.descriptors import SourceDescriptorBuilder
         from .scg.map_job import MapSourceJob, SourceMapInput
 
         body = request.get_json(silent=True) or {}
@@ -367,6 +708,26 @@ class SourceMapResource(Resource):
             source = SourceMapInput.model_validate(payload)
         except ValidationError as exc:
             return _validation_error(exc)
+        if source.source_type == "text":
+            # The schemaless ``LlmStructureProvider`` needs an injected LLM and
+            # is never registered (``StructureProviderRegistry.with_defaults``
+            # excludes it), so a "text" map job would always fail in-session at
+            # ``scg_build_structure`` — reject honestly up-front instead.
+            return {"message": "source_type 'text' not yet supported"}, 422
+        if (
+            source.descriptor is None
+            and source.source_type == SourceDescriptorBuilder.SOURCE_TYPE
+        ):
+            builder = SourceDescriptorBuilder(
+                source_id, project=request.args.get("project")
+            )
+            try:
+                built = builder.build()
+            except LookupError as exc:
+                return {"message": str(exc)}, 422
+            except RuntimeError as exc:
+                return {"message": str(exc)}, 503
+            source = source.model_copy(update={"descriptor": built.raw})
         try:
             job = MapSourceJob.start(
                 source,
@@ -379,18 +740,100 @@ class SourceMapResource(Resource):
         return {"job": job.model_dump(), "job_id": job.job_id}, 202
 
 
+@agentic_ns.route("/sources/<string:source_id>/map/jobs")
+class SourceMapJobsResource(Resource):
+    """Map-job snapshots for one source (the durable poll surface)."""
+
+    @agentic_ns.doc(
+        "list_map_jobs",
+        params={"source_id": "Source id from GET /api/agentic_search/sources."},
+    )
+    @agentic_ns.response(200, "Map jobs for the source, newest first.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    def get(self, source_id: str) -> tuple[dict, int]:
+        """List map jobs for a source.
+
+        Returns the source's mapping jobs, newest first. Each record carries
+        the job's status (`queued`, `running`, `completed` or `failed`) and
+        its progress phase. Poll this after starting a map job to follow it
+        without holding an event stream open.
+        """
+        if (auth := _require_api_key()) is not None:
+            return auth
+        jobs = store_mod.get_store().list_map_jobs(source_id=source_id)
+        return {"jobs": [j.model_dump() for j in jobs]}, 200
+
+
+@agentic_ns.route("/sources/<string:source_id>/map/jobs/<string:job_id>")
+class SourceMapJobItemResource(Resource):
+    """One map-job snapshot."""
+
+    @agentic_ns.doc(
+        "get_map_job",
+        params={
+            "source_id": "Source id from GET /api/agentic_search/sources.",
+            "job_id": "Map job id returned by POST /sources/{source_id}/map.",
+        },
+    )
+    @agentic_ns.response(200, "The map job record.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(404, "Map job not found, or it belongs to another source.")
+    def get(self, source_id: str, job_id: str) -> tuple[dict, int]:
+        """Get a map job.
+
+        Returns one mapping job's record. The job must belong to the source
+        in the path; otherwise the response is 404. Poll this until the
+        status settles to `completed` or `failed`.
+        """
+        if (auth := _require_api_key()) is not None:
+            return auth
+        job = store_mod.get_store().get_map_job(job_id)
+        if job is None or job.source_id != source_id:
+            return {"message": "map job not found"}, 404
+        return {"job": job.model_dump()}, 200
+
+
 @agentic_ns.route("/sources/<string:source_id>/map/events")
 class SourceMapEventsResource(Resource):
     """SSE event stream over a map-source job's append-only event log."""
 
-    @agentic_ns.doc("stream_map_events")
+    @agentic_ns.doc(
+        "stream_map_events",
+        params={
+            "source_id": "Source id from GET /api/agentic_search/sources.",
+            "job_id": {
+                "description": "Map job to stream. Defaults to the newest job "
+                "for the source.",
+                "in": "query",
+                "type": "string",
+            },
+            "after_idx": {
+                "description": "Replay only events with an index greater than "
+                "this value. Defaults to -1, a full replay from the start.",
+                "in": "query",
+                "type": "integer",
+            },
+            "api_key": {
+                "description": "API key, for EventSource clients that cannot "
+                "set the X-API-Key header.",
+                "in": "query",
+                "type": "string",
+            },
+        },
+    )
+    @agentic_ns.response(200, "Server-sent event stream of map job events.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(404, "No map job for the source, or unknown job id.")
     def get(self, source_id: str) -> Any:
-        """Stream the latest map-job's events for *source_id* as SSE.
+        """Stream map job events.
 
-        Reuses :class:`RunSseGenerator` verbatim — the map-job event log shares
-        the run event-log shape, so the same replay-from-idx + tail generator
-        projects it. ``?job_id=`` selects a specific job; otherwise the newest
-        job for *source_id* is streamed. 404 when no job exists.
+        Server-sent events (`text/event-stream`) over a mapping job's
+        append-only event log: replays from the start, then tails live until
+        a terminal event. The newest job for the source is streamed by
+        default; pass `job_id` to pick one. A dropped connection resumes with
+        `after_idx` or the `Last-Event-ID` header. Because EventSource cannot
+        set headers, the API key is also accepted as the `api_key` query
+        parameter.
         """
         if (auth := _require_api_key()) is not None:
             return auth
@@ -426,12 +869,17 @@ class ScgResource(Resource):
     """Introspection over the Source Capability Graph (counts + sources)."""
 
     @agentic_ns.doc("introspect_scg")
+    @agentic_ns.response(200, "Graph counts and the mapped source list.")
+    @agentic_ns.response(401, "Missing or invalid API key.")
+    @agentic_ns.response(503, "Source Capability Graph is disabled.")
     def get(self) -> tuple[dict, int]:
-        """Return SCG node/edge/source/recipe counts + the mapped source list.
+        """Inspect the capability graph.
 
-        Gated on ``scg.enabled`` (503 when off) so a disabled deployment never
-        touches the SCG store. Reads the deterministic core's
-        :func:`get_scg_store` — never an LLM.
+        Returns node, edge, source and recipe counts for the Source
+        Capability Graph, plus the list of mapped sources with their types.
+        Useful to confirm that map jobs have populated the graph. The read is
+        deterministic and never invokes a model. Returns 503 when
+        `scg.enabled` is off.
         """
         if (auth := _require_api_key()) is not None:
             return auth

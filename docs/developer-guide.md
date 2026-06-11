@@ -7,10 +7,10 @@ This page summarizes the code layout, core interfaces, and the minimal steps nee
 - `packages/mewbo_tools/`: tool implementations and integration glue.
 - `packages/mewbo_tools/src/mewbo_tools/vendor/aider`: vendored Aider utilities used by local file and shell tools.
 - `packages/mewbo_graph/` (`mewbo-graph`): the **optional** knowledge-graph capability library — the reusable substrate shared by both MewboWiki and Mewbo Search. Houses the tree-sitter code graph, the multiplex atomic-note memory engine, the embedder, the hybrid retriever, and the Source Capability Graph (SCG) reachability router, plus the bundled `wiki` and `scg` plugin suites (SessionTools + AgentDefs).
-- `apps/mewbo_api/`: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (`ide.py`, `ide_routes.py`). The wiki/search surface here is a thin product layer (HTTP routes, wire/SSE contracts, run/job lifecycle, persistence glue) over `mewbo_graph`.
+- `apps/mewbo_api/`: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (`ide.py`, `ide_routes.py`). The wiki/search surface here is a thin product layer (HTTP routes, wire/SSE contracts, run/job lifecycle, persistence glue) over `mewbo_graph`. The full endpoint catalog, with parameters, response shapes, and request samples, is the [REST API Reference](rest-api.md).
 - `apps/mewbo_console/`: Web console for task orchestration, plugin management, and Web IDE access (React + Vite).
 - `apps/mewbo_cli/`: terminal CLI for interactive sessions.
-- `mewbo_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
+- `apps/mewbo_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
 
 ### Layering — the down-only dependency DAG
 
@@ -42,15 +42,20 @@ The orchestrator loads project instructions from the working directory and injec
 - `ToolRunner` protocol (`mewbo_core.tool_registry`): interface for tool runners with `run(ActionStep)`.
 - `ToolSpec` / `ToolRegistry` (`mewbo_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config. The value is either `aider_edit_block_tool` or `file_edit_tool`. When `edit_tool` is empty, `ToolUseLoop` auto-selects based on model identity via `model_prefers_structured_patch()`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
 - `PluginSystem` (`mewbo_core.plugins`): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by `agent_registry.py`), skills, hooks, and MCP tool configurations. Loaded via `load_all_plugin_components()` during session init.
+- `register_session_capability_provider` (`mewbo_core.capabilities`): down-only extension point for runtime capability grants. A library above core registers a predicate that grants extra session capabilities when a live condition holds; core unions the grants into the client-advertised set at session init via `augment_session_capabilities`, without ever importing up. Providers are best-effort: one that raises is logged and skipped. Example: `mewbo_graph` grants `scg` once the SCG is enabled and a source is mapped.
 - `ActionStep`, `Plan`, `TaskQueue` (`mewbo_core.classes`): planning and tool-execution payloads.
 - `PermissionPolicy` (`mewbo_core.permissions`): allow/deny/ask rules for tool execution.
 - `HookManager` (`mewbo_core.hooks`): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports `"command"` (shell) and `"http"` (fire-and-forget POST) hook types via `HooksConfig`.
 - `ChannelAdapter` protocol (`mewbo_api.channels.base`): abstraction for chat platform integrations with four methods (`verify_request`, `parse_inbound`, `send_response`, `system_context`). All adapters share the `_process_inbound()` pipeline in `routes.py`. Current adapters: Nextcloud Talk (webhook-driven) and Email (IMAP polling with SMTP replies rendered as HTML from markdown).
+- `WorkspaceGraphBinding` (`mewbo_api.agentic_search.scg.workspace_binding`): the single seam that turns a Mewbo Search workspace into graph access for a run. `for_workspace()` resolves three facts in one place: the capability context events (including the workspace's untrusted instructions as a quarantined event), the tool allowlist (the run's connector grant unioned with the SCG traversal verbs), and the workspace source scope as a context manager. The search runner and the graph-first structured runner both consume it. A new run type that binds a workspace should too, rather than re-assembling those facts inline.
 - `SessionStore` / `SessionRuntime` (`mewbo_core.session_store`, `mewbo_core.session_runtime`): transcripts and the shared runtime facade.
 - `ChatModel` protocol (`mewbo_core.llm`): interface for LLM backends via `build_chat_model`. Supports `proxy_model_prefix` for proxy routing and `model_prefers_structured_patch()` for edit tool auto-selection.
 - `LSPTool` (`mewbo_tools.integration.lsp.tool`): code intelligence via pygls language servers. Operations: `diagnostics`, `definition`, `references`, `hover`. Servers are `ServerDef` instances in `lsp/servers.py`, matched by file extension and auto-discovered on the PATH. Passive diagnostics are injected after file edits via `_append_lsp_feedback` in `ToolUseLoop`. Config: `agent.lsp.enabled` and `agent.lsp.servers` (override built-ins or add custom servers). Requires the `pygls` optional dependency; silently absent when not installed.
 
 ## New client walkthrough (concrete steps)
+
+These steps embed the core engine in-process. If you would rather drive Mewbo over HTTP, every endpoint is documented in the [REST API Reference](rest-api.md).
+
 1. Load config and initialize core services:
    - `load_registry()` for tool registration.
    - `load_permission_policy()` and `approval_callback_from_config()` for approvals.

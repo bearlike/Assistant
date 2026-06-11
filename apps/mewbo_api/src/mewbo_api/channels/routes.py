@@ -293,6 +293,7 @@ def _process_inbound(
         approval_callback=auto_approve,
         cwd=project_cwd,
         skill_instructions=client_ctx,
+        source_platform=platform,
     )
     return {}, 200
 
@@ -397,7 +398,7 @@ def _channel_completion_hook(session_id: str, error: str | None = None) -> None:
     if not adapter:
         return
 
-    final_text = _extract_final_answer(events, error)
+    final_text = extract_final_answer(events, error)
     if not final_text:
         return
 
@@ -425,8 +426,12 @@ def _find_channel_context(
     return None
 
 
-def _extract_final_answer(events: list[EventRecord], error: str | None) -> str:
-    """Walk the transcript backwards to find the final answer text."""
+def extract_final_answer(events: list[EventRecord], error: str | None) -> str:
+    """Walk the transcript backwards to find the final answer text.
+
+    Shared by every reply-capable inbound surface (chat channels here,
+    ``vcs_pickup`` for CI) — the "what do we send back" rule must not fork.
+    """
     if error:
         return f"Session ended with an error: {error}"
     for event in reversed(events):

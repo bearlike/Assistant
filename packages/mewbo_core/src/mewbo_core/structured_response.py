@@ -14,7 +14,8 @@ and NO loop change are needed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import contextlib
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 import jsonschema
@@ -55,6 +56,7 @@ _REDRIVE_QUERY = (
 if TYPE_CHECKING:
     import threading
     from collections.abc import Callable
+    from contextlib import AbstractContextManager
 
     from mewbo_core.classes import ActionStep
     from mewbo_core.types import Event
@@ -63,6 +65,16 @@ logging = get_logger(name="core.structured_response")
 
 EMIT_RESULT_TOOL_ID = "emit_result"
 STRUCTURED_OUTPUT_EVENT = "structured_output"
+# Provenance tag PREFIX stamped on every agentic ``/v1/structured`` session so
+# ``SessionOrigin``/``TraceProvenance`` classify it as ``structured`` instead of
+# falling back to ``user`` (#78). The durable tag is ``structured:run:<session_id>``
+# (unique per session) — a CONSTANT tag would collide on the tag-keyed store, so
+# every run would overwrite one shared doc and all-but-the-latest run would
+# silently lose its tag and reclassify to the ``user`` fallback (#87). The id
+# segment is transparent to the parsers: ``SessionOrigin.classify`` prefix-matches
+# ``structured:`` and ``_facets_from_tags`` reads the 2nd segment (``run``) as the
+# ``session_type``. Per-run RESOLUTION is the storeless ``run_id``, not this tag.
+STRUCTURED_RUN_TAG = "structured:run"
 # Max schema-validation failures tolerated before giving up. The Nth failure
 # terminates the run, so the model gets exactly N-1 reasks (2 with the default).
 DEFAULT_MAX_FAILURES = 3
@@ -87,6 +99,8 @@ class _ResponderRuntime(Protocol):
         session_id: str | None = ...,
         session_tag: str | None = ...,
     ) -> str: ...
+
+    def tag_session(self, session_id: str, tag: str) -> None: ...
 
     def append_context_event(self, session_id: str, context: dict[str, object]) -> None: ...
 
@@ -254,6 +268,20 @@ class StructuredResponder:
     model_name: str | None = None
     max_failures: int = DEFAULT_MAX_FAILURES
     session_tag: str | None = None
+    source_platform: str | None = None
+    # Graph-first extension seam (#77 — additive, app-injected, keeps core
+    # graph-free). ``capabilities`` overrides the default ``wiki`` advertisement
+    # (a search workspace advertises ``scg``); ``context_events`` are extra
+    # context writes the binding supplies (e.g. quarantined workspace
+    # instructions); ``extra_instructions`` are trusted skill_instructions
+    # PREPENDED to the force-emit directive (the graph-first discipline
+    # playbook); ``scope_factory`` is an injected context-manager factory bound
+    # around each drive (the ``ScgScope`` source scope) so core never imports the
+    # graph engine. All default to the historical behaviour.
+    capabilities: list[str] | None = None
+    context_events: list[dict[str, object]] = field(default_factory=list)
+    extra_instructions: str | None = None
+    scope_factory: Callable[[], AbstractContextManager[None]] | None = None
 
     def _prepare(self) -> tuple[str, EmitStructuredResponseTool]:
         """Resolve the session, scope its workspace, and build the emit tool.
@@ -262,12 +290,41 @@ class StructuredResponder:
         emit-tool construction + capability scoping live in exactly one place
         (DRY). Returns ``(session_id, emit)``; the same ``emit`` instance is the
         result holder for the sync path's re-drive.
+
+        Provenance stamp (#78): an agentic structured run is tagged
+        :data:`STRUCTURED_RUN_TAG` and its originating ``source_platform`` is
+        written as a context event, so ``SessionOrigin``/``TraceProvenance``
+        classify it as ``structured`` (not the ``user`` fallback) and the trace
+        carries ``surface:<platform>``. Both signals are stamped BEFORE the run
+        starts (the orchestrator reads them at run start). This single seam also
+        covers the MCP ``structured_query`` tool, which posts to ``/v1/structured``.
+
+        Graph-first (#77): when a search workspace is bound the caller supplies
+        ``capabilities=["scg"]`` + the binding's ``context_events`` (capability
+        advertisement + quarantined instructions). The default ``wiki``
+        capability is used only when no explicit capabilities are given, so a
+        wiki-grounded structured run is unchanged.
         """
         session_id = self.runtime.resolve_session(session_tag=self.session_tag)
-        if self.workspace:
+        # Per-session tag (``structured:run:<id>``) — never the bare prefix, which
+        # would collide on the tag-keyed store and let one run steal every other
+        # run's tag (#87). The id segment is transparent to the prefix-matching
+        # provenance parsers.
+        self.runtime.tag_session(session_id, f"{STRUCTURED_RUN_TAG}:{session_id}")
+        if self.source_platform:
             self.runtime.append_context_event(
-                session_id, {"client_capabilities": [_WORKSPACE_CAPABILITY]}
+                session_id, {"source_platform": self.source_platform}
             )
+        for context in self.context_events:
+            self.runtime.append_context_event(session_id, context)
+        if self.workspace:
+            if not self.context_events:
+                # Default (wiki) grounding: advertise the wiki capability unless
+                # the caller already supplied its own capability context events.
+                self.runtime.append_context_event(
+                    session_id,
+                    {"client_capabilities": self.capabilities or [_WORKSPACE_CAPABILITY]},
+                )
             self.runtime.append_context_event(
                 session_id, {"structured_workspace": self.workspace}
             )
@@ -348,17 +405,31 @@ class StructuredResponder:
         *,
         directive: str = FORCE_EMIT_DIRECTIVE,
     ) -> None:
-        """Run one bounded structured session that ends in an emit call."""
-        self.runtime.run_sync(
-            session_id=session_id,
-            user_query=query,
-            model_name=self.model_name,
-            allowed_tools=self.allowed_tools,
-            strict_tool_scope=True,
-            approval_callback=auto_approve,
-            extra_session_tools=[emit],
-            skill_instructions=directive,
-        )
+        """Run one bounded structured session that ends in an emit call.
+
+        Graph-first (#77): ``extra_instructions`` (the graph-first discipline
+        playbook) is PREPENDED to the force-emit directive — both ride the one
+        trusted ``skill_instructions`` slot — and the drive runs inside the
+        injected ``scope_factory`` (the ``ScgScope`` source scope) so the
+        un-owned ``scg_route`` plugin tool only ranks pathways through the bound
+        workspace's sources. Both default to no-ops, so the wiki path is
+        unchanged.
+        """
+        skill = directive
+        if self.extra_instructions:
+            skill = f"{self.extra_instructions}\n\n{directive}"
+        scope = self.scope_factory() if self.scope_factory else contextlib.nullcontext()
+        with scope:
+            self.runtime.run_sync(
+                session_id=session_id,
+                user_query=query,
+                model_name=self.model_name,
+                allowed_tools=self.allowed_tools,
+                strict_tool_scope=True,
+                approval_callback=auto_approve,
+                extra_session_tools=[emit],
+                skill_instructions=skill,
+            )
 
     def start_async(self, query: str) -> str:
         """Kick the same schema-bound emit-tool session asynchronously.
@@ -403,6 +474,7 @@ __all__ = [
     "EMIT_RESULT_TOOL_ID",
     "FORCE_EMIT_DIRECTIVE",
     "STRUCTURED_OUTPUT_EVENT",
+    "STRUCTURED_RUN_TAG",
     "EmitStructuredResponseTool",
     "StructuredResponder",
     "StructuredResponseError",

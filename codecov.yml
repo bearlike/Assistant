@@ -39,4 +39,4 @@ component_management:
     - component_id: ha
       name: ha
       paths:
-        - "mewbo_ha_conversation/**"
+        - "apps/mewbo_ha_conversation/**"

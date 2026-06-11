@@ -4,6 +4,10 @@ This directory vendors a minimal subset of Aider (https://github.com/Aider-AI/ai
 needed for the Mewbo edit-block adapter. It is intentionally small and updated
 via scripts/vendor_aider.sh.
 
+These files are a verbatim upstream reference snapshot and are never imported
+at runtime. The adapted, importable copies live under
+packages/mewbo_tools/src/mewbo_tools/ (aider_bridge/ and vendor/aider/).
+
 Pinned upstream commit: 4bf56b77145b0be593ed48c3c90cdecead217496
 
 Included files:

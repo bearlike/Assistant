@@ -27,6 +27,15 @@ Mongo collections: ``agentic_search_scg_nodes``, ``agentic_search_scg_edges``,
 ``agentic_search_scg_recipes``, ``agentic_search_scg_embeddings``,
 ``agentic_search_scg_sources``.
 
+Per-source mappings are GLOBAL and content-addressed (``node_id =
+sha1(source_key|kind)[:16]``) — the SCG is "a tenant of the same three-layer
+multiplex graph that powers the Agentic Wiki" and the layers cross-pollinate
+without explicit wiring (``docs/features-search.md``). #75 therefore does NOT
+hard-partition this store by workspace; a workspace is a **scoped VIEW** over the
+shared graph — see :mod:`mewbo_graph.scg.scope` (the source-id allowlist
+:class:`ScgRouter` honours at query time) — so a re-map in one workspace stays a
+cheap idempotent upsert that *every* workspace mapping that source benefits from.
+
 Security invariant (spec §6): SCG nodes carry only a *redacted* ``auth_scope``
 descriptor — this store never sees or persists a token/credential.
 """

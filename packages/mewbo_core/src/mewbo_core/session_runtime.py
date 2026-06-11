@@ -234,11 +234,33 @@ class SessionRuntime:
         assert session_id is not None
         return session_id
 
+    def ensure_session(self, session_id: str) -> None:
+        """Idempotently materialise a session record for a pre-minted id.
+
+        Thin delegate to the store's ``ensure_session``. A caller that minted a
+        ``session_id`` outside ``resolve_session`` (e.g. the realtime recorder,
+        which pre-mints to open a Langfuse trace before any store write) calls
+        this so the session is a real RECORD — visible to ``list_sessions`` and
+        every read surface — not an orphan transcript.
+        """
+        self._session_store.ensure_session(session_id)
+
     def append_context_event(self, session_id: str, context: dict[str, object]) -> None:
         """Append a context event to the session transcript."""
         if not context:
             return
         self._session_store.append_event(session_id, {"type": "context", "payload": context})
+
+    def tag_session(self, session_id: str, tag: str) -> None:
+        """Associate a provenance/lookup tag with a session.
+
+        Thin delegate to the store so callers that already hold a resolved
+        ``session_id`` (e.g. a structured/realtime run stamping its origin tag)
+        don't reach into ``session_store`` directly. ``resolve_session`` remains
+        the seam for tag-keyed *resolution*; this is the write-only sibling for
+        tagging a session you've already created.
+        """
+        self._session_store.tag_session(session_id, tag)
 
     def append_event(self, session_id: str, event: dict[str, object]) -> None:
         """Append a raw transcript event verbatim.
@@ -264,13 +286,8 @@ class SessionRuntime:
         title = stored_title
         status = "idle"
         done_reason = None
-        context: dict[str, object] | None = None
         has_user_event = False
         for event in events:
-            if event.get("type") == "context":
-                payload = event.get("payload")
-                if isinstance(payload, dict):
-                    context = {**(context or {}), **payload}
             if event.get("type") == "user":
                 has_user_event = True
                 if title is None:
@@ -307,7 +324,7 @@ class SessionRuntime:
             created_at = None
         if not title:
             title = f"Session {session_id[:8]}"
-        merged_context = context or {}
+        merged_context = self._session_store.merge_context_events(events)
         origin = SessionOrigin.classify(
             self._session_store.tags_for_session(session_id), merged_context
         )
@@ -322,6 +339,21 @@ class SessionRuntime:
         # ``continue`` re-engages it through the one loop, mirroring send_followup —
         # the only other way out. Only ``completed`` is genuinely terminal (#66).
         recoverable = not running and status != "completed" and has_user_event
+        # Surface the advertised capabilities + workspace so the landing page can
+        # show WHAT a session was scoped to (transparency) without re-reading the
+        # transcript. These ride the merged context already; lifting them to
+        # top-level keys keeps the FE from having to know the context shape. A
+        # runtime-granted capability (the #83-B ``scg`` provider) is intentionally
+        # NOT probed here — it's a live predicate, not a durable signal, and is
+        # already surfaced where it matters (the run's Langfuse trace facet, #84);
+        # a per-row store probe in a session LIST would be the wrong tradeoff.
+        caps = merged_context.get("client_capabilities")
+        capabilities = (
+            [str(c) for c in caps if str(c).strip()] if isinstance(caps, list) else []
+        )
+        workspace = merged_context.get("structured_workspace") or merged_context.get(
+            "workspace"
+        )
         return {
             "session_id": session_id,
             "title": title,
@@ -332,6 +364,8 @@ class SessionRuntime:
             "recoverable": recoverable,
             "context": merged_context,
             "origin": origin.value,
+            "capabilities": capabilities,
+            "workspace": str(workspace) if workspace else None,
             "archived": self._session_store.is_archived(session_id),
         }
 
@@ -616,15 +650,39 @@ class SessionRuntime:
         else:
             # ----------------------------------------------------------
             # Continue = stitch: keep the failed run's traces, delete
-            # only prior recovery attempts (events after the LAST
-            # completion), then start a new continuation turn.
+            # only a STALE PRIOR continue attempt, then start a new
+            # continuation turn.
+            #
+            # A prior continue left a ``recovery`` audit marker + the
+            # synthetic turn it drove; re-continuing should drop that
+            # stale attempt so the transcript doesn't accrete duplicate
+            # recovery prompts. We cut from the LAST ``recovery`` marker
+            # — NOT the last ``completion``. A run killed mid-flight
+            # (process restart) emits neither a completion nor a recovery
+            # marker for its turn, so anchoring on the last completion
+            # would fall back to the PREVIOUS completed turn and delete
+            # the entire interrupted turn — its user message and every
+            # tool call/result (Gitea #84: 60 scg_memory traces erased,
+            # which the console then faithfully rendered as "missing").
+            # No prior recovery marker ⇒ nothing stale ⇒ preserve all
+            # traces (the interrupted turn stays an open turn the
+            # continuation resumes from).
             # ----------------------------------------------------------
-            last_completion_ts = ""
+            last_recovery_ts = ""
             for ev in events:
-                if ev.get("type") == "completion":
-                    last_completion_ts = ev.get("ts", "")
-            if last_completion_ts:
-                self._session_store.truncate_after(session_id, last_completion_ts)
+                if ev.get("type") == "recovery":
+                    last_recovery_ts = ev.get("ts", "")
+            if last_recovery_ts:
+                # Truncate just BEFORE the stale recovery marker so its
+                # own synthetic continue-turn is removed but the real
+                # work preceding it is kept.
+                prev_ts = ""
+                for ev in events:
+                    if ev.get("ts", "") >= last_recovery_ts:
+                        break
+                    prev_ts = ev.get("ts", "")
+                if prev_ts:
+                    self._session_store.truncate_after(session_id, prev_ts)
             query_text = _build_continue_recovery_query()
             # Audit marker so the transcript records when the user
             # triggered a continue. Not appended for retry (the failed

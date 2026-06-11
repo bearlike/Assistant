@@ -113,6 +113,18 @@ _OPERATION_GET_KEYWORDS = frozenset(
         "lookup",
         "web_search",
         "web_url_read",
+        # SCG reasoning tools — default-allowed (no secrets cross them; the
+        # auth_scope descriptor stays redacted). Reads (`scg_route`/`scg_observe`)
+        # and the additive learned-memory deposit (`scg_memory`) are classified
+        # `get` so the default permission policy ALLOWs them without an extra
+        # config knob, the same way `web_url_read` is GET-classified by its exact
+        # id. The verbs (route/observe) carry no SET keyword; `scg_memory` is the
+        # one deliberate write whitelisted here because a connector insight is a
+        # propositional reachability fact, never a record value or credential
+        # (#83-B). Exact ids — no false-positive substring match on other tools.
+        "scg_route",
+        "scg_observe",
+        "scg_memory",
     }
 )
 
@@ -249,8 +261,11 @@ class ToolUseLoop:
         # Assemble session tools — per-agent stateful handlers that carry
         # their own schema, dispatch, and run-termination flag. The core's
         # built-in ``ExitPlanModeTool`` is always attached to root agents
-        # with a session id; plugin-contributed tools are filtered through
-        # the agent's ``allowed_tools`` allowlist.
+        # with a session id; plugin-contributed tools are selected by EITHER
+        # the agent's ``allowed_tools`` allowlist OR a capability gate (a
+        # factory whose ``requires_capabilities`` ⊆ ``session_capabilities``),
+        # so a runtime-granted capability (#83-B/#84) surfaces its tools to the
+        # root agent without the client listing them explicitly.
         self._session_tools: list[SessionTool] = []
         if agent_context.depth == 0 and session_id is not None:
             self._session_tools.append(
@@ -265,6 +280,7 @@ class ToolUseLoop:
                     allowed_tools,
                     session_id=session_id,
                     event_logger=agent_context.event_logger,
+                    session_capabilities=session_capabilities,
                 )
             )
         # Caller-injected session tools (e.g. the structured-response emit

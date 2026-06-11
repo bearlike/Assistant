@@ -27,6 +27,7 @@ from mewbo_core.permissions import (
     approval_callback_from_config,
     load_permission_policy,
 )
+from mewbo_core.session_provenance import TraceProvenance
 from mewbo_core.session_store import SessionStoreBase, create_session_store
 from mewbo_core.session_tools import SessionTool, SessionToolRegistry
 from mewbo_core.skills import SkillRegistry, activate_skill
@@ -138,10 +139,18 @@ class Orchestrator:
                         capabilities=plugin_caps,
                         plugin_root=plugin_root,
                     )
+                # Load this plugin's session tools WITH its capability gate, so a
+                # capability-gated session tool (e.g. the ``scg`` suite's
+                # ``scg_*``) surfaces to any session that holds the capability —
+                # including via the #83-B runtime grant — not only when the
+                # client lists the tool in ``allowed_tools`` (Gitea #84). Same
+                # data-driven gate the AgentDefs register through above.
+                for entry in pc.session_tool_entries:
+                    self._session_tool_registry.load_entry(
+                        entry, requires_capabilities=plugin_caps
+                    )
             for hooks_json, plugin_root in fan_out.hooks_configs:
                 merge_plugin_hooks(self._hook_manager, hooks_json, plugin_root)
-            for entry in fan_out.session_tool_entries:
-                self._session_tool_registry.load_entry(entry)
             plugin_mcp_servers = fan_out.mcp_servers
         else:
             plugin_mcp_servers = {}
@@ -181,12 +190,35 @@ class Orchestrator:
         if session_id is None:
             session_id = self._session_store.create_session()
 
+        # Fold the session's durable signals (tags + merged context + the
+        # entry-point surface) into filterable Langfuse tags/metadata once; the
+        # seam propagates them to every child observation. Apps write their
+        # context/tags before invoking the runtime, so they are present here.
+        #
+        # The merged context carries only the CLIENT-ADVERTISED capabilities, so
+        # overlay the AUGMENTED set (advertised ∪ runtime-provider grants) before
+        # deriving — otherwise a capability granted at runtime (the #83-B ``scg``
+        # provider; #84) would be live in the run yet invisible in the trace's
+        # ``capabilities`` facet. ``derive`` stays a pure transform of
+        # (tags, context, surface); we only enrich the context it reads.
+        derive_context = dict(self._session_store.latest_context(session_id))
+        effective_caps = self._session_capabilities(session_id)
+        if effective_caps:
+            derive_context["client_capabilities"] = list(effective_caps)
+        provenance = TraceProvenance.derive(
+            tags=self._session_store.tags_for_session(session_id),
+            context=derive_context,
+            surface=source_platform,
+        )
+
         with session_log_context(session_id):
             with langfuse_session_context(
                 session_id,
                 user_id=user_id,
                 invocation_id=invocation_id,
                 source_platform=source_platform,
+                tags=list(provenance.tags),
+                metadata=provenance.metadata,
             ):
                 return self._run_with_session_context(
                     user_query,
@@ -490,19 +522,28 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _session_capabilities(self, session_id: str) -> tuple[str, ...]:
-        """Return capability tuple advertised by the client for *session_id*.
+        """Return the capability tuple in effect for *session_id*.
 
         Reads ``client_capabilities`` from the most recently appended
-        ``context`` event (set by the API from the
-        ``X-Mewbo-Capabilities`` header). Returns an empty tuple on
-        any error or when the client advertised none.
+        ``context`` event (set by the API from the ``X-Mewbo-Capabilities``
+        header), then unions in any RUNTIME grants registered by a capability
+        library above core (``augment_session_capabilities``) — so a capability
+        gated on a live predicate (e.g. ``scg`` once the SCG is enabled AND a
+        source is mapped) surfaces to an ORDINARY session without the client
+        advertising it. The augmentation is the single read-point every
+        downstream gate funnels through (sub-agent catalog, skill activation,
+        the ``scg_*`` plugin tool scope), so the grant happens in exactly one
+        seam. Returns an empty tuple on any error or when nothing applies.
         """
-        from mewbo_core.capabilities import parse_capabilities
+        from mewbo_core.capabilities import (
+            augment_session_capabilities,
+            parse_capabilities,
+        )
 
         try:
             events = self._session_store.load_transcript(session_id)
         except Exception:
-            return ()
+            return augment_session_capabilities(())
         advertised: object = None
         for event in events:
             if event.get("type") != "context":
@@ -510,7 +551,7 @@ class Orchestrator:
             payload = event.get("payload")
             if isinstance(payload, dict) and "client_capabilities" in payload:
                 advertised = payload["client_capabilities"]
-        return parse_capabilities(advertised)
+        return augment_session_capabilities(parse_capabilities(advertised))
 
     def _maybe_generate_title(self, session_id: str) -> None:
         """Kick off title generation in a daemon thread (non-blocking).
