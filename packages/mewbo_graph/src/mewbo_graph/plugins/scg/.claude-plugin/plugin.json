@@ -41,6 +41,11 @@
       "class": "ScgMemoryTool"
     },
     {
+      "tool_id": "scg_results",
+      "module": "mewbo_graph.plugins.scg.results",
+      "class": "ScgResultsTool"
+    },
+    {
       "tool_id": "mint_entity",
       "module": "mewbo_graph.plugins.wiki.mint_entity",
       "class": "MintEntityTool"

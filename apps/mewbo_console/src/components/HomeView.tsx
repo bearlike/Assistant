@@ -18,19 +18,8 @@ import {
 import { useProjects } from '../hooks/useProjects';
 import { ProjectLabel } from '../utils/projectLabel';
 import { formatSessionTime } from '../utils/time';
+import { ORIGIN_FILTERS, DEFAULT_VISIBLE_ORIGINS } from '../utils/sessionOrigins';
 
-// Per-origin filter. Default reveals what the user authored — sessions they
-// started in the console ("user") plus channel chats — and hides the
-// internally-spawned wiki/search sessions until scoped into.
-const ORIGIN_FILTERS: { origin: SessionOrigin; label: string }[] = [
-  { origin: 'user', label: 'My tasks' },
-  { origin: 'channel', label: 'Channels' },
-  { origin: 'wiki', label: 'Wiki' },
-  { origin: 'search', label: 'Search' },
-  { origin: 'structured', label: 'Structured' },
-  { origin: 'draft', label: 'Draft' },
-];
-const DEFAULT_VISIBLE_ORIGINS: SessionOrigin[] = ['user', 'channel'];
 interface HomeViewProps {
   sessions: SessionSummary[];
   archivedSessions: SessionSummary[];

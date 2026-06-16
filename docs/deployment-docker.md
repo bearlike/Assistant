@@ -28,7 +28,7 @@ The console is available at `http://localhost:3001`. The API is at `http://local
 
 ## Environment Variables
 
-All variables live in `docker.env` (copied from `docker.example.env`).
+All variables live in [`docker.env`](repo:docker.env) (copied from [`docker.example.env`](repo:docker.example.env)).
 
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
@@ -51,7 +51,7 @@ LLM provider keys, Langfuse credentials, and other runtime settings belong in `c
 
 ## Services
 
-The Compose file defines five services:
+The [Compose file](repo:docker-compose.yml) defines five services:
 
 | Service | Image | Default port | Purpose |
 |---------|-------|-------------|---------|
@@ -63,7 +63,7 @@ The Compose file defines five services:
 
 The `api`, `mewbo-mcp`, and `console` services use **host networking** (`network_mode: host`), so they share `127.0.0.1` with the host. The `ide-proxy` runs on the `mewbo-ide` bridge network and is bound to loopback by default.
 
-The `mewbo-mcp` service reads the same `docker.env` as the API, so its `MASTER_API_TOKEN` always matches. It also mounts the same `api-data` volume and so shares the API's key store. API keys issued via `POST /api/keys` are therefore valid on the MCP server too.
+The `mewbo-mcp` service reads the same [`docker.env`](repo:docker.env) as the API, so its `MASTER_API_TOKEN` always matches. It also mounts the same `api-data` volume and so shares the API's key store. API keys issued via [`POST /api/keys`](endpoint:POST /api/keys) are therefore valid on the MCP server too.
 
 ## Named Volumes
 
@@ -78,7 +78,7 @@ All named volumes survive `docker compose down`. They are cleared only by `docke
 
 ## Mounting Project Directories
 
-Use a `docker-compose.override.yml` (auto-loaded by Compose) to mount your project directories:
+Use a [`docker-compose.override.yml`](repo:docker-compose.override.yml) (auto-loaded by Compose) to mount your project directories:
 
 ```bash
 cp docker-compose.override.example.yml docker-compose.override.yml
@@ -101,16 +101,16 @@ services:
 
 ## Post-Init Scripts
 
-Scripts in `docker/init.d/` are run inside the `api` container before Gunicorn starts (sorted lexicographically by filename). Scripts are **sourced** (not executed), so they can export environment variables into the API process environment. A failing script logs a warning and allows startup to continue.
+Scripts in [`docker/init.d/`](repo:docker/init.d) are run inside the `api` container before Gunicorn starts (sorted lexicographically by filename). Scripts are **sourced** (not executed), so they can export environment variables into the API process environment. A failing script logs a warning and allows startup to continue.
 
 The included scripts:
 
 | Script | Purpose |
 |--------|---------|
-| `05-trust-internal-ca.sh` | If a PEM root CA is mounted at `/usr/local/share/ca-certificates/*.crt` (the `.crt` extension is required), rebuilds the system trust bundle and points Python HTTPS clients at it. Lets `git clone` and API calls verify hosts behind a private CA without disabling verification. |
-| `10-git-setup.sh` | If `GITHUB_TOKEN` is set and `gh` is installed, configures `git credential.helper` for non-interactive auth. Also sets `git config --global safe.directory '*'` so volume-mounted repos are trusted regardless of file ownership. |
+| [`05-trust-internal-ca.sh`](repo:docker/init.d/05-trust-internal-ca.sh) | If a PEM root CA is mounted at `/usr/local/share/ca-certificates/*.crt` (the `.crt` extension is required), rebuilds the system trust bundle and points Python HTTPS clients at it. Lets `git clone` and API calls verify hosts behind a private CA without disabling verification. |
+| [`10-git-setup.sh`](repo:docker/init.d/10-git-setup.sh) | If `GITHUB_TOKEN` is set and `gh` is installed, configures `git credential.helper` for non-interactive auth. Also sets `git config --global safe.directory '*'` so volume-mounted repos are trusted regardless of file ownership. |
 
-To add your own scripts, mount the `docker/init.d/` directory in your override file (see example above) and add `.sh` files there. The API image does not need to be rebuilt.
+To add your own scripts, mount the [`docker/init.d/`](repo:docker/init.d) directory in your override file (see example above) and add `.sh` files there. The API image does not need to be rebuilt.
 
 ## Runtime Config Injection
 

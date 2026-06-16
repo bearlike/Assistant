@@ -92,6 +92,12 @@ class SubAgentPayload(TypedDict):
     steps_completed: NotRequired[int]
     input_tokens: NotRequired[int]
     output_tokens: NotRequired[int]
+    # The spawned AgentDef name (e.g. ``scg-path-probe``) — additive, present
+    # only for an agent_type spawn so the trace projection can label the lane by
+    # its definition rather than the model name.
+    agent_type: NotRequired[str]
+    # The child's compressed result (set only on the terminal ``stop``).
+    summary: NotRequired[str]
 
 
 class AgentMessagePayload(TypedDict):

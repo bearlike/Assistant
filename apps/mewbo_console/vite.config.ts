@@ -75,10 +75,13 @@ export default defineConfig(({ mode }) => {
         workbox: {
           globPatterns: ["**/*.{js,css,html,ico,png,svg,woff,woff2}"],
           // runtime-config.js is rendered at container start; never precache.
-          // StliteWidgetPanel and its Streamlit/Plotly/DeckGL sub-chunks are
-          // lazily loaded WASM-heavy assets that exceed the 2 MiB precache
-          // limit — exclude them and let the network serve them on demand.
-          globIgnores: ["**/runtime-config.js", "**/StliteWidgetPanel-*.js", "**/PlotlyChart-*.js", "**/DeckGlJsonChart-*.js"],
+          // stlite chunks (the prebuilt Streamlit/Plotly/DeckGL sub-chunks)
+          // are lazily loaded WASM-heavy assets that exceed the 2 MiB
+          // precache limit — exclude them and let the network serve them on
+          // demand. They all carry the deterministic `stlite-` prefix
+          // assigned by `chunkFileNames` below, so one pattern stays correct
+          // across stlite upgrades and bundler chunking changes.
+          globIgnores: ["**/runtime-config.js", "**/stlite-*.js"],
           navigateFallback: "index.html",
           // `/ide/` is proxied to per-session code-server containers (see
           // docker/nginx-reverse-proxy.conf + docker/nginx-ide-proxy.conf).
@@ -134,6 +137,23 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src')
+      }
+    },
+    build: {
+      // Vite 8 defaults to lightningcss, which hard-errors on Tailwind's
+      // verbatim scan of the `shadow-[var(--${opts.elevation})]` template
+      // literal in composer-shell.tsx (`Unexpected token Delim('$')`).
+      cssMinify: "esbuild",
+      rollupOptions: {
+        output: {
+          // Chunks containing @stlite prebuilt modules get a stable
+          // `stlite-` prefix so the workbox globIgnores above can exclude
+          // them from the precache without hardcoding content hashes.
+          chunkFileNames: (chunk) =>
+            chunk.moduleIds.some((id) => id.includes("@stlite"))
+              ? "assets/stlite-[name]-[hash].js"
+              : "assets/[name]-[hash].js"
+        }
       }
     },
     // Vite's dep optimizer runs esbuild directly, which doesn't know about

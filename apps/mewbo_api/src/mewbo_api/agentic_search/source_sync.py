@@ -17,6 +17,12 @@ or a config-only install just refreshes the virtual config and returns. Every ma
 start is wrapped so one failing source never blocks the workspace save (the save
 already succeeded by the time we run); failures are logged, not raised.
 
+The fan-out (step 2 — the ``_mappable``/``_drifted``/``_reenrich`` resolution +
+the ``_start_map`` loop) runs on a **background daemon thread** so the
+``POST``/``PATCH`` route returns the 201/200 response immediately.  Step 1
+(config refresh + NL-fingerprint stamp) stays synchronous because it is cheap
+store I/O and the response body should reflect the refreshed state.
+
 Why an atomic class: the route handlers stay thin (one call), and the
 "which sources are newly mappable" decision lives in ONE place reused by both
 create and update — no duplicated, drifting logic across two routes.
@@ -25,6 +31,7 @@ create and update — no duplicated, drifting logic across two routes.
 from __future__ import annotations
 
 import hashlib
+import threading
 from typing import Any
 
 from mewbo_core.common import get_logger
@@ -81,6 +88,18 @@ class NlContextFingerprint:
 class WorkspaceSourceSync:
     """Refresh the virtual MCP config + best-effort auto-map newly-enabled sources."""
 
+    # The most recent fan-out thread (#97). Route-level tests can't reach the
+    # Thread returned by ``on_workspace_saved`` (the routes ignore it), so they
+    # synchronize through :meth:`join_last_fan_out` instead of sleeping.
+    _last_fan_out: threading.Thread | None = None
+
+    @classmethod
+    def join_last_fan_out(cls, timeout: float = 5.0) -> None:
+        """Test seam: block until the most recent fan-out finishes (no-op when none)."""
+        t = cls._last_fan_out
+        if t is not None:
+            t.join(timeout=timeout)
+
     @classmethod
     def on_workspace_saved(
         cls,
@@ -91,7 +110,7 @@ class WorkspaceSourceSync:
         prev_sources: list[str] | None = None,
         runtime: Any = None,
         project: str | None = None,
-    ) -> None:
+    ) -> threading.Thread | None:
         """Refresh the virtual config, then auto-map newly-enabled + drifted sources.
 
         *prev_sources* is the selection BEFORE this save (``None`` on create);
@@ -104,6 +123,16 @@ class WorkspaceSourceSync:
         map-time enrich step (#83). Always refreshes the virtual MCP config first
         (stamping the new NL fingerprint) so it tracks the new selection even when
         auto-map is disabled or a source can't be mapped.
+
+        Step 1 (virtual-config refresh + NL-fingerprint stamp) runs synchronously
+        because it is cheap store I/O and the response body should reflect the
+        refreshed state.  Step 2 (the ``_mappable``/``_drifted``/``_reenrich``
+        resolution + ``_start_map`` loop — involves live MCP introspection) runs on
+        a background daemon thread so the route returns immediately.  The thread is
+        returned (not ``None``) when the fan-out was actually launched, ``None``
+        when the SCG gate is off or no runtime is wired (i.e. fan-out never runs).
+        Callers that need to synchronise (tests) can ``thread.join(timeout=…)``; the
+        route ignores the return value.
         """
         # Compute the new NL-context fingerprint and read the prior one BEFORE the
         # save overwrites it — the change is what gates the re-enrich (#83). Both
@@ -137,46 +166,108 @@ class WorkspaceSourceSync:
             )
 
         # 2. Auto-map newly-enabled + drifted + re-enrich live sources (gated).
+        #    Resolve the inputs NOW (on the request thread — cheap store reads /
+        #    set operations) so the thread captures concrete values, not live
+        #    request-context references that may be torn down.
         if not ScgConfig.enabled() or runtime is None:
-            return
+            return None
         prev = set(prev_sources or [])
         newly = [s for s in new_sources if s not in prev]
-        # Already-mapped enabled sources whose live tool surface drifted need a
-        # re-map even though they aren't newly enabled (a tool was added/removed
-        # or an arg changed since the last map). Cheap: one manifest-hash compare
-        # per already-mapped enabled source, no new tick/daemon.
         already = [s for s in new_sources if s in prev]
-        drifted = cls._drifted(store, already, project=project)
-        # An instructions/desc edit changed no sources and perturbed no tool list,
-        # so neither _mappable nor _drifted fires — yet the enrich notes are now
-        # stale. Re-drive the map (idempotent, in-flight-guarded) for the
-        # workspace's enabled, already-mapped sources so the map-time enrich
-        # re-seeds against the new prose (#83). Only on a real fingerprint change.
-        reenrich = cls._reenrich_targets(store, already) if nl_changed else []
-        to_map = list(
-            dict.fromkeys(
-                cls._mappable(store, newly, project=project) + drifted + reenrich
-            )
+
+        # Start the fan-out on a daemon thread so the route returns immediately.
+        # All per-source MCP introspection (SourceDescriptorBuilder.build + the
+        # live ManifestHash comparisons in _drifted) happen inside the thread.
+        t = threading.Thread(
+            target=cls._fan_out,
+            kwargs=dict(
+                store=store,
+                workspace_id=workspace_id,
+                newly=newly,
+                already=already,
+                nl_changed=nl_changed,
+                runtime=runtime,
+                project=project,
+            ),
+            name=f"workspace-automap-{workspace_id}",
+            daemon=True,
         )
-        if not to_map:
-            return
-        # The workspace prose that triggered this map seeds the enrich step — it
-        # is UNTRUSTED and rides the user turn only (#81-B). Read it once and
-        # pass it to every mapped source (anchored to that source's caps).
-        # Best-effort like every other step here: enrich plumbing must never
-        # fail the workspace save that carried the prose.
+        cls._last_fan_out = t
+        t.start()
+        return t
+
+    @classmethod
+    def _fan_out(
+        cls,
+        *,
+        store: AgenticSearchStoreBase,
+        workspace_id: str,
+        newly: list[str],
+        already: list[str],
+        nl_changed: bool,
+        runtime: Any,
+        project: str | None,
+    ) -> None:
+        """Background fan-out: resolve mappable/drifted/reenrich sources and start jobs.
+
+        Runs on a daemon thread started by :meth:`on_workspace_saved`.  The entire
+        body is best-effort: any unhandled exception is logged and swallowed — the
+        workspace save already succeeded before this thread was started.  Per-source
+        error isolation is preserved: ``_start_map`` has its own try/except, so one
+        broken source never affects the others.
+
+        Thread-safety notes:
+        - ``store`` is the shared ``AgenticSearchStoreBase`` instance.
+          ``JsonAgenticSearchStore`` uses a ``threading.Lock`` for all writes
+          (``create_map_job``, ``update_map_job``) and atomic JSON rewrites, so
+          concurrent calls from this thread and the request thread are safe.
+          ``MongoAgenticSearchStore`` uses MongoDB's document-level atomics; safe.
+        - ``SourceDescriptorBuilder.build()`` opens a fresh MCP connection per call
+          (stateless, no shared mutable state) — safe off-thread.
+        - ``MapSourceJob.start()`` is already called from worker contexts
+          (``SessionRuntime`` background threads); safe off-thread.
+        - ``get_scg_store()`` returns a module-level singleton; its list/read methods
+          are read-only and safe to call from any thread.
+        """
         try:
-            nl_context = cls._nl_context_for(store, workspace_id)
-        except Exception as exc:  # noqa: BLE001 — degrade to descriptor-only map
-            logging.warning(
-                "workspace %s NL-context read failed (mapping without enrich prose): %s",
-                workspace_id,
-                exc,
+            # Already-mapped enabled sources whose live tool surface drifted need a
+            # re-map even though they aren't newly enabled (a tool was added/removed
+            # or an arg changed since the last map).
+            drifted = cls._drifted(store, already, project=project)
+            # An instructions/desc edit changed no sources and perturbed no tool list,
+            # so neither _mappable nor _drifted fires — yet the enrich notes are now
+            # stale. Re-drive the map (idempotent, in-flight-guarded) for the
+            # workspace's enabled, already-mapped sources so the map-time enrich
+            # re-seeds against the new prose (#83). Only on a real fingerprint change.
+            reenrich = cls._reenrich_targets(store, already) if nl_changed else []
+            to_map = list(
+                dict.fromkeys(
+                    cls._mappable(store, newly, project=project) + drifted + reenrich
+                )
             )
-            nl_context = None
-        for source_id in to_map:
-            cls._start_map(
-                store, source_id, runtime=runtime, project=project, nl_context=nl_context
+            if not to_map:
+                return
+            # The workspace prose that triggered this map seeds the enrich step — it
+            # is UNTRUSTED and rides the user turn only (#81-B). Read it once and
+            # pass it to every mapped source (anchored to that source's caps).
+            # Best-effort like every other step here: enrich plumbing must never
+            # fail the workspace save that carried the prose.
+            try:
+                nl_context = cls._nl_context_for(store, workspace_id)
+            except Exception as exc:  # noqa: BLE001 — degrade to descriptor-only map
+                logging.warning(
+                    "workspace %s NL-context read failed (mapping without enrich prose): %s",
+                    workspace_id,
+                    exc,
+                )
+                nl_context = None
+            for source_id in to_map:
+                cls._start_map(
+                    store, source_id, runtime=runtime, project=project, nl_context=nl_context
+                )
+        except Exception as exc:  # noqa: BLE001 — best-effort; never crash the daemon
+            logging.warning(
+                "workspace %s background automap fan-out failed: %s", workspace_id, exc
             )
 
     @staticmethod

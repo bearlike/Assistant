@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from mewbo_api import backend
+from mewbo_core.structured_response import StructuredResponseError
 
 _SCHEMA = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
 
@@ -241,6 +242,241 @@ def test_structured_post_refused_start_returns_error(client, auth_headers):
         )
     assert r.status_code >= 400
     assert "error" in r.get_json()
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/structured  (mode: "synthesis") — the no-loop fast lane (#85)
+#
+# Folds in the former POST /v1/structured/fast: a synchronous single round-trip
+# via SynthesisRunner instead of the agentic StructuredResponder loop. Returns
+# inline (status completed) with the validated output + grounding citations.
+# ---------------------------------------------------------------------------
+
+_SYNTH_BODY = {
+    "run_id": "synth-sess:r1",
+    "status": "completed",
+    "output": {"name": "Ada"},
+    "citations": [{"id": "p1", "kind": "page", "snippet": "s", "score": 0.9, "source": "p.md"}],
+    "workspace": "wiki",
+}
+
+
+def test_structured_synthesis_mode_dispatches_to_runner(client, auth_headers):
+    """mode:'synthesis' runs SynthesisRunner inline → completed output + citations.
+
+    The agentic StructuredResponder path is short-circuited — no loop, no polling.
+    """
+    captured: dict = {}
+
+    class _FakeRunner:
+        def __init__(self, *, runtime):
+            captured["runtime_passed"] = True
+
+        def run(self, *, query, schema, workspace, model, surface):
+            captured.update(
+                query=query, schema=schema, workspace=workspace,
+                model=model, surface=surface,
+            )
+            return dict(_SYNTH_BODY)
+
+    with (
+        patch("mewbo_api.structured.routes.SynthesisRunner", _FakeRunner),
+        patch("mewbo_api.structured.routes.StructuredResponder") as mock_responder,
+    ):
+        r = client.post(
+            "/v1/structured",
+            json={
+                "query": "Who?",
+                "schema": _SCHEMA,
+                "workspace": "wiki",
+                "mode": "synthesis",
+            },
+            headers={**auth_headers, "X-Mewbo-Surface": "mcp"},
+        )
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["status"] == "completed"
+    assert body["output"] == {"name": "Ada"}
+    assert body["citations"][0]["id"] == "p1"
+    assert body["run_id"] == "synth-sess:r1"
+    # Dispatched with the request fields + the surface from X-Mewbo-Surface.
+    assert captured["query"] == "Who?"
+    assert captured["schema"] == _SCHEMA
+    assert captured["workspace"] == "wiki"
+    assert captured["surface"] == "mcp"
+    # The agentic responder is never constructed — synthesis short-circuits it.
+    mock_responder.assert_not_called()
+
+
+def test_structured_synthesis_mode_threads_model(client, auth_headers):
+    """The optional 'model' override is forwarded into SynthesisRunner.run(model=...)."""
+    captured: dict = {}
+
+    class _FakeRunner:
+        def __init__(self, *, runtime):
+            pass
+
+        def run(self, *, query, schema, workspace, model, surface):
+            captured["model"] = model
+            return dict(_SYNTH_BODY)
+
+    with patch("mewbo_api.structured.routes.SynthesisRunner", _FakeRunner):
+        r = client.post(
+            "/v1/structured",
+            json={
+                "query": "Who?",
+                "schema": _SCHEMA,
+                "mode": "synthesis",
+                "model": "openai/gpt-5.4-nano",
+            },
+            headers=auth_headers,
+        )
+    assert r.status_code == 200
+    assert captured["model"] == "openai/gpt-5.4-nano"
+
+
+def test_structured_synthesis_validation_failure_returns_422(client, auth_headers):
+    """A StructuredResponseError from synthesis → 422 envelope, no internal tool name."""
+    class _FailRunner:
+        def __init__(self, *, runtime):
+            pass
+
+        def run(self, **kwargs):
+            raise StructuredResponseError("validation exhausted")
+
+    with patch("mewbo_api.structured.routes.SynthesisRunner", _FailRunner):
+        r = client.post(
+            "/v1/structured",
+            json={"query": "q", "schema": _SCHEMA, "mode": "synthesis"},
+            headers=auth_headers,
+        )
+    assert r.status_code == 422
+    body = r.get_json()
+    assert body["error"]["code"] == 422
+    assert "emit_result" not in str(body).lower()
+
+
+def test_structured_synthesis_unexpected_error_returns_500(client, auth_headers):
+    """An unexpected synthesis failure → 500 error envelope (not an unhandled crash)."""
+    class _BoomRunner:
+        def __init__(self, *, runtime):
+            pass
+
+        def run(self, **kwargs):
+            raise RuntimeError("boom")
+
+    with patch("mewbo_api.structured.routes.SynthesisRunner", _BoomRunner):
+        r = client.post(
+            "/v1/structured",
+            json={"query": "q", "schema": _SCHEMA, "mode": "synthesis"},
+            headers=auth_headers,
+        )
+    assert r.status_code == 500
+    assert r.get_json()["error"]["code"] == 500
+
+
+def test_structured_default_mode_is_agentic(client, auth_headers):
+    """Omitting mode (or mode='agentic') takes the agentic path, never SynthesisRunner."""
+    with (
+        patch("mewbo_api.structured.routes.SynthesisRunner") as synth_cls,
+        patch("mewbo_api.structured.routes.StructuredResponder") as mock_cls,
+        patch("mewbo_api.structured.routes._load_structured_output", return_value={"name": "Ada"}),
+    ):
+        mock_cls.return_value.start_async.return_value = "sess-a:r1"
+        r = client.post(
+            "/v1/structured",
+            json={"query": "Who?", "schema": _SCHEMA, "mode": "agentic"},
+            headers=auth_headers,
+        )
+    assert r.status_code == 200
+    assert r.get_json()["status"] == "completed"
+    synth_cls.assert_not_called()
+
+
+def test_structured_synthesis_real_runner_session_backed(client, auth_headers, tmp_path):
+    """End-to-end synthesis mode: real SynthesisRunner, stubbed LLM, real store.
+
+    Asserts the inline completed response AND that the run is session-backed with
+    the ``structured:fast`` tag (``structured_fast`` session_type parity with the
+    removed sibling), and that the persisted ``structured_output`` lets
+    ``GET /v1/structured/<run_id>`` resolve the same output.
+    """
+    from mewbo_api.realtime.recorder import FAST_STRUCTURED_TAG, RealtimeSessionRecorder
+    from mewbo_core.session_provenance import SessionOrigin
+    from mewbo_core.session_runtime import SessionRuntime
+    from mewbo_core.session_store import SessionStore
+
+    runtime = SessionRuntime(session_store=SessionStore(root_dir=str(tmp_path)))
+
+    async def _synth(self, query, schema, *, workspace=None, k=8):
+        return {"name": "Ada"}, []
+
+    def _sync_persist(self, **kwargs):
+        self.persist(**kwargs)
+
+    with (
+        patch("mewbo_api.structured.routes._runtime", runtime),
+        patch("mewbo_api.structured.synthesis.StructuredSynthesizer.synthesize", new=_synth),
+        patch.object(RealtimeSessionRecorder, "persist_async", new=_sync_persist),
+    ):
+        r = client.post(
+            "/v1/structured",
+            json={"query": "Who?", "schema": _SCHEMA, "mode": "synthesis"},
+            headers=auth_headers,
+        )
+        assert r.status_code == 200, r.get_data(as_text=True)
+        body = r.get_json()
+        assert body["status"] == "completed"
+        assert body["output"] == {"name": "Ada"}
+        run_id = body["run_id"]
+        session_id = run_id.split(":", 1)[0]
+
+        # Session-backed with the unique structured:fast tag → structured origin.
+        tags = runtime.session_store.tags_for_session(session_id)
+        assert f"{FAST_STRUCTURED_TAG}:{session_id}" in tags
+        assert SessionOrigin.classify(tags, {}) == SessionOrigin.STRUCTURED
+
+        # The persisted structured_output makes the GET handle resolve identically.
+        gr = client.get(f"/v1/structured/{run_id}", headers=auth_headers)
+        assert gr.status_code == 200
+        assert gr.get_json()["output"] == {"name": "Ada"}
+
+
+def test_structured_synthesis_handle_resolves_before_write_behind(client, auth_headers, tmp_path):
+    """The session record is materialised SYNCHRONOUSLY, so the run handle resolves
+    immediately — GET never 404s while write-behind transcript persistence is still
+    pending (it only ever wrote the record inside persist() before this fix).
+    """
+    from mewbo_api.realtime.recorder import RealtimeSessionRecorder
+    from mewbo_core.session_runtime import SessionRuntime
+    from mewbo_core.session_store import SessionStore
+
+    runtime = SessionRuntime(session_store=SessionStore(root_dir=str(tmp_path)))
+
+    async def _synth(self, query, schema, *, workspace=None, k=8):
+        return {"name": "Ada"}, []
+
+    # Suppress write-behind persistence ENTIRELY: if the record only appeared via
+    # persist(), the session would be invisible and the GET below would 404.
+    with (
+        patch("mewbo_api.structured.routes._runtime", runtime),
+        patch("mewbo_api.structured.synthesis.StructuredSynthesizer.synthesize", new=_synth),
+        patch.object(RealtimeSessionRecorder, "persist_async", new=lambda self, **kw: None),
+    ):
+        r = client.post(
+            "/v1/structured",
+            json={"query": "Who?", "schema": _SCHEMA, "mode": "synthesis"},
+            headers=auth_headers,
+        )
+        run_id = r.get_json()["run_id"]
+        session_id = run_id.split(":", 1)[0]
+        # The record exists synchronously despite persistence being suppressed.
+        assert session_id in runtime.session_store.list_sessions()
+        # The handle resolves (not 404) — status is non-terminal until the
+        # write-behind structured_output lands, never a misleading "not found".
+        gr = client.get(f"/v1/structured/{run_id}", headers=auth_headers)
+        assert gr.status_code == 200
+        assert gr.get_json()["status"] != "completed"  # output is still write-behind
 
 
 # ---------------------------------------------------------------------------

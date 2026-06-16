@@ -180,6 +180,79 @@ def test_runtime_start_async_forwards_structured_params(tmp_path):
     _wait_idle(runtime, session_id)
 
 
+def test_start_async_emits_run_accepted_before_registry_build(tmp_path, monkeypatch):
+    """#138: ``run_accepted`` is emitted BEFORE the run thread builds the registry.
+
+    ``orchestrate_session`` is where ``Orchestrator.__init__`` builds the tool
+    registry + discovers project instructions. We capture the transcript at the
+    moment it is invoked: ``run_accepted`` must already be present, proving it was
+    emitted ahead of that heavy synchronous setup so the FE can render the shell
+    instantly. We patch ``orchestrate_session`` (not ``run_sync``) so the real
+    ``run_sync`` path threads the marker.
+    """
+    import mewbo_core.session_runtime as sr
+    from mewbo_core.classes import TaskQueue
+
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+
+    seen: dict = {}
+    reached_build = threading.Event()
+
+    def fake_orchestrate_session(**kwargs):
+        sid = kwargs["session_id"]
+        seen["types"] = [e.get("type") for e in store.load_transcript(sid)]
+        reached_build.set()
+        return TaskQueue(action_steps=[])
+
+    monkeypatch.setattr(sr, "orchestrate_session", fake_orchestrate_session)
+
+    run_id = runtime.start_async(session_id=session_id, user_query="hello")
+    assert run_id == f"{session_id}:r1"
+
+    # The marker is appended synchronously by start_async, before the thread runs.
+    transcript = store.load_transcript(session_id)
+    accepted = [e for e in transcript if e.get("type") == "run_accepted"]
+    assert len(accepted) == 1
+    assert accepted[0]["payload"]["run_id"] == run_id
+    assert accepted[0]["payload"]["session_id"] == session_id
+    assert accepted[0]["payload"]["ts"]
+
+    assert reached_build.wait(2.0)
+    _wait_idle(runtime, session_id)
+    # The registry-building call saw run_accepted already in the transcript.
+    assert "run_accepted" in seen["types"]
+
+
+def test_start_async_does_not_emit_run_accepted_when_busy(tmp_path):
+    """A refused concurrent start emits no second ``run_accepted`` marker."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+
+    def fake_run_sync(*, session_id, user_query, should_cancel=None, **_kwargs):
+        while should_cancel and not should_cancel():
+            time.sleep(0.01)
+
+    runtime.run_sync = fake_run_sync
+    session_id = runtime.resolve_session()
+    first = runtime.start_async(session_id=session_id, user_query="busy")
+    assert first
+    try:
+        deadline = time.time() + 2.0
+        while time.time() < deadline and not runtime.is_running(session_id):
+            time.sleep(0.01)
+        second = runtime.start_async(session_id=session_id, user_query="again")
+        assert second == ""
+        markers = [
+            e for e in store.load_transcript(session_id) if e.get("type") == "run_accepted"
+        ]
+        assert len(markers) == 1  # only the first run's marker
+    finally:
+        runtime.cancel(session_id)
+        _wait_idle(runtime, session_id)
+
+
 def _wait_idle(runtime, session_id, timeout=2.0):
     deadline = time.time() + timeout
     while time.time() < deadline and runtime.is_running(session_id):

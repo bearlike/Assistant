@@ -334,6 +334,11 @@ export function App() {
   }
 
   const layoutMode: 'home' | 'detail' = isSessionRoute ? 'detail' : 'home';
+  // The persistent task sidebar lives on session detail, where switching
+  // between past tasks is the core need the ticket describes ("accessible …
+  // instead of only via the task landing page"). The landing page itself is
+  // already the full task list, so a sidebar there would just duplicate it.
+  const showSidebar = isSessionRoute;
   // Section nav (Tasks/Wiki/Search) renders only on the default landing pages.
   // `/`, `/wiki`, and `/search` exactly — sub-pages (`/wiki/p/...`, `/settings`,
   // etc.) and session pages keep the lean header to avoid crowding.
@@ -352,6 +357,7 @@ export function App() {
     <NotificationBalloon notifications={notifications} />
     <AppLayout
       mode={layoutMode}
+      showSidebar={showSidebar}
       session={activeSession}
       onBack={handleBack}
       theme={theme}

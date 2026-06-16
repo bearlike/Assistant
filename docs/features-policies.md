@@ -136,7 +136,7 @@ The exception object is returned to the agent verbatim in the tool result slot. 
 
 When `isTerminal: true`, a policy violation does not just block the call. It terminates the entire session. The structured exception becomes the session's final result, surfaced through the same terminal-result path as a structured-output response.
 
-Terminal policies are most useful in front of **structured-output endpoints** (`/v1/structured`, `/v1/structured/fast`), where a request must either produce a valid structured response or fail cleanly with a typed exception. Referencing a policy by name in a structured request activates it for the duration of that call:
+Terminal policies are most useful in front of **structured-output endpoints** ([/v1/structured](endpoint:POST /v1/structured)), where a request must either produce a valid structured response or fail cleanly with a typed exception. Referencing a policy by name in a structured request activates it for the duration of that call:
 
 ```http
 POST /v1/structured
@@ -214,4 +214,4 @@ Mewbo notices when a policy file changes on disk and picks up the new version au
 ---
 
 > [!NOTE] How it works internally
-> Policies hook into the pre-execution gate inside `ToolUseLoop._execute_tool_call()` in `packages/mewbo_core/src/mewbo_core/tool_use_loop.py`, after MCP input coercion and the permission check but before `run_pre_tool_use`. The isolated checker is a minimal single-turn LiteLLM call (not a full ToolUseLoop session) bound to the exception-structure tool only. The `PolicyRegistry` mirrors `SkillRegistry` in `packages/mewbo_core/src/mewbo_core/`. See [Architecture Overview → Policies](core-orchestration.md#policies).
+> Policies hook into the pre-execution gate inside `ToolUseLoop._execute_tool_call()` in [packages/mewbo_core/src/mewbo_core/tool_use_loop.py](repo:packages/mewbo_core/src/mewbo_core/tool_use_loop.py), after MCP input coercion and the permission check but before `run_pre_tool_use`. The isolated checker is a minimal single-turn LiteLLM call (not a full ToolUseLoop session) bound to the exception-structure tool only. The `PolicyRegistry` mirrors `SkillRegistry` in `packages/mewbo_core/src/mewbo_core/`. See [Architecture Overview → Policies](core-orchestration.md#policies).

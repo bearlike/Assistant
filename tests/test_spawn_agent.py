@@ -122,6 +122,52 @@ class TestSpawnAgentBasic:
 
         asyncio.run(_test())
 
+    def test_stop_event_carries_child_result_summary(self):
+        """The ``sub_agent`` stop event echoes the child's compressed result (#86).
+
+        Downstream consumers (the agentic-search trace) project this ``summary``
+        as the probe's evidence block — the lifecycle ``detail`` is only the
+        ``done_reason``. Additive: a ``start`` carries no summary, so existing
+        consumers that read only the legacy keys are unaffected.
+        """
+        async def _test():
+            events: list = []
+            # depth>0 → blocking path settles inline; event_logger rides the root
+            # (the frozen ctx is built with it) and child() inherits it.
+            root = AgentContext.root(
+                model_name="test-model",
+                max_depth=5,
+                registry=AgentHypervisor(max_concurrent=100),
+                event_logger=events.append,
+            )
+            ctx = root.child()
+            tool = SpawnAgentTool(
+                agent_context=ctx,
+                tool_registry=_make_registry("shell_tool"),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+            bound = MagicMock()
+            bound.ainvoke = AsyncMock(return_value=_text_response("Child says hello"))
+            with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+                mock_build.return_value = MagicMock()
+                mock_build.return_value.bind_tools.return_value = bound
+                await tool.run_async(ActionStep(
+                    tool_id="spawn_agent",
+                    operation="set",
+                    tool_input={"task": "say hello"},
+                ))
+
+            sub = [e for e in events if e["type"] == "sub_agent"]
+            starts = [e for e in sub if e["payload"]["action"] == "start"]
+            stops = [e for e in sub if e["payload"]["action"] == "stop"]
+            assert starts and "summary" not in starts[0]["payload"]
+            assert stops and "Child says hello" in stops[0]["payload"]["summary"]
+            assert stops[0]["payload"]["detail"]  # the done_reason, unchanged
+
+        asyncio.run(_test())
+
 
 class TestSpawnAgentToolScoping:
     """Test tool filtering: allowed_tools, denied_tools, config denied."""

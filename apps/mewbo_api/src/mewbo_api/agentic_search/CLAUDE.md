@@ -134,6 +134,45 @@ reducer switches on). Rules:
   `result` events drive arrival order. The prototype's `finish_delay_ms`
   / `t_ms` are deprecated decorative fields — real ordering comes from
   event arrival, never a client timer.
+- Orchestrated runs now populate ALL of it (#95): `agent_*` includes a
+  synthetic **coordinator lane** for root-inlined tool activity, `result`
+  events come from the agent's `scg_results` emission, and
+  `total_ms`/`confidence`/`sources_count` are computed, never defaulted —
+  see `scg/CLAUDE.md` → "Coordinator lane + result cards + honest settle".
+- **Instrument-fidelity additions (run-797097e4b1, all additive — NO
+  `OUTPUT_CONTRACT_VERSION` bump):**
+  - `SearchResult.meta: dict[str, scalar] | None` — agent-emitted structured
+    facts (stars/language/version/state/size…) ride verbatim, **SCALARS only** (the
+    projection drops a non-scalar value silently so a connector blob can't
+    leak). This is the SINGLE card-metadata channel — the "card_meta footer"
+    (#111) is `meta` rendered as a structured footer by the console's open-vocab
+    `resultMeta` classifier, NOT a second wire field (DRY); the LLM proposes the
+    keys, the console renders any of them. `TraceAgent` gains `kind`/`model`/`steps`/`duration_ms`/
+    `input_tokens`/`output_tokens`/`results_count` (+ `returned_count`, the raw
+    pre-dedup emit; `returned − results_count` = the lane's "N filtered", #111);
+    `RunPayload.stats:
+    RunStatsWire | None` (probes·tool_calls·tokens·setup_ms·search_ms — populated
+    at settle, **None when underivable; NEVER a fabricated 0**);
+    `RunPayload.related_questions` is populated by a PARALLEL structured call at
+    settle (`RelatedQuestionsRunner`, + a dedicated `related_questions` SSE event),
+    NOT the `scg_results` emit (now the fallback) — see scg/CLAUDE.md.
+  - **Result dedup is cross-emitter + semantic** (`ResultsProjection.dedup_keys`):
+    a card registers BOTH a normalized-url key (scheme/trailing-slash stripped,
+    host lowercased) AND a `(title, source)` key, so the root's url-less re-emit
+    of a probe's hit collapses into it — first emission wins (5-cards-for-3 fix).
+    Holds live (`_emit_results`) AND at settle (`_build_results`); seen-state is
+    per-run on the streamer/runner.
+  - **Lane labels are the agent KIND, not the model.** `TraceAgent.name`/`kind`
+    read `sub_agent.agent_type` (Lane A), falling back to the literal
+    `scg-path-probe` — NEVER the model (which is its own `model` field). The
+    `start`-brief opener prefers a `SUB-QUERY:`/`PATHWAY:` line, skipping the
+    leaf-executor system-prompt boilerplate.
+  - **Probe lanes get tool-call digests.** A probe's non-`scg_results` tool call
+    projects ONE secret-free digest line (tool_id + capped input hint, never the
+    result payload) onto its lane; its `scg_results` emit projects its cards AND
+    credits `results_count`. The coordinator lane is ALSO appended to
+    `payload.trace` at settle (kind `coordinator`, blank `result` — the synthesis
+    is the answer, never duplicated) so a zero-probe run stops showing `trace:[]`.
 
 ## `store.py` is the substitution boundary
 
@@ -171,12 +210,29 @@ stays listed `available=False` with the manifest's `disabled_reason` as
 `SourceCatalog.tools_for(source_ids, project)` is the rule a run applies
 to scope `allowed_tools` (selected sources → de-duplicated union of tool
 ids). Resolution order per source: **live SCG capability nodes**
-(`kind == "capability"`, the tool id is the node `name`) → the live server's
-registry `mcp_<server>_*` ids → the illustrative `tools` declared *beside the
-source* in `fixtures.SOURCE_CATALOG` (seeding on only — never a `TOOL_MAP`
-constant in the resolver). The union is then intersected with the live
-registry via `filter_specs()`. The wire shape (`SourceCatalogEntry`) and the
-`tools_for` contract are fixed; only the resolution body changes.
+(`kind == "capability"`) → the live server's registry `mcp_<server>_*` ids →
+the illustrative `tools` declared *beside the source* in
+`fixtures.SOURCE_CATALOG` (seeding on only — never a `TOOL_MAP` constant in the
+resolver). The union is then intersected with the live registry via
+`filter_specs()`. The wire shape (`SourceCatalogEntry`) and the `tools_for`
+contract are fixed; only the resolution body changes.
+
+**GRANT INVERSION fix (run-797097e4b1) — capability nodes carry the RAW MCP tool
+name, not the registry id.** `_scg_tool_ids` mints `mcp_tool_id(source_id,
+node.name)` (the core id convention, the SAME translation `plugins/scg/route.py`
+ships for probe spawns), preferring the raw name only when IT is the live id (a
+node already holding a built-in / full id — the fixture shape). Returning the
+raw name made the `filter_specs` ∩ DELETE every successfully-mapped source's
+tools while a failed-map source fell through to the live branch and bound ALL
+~51 raw registry tools (incl. `create_repo` / `delete_branch` / `wiki_write`).
+**SEARCH grants are READ-ONLY:** `tools_for` filters the union through
+`_is_write_tool` (a pure name-verb check — leading token vs the broad write set,
+trailing token vs a STRICT suffix set so `get_latest_release` survives), dropping
+the obvious mutators. The traversal verbs a graph drive also needs are unioned
+later by `WorkspaceGraphBinding`, never here. **`RunRecord.allowed_tools` records
+the BINDING's actual grant** (`orchestrated_runner` persists
+`binding.allowed_tools()` at seed) — the audit field no longer diverges from what
+`run_sync` drove with.
 
 **Map descriptors auto-build at the route.** `POST /sources/<id>/map` without
 a `descriptor` for an `mcp_tool_list` source builds one via
@@ -203,7 +259,15 @@ behavior). `WorkspaceSourceSync.on_workspace_saved` (`source_sync.py`) is the
 POST/PATCH hook: it refreshes the virtual config, then auto-maps newly-enabled
 **live** sources (idempotent — skips already-mapped/in-flight; a terminal/failed
 job does NOT block a re-map, so a previously-unreachable source re-maps once its
-URL is fixed). It ALSO re-maps already-mapped enabled sources whose live tool
+URL is fixed). **The hook is register-and-return (#97):** only step 1 (virtual
+config refresh + NL fingerprint) runs on the request thread; the whole auto-map
+fan-out (mappable/drifted/re-enrich resolution + live descriptor builds +
+`MapSourceJob.start`) runs on one named daemon thread
+(`workspace-automap-<id>`) — the descriptor build is a live MCP handshake per
+source, and doing it in-request blocked "Create Workspace" for N handshakes
+(the user read it as browser-dependent indexing). The method returns the
+`Thread | None` so tests join deterministically; routes ignore it. Never move
+the fan-out back in-request, and never let the thread body raise. It ALSO re-maps already-mapped enabled sources whose live tool
 list drifted from the stamped `ManifestHash` (#81-C), and carries the workspace
 `instructions`/`desc` as untrusted `nl_context` to seed the map-time enrich step
 (#81-B — see scg/CLAUDE.md). **Workspace editing IS a graph-lifecycle event
@@ -254,7 +318,16 @@ loop; tiers are one decomposition+probe budget knob over the single
 It is chosen **per run** (`scg.enabled` AND ≥1 mapped source — see the seam
 section above); the tier rides `RunRecord.tier` (`POST /runs` body `tier`:
 `fast|auto|deep`, default `scg` config `default_tier`, echoed on `RunPayload`),
-never the runner instance. The durable decisions + the two silent correctness
+never the runner instance. `RunRecord.model` rides the same way: the optional
+`POST /runs` body `model` (a LiteLLM name; non-string/blank → ignored, never a
+400 — the `/v1/structured` stance) wins over the tier's configured model at the
+drive (`run.model or ScgConfig.model_for_tier(run.tier)`) and is echoed on
+every `RunPayload` so the deep-link snapshot stays self-sufficient. Per-tier
+defaults are config (`scg.traversal.tier_models`); the override is per-run
+only — no config write, no restart. `GET /tiers` exposes the resolved per-tier
+preset (tier map → `llm.default_model`, exactly the drive's fallback; pure
+config read, NOT gated on `scg.enabled`) so the console's composer can show
+which model a tier runs before submit. The durable decisions + the two silent correctness
 traps live in **`scg/CLAUDE.md`**; the full spec + research grounding is
 **Gitea #19**.
 

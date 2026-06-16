@@ -32,7 +32,8 @@ decomposition depth + probe-count fan-out (see `scg-search.md`) **and, since
 auto→`openai/claude-sonnet-4-6`, deep→`openai/gpt-5.5`) into the drive's
 `model_name`; probes inherit the session model, so the one knob moves the
 whole run. Blank/unknown → `llm.default_model`; an explicit request `model`
-(where offered) wins over the tier map. They are NOT
+(`POST /runs` body, riding `RunRecord.model`) wins over the tier map at the
+drive: `run.model or ScgConfig.model_for_tier(run.tier)`. They are NOT
 verification rounds; there are no verification rounds. **The connector's real
 return is the only verifier.** Cut as over-engineering — do NOT reintroduce:
 explicit A\* `f=g+h` frontier, multi-path self-consistency / majority-vote
@@ -64,6 +65,152 @@ terminal emit tool ends the loop itself).
   `scg:map:`→`scg_map`; structured `structured:run`→`structured_run`. Surface
   threads `SearchRun.start(source_platform=…)`→`_seed_session` (route passes
   `request_surface()`).
+
+## Probe evidence → trace response + synthesis metrics (#86)
+
+The `sub_agent` STOP event's `detail` is only the `done_reason` ("completed") —
+the probe's real `EVIDENCE (pathway: …)` / `NO DATA …` block is `tq.task_result`,
+now echoed as an additive `summary` on that event (core `spawn_agent`). So:
+
+- **`ProbeTrace.result_text` / `is_dead_end`** (`run_streamer.py`) are the ONE
+  reader + the ONE classifier: the `NO DATA` prefix (the scg-path-probe return
+  contract) is the deterministic dead-end marker. The live `_project` and
+  settle's `_build_trace` both capture it → `agent_done.result` (the console's
+  per-lane response panel) + `empty`=dead-end (the lane reads visibly distinct).
+- **`OrchestratedSearchRunner._synthesis_metrics`** derives
+  `AnswerSynthesis.confidence` (= data-bearing probes / probes run) +
+  `sources_count` (= data-bearing probe count) from that same trace — NEVER the
+  echo fixture (the old code left both at the schema default → `0%` / `0 sources`
+  beside a real answer). An empty trace ⇒ `(0.0, 0)` ⇒ the console suppresses the
+  chip rather than render an unearned `0%`.
+- **Fake-runtime transcripts must carry a realistic `summary` on the `stop`
+  event** (an EVIDENCE or NO-DATA block) — else the metrics read 0 and the
+  evidence panel is empty (the same "mirror the real engine shape" rule as the
+  `completion` payload above).
+
+## Coordinator lane + result cards + honest settle (#95)
+
+A fast-tier run can legitimately spawn ZERO probes (the root inlines every
+tool call — verified live, run `run-02ad562781`), and the original projection
+keyed everything off `sub_agent` events → blank trace, `results=[]`,
+`total_ms=0` beside a correct synthesis. The fixes, all additive on the wire
+(no `OUTPUT_CONTRACT_VERSION` bump):
+
+- **Coordinator lane** — root `tool_result` events project into ONE synthetic
+  lane (id `coordinator`, name `scg-search`, `source_id ""`).
+  `CoordinatorTrace` (run_streamer.py) is the pure shared projection (the
+  `ProbeTrace` stance: live `_project` and settle render byte-identically).
+  SECURITY: a line is a digest only — tool_id + scalar-input hint capped at
+  120 chars; the tool's RESULT payload is never read (connector returns can
+  carry secrets/PII). The `scg_results` call renders as `emitted N results`,
+  never its entries. The lane has no `stop` lifecycle — its `agent_done`
+  fires at settle, `empty = no data-bearing probe AND no results`. Slots come
+  from merged first-seen order (`_assign_lane_slots`) so settle reproduces
+  the live interleaving.
+- **Probe tool_results ARE on this transcript/bus (#102 — the #95
+  "own-sessions" premise was WRONG, verified live in Mongo).** A child loop
+  inherits the parent's `event_logger` (core `AgentContext.child`), and every
+  `tool_result` payload carries the emitting `agent_id` — so EVERY
+  `tool_result` must be classified `agent_id ∈ probe lanes` before
+  projection (live `_probe_emitter` / settle `probe_ids` from the trace; a
+  spawn's `sub_agent` `start` always precedes the child's first tool call, so
+  the lane is known in time). Unclassified, probe tool calls mislabel into
+  the coordinator lane. A probe's `scg_results` projects as ITS result
+  cards; its other tool calls project NOWHERE (the probe lane stays
+  lifecycle-only — the #86 evidence rides the stop summary).
+- **`scg_results` = transcript-as-transport, EVERY search agent emits.** The
+  tool (`mewbo_graph.plugins.scg.results`, granted via `TRAVERSAL_TOOLS` +
+  bound to probes by the capability gate) validates (≤50 entries,
+  `extra="forbid"`, relevance/confidence 0..1) and returns `{ok, count}` —
+  it writes NOTHING (layering: the library never touches the api run store;
+  no MapPhaseSink-style DI needed because the transcript already reaches the
+  api). `ResultsProjection` maps entries → `SearchResult` with stable ids:
+  `r-<run_id8>-<n>` (root) / `r-<run_id8>-<agent8>-<n>` (probe emit, salted
+  so concurrent emitters never collide) — that id is the live↔settle dedup
+  key. Entry `confidence` rides the wire verbatim (`SearchResult.confidence`,
+  #102) AND folds into `relevance` only when `relevance` is absent. Playbook
+  discipline: each probe emits ONCE before its evidence block; the ROOT
+  emits once, before synthesis, ONLY for hits it grounded inline (never
+  re-emitting a probe's — duplicate cards have distinct ids, the playbook is
+  the dedup). Emitting is NOT terminal for anyone — a probe's terminal stays
+  the stop-summary evidence block (#86).
+- **Metrics provenance** (`_synthesis_metrics`): `sources_count` = distinct
+  grounding sources = data-bearing probe lanes (keyed by `agent_id` — the
+  wire `source_id` is the shared parent grouping key, useless for
+  distinctness) ∪ emitted results' `source` fields. `confidence` =
+  data-bearing/probes when probes ran, else mean folded entry score, else
+  `(0.0, 0)` (console suppresses). The coordinator lane is NEVER a probe.
+  `total_ms` = `started_at→settle` wall clock, stamped on `run_done`,
+  `RunPayload`, and the `_fail` payload — never hardcoded 0 again. **It is also
+  now persisted on the RECORD** (`update_run(total_ms=…)` on BOTH the settle and
+  `_fail` paths) — the EVIDENCE: those two `update_run` calls OMITTED it, so
+  `RunRecord.total_ms` kept its default 0 while `run_done` carried the real
+  elapsed (the echo runner already passed it; the orchestrated didn't).
+- **Instrument fidelity (run-797097e4b1 forensic audit) — `run_streamer` +
+  `orchestrated_runner._settle`, all additive on the wire:**
+  - **Cross-emitter SEMANTIC result dedup** (`ResultsProjection.dedup_keys`): a
+    card registers BOTH its normalized-url key AND its `(title, source)` key, so
+    the root's url-less prose re-emit of a probe's hit collapses into the probe's
+    card — FIRST emission wins (5-cards-for-3 fix). Held live AND at settle
+    (shared keys); seen-state is per-run instance state.
+  - **Per-lane `results_count` is the TRUE count.** `_build_results` returns
+    `emitter→count`; each `TraceAgent.results_count` + `agent_done` is credited
+    from it (the old hardcoded 0 was blind to a probe that emitted 3 cards). The
+    coordinator is credited only its OWN inline emits, never a probe's.
+  - **Lane label = agent KIND, never the model.** `ProbeTrace.lane_name` reads
+    `sub_agent.agent_type` (Lane A), falling back to the literal `scg-path-probe`;
+    `ProbeTrace.model` is the LLM, surfaced as `TraceAgent.model` separately. The
+    `start`-brief opener prefers a `SUB-QUERY:`/`PATHWAY:` line (the real task is
+    ~7KB past the leaf-executor system-prompt header).
+  - **Probe tool digests project.** A probe's non-`scg_results` tool call →
+    ONE secret-free digest line (tool_id + capped input hint, never the payload)
+    on its lane — the run's only real data fetch
+    (`mcp_github_search_repositories`) was being dropped. The coordinator lane is
+    ALSO appended to `payload.trace` at settle (kind `coordinator`, blank
+    `result`) so a zero-probe run stops snapshotting `trace:[]`.
+  - **Per-lane telemetry** (`_lane_stats`) derives `steps`/`duration_ms`/tokens
+    from the lane's `llm_call_start`/`llm_call_end` events (match `agent_id`;
+    duration = last-end − first-start; tokens = cumulative on the last end, else
+    per-call sums) + the `sub_agent` stop aggregates (stop wins for steps/tokens).
+  - **`RunStatsWire` is HONEST** (`_build_stats`): `probes` = lanes, `tool_calls`
+    = tool_result count, tokens = cross-lane totals, `setup_ms` = `created_at` →
+    first user/llm event (the pre-turn MCP-handshake gap the "73s total" hid),
+    `search_ms` = `total − setup`. The two `_ms` fields are **None when the
+    bracketing event is absent — NEVER a fabricated 0** (the RunStats discipline).
+  - **`related_questions` is a PARALLEL structured call, not the agent's emit
+    (#111).** `RelatedQuestionsRunner` (`related_questions.py`) reuses the core
+    no-loop `StructuredSynthesizer` (one emit + reask) to generate follow-ups from
+    the query + synthesized answer. The settle worker kicks it off on a daemon
+    thread BEFORE the `answer_delta*`/`answer_ready` events stream (so the answer
+    reveals without waiting on it), then joins it (bounded) and appends a dedicated
+    `related_questions` event BETWEEN `answer_ready` and the terminal `run_done`
+    (the stream closes on `run_done`, so it must land before). It is the PRIMARY
+    source; the legacy transcript-read (`_build_related_questions`, last scg_results
+    emit) is the fallback when the call is off/empty. The runner is INJECTED — only
+    `get_search_runner()` arms it (on the cheap fast-tier model), so fake-runtime
+    tests stay LLM-free (`_related_runner=None` ⇒ legacy path), upholding the
+    no-real-LLM rule. The console also folds the event live (the snapshot carries
+    `RunPayload.related_questions` regardless).
+  - **Per-lane `returned_count` complements `results_count` (#111).** `results_count`
+    is the KEPT count (post cross-emitter dedup); `returned_count` is the RAW emit.
+    `_build_results` returns `(results, kept, returned)`; the live streamer tracks
+    `_returned_by_emitter` (credit raw BEFORE the dedup skip in `_emit_results`).
+    The `returned − kept` delta is the lane's "N filtered" — the console surfaces
+    it so the trace reads how much each tool contributed vs. duplicated.
+  - **`run_started.session_id`** now carries the REAL session id (resolved before
+    the emit on the happy path); fail-fast paths keep the tag (no session yet).
+- **Skills opt-out on BOTH drives.** The search + map drives pass
+  `enable_skills=False` (Lane A) via `_skills_opt_out(runtime)` — a signature
+  introspection so a pre-Lane-A `run_sync` never raises — because the scg-*
+  playbook is the ONLY trusted system-prompt extension.
+- **`resolve_entity` trap (open, #95-D):** it reaches search-run sessions via
+  the scg plugin manifest + #84's capability-driven `build_for`, but a search
+  RUN never satisfies `resolve_qa_ctx` (no QA answer, no
+  `structured_workspace` event) → it always errors `wiki ctx not found`.
+  Exclusion is NOT one-seam: the same registration serves
+  `scg-search-structured`, where the ctx DOES resolve. The clean future fix
+  is gating entity tools on wiki-ctx presence rather than the bare `scg`
+  capability — don't hack the manifest.
 
 ## Two correctness traps (both silent — no exception)
 
@@ -225,6 +372,28 @@ writes its own *relocated* store, which is already down in `mewbo_graph`.)
   map keeps the mapper's fetch-natively contract. The built raw shape
   `{"tools": [{name, description?, inputSchema?}]}` is exactly what
   `McpToolListStructureProvider` parses.
+
+## Node-query cache + landing summary (#139)
+
+`/sources` (a per-source capability lookup per configured server) and
+`/workspaces/<id>/graph` (a `query_nodes(source_id=…)` per scoped source)
+re-scan the node collection once per source on every request — on JSON that
+reloads + re-validates the whole `nodes.json` each time. `ScgStore` now memoizes
+`query_nodes` by the `(source_id, kind, name_contains)` triple (`_NodeQueryCache`,
+in `mewbo_graph.scg.store`): the base `query_nodes` is concrete (cache → delegate
+to the driver's `_query_nodes_uncached`); **every node write (`upsert_nodes` /
+`delete_source`) calls `_invalidate_nodes()`**, so same-process reads (incl. an
+in-process map job re-driving the parser) never see a stale graph. A 30s TTL
+bounds cross-worker Mongo staleness (another worker's map job can't reach our
+`clear`) — the same eventual-consistency contract the console's `staleTime`
+already assumes. Adding a new node-mutating write path? Invalidate there too.
+
+The landing health band reads `GET /workspaces/<id>/graph/summary`
+(`graph_routes.py`) — the SAME `_build_graph_payload` assembly projected to
+`{scope, stats}` only (no node/edge arrays). It shares `_resolve_scope` +
+`_safe_graph_payload` with the full graph route (identical auth/404/degradation)
+and rides the warm `query_nodes` cache, so the landing never ships the full
+graph just to render the four-number stat strip.
 
 ## Router — brute-force now, PPR is the documented scale seam
 

@@ -13,36 +13,36 @@ from mewbo_core.classes import ActionStep
 from mewbo_core.common import MockSpeaker, get_logger, get_mock_speaker
 from mewbo_core.config import get_mcp_config_path
 
+from mewbo_tools.integration.exception_unwrap import (
+    classify_connect_failure,
+    describe_exception_group,
+)
+
 logging = get_logger(name="tools.integration.mcp")
 _LAST_DISCOVERY_FAILURES: dict[str, str] = {}
 
 
 def _log_discovery_failure(server_name: str, exc: Exception) -> None:
-    logging.warning("Failed to discover MCP tools for {}: {}", server_name, exc)
-    exceptions = getattr(exc, "exceptions", None)
-    if isinstance(exceptions, tuple):
-        for idx, sub in enumerate(exceptions, start=1):
-            logging.warning("MCP discovery sub-exception {} for {}: {}", idx, server_name, sub)
-            logging.opt(exception=sub).debug("MCP discovery sub-exception traceback")
-    else:
-        logging.opt(exception=exc).debug("MCP discovery traceback")
+    reason = classify_connect_failure(exc)
+    logging.bind(mcp_server=server_name, reason=reason).warning(
+        "Failed to discover MCP tools for {} [{}]: {}",
+        server_name,
+        reason,
+        describe_exception_group(exc),
+    )
+    logging.opt(exception=exc).debug("MCP discovery traceback for {}", server_name)
 
 
 def _log_runtime_failure(server_name: str, tool_name: str, exc: Exception) -> None:
-    logging.warning("MCP runtime error for {}.{}: {}", server_name, tool_name, exc)
-    exceptions = getattr(exc, "exceptions", None)
-    if isinstance(exceptions, tuple):
-        for idx, sub in enumerate(exceptions, start=1):
-            logging.warning(
-                "MCP runtime sub-exception {} for {}.{}: {}",
-                idx,
-                server_name,
-                tool_name,
-                sub,
-            )
-            logging.opt(exception=sub).debug("MCP runtime sub-exception traceback")
-    else:
-        logging.opt(exception=exc).debug("MCP runtime traceback")
+    reason = classify_connect_failure(exc)
+    logging.bind(mcp_server=server_name, reason=reason).warning(
+        "MCP runtime error for {}.{} [{}]: {}",
+        server_name,
+        tool_name,
+        reason,
+        describe_exception_group(exc),
+    )
+    logging.opt(exception=exc).debug("MCP runtime traceback for {}.{}", server_name, tool_name)
 
 
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -414,11 +414,15 @@ class MCPToolRunner:
 
         pool = get_mcp_pool()
 
-        # Ensure the pool has the latest MCP config so it can detect
-        # config changes between invocations.
-        config = _load_mcp_config(cwd=self._cwd)
-        config = _normalize_mcp_config(config)
-        await pool.refresh_if_config_changed(config)
+        # Gitea #130 Phase 4: a server that is already live must never trigger
+        # a full-config reload + reconnect mid-query — that re-dialed EVERY
+        # server (incl. dead ones) on every tool call, re-incurring the stall.
+        # Only when the target isn't connected do we sync config (so a config
+        # change / first use is picked up), and even then with connect=False so
+        # the eager dial is deferred to get_or_connect for THIS server alone.
+        if not pool.is_connected(self.server_name):
+            config = _normalize_mcp_config(_load_mcp_config(cwd=self._cwd))
+            await pool.refresh_if_config_changed(config, connect=False)
 
         state = await pool.get_or_connect(self.server_name)
 

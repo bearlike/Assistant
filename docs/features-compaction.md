@@ -33,7 +33,7 @@ The context window bar in the console shows how full the window is right now and
 |-----------|---------|
 | CLI | `/compact` or `/summarize` |
 | Console | Compact button in the session header toolbar |
-| API | `POST /api/sessions/{id}/query` with `{"query": "/compact"}` |
+| API | [POST /api/sessions/{session_id}/query](endpoint:POST /api/sessions/{session_id}/query) with `{"query": "/compact"}` |
 
 ---
 

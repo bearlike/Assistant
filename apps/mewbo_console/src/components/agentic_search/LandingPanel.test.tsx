@@ -54,6 +54,8 @@ function renderLanding(
         sources={[]}
         tier="auto"
         onTierChange={vi.fn()}
+        model=""
+        onModelChange={vi.fn()}
         onPickWorkspace={vi.fn()}
         onSubmit={overrides.onSubmit ?? vi.fn()}
         onOpenCreate={vi.fn()}
@@ -134,5 +136,54 @@ describe("LandingPanel — past-query chips (replay vs rerun)", () => {
     expect(chip.className).toContain("max-w-[240px]")
     expect(chip.className).toContain("h-7")
     expect(chip.querySelector(".truncate")).not.toBeNull()
+  })
+
+  it("dedupes identical past queries into ONE example chip (#98)", () => {
+    // Three runs of the same query collapse to a single chip — they previously
+    // shared a `key={e.q}` and hovered/replayed as twins.
+    renderLanding(
+      workspace({
+        past_queries: [
+          { q: "where is auth", when: "1m", results: 3, run_id: "run-c" },
+          { q: "where is auth", when: "1h", results: 3, run_id: "run-b" },
+          { q: "where is auth", when: "2h", results: 3, run_id: "run-a" },
+        ],
+      }),
+    )
+    expect(screen.getAllByText("where is auth")).toHaveLength(1)
+    expect(screen.getAllByTitle("Replay this search")).toHaveLength(1)
+  })
+
+  it("keeps the most recent duplicate's run for the surviving chip (#98)", () => {
+    const onOpenRun = vi.fn()
+    renderLanding(
+      workspace({
+        past_queries: [
+          { q: "deploy flow", when: "now", results: 5, run_id: "run-newest" },
+          { q: "deploy flow", when: "old", results: 5, run_id: "run-oldest" },
+        ],
+      }),
+      { onOpenRun },
+    )
+    fireEvent.click(screen.getByTitle("Replay this search"))
+    expect(onOpenRun).toHaveBeenCalledWith("run-newest")
+  })
+})
+
+describe("LandingPanel — workspace card meta row is single-line (#98)", () => {
+  // The meta/action shelf must NEVER wrap to a second line: `flex-nowrap` on
+  // the row + `flex-none` on the action cluster + `whitespace-nowrap` on the
+  // "N past" pill, pinned to the card bottom via `mt-auto`.
+  it("pins the meta row to the card bottom and forbids wrapping", () => {
+    renderLanding(workspace())
+    const pastPill = screen.getByRole("button", { name: /recent runs in platform/i })
+    // The "N past" pill is the load-bearing single-line guarantee.
+    expect(pastPill.className).toContain("whitespace-nowrap")
+    expect(pastPill.className).toContain("flex-none")
+
+    // Its meta-row ancestor pins to the bottom and never wraps.
+    const metaRow = pastPill.closest(".mt-auto")
+    expect(metaRow).not.toBeNull()
+    expect(metaRow?.className).toContain("flex-nowrap")
   })
 })

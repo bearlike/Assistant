@@ -379,6 +379,93 @@ def test_post_run_invalid_tier_400s():
     assert "tier" in resp.get_json()["message"]
 
 
+# ── POST /runs per-run model override ────────────────────────────────────────
+
+
+def test_post_run_threads_model_override_to_record_and_echo():
+    """An explicit ``model`` rides the RUN RECORD (the drive-time seam reads
+    ``run.model or ScgConfig.model_for_tier``) and is echoed on the payload."""
+    from mewbo_api.agentic_search.runner import EchoSearchRunner
+
+    seen: dict[str, str | None] = {}
+
+    class _CaptureRunner(EchoSearchRunner):
+        def start(self, run, workspace, *, store, runtime=None, source_platform=None):
+            seen["model"] = run.model
+            return super().start(
+                run, workspace, store=store, runtime=runtime,
+                source_platform=source_platform,
+            )
+
+    set_search_runner(_CaptureRunner())
+    client = backend.app.test_client()
+    ws_id = _any_workspace_id(client)
+    resp = client.post(
+        "/api/agentic_search/runs",
+        json={"workspace_id": ws_id, "query": "q", "model": "openai/gpt-5.5"},
+        headers=_auth(),
+    )
+    assert resp.status_code == 200
+    assert seen["model"] == "openai/gpt-5.5"
+    assert resp.get_json()["run"]["model"] == "openai/gpt-5.5"
+
+
+@pytest.mark.parametrize("bad_model", [7, "", "   ", ["a"]])
+def test_post_run_non_string_model_is_ignored(bad_model):
+    """A non-string / blank ``model`` is ignored — the tier's configured model
+    applies, never a 400 (the /v1/structured override stance)."""
+    client = backend.app.test_client()
+    ws_id = _any_workspace_id(client)
+    resp = client.post(
+        "/api/agentic_search/runs",
+        json={"workspace_id": ws_id, "query": "q", "model": bad_model},
+        headers=_auth(),
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["run"]["model"] is None
+
+
+# ── GET /tiers — tier→model presets for the composer ────────────────────────
+
+
+def test_get_tiers_returns_resolved_model_per_tier():
+    """GET /tiers exposes the tier budget knobs + the model preset each runs on
+    (the composer's coupled tier/model pickers read this)."""
+    client = backend.app.test_client()
+    resp = client.get("/api/agentic_search/tiers", headers=_auth())
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["default_tier"] in {"fast", "auto", "deep"}
+    assert set(body["tiers"]) == {"fast", "auto", "deep"}
+    # Every tier resolves to a non-empty model name — exactly what the drive
+    # would run (`run.model or ScgConfig.model_for_tier(tier)` falling back to
+    # `llm.default_model`), so the FE never shows a blank preset.
+    for tier, model in body["tiers"].items():
+        assert isinstance(model, str) and model, f"tier {tier} resolved blank"
+
+
+def test_get_tiers_blank_mapping_falls_back_to_default_model(monkeypatch):
+    """A blank tier mapping resolves to ``llm.default_model`` — mirroring the
+    drive-time fallback, never an empty string on the wire."""
+    monkeypatch.setattr(ScgConfig, "model_for_tier", staticmethod(lambda _t: None))
+    client = backend.app.test_client()
+    resp = client.get("/api/agentic_search/tiers", headers=_auth())
+    assert resp.status_code == 200
+    tiers = resp.get_json()["tiers"]
+    from mewbo_core.config import get_config_value
+
+    expected = str(get_config_value("llm", "default_model") or "")
+    assert expected, "test precondition: llm.default_model is configured"
+    assert all(model == expected for model in tiers.values())
+
+
+def test_get_tiers_requires_api_key():
+    """No API key → 401 like every other route on the namespace."""
+    client = backend.app.test_client()
+    resp = client.get("/api/agentic_search/tiers")
+    assert resp.status_code == 401
+
+
 # ── per-run runner resolution (no startup registration) ─────────────────────
 
 

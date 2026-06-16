@@ -1,13 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import {
-  Check,
-  ChevronDown,
-  Clock,
-  Gauge,
-  Plus,
-  Search,
-  SlidersHorizontal,
-} from "lucide-react"
+import { Check, ChevronDown, Clock, Plus, Search } from "lucide-react"
 import { Command as CmdK } from "cmdk"
 import {
   CommandGroup,
@@ -16,13 +8,6 @@ import {
   CommandSeparator,
 } from "@/components/ui/command"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -30,74 +15,13 @@ import {
 import {
   ComposerSendButton,
   ComposerShell,
-  composerSurface,
-  composerSurfaceData,
 } from "@/components/ui/composer-shell"
 import { cn } from "@/lib/utils"
 import { RelativeTime } from "../wiki/relativeTime"
+import { useTiers } from "../../hooks/useAgenticSearch"
 import type { SearchTier, SourceCatalogEntry, Workspace } from "../../types/agenticSearch"
-import { SrcAvatar } from "./SrcAvatar"
-
-// Tier = one budget knob (decomposition depth + probe fan-out) — see
-// docs/features-search.md "Search tiers". Default is auto.
-const TIERS: { id: SearchTier; name: string; hint: string }[] = [
-  { id: "fast", name: "Fast", hint: "quick lookups" },
-  { id: "auto", name: "Auto", hint: "balanced (default)" },
-  { id: "deep", name: "Deep", hint: "exhaustive research" },
-]
-
-/** Fast/Auto/Deep selector — same pill language as `WorkspacePill`. */
-function TierPill({
-  tier,
-  onChange,
-  inline,
-}: {
-  tier: SearchTier
-  onChange: (tier: SearchTier) => void
-  inline?: boolean
-}) {
-  const current = TIERS.find((t) => t.id === tier) ?? TIERS[1]
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          title="Search tier"
-          aria-label="Search tier"
-          className={cn(
-            "inline-flex items-center gap-1.5 transition-colors flex-none rounded-md font-medium",
-            inline
-              ? "h-[30px] px-2.5 text-[12.5px] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))]"
-              : "h-8 px-2.5 text-sm hover:bg-[hsl(var(--accent))]"
-          )}
-        >
-          <Gauge className="h-3 w-3 opacity-70" />
-          <span>{current.name}</span>
-          <ChevronDown className="h-3 w-3 opacity-60" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56 shadow-[var(--elev-3)]">
-        <DropdownMenuRadioGroup
-          value={tier}
-          onValueChange={(v) => onChange(v as SearchTier)}
-        >
-          {/* Uniform-height rows: the radio indicator owns the reserved left
-              slot (pl-8 from the primitive); the name fills, and the prose
-              hint is a consistent right column — NOT mono (it's prose, not
-              data), so the rows read evenly sized regardless of hint length. */}
-          {TIERS.map((t) => (
-            <DropdownMenuRadioItem key={t.id} value={t.id} className="h-8">
-              <span className="font-medium">{t.name}</span>
-              <span className="ml-auto pl-3 text-xs text-[hsl(var(--muted-foreground))]">
-                {t.hint}
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
+import { dedupePastQueries, pastQueryKey } from "./utils"
+import { SearchScopeControl } from "./SearchScopeControl"
 
 /**
  * Workspace selector. Two visual modes — chip (default) for the compact
@@ -126,13 +50,8 @@ function WorkspacePill({ workspace, workspaces, onPick, onNew, inline }: Workspa
               : "h-8 px-2.5 text-sm hover:bg-[hsl(var(--accent))]"
           )}
         >
-          <span
-            className={cn(
-              "rounded-full bg-[hsl(var(--primary))]",
-              inline ? "h-1.5 w-1.5" : "h-1.5 w-1.5"
-            )}
-          />
-          <span className="truncate max-w-[140px]">{workspace.name}</span>
+          <span className="rounded-full bg-[hsl(var(--primary))] h-1.5 w-1.5 flex-none" />
+          <span className="truncate max-w-[72px] sm:max-w-[140px]">{workspace.name}</span>
           <ChevronDown className="h-3 w-3 opacity-60" />
         </button>
       </PopoverTrigger>
@@ -196,24 +115,33 @@ interface SearchBarProps {
   onPickWorkspace: (workspace: Workspace) => void
   onNewWorkspace: () => void
   autoFocus?: boolean
-  compact?: boolean
+  /** `hero` = the tall landing composer; `compact` = the results-topbar bar.
+   *  Both render through the SAME `ComposerShell` — only the size tokens
+   *  differ, so the two surfaces read as one component (DRY). */
+  variant?: "hero" | "compact"
   /** A run submission is in flight (mutation pending) — submit disables. */
   submitting?: boolean
-  /** "hero" → two-row 96px bar matching the task-landing rhythm. */
-  variant?: "hero"
-  /** Hero footer Configure pill — shows up to 4 source avatars + sliders icon. */
+  /** Source catalog — feeds the scope control's sources footer. */
   sources?: SourceCatalogEntry[]
   onOpenConfig?: (workspace: Workspace) => void
-  /** Fast/Auto/Deep budget knob — rendered when both props are provided. */
+  /** Fast/Auto/Deep budget knob — rendered (in the scope control) when both
+   *  props are provided. */
   tier?: SearchTier
   onTierChange?: (tier: SearchTier) => void
+  /** Per-run model override ("" = run on the tier's preset). Session-instance-
+   *  only by design: the view never persists it (and resets it on a tier
+   *  change), so a custom model can be trialled without a config edit. */
+  model?: string
+  onModelChange?: (model: string) => void
 }
 
 /**
- * Search affordance with three visual modes — `hero` (two-row 96px landing),
- * `compact` (results topbar), and the default single-row bar. All modes
- * share one cmdk Command context so keyboard nav stays connected, plus the
- * elevation tokens (`--elev-1..3`) from `index.css`.
+ * The single search composer. Both surfaces — the landing hero and the
+ * results topbar — render through one `ComposerShell` (the same primitive the
+ * Tasks composer uses), differing only by a size token. The toolbar carries
+ * exactly two controls: the workspace context pill and the `SearchScopeControl`
+ * (tier · model · sources, progressively disclosed). One cmdk `Command`
+ * context drives the suggestions dropdown for both.
  */
 export function SearchBar({
   value,
@@ -225,15 +153,20 @@ export function SearchBar({
   onPickWorkspace,
   onNewWorkspace,
   autoFocus = false,
-  compact = false,
+  variant = "compact",
   submitting = false,
-  variant,
   sources = [],
   onOpenConfig,
   tier,
   onTierChange,
+  model,
+  onModelChange,
 }: SearchBarProps) {
   const isHero = variant === "hero"
+  // Tier→model presets (config-backed). Feeds the scope control's per-tier
+  // model lines AND its resting label, so the control describes the SAME
+  // resolution the backend applies (`run.model or tier preset`).
+  const tierModels = useTiers().data?.tiers
   const [acOpen, setAcOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -275,7 +208,11 @@ export function SearchBar({
   }, [acOpen])
 
   const filtered = useMemo(() => {
-    const past = workspace.past_queries ?? []
+    // Dedupe by normalized query text FIRST so identical reruns collapse to one
+    // selectable row (cmdk keys items by `value` — duplicates would otherwise
+    // hover/select together). Backend prepends, so the kept entry is the most
+    // recent run. Then narrow to the typed needle.
+    const past = dedupePastQueries(workspace.past_queries ?? [])
     if (!value.trim()) return past
     const needle = value.toLowerCase()
     return past.filter((p) => p.q.toLowerCase().includes(needle))
@@ -326,13 +263,17 @@ export function SearchBar({
         )}
         {filtered.length > 0 && (
           <CommandGroup heading={`Recent in ${workspace.name}`}>
-            {filtered.map((p) => (
+            {filtered.map((p, i) => (
               // A recent-query suggestion REPLAYS its stored run (GET snapshot)
               // when it has a run_id + a replay handler — never a fresh POST.
               // Falls back to pre-filling a new run for legacy entries.
+              // value/key must be UNIQUE per entry (run_id, else `<q>-<index>`):
+              // cmdk identifies items by `value`, so a shared `p.q` made every
+              // rerun of a query hover/select as one. Duplicates are already
+              // gone (dedupePastQueries), so the index is only a legacy fallback.
               <CommandItem
-                key={p.q}
-                value={p.q}
+                key={pastQueryKey(p, i)}
+                value={pastQueryKey(p, i)}
                 onSelect={() => {
                   if (p.run_id && onReplay) {
                     setAcOpen(false)
@@ -387,136 +328,67 @@ export function SearchBar({
     </div>
   )
 
-  if (isHero) {
-    const wsSourceObjs = workspace.sources
-      .map((id) => sources.find((s) => s.id === id))
-      .filter((s): s is SourceCatalogEntry => Boolean(s))
-      .slice(0, 4)
-    return (
-      <CmdK
-        shouldFilter={false}
-        loop
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            if (!acOpen || filtered.length === 0) {
-              e.preventDefault()
-              submit()
-            }
-          } else if (e.key === "Escape") {
-            setAcOpen(false)
-          }
-        }}
-        className="block w-full max-w-[720px] mx-auto"
-      >
-        <ComposerShell
-          wrapRef={wrapRef}
-          surface={{ radius: "rounded-2xl", elevation: "elev-2", halo: "strong" }}
-          bodyClassName="relative px-3.5 pt-3.5 pb-2.5 min-h-[96px]"
-          top={
-            // No expand affordance here: cmdk's `Command.Input` is a
-            // single-line <input> with no multiline mode, so a faithful
-            // "expand to a textarea" toggle would mean swapping the input
-            // element + re-deriving Enter/newline/height handling (>60 LOC of
-            // fiddly state). YAGNI — the hero box is a single-line natural-
-            // language prompt; a broken Maximize button was worse than none.
-            <CmdK.Input
-              ref={inputRef}
-              value={value}
-              onValueChange={(v: string) => {
-                onChange(v)
-                setAcOpen(true)
-              }}
-              onFocus={handleFocus}
-              placeholder="Ask or search the workspace…"
-              className="block w-full bg-transparent border-0 outline-none px-1 pb-3 text-base text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
-            />
-          }
-          toolbarLeft={
-            <>
-              {/* No Attach/Voice affordances: like the removed Expand button,
-                  a control that does nothing is worse than none. Re-add only
-                  alongside a real implementation. */}
-              <WorkspacePill
-                workspace={workspace}
-                workspaces={workspaces}
-                onPick={onPickWorkspace}
-                onNew={onNewWorkspace}
-                inline
-              />
-              {tier && onTierChange && (
-                <TierPill tier={tier} onChange={onTierChange} inline />
-              )}
-              {onOpenConfig && wsSourceObjs.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => onOpenConfig(workspace)}
-                  title="Configure workspace sources"
-                  className="hidden sm:inline-flex items-center gap-2 h-[30px] px-2.5 rounded-md text-xs text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
-                >
-                  <span className="inline-flex gap-1">
-                    {wsSourceObjs.map((s) => (
-                      <SrcAvatar key={s.id} source={s} size={16} />
-                    ))}
-                  </span>
-                  <SlidersHorizontal className="h-3 w-3" />
-                </button>
-              )}
-            </>
-          }
-          toolbarRight={
-            <ComposerSendButton
-              onClick={() => submit()}
-              submitting={submitting}
-              active={Boolean(value.trim())}
-              shape="square"
-              aria-label={submitting ? "Starting search…" : "Search"}
-              className="h-8 w-8 hover:brightness-110 hover:opacity-100"
-            />
-          }
-          popover={dropdown}
+  // Toolbar — exactly two controls, shared by both variants: the workspace
+  // context pill and the progressively-disclosed scope control. The scope
+  // control renders only when the run-config props are present (legacy call
+  // sites that don't wire tier/model stay valid).
+  const toolbarLeft = (
+    <>
+      <WorkspacePill
+        workspace={workspace}
+        workspaces={workspaces}
+        onPick={onPickWorkspace}
+        onNew={onNewWorkspace}
+        inline
+      />
+      {tier && onTierChange && onModelChange && (
+        <SearchScopeControl
+          tier={tier}
+          onTierChange={onTierChange}
+          model={model ?? ""}
+          onModelChange={onModelChange}
+          models={tierModels}
+          workspace={workspace}
+          sources={sources}
+          onOpenConfig={onOpenConfig}
+          inline
         />
-      </CmdK>
-    )
-  }
+      )}
+    </>
+  )
 
-  // Default + compact (results topbar): single-row bar, retained as-is for the
-  // existing call sites. Picks up the elevation tokens for visual consistency.
   return (
-    <div ref={wrapRef} className="relative w-full">
-      <CmdK
-        shouldFilter={false}
-        loop
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            if (!acOpen || filtered.length === 0) {
-              e.preventDefault()
-              submit()
-            }
-          } else if (e.key === "Escape") {
-            setAcOpen(false)
+    <CmdK
+      shouldFilter={false}
+      loop
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          if (!acOpen || filtered.length === 0) {
+            e.preventDefault()
+            submit()
           }
-        }}
-        className="block"
-      >
-        <div
-          className={cn(
-            // px-2 so the send button on the right has the same breathing
-            // room as the workspace pill on the left, matching the button's
-            // 8/9px top/bottom inset.
-            "flex items-center gap-1 px-2",
-            composerSurface({ radius: "rounded-full", elevation: "elev-1", halo: "soft" }),
-            compact ? "h-11" : "h-[54px]"
-          )}
-          {...composerSurfaceData({ halo: "soft" })}
-        >
-          <WorkspacePill
-            workspace={workspace}
-            workspaces={workspaces}
-            onPick={onPickWorkspace}
-            onNew={onNewWorkspace}
-          />
-          {tier && onTierChange && <TierPill tier={tier} onChange={onTierChange} />}
-          <span aria-hidden className="h-5 w-px bg-[hsl(var(--border))] mx-1" />
+        } else if (e.key === "Escape") {
+          setAcOpen(false)
+        }
+      }}
+      className={cn("block w-full", isHero && "max-w-[720px] mx-auto")}
+    >
+      <ComposerShell
+        wrapRef={wrapRef}
+        surface={
+          isHero
+            ? { radius: "rounded-2xl", elevation: "elev-2", halo: "strong" }
+            : { radius: "rounded-xl", elevation: "elev-1", halo: "soft" }
+        }
+        bodyClassName={cn(
+          "relative",
+          isHero ? "px-3.5 pt-3.5 pb-2.5 min-h-[96px]" : "px-2.5 pt-2.5 pb-2"
+        )}
+        top={
+          // No expand affordance: cmdk's `Command.Input` is a single-line
+          // <input> with no multiline mode, so a faithful "expand to textarea"
+          // toggle would mean swapping the element + re-deriving height/Enter
+          // handling (>60 LOC). YAGNI — a broken control is worse than none.
           <CmdK.Input
             ref={inputRef}
             value={value}
@@ -526,28 +398,27 @@ export function SearchBar({
             }}
             onFocus={handleFocus}
             placeholder={
-              compact
-                ? `Search ${workspace.name.toLowerCase()}…`
-                : "Ask or search the workspace…"
+              isHero ? "Ask or search the workspace…" : `Search ${workspace.name.toLowerCase()}…`
             }
             className={cn(
-              "flex-1 bg-transparent border-0 outline-none px-1 text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]",
-              compact ? "h-10 text-sm" : "h-12 text-base"
+              "block w-full bg-transparent border-0 outline-none px-1 text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]",
+              isHero ? "pb-3 text-base" : "pb-2 text-sm"
             )}
           />
-          {/* Smaller than the bar by ~16px so there's a visible inset on top,
-              bottom, AND right (matching the px-2 padding above). Square in
-              compact mode, round otherwise so it echoes the pill bar's curve. */}
+        }
+        toolbarLeft={toolbarLeft}
+        toolbarRight={
           <ComposerSendButton
             onClick={() => submit()}
             submitting={submitting}
             active={Boolean(value.trim())}
-            shape={compact ? "square" : "round"}
+            shape="square"
             aria-label={submitting ? "Starting search…" : "Search"}
+            className={isHero ? "h-8 w-8 hover:brightness-110 hover:opacity-100" : ""}
           />
-        </div>
-        {dropdown}
-      </CmdK>
-    </div>
+        }
+        popover={dropdown}
+      />
+    </CmdK>
   )
 }

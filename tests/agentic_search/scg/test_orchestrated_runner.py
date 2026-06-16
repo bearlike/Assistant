@@ -107,24 +107,77 @@ class FakeRuntime:
 
 
 def _sub_agent(
-    agent_id, action, *, detail="", status=None, parent_id="root", model="scg-path-probe"
+    agent_id,
+    action,
+    *,
+    detail="",
+    status=None,
+    parent_id="root",
+    model="claude-haiku-4-5",
+    agent_type="scg-path-probe",
+    summary=None,
 ):
+    payload = {
+        "action": action,
+        "agent_id": agent_id,
+        "parent_id": parent_id,
+        "depth": 1,
+        # ``model`` is the LLM the lane ran on; ``agent_type`` is its KIND (Lane
+        # A) — the lane name reads the KIND, the model is its own field.
+        "model": model,
+        "agent_type": agent_type,
+        "detail": detail,
+        "status": status or action,
+        "steps_completed": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    # ``spawn_agent`` threads the child's compressed ``task_result`` onto the
+    # terminal ``stop`` event as ``summary`` (the lifecycle ``detail`` is only the
+    # ``done_reason``). Mirror that real shape so the trace's evidence projection
+    # + the data-bearing metrics have something to read.
+    if summary is not None:
+        payload["summary"] = summary
+    return {"type": "sub_agent", "ts": utc_now_iso(), "payload": payload}
+
+
+def _tool_result(tool_id, *, agent_id="root", tool_input=None, success=True, result=""):
+    """A ``tool_result`` transcript event (the root/probe tool-call projection)."""
     return {
-        "type": "sub_agent",
+        "type": "tool_result",
         "ts": utc_now_iso(),
         "payload": {
-            "action": action,
+            "tool_id": tool_id,
+            "operation": "call",
+            "tool_input": tool_input or {},
+            "result": result,
+            "success": success,
             "agent_id": agent_id,
-            "parent_id": parent_id,
-            "depth": 1,
-            "model": model,
-            "detail": detail,
-            "status": status or action,
-            "steps_completed": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
+            "model": "claude-haiku-4-5",
         },
     }
+
+
+def _scg_results(entries, *, agent_id="root", related=None):
+    """An ``scg_results`` emit transcript event (transcript-as-transport)."""
+    tool_input: dict = {"results": entries}
+    if related is not None:
+        tool_input["related_questions"] = related
+    return _tool_result("scg_results", agent_id=agent_id, tool_input=tool_input)
+
+
+def _llm_call(agent_id, *, depth, kind, ts, in_tok=0, out_tok=0, cum_in=0, cum_out=0):
+    """An ``llm_call_start``/``llm_call_end`` event (per-lane telemetry source)."""
+    payload = {"agent_id": agent_id, "depth": depth, "model": "claude-haiku-4-5"}
+    if kind == "llm_call_end":
+        payload.update(
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cumulative_input_tokens=cum_in,
+            cumulative_output_tokens=cum_out,
+            success=True,
+        )
+    return {"type": kind, "ts": ts, "payload": payload}
 
 
 def _completion(text, done_reason="completed", error=None):
@@ -142,14 +195,32 @@ def _completion(text, done_reason="completed", error=None):
 
 
 def _ok_transcript():
-    """Two probe sub-agents (start→line→stop) + a final completion answer."""
+    """Two probes: one returns EVIDENCE, one dead-ends NO DATA + completion.
+
+    The ``summary`` on each ``stop`` is the probe's real contract block
+    (``EVIDENCE (pathway: …)`` / ``NO DATA on pathway …``) — the signal the
+    runner classifies for the per-lane response panel AND the data-bearing
+    confidence/sources metrics.
+    """
     return [
         {"type": "user", "ts": utc_now_iso(), "payload": {"text": "query: ...\ntier: Auto"}},
         _sub_agent("probe-a", "start", detail="probe github#search_issues"),
         _sub_agent("probe-a", "message", detail="searching live data"),
-        _sub_agent("probe-a", "stop", detail="found 2 issues", status="completed"),
+        _sub_agent(
+            "probe-a",
+            "stop",
+            detail="completed",
+            status="completed",
+            summary="EVIDENCE (pathway: github#search_issues): two issues filed last week.",
+        ),
         _sub_agent("probe-b", "start", detail="probe linear#search"),
-        _sub_agent("probe-b", "stop", detail="no data on this pathway", status="completed"),
+        _sub_agent(
+            "probe-b",
+            "stop",
+            detail="completed",
+            status="completed",
+            summary="NO DATA on pathway linear#search for: matching issues\ngaps remaining: none",
+        ),
         _completion("Two open issues match, both filed last week. [github#search_issues]"),
     ]
 
@@ -158,13 +229,14 @@ def _ws():
     return Workspace(id="ws-1", name="Test WS", sources=["github", "linear"])
 
 
-def _run(store, allowed_tools=None, tier="auto"):
+def _run(store, allowed_tools=None, tier="auto", model=None):
     """Build + persist a ``running`` run record, as ``SearchRun.start`` does.
 
     The runner contract assumes the record already exists in the store (the
     façade creates it before handing off), so the translation's ``update_run``
     has a row to patch — mirror that here. ``tier`` rides the record (the
-    per-run budget knob), never the runner instance.
+    per-run budget knob), never the runner instance; ``model`` is the explicit
+    per-run override.
     """
     now = utc_now_iso()
     run = RunRecord(
@@ -174,6 +246,7 @@ def _run(store, allowed_tools=None, tier="auto"):
         query="which issues match?",
         status="running",
         tier=tier,
+        model=model,
         created_at=now,
         started_at=now,
         source_ids=["github", "linear"],
@@ -247,23 +320,58 @@ def test_emits_echo_protocol_sequence(store, monkeypatch):
     assert payload.trace[1].slot == 1
 
 
-def test_working_agent_done_is_not_empty(store, monkeypatch):
-    """A probe that emitted trace lines yields ``agent_done(empty=False)``.
+def test_agent_done_carries_evidence_and_marks_dead_ends(store, monkeypatch):
+    """``agent_done`` projects the probe's evidence + flags dead-ends (#86).
 
-    Regression: the runner used to hardcode ``empty=True`` for every probe, so
-    the console greyed out every lane even on success. ``empty`` must reflect
-    whether the lane produced output.
+    The probe's ``EVIDENCE (pathway: …)`` / ``NO DATA …`` block rides
+    ``agent_done.result`` so the console's per-lane response panel shows what it
+    found; ``empty`` flags the dead-ended lane (the ``NO DATA`` verdict) distinct
+    from the data-bearing one — not greyed-out-everything, not green-everything.
     """
     _enable_scg(monkeypatch)
     OrchestratedSearchRunner().start(
         _run(store), _ws(), store=store, runtime=FakeRuntime(_ok_transcript())
     )
 
-    done = [e for e in store.load_run_events("run-1") if e.get("type") == "agent_done"]
-    assert len(done) == 2
-    # Both probes did work (start→…→stop), so neither lane is empty.
-    assert all(e["empty"] is False for e in done)
-    assert all(e["results_count"] == 0 for e in done)
+    done = {
+        e["agent_id"]: e
+        for e in store.load_run_events("run-1")
+        if e.get("type") == "agent_done"
+    }
+    assert set(done) == {"probe-a", "probe-b"}
+    # The evidence-bearing lane: not empty, and its evidence block is projected.
+    assert done["probe-a"]["empty"] is False
+    assert "EVIDENCE (pathway: github#search_issues)" in done["probe-a"]["result"]
+    # The dead-ended lane: empty (NO DATA is signal), evidence still projected.
+    assert done["probe-b"]["empty"] is True
+    assert done["probe-b"]["result"].startswith("NO DATA")
+    # The persisted trace carries the same per-lane evidence for reload/share.
+    trace = {a.agent_id: a for a in store.get_run("run-1").payload.trace}
+    assert "EVIDENCE" in trace["probe-a"].result
+    assert trace["probe-b"].result.startswith("NO DATA")
+
+
+def test_synthesis_confidence_and_sources_from_probes(store, monkeypatch):
+    """Confidence/sources_count derive from data-bearing probes, not a fixture.
+
+    Regression (#86): ``_settle`` left both at the schema defaults, so every live
+    run rendered ``0%`` / ``0 sources`` next to a real cited answer. They now come
+    from the trace: 1 of 2 probes returned evidence ⇒ confidence 0.5, 1 source.
+    """
+    _enable_scg(monkeypatch)
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(_ok_transcript())
+    )
+
+    answer = store.get_run("run-1").payload.answer
+    assert answer.confidence == 0.5  # data-bearing / probes run = 1/2
+    assert answer.sources_count == 1  # one probe returned an EVIDENCE block
+    # And it rides the answer_ready event the console reads live.
+    ready = [
+        e for e in store.load_run_events("run-1") if e.get("type") == "answer_ready"
+    ][0]
+    assert ready["answer"]["confidence"] == 0.5
+    assert ready["answer"]["sources_count"] == 1
 
 
 def test_completed_snapshot_persisted(store, monkeypatch):
@@ -327,6 +435,27 @@ def test_tier_picks_the_model(store, monkeypatch):
         _run(store, tier="deep"), _ws(), store=store, runtime=runtime
     )
     assert runtime.run_sync_kwargs["model_name"] == "openai/gpt-5.5"
+
+
+def test_explicit_model_override_wins_over_tier(store, monkeypatch):
+    """``run.model`` (the POST body override) beats the tier map at the drive.
+
+    The per-run knob the console's model pill rides: probes inherit the session
+    model, so the override moves the whole run; it is echoed onto the payload
+    for snapshot self-sufficiency.
+    """
+    _enable_scg(monkeypatch)
+    runtime = FakeRuntime(_ok_transcript())
+    OrchestratedSearchRunner().start(
+        _run(store, tier="fast", model="openai/custom-model"),
+        _ws(),
+        store=store,
+        runtime=runtime,
+    )
+    assert runtime.run_sync_kwargs["model_name"] == "openai/custom-model"
+    record = store.get_run("run-1")
+    assert record.payload is not None
+    assert record.payload.model == "openai/custom-model"
 
 
 def test_scg_search_playbook_is_skill_instructions(store, monkeypatch):
@@ -631,3 +760,357 @@ def test_busy_registry_refusal_fails(store, monkeypatch):
     assert payload.status == "failed"
     assert "active run" in (payload.error or "")
     assert _event_types(store, "run-1") == ["run_started", "error"]
+
+
+# ---------------------------------------------------------------------------
+# Instrument fidelity — total_ms persisted, honest stats, dedup, lanes, meta.
+# ---------------------------------------------------------------------------
+
+
+def test_total_ms_persisted_on_record_at_settle(store, monkeypatch):
+    """``total_ms`` is persisted on the RECORD at settle, not just the event.
+
+    The EVIDENCE: the settle ``update_run`` OMITTED ``total_ms`` so the record
+    kept its default 0 while ``run_done`` carried the real elapsed — the audit
+    field lied.
+    """
+    _enable_scg(monkeypatch)
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(_ok_transcript())
+    )
+    record = store.get_run("run-1")
+    done = [e for e in store.load_run_events("run-1") if e.get("type") == "run_done"][0]
+    # Both the event and the record carry the SAME elapsed (≥0, never the old 0
+    # default beside a real run).
+    assert record.total_ms == done["total_ms"]
+    assert record.payload.total_ms == done["total_ms"]
+
+
+def test_total_ms_persisted_on_record_at_fail(store, monkeypatch):
+    """``total_ms`` is persisted on the record on the FAIL path too."""
+    _enable_scg(monkeypatch)
+    transcript = [_completion("", done_reason="error", error="boom")]
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+    record = store.get_run("run-1")
+    assert record.status == "failed"
+    # The fail update_run now records total_ms (the second omitting call).
+    assert record.total_ms == record.payload.total_ms
+    assert record.payload.total_ms >= 0
+
+
+def test_run_stats_honest_none_when_underivable(store, monkeypatch):
+    """RunStatsWire never fabricates: no user/llm event ⇒ ``setup_ms`` is None.
+
+    A transcript with no timestamped ``user`` / ``llm_call_start`` event can't
+    bracket the pre-turn handshake, so ``setup_ms`` (and ``search_ms``) stays
+    None — not a misleading 0. ``probes`` / ``tool_calls`` are still counted.
+    """
+    _enable_scg(monkeypatch)
+    transcript = [
+        _sub_agent("probe-a", "start", detail="probe github"),
+        _sub_agent("probe-a", "stop", detail="completed", status="completed",
+                   summary="EVIDENCE (pathway: github): found."),
+        _completion("answer [github]"),
+    ]
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+    stats = store.get_run("run-1").payload.stats
+    assert stats is not None
+    assert stats.probes == 1  # one probe lane
+    assert stats.tool_calls == 0  # no tool_result events
+    assert stats.setup_ms is None  # no user/llm event to bracket — never 0
+    assert stats.search_ms is None
+
+
+def test_run_stats_derives_tokens_and_tool_calls(store, monkeypatch):
+    """With llm_call + tool_result events, stats sum tokens + count tool calls."""
+    _enable_scg(monkeypatch)
+    t0, t1 = "2026-06-12T06:00:00+00:00", "2026-06-12T06:00:41+00:00"
+    transcript = [
+        {"type": "user", "ts": t0, "payload": {"text": "query"}},
+        _llm_call("root", depth=0, kind="llm_call_start", ts=t0),
+        _tool_result("mcp_github_search", agent_id="root", tool_input={"q": "x"}),
+        _scg_results(
+            [{"source": "github", "kind": "code", "title": "r",
+              "url": "https://github.com/a/r"}],
+            agent_id="root",
+        ),
+        _llm_call("root", depth=0, kind="llm_call_end", ts=t1,
+                  in_tok=1000, out_tok=200, cum_in=1000, cum_out=200),
+        _completion("answer [github]"),
+    ]
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+    stats = store.get_run("run-1").payload.stats
+    assert stats.tool_calls == 2  # the search call + the scg_results emit
+    assert stats.input_tokens == 1000
+    assert stats.output_tokens == 200
+    assert stats.probes == 0  # root-inline run, no probe lanes
+    # setup_ms = created_at→first user event; search_ms = total − setup.
+    assert stats.setup_ms is not None
+    assert stats.search_ms is not None
+
+
+def test_coordinator_lane_appended_to_trace(store, monkeypatch):
+    """A zero-probe run persists a coordinator lane so trace is never empty.
+
+    The EVIDENCE: a fast-tier run inlined all work (zero probes) → ``trace:[]``
+    beside a real answer. The coordinator lane (kind=coordinator, blank result)
+    now rides ``payload.trace``.
+    """
+    _enable_scg(monkeypatch)
+    transcript = [
+        {"type": "user", "ts": utc_now_iso(), "payload": {"text": "q"}},
+        _tool_result("mcp_github_search", agent_id="root", tool_input={"q": "x"}),
+        _scg_results(
+            [{"source": "github", "kind": "code", "title": "acme/widgets",
+              "url": "https://github.com/acme/widgets"}],
+            agent_id="root",
+        ),
+        _completion("Found acme/widgets. [github]"),
+    ]
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+    trace = store.get_run("run-1").payload.trace
+    coordinator = [a for a in trace if a.kind == "coordinator"]
+    assert len(coordinator) == 1
+    lane = coordinator[0]
+    assert lane.result == ""  # synthesis is the answer, never duplicated
+    assert lane.results_count == 1  # the root's one emitted card
+    # Its digest lines carry the tool ids, never result payloads.
+    assert any("mcp_github_search" in ln.text for ln in lane.lines)
+
+
+def test_root_reemit_deduped_at_settle(store, monkeypatch):
+    """A probe card + a root url-less re-emit of it settle to ONE result.
+
+    The EVIDENCE: 5 cards for 3 results — the root re-emitted probe hits with no
+    url. The semantic dedup collapses them at settle too.
+    """
+    _enable_scg(monkeypatch)
+    transcript = [
+        _sub_agent("probe-a", "start", detail="probe github"),
+        _scg_results(
+            [{"source": "github", "kind": "code", "title": "acme/widgets",
+              "url": "https://github.com/acme/widgets"}],
+            agent_id="probe-a",
+        ),
+        _sub_agent("probe-a", "stop", detail="completed", status="completed",
+                   summary="EVIDENCE (pathway: github): found it."),
+        # Root re-emits the SAME repo from prose — no url, kind flipped to docs.
+        _scg_results(
+            [{"source": "github", "kind": "docs", "title": "acme/widgets"}],
+            agent_id="root",
+        ),
+        _completion("Found acme/widgets. [github]"),
+    ]
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+    results = store.get_run("run-1").payload.results
+    assert len(results) == 1  # the probe card won; the root re-emit deduped
+    # The probe lane is credited the card; the root coordinator is not.
+    trace = {a.agent_id: a for a in store.get_run("run-1").payload.trace}
+    assert trace["probe-a"].results_count == 1
+
+
+def test_meta_and_related_questions_settle(store, monkeypatch):
+    """An emit's ``meta`` rides onto the card; ``related_questions`` onto payload."""
+    _enable_scg(monkeypatch)
+    transcript = [
+        {"type": "user", "ts": utc_now_iso(), "payload": {"text": "q"}},
+        _scg_results(
+            [{"source": "github", "kind": "code", "title": "acme/widgets",
+              "url": "https://github.com/acme/widgets",
+              "meta": {"stars": 1200, "language": "Go", "blob": {"x": 1}}}],
+            agent_id="root",
+            related=["how is auth wired?", "what about rate limits?"],
+        ),
+        _completion("Found it. [github]"),
+    ]
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+    payload = store.get_run("run-1").payload
+    assert payload.related_questions == [
+        "how is auth wired?",
+        "what about rate limits?",
+    ]
+    [card] = payload.results
+    # Scalars survive; the nested blob is dropped.
+    assert card.meta == {"stars": 1200, "language": "Go"}
+
+
+class _FakeRelated:
+    """A :class:`RelatedQuestionsRunner` stand-in (duck-typed ``.run``)."""
+
+    def __init__(self, out):
+        self._out = out
+        self.calls: list[tuple[str, str]] = []
+
+    def run(self, query, answer):
+        self.calls.append((query, answer))
+        return list(self._out)
+
+
+def test_parallel_related_questions_event_and_payload(store, monkeypatch):
+    """An armed runner emits a related_questions event (before run_done) + on payload.
+
+    The parallel structured call is the PRIMARY source — it WINS over the
+    agent-emitted ``related_questions`` on the transcript.
+    """
+    _enable_scg(monkeypatch)
+    transcript = [
+        {"type": "user", "ts": utc_now_iso(), "payload": {"text": "q"}},
+        _scg_results(
+            [{"source": "github", "kind": "code", "title": "acme/widgets",
+              "url": "https://github.com/acme/widgets"}],
+            agent_id="root",
+            related=["stale agent emit?"],
+        ),
+        _completion("Found it. [github]"),
+    ]
+    related = _FakeRelated(["follow up one?", "follow up two?"])
+    OrchestratedSearchRunner(related).start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+
+    types = _event_types(store, "run-1")
+    assert "related_questions" in types
+    # Emitted AFTER the answer is ready and BEFORE the terminal run_done (so the
+    # stream, which closes on run_done, still delivers it).
+    assert (
+        types.index("answer_ready")
+        < types.index("related_questions")
+        < types.index("run_done")
+    )
+    rq = next(
+        e for e in store.load_run_events("run-1") if e.get("type") == "related_questions"
+    )
+    assert rq["questions"] == ["follow up one?", "follow up two?"]
+    # The parallel call's output wins over the agent emit, on the payload too.
+    payload = store.get_run("run-1").payload
+    assert payload.related_questions == ["follow up one?", "follow up two?"]
+    # It was fed the run's query + the synthesized answer.
+    assert related.calls and related.calls[0][0] == "which issues match?"
+    assert related.calls[0][1].startswith("Found it.")
+
+
+def test_parallel_related_questions_empty_falls_back_to_agent_emit(store, monkeypatch):
+    """An armed runner that yields nothing falls back to the agent-emitted list."""
+    _enable_scg(monkeypatch)
+    transcript = [
+        {"type": "user", "ts": utc_now_iso(), "payload": {"text": "q"}},
+        _scg_results(
+            [{"source": "github", "kind": "code", "title": "acme/widgets",
+              "url": "https://github.com/acme/widgets"}],
+            agent_id="root",
+            related=["agent emit survives?"],
+        ),
+        _completion("Found it. [github]"),
+    ]
+    OrchestratedSearchRunner(_FakeRelated([])).start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+    payload = store.get_run("run-1").payload
+    assert payload.related_questions == ["agent emit survives?"]
+
+
+def test_lane_returned_count_credits_filtered(store, monkeypatch):
+    """A lane's ``returned_count`` is its RAW emit; ``results_count`` is KEPT.
+
+    probe-a emits two distinct cards (both kept); the root re-emits one of them
+    url-less (deduped away) — so the coordinator lane RETURNED 1 but KEPT 0, the
+    "1 filtered" the console surfaces.
+    """
+    _enable_scg(monkeypatch)
+    transcript = [
+        _sub_agent("probe-a", "start", detail="probe github"),
+        _scg_results(
+            [
+                {"source": "github", "kind": "code", "title": "a",
+                 "url": "https://github.com/x/a"},
+                {"source": "github", "kind": "code", "title": "b",
+                 "url": "https://github.com/x/b"},
+            ],
+            agent_id="probe-a",
+        ),
+        _sub_agent("probe-a", "stop", detail="completed", status="completed",
+                   summary="EVIDENCE (pathway: github): found two."),
+        # Root re-emits 'a' from prose (no url) — collides with probe-a's 'a'.
+        _scg_results([{"source": "github", "kind": "docs", "title": "a"}], agent_id="root"),
+        _completion("Found a and b. [github]"),
+    ]
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+    payload = store.get_run("run-1").payload
+    trace = {a.agent_id: a for a in payload.trace}
+    assert trace["probe-a"].results_count == 2
+    assert trace["probe-a"].returned_count == 2
+    assert trace["coordinator"].results_count == 0  # both root re-emits deduped
+    assert trace["coordinator"].returned_count == 1  # it raw-emitted one
+    # The agent_done event carries returned_count alongside results_count.
+    done = next(
+        e
+        for e in store.load_run_events("run-1")
+        if e.get("type") == "agent_done" and e.get("agent_id") == "probe-a"
+    )
+    assert done["results_count"] == 2
+    assert done["returned_count"] == 2
+
+
+def test_per_lane_telemetry_from_llm_calls(store, monkeypatch):
+    """Per-lane steps/duration/tokens derive from the lane's llm_call events."""
+    _enable_scg(monkeypatch)
+    t0, t1, t2 = (
+        "2026-06-12T06:00:00+00:00",
+        "2026-06-12T06:00:05+00:00",
+        "2026-06-12T06:00:12+00:00",
+    )
+    transcript = [
+        _sub_agent("probe-a", "start", detail="probe github"),
+        _llm_call("probe-a", depth=1, kind="llm_call_start", ts=t0),
+        _llm_call("probe-a", depth=1, kind="llm_call_end", ts=t1,
+                  in_tok=500, out_tok=80, cum_in=500, cum_out=80),
+        _llm_call("probe-a", depth=1, kind="llm_call_start", ts=t1),
+        _llm_call("probe-a", depth=1, kind="llm_call_end", ts=t2,
+                  in_tok=300, out_tok=40, cum_in=800, cum_out=120),
+        _sub_agent("probe-a", "stop", detail="completed", status="completed",
+                   summary="EVIDENCE (pathway: github): found."),
+        _completion("answer [github]"),
+    ]
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=FakeRuntime(transcript)
+    )
+    lane = {a.agent_id: a for a in store.get_run("run-1").payload.trace}["probe-a"]
+    assert lane.kind == "scg-path-probe"  # the kind fallback, not the model
+    assert lane.model == "claude-haiku-4-5"
+    assert lane.steps == 2  # two llm_call_end events
+    assert lane.duration_ms == 12000  # t0 → t2
+    assert lane.input_tokens == 800  # cumulative on the last end
+    assert lane.output_tokens == 120
+
+
+def test_recorded_grant_matches_binding(store, monkeypatch):
+    """``RunRecord.allowed_tools`` records what the binding ACTUALLY grants.
+
+    The EVIDENCE: the recorded grant (``SourceCatalog.tools_for`` alone) diverged
+    from what ``binding.allowed_tools()`` fed ``run_sync`` — the audit field lied.
+    The record now equals the actual grant (connector grant ∪ traversal verbs).
+    """
+    _enable_scg(monkeypatch)
+    runtime = FakeRuntime(_ok_transcript())
+    OrchestratedSearchRunner().start(
+        _run(store, allowed_tools=["github_search"]), _ws(), store=store, runtime=runtime
+    )
+    record = store.get_run("run-1")
+    driven = runtime.run_sync_kwargs["allowed_tools"]
+    assert set(record.allowed_tools) == set(driven)
+    for verb in ("scg_route", "scg_results", "spawn_agent"):
+        assert verb in record.allowed_tools

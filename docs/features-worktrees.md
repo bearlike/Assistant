@@ -71,7 +71,7 @@ POST /api/sessions/{session_id}/query
 }
 ```
 
-The same `context` object works when creating the session in the first place via `POST /api/sessions`. The backend fills in `repo` and `branch` on the session context from the worktree record. To anchor to a branch without a worktree, pass `"branch": "<name>"` in the same context object.
+The same `context` object works when creating the session in the first place via [POST /api/sessions](endpoint:POST /api/sessions). The backend fills in `repo` and `branch` on the session context from the worktree record. To anchor to a branch without a worktree, pass `"branch": "<name>"` in the same context object.
 
 For full request and response schemas see the [REST API Reference](rest-api.md).
 

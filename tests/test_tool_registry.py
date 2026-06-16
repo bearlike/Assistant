@@ -10,7 +10,9 @@ from mewbo_core.tool_registry import (
     _default_manifest_cache_path,
     _ensure_auto_manifest,
     _sanitize_tool_id,
+    get_or_build_registry,
     load_registry,
+    reset_registry_cache,
 )
 
 
@@ -537,3 +539,113 @@ def test_auto_manifest_marks_failed_server(tmp_path, monkeypatch):
     )
     assert spec.enabled is False
     assert "Discovery failed" in spec.metadata.get("disabled_reason", "")
+
+
+# ---------------------------------------------------------------------------
+# ToolRegistryCache — registry reuse across runs in a session (Gitea #138)
+# ---------------------------------------------------------------------------
+
+
+def test_get_or_build_registry_reuses_identical_inputs(monkeypatch, tmp_path):
+    """A 2nd run with identical inputs reuses the SAME registry — built once."""
+    import mewbo_core.tool_registry as tr
+
+    reset_registry_cache()
+    calls: list = []
+
+    def fake_load_registry(*, cwd=None, extra_mcp_servers=None):
+        calls.append((cwd, extra_mcp_servers))
+        return ToolRegistry()
+
+    monkeypatch.setattr(tr, "load_registry", fake_load_registry)
+    try:
+        cwd = str(tmp_path)
+        first = get_or_build_registry(cwd=cwd)
+        second = get_or_build_registry(cwd=cwd)
+        assert first is second  # reused, not rebuilt
+        assert len(calls) == 1
+    finally:
+        reset_registry_cache()
+
+
+def test_get_or_build_registry_rebuilds_on_different_cwd(monkeypatch, tmp_path):
+    """A different cwd is a distinct scope → the registry is rebuilt."""
+    import mewbo_core.tool_registry as tr
+
+    reset_registry_cache()
+    calls: list = []
+
+    def fake_load_registry(*, cwd=None, extra_mcp_servers=None):
+        calls.append((cwd, extra_mcp_servers))
+        return ToolRegistry()
+
+    monkeypatch.setattr(tr, "load_registry", fake_load_registry)
+    try:
+        a = get_or_build_registry(cwd=str(tmp_path / "a"))
+        b = get_or_build_registry(cwd=str(tmp_path / "b"))
+        assert a is not b
+        assert len(calls) == 2
+    finally:
+        reset_registry_cache()
+
+
+def test_get_or_build_registry_rebuilds_on_changed_mcp_servers(monkeypatch, tmp_path):
+    """Changing the plugin-contributed MCP servers rebuilds (key includes them)."""
+    import mewbo_core.tool_registry as tr
+
+    reset_registry_cache()
+    calls: list = []
+
+    def fake_load_registry(*, cwd=None, extra_mcp_servers=None):
+        calls.append((cwd, extra_mcp_servers))
+        return ToolRegistry()
+
+    monkeypatch.setattr(tr, "load_registry", fake_load_registry)
+    try:
+        cwd = str(tmp_path)
+        none_servers = get_or_build_registry(cwd=cwd, extra_mcp_servers=None)
+        with_server = get_or_build_registry(
+            cwd=cwd, extra_mcp_servers={"srv": {"command": "x"}}
+        )
+        assert none_servers is not with_server
+        assert len(calls) == 2
+        # And the variant with servers is itself cached on repeat.
+        again = get_or_build_registry(cwd=cwd, extra_mcp_servers={"srv": {"command": "x"}})
+        assert again is with_server
+        assert len(calls) == 2
+    finally:
+        reset_registry_cache()
+
+
+def test_orchestrator_reuses_registry_across_runs(monkeypatch, tmp_path):
+    """End-to-end: two Orchestrators (= two queries) on the same cwd share the
+    cached registry; a different cwd rebuilds — proving the per-query rebuild is
+    gone (Gitea #138)."""
+    import mewbo_core.tool_registry as tr
+    from mewbo_core.orchestrator import Orchestrator
+    from mewbo_core.session_store import SessionStore
+
+    reset_registry_cache()
+    set_mcp_config_path("")
+    set_config_override({"plugins": {"enabled": False}, "home_assistant": {"enabled": False}})
+    calls: list = []
+
+    def fake_load_registry(*, cwd=None, extra_mcp_servers=None):
+        calls.append(cwd)
+        return ToolRegistry()
+
+    monkeypatch.setattr(tr, "load_registry", fake_load_registry)
+    store = SessionStore(root_dir=str(tmp_path / "store"))
+    try:
+        cwd = str(tmp_path / "proj")
+        first = Orchestrator(session_store=store, cwd=cwd)
+        second = Orchestrator(session_store=store, cwd=cwd)
+        assert first._tool_registry is second._tool_registry
+        assert len(calls) == 1
+
+        other = Orchestrator(session_store=store, cwd=str(tmp_path / "other"))
+        assert other._tool_registry is not first._tool_registry
+        assert len(calls) == 2
+    finally:
+        reset_registry_cache()
+        set_config_override({})

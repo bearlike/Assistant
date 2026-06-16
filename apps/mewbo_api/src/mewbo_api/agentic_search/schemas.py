@@ -284,11 +284,21 @@ class SearchResult(_Wire):
     source: str
     kind: ResultKindLiteral
     relevance: float = 0.0
+    # How sure the emitting agent is this hit answers the query (0..1) —
+    # carried verbatim from an ``scg_results`` entry (agent-emitted cards
+    # only). ``None`` when the emitter offered no defensible confidence.
+    confidence: float | None = None
     title: str
     url: str = ""
     snippet: str = ""
     author: str = ""
     timestamp: str = ""
+    # Free-form, agent-emitted scalar metadata carried verbatim from an
+    # ``scg_results`` entry's ``meta`` (e.g. ``{"stars": 1200, "language":
+    # "Go"}``). SCALARS ONLY — the projection drops any non-scalar value
+    # silently so a connector blob can never ride this field. ``None`` when the
+    # emitter supplied none.
+    meta: dict[str, str | int | float | bool] | None = None
     insight: ResultInsight | None = None
     refs: list[ResultRef] = Field(default_factory=list)
     image: ResultImage | None = None
@@ -321,6 +331,31 @@ class TraceAgent(_Wire):
     source_id: str
     slot: int = 0
     lines: list[TraceLine] = Field(default_factory=list)
+    # The probe's compressed terminal evidence (the ``EVIDENCE (pathway: …)`` /
+    # ``NO DATA …`` block it returned) — projected from the ``sub_agent`` stop
+    # event's ``summary`` so the console's per-lane response panel can show what
+    # each probe actually found, not just that it finished. "" until terminal.
+    result: str = ""
+    # Per-lane provenance (additive, populated at settle from the transcript):
+    # ``kind`` is the agent KIND ("coordinator" | "scg-path-probe" | …),
+    # distinct from ``name`` (the display label) — the EVIDENCE flagged that
+    # ``name`` was carrying the MODEL string; the kind is the honest taxonomy.
+    # ``model`` names the LLM the lane ran on. ``steps`` / ``duration_ms`` /
+    # ``input_tokens`` / ``output_tokens`` are derived from the lane's
+    # ``llm_call_*`` + ``sub_agent`` stop aggregates (``None`` when underivable).
+    # ``results_count`` is the TRUE per-lane KEPT card count (after cross-emitter
+    # dedup); ``returned_count`` is how many it RAW-emitted before dedup. Their
+    # delta is the count the lane contributed that collapsed into another lane's
+    # card — surfaced as "N filtered" so the trace reads how much each tool
+    # really contributed (the old hardcoded 0 was blind to a 3-card probe).
+    kind: str = ""
+    model: str | None = None
+    steps: int | None = None
+    duration_ms: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    results_count: int = 0
+    returned_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +371,23 @@ class AnswerBullet(_Wire):
 
 
 class AnswerSynthesis(_Wire):
-    """The cited answer block rendered by ``AnswerCard``."""
+    """The cited answer block rendered by ``AnswerCard``.
+
+    Provenance fields are populated at settle from REAL probe signals, never
+    invented (``OrchestratedSearchRunner._synthesis_metrics``):
+
+    * ``sources_count`` — the number of probes that returned data (an
+      ``EVIDENCE`` block, not a ``NO DATA`` dead-end). Each probe walks one
+      qualified pathway, so it is the breadth of grounding behind the answer,
+      not a fixed fixture value.
+    * ``confidence`` — a DEFINED heuristic: ``data-bearing probes / probes run``
+      (a probe is data-bearing iff its evidence isn't a ``NO DATA`` dead-end).
+      ``0.0`` means "no probe ran" (e.g. a synthesis with an empty trace) — the
+      console suppresses the chip rather than render an unearned ``0%``.
+
+    The echo runner keeps its fixture values; only the orchestrated runner
+    derives these from the live trace.
+    """
 
     tldr: str = ""
     bullets: list[AnswerBullet] = Field(default_factory=list)
@@ -358,6 +409,29 @@ class RelatedPerson(_Wire):
 # ---------------------------------------------------------------------------
 
 
+class RunStatsWire(_Wire):
+    """Honest, derived run statistics — the "show the work" instrument block.
+
+    Populated at settle from REAL session events (``RunStats`` discipline:
+    NEVER fabricate — a value that can't be derived stays ``None``, never a
+    misleading 0). ``probes`` is the spawned probe-lane count; ``tool_calls``
+    the total ``tool_result`` events; ``input_tokens`` / ``output_tokens`` the
+    cross-lane token totals. ``setup_ms`` is the pre-turn wall clock
+    (``created_at`` → first user/llm event — the MCP-handshake gap the old
+    "73s total" hid); ``search_ms`` is ``total_ms − setup_ms``. The two ``_ms``
+    fields are ``None`` when the bracketing event is unavailable (e.g. a
+    fake-runtime transcript with no ``llm_call_*``), so the console suppresses
+    them rather than render a fabricated 0.
+    """
+
+    probes: int = 0
+    tool_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    setup_ms: int | None = None
+    search_ms: int | None = None
+
+
 class RunPayload(_Wire):
     """The normalized, console-facing snapshot of a run's results.
 
@@ -372,12 +446,19 @@ class RunPayload(_Wire):
     workspace_id: str
     status: RunStatus = "completed"
     tier: SearchTierLiteral = "auto"
+    # Explicit per-run model override (a LiteLLM name); None = the tier's
+    # configured model. Echoed so the deep-link snapshot stays self-sufficient.
+    model: str | None = None
     total_ms: int = 0
     answer: AnswerSynthesis = Field(default_factory=AnswerSynthesis)
     results: list[SearchResult] = Field(default_factory=list)
     trace: list[TraceAgent] = Field(default_factory=list)
     related_questions: list[str] = Field(default_factory=list)
     related_people: list[RelatedPerson] = Field(default_factory=list)
+    # Honest derived run stats (probes / tool_calls / tokens / setup·search ms),
+    # populated at settle from session events. ``None`` until a real settle ran
+    # (an in-flight or echo run carries no stats).
+    stats: RunStatsWire | None = None
     error: str | None = None
 
 
@@ -396,6 +477,9 @@ class RunRecord(_Wire):
     query: str
     status: RunStatus = "queued"
     tier: SearchTierLiteral = "auto"
+    # Explicit per-run model override; the runner reads it at drive time
+    # (``run.model or ScgConfig.model_for_tier(run.tier)``).
+    model: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     started_at: str | None = None
     completed_at: str | None = None
@@ -455,10 +539,11 @@ SEARCH_EVENT_TYPES: frozenset[str] = frozenset(
         "run_started",   # {run_id, session_id, workspace_id, query, sources}
         "agent_start",   # {agent_id, source_id, name, slot}
         "agent_line",    # {agent_id, line: TraceLine}
-        "agent_done",    # {agent_id, results_count, empty}
+        "agent_done",    # {agent_id, results_count, returned_count, empty}
         "result",        # {result: SearchResult}
         "answer_delta",  # {text}  — streamed synthesis tokens (typewriter)
         "answer_ready",  # {answer: AnswerSynthesis}
+        "related_questions",  # {questions: [str]}  — parallel follow-up call
         "run_done",      # {status, total_ms}                 (terminal)
         "error",         # {error: {code, message, hint?}}    (terminal)
         "cancelled",     # {}                                 (terminal)
@@ -508,6 +593,7 @@ __all__ = [
     "AnswerBullet",
     "AnswerSynthesis",
     "RelatedPerson",
+    "RunStatsWire",
     "RunPayload",
     "RunRecord",
     "utc_now_iso",

@@ -119,10 +119,22 @@ def map_recorder(monkeypatch: pytest.MonkeyPatch) -> _MapRecorder:
 
 
 def _create_workspace(client, **body) -> str:
-    """Create a workspace via the route; return its id."""
+    """Create a workspace via the route; return its id (fan-out settled)."""
     resp = client.post("/api/agentic_search/workspaces", json=body, headers=_auth())
     assert resp.status_code == 201, resp.get_json()
+    # The auto-map fan-out is async (#97) — settle it so a later
+    # ``map_recorder.clear()`` can't race the create-time map.
+    sync_mod.WorkspaceSourceSync.join_last_fan_out()
     return resp.get_json()["workspace"]["id"]
+
+
+def _patch_workspace(client, ws_id: str, body: dict):
+    """PATCH a workspace via the route; settle the async fan-out (#97)."""
+    resp = client.patch(
+        f"/api/agentic_search/workspaces/{ws_id}", json=body, headers=_auth()
+    )
+    sync_mod.WorkspaceSourceSync.join_last_fan_out()
+    return resp
 
 
 # ── sources PATCH → newly-enabled source mapped ─────────────────────────────
@@ -134,11 +146,7 @@ def test_sources_patch_maps_newly_enabled_source(map_recorder: _MapRecorder) -> 
     ws_id = _create_workspace(client, name="W", sources=["gitea"])
     map_recorder.clear()  # ignore the create-time map of gitea
 
-    resp = client.patch(
-        f"/api/agentic_search/workspaces/{ws_id}",
-        json={"sources": ["gitea", "internet-search"]},
-        headers=_auth(),
-    )
+    resp = _patch_workspace(client, ws_id, {"sources": ["gitea", "internet-search"]})
     assert resp.status_code == 200
     # gitea was already enabled → only internet-search is newly-enabled + mapped.
     assert map_recorder.started == ["internet-search"]
@@ -161,10 +169,8 @@ def test_instructions_only_patch_redrives_map(map_recorder: _MapRecorder) -> Non
     )
     map_recorder.clear()
 
-    resp = client.patch(
-        f"/api/agentic_search/workspaces/{ws_id}",
-        json={"instructions": "prefer gitea#search_issues for repo lookups"},
-        headers=_auth(),
+    resp = _patch_workspace(
+        client, ws_id, {"instructions": "prefer gitea#search_issues for repo lookups"}
     )
     assert resp.status_code == 200
     # No sources key in the body, no tool drift — the prose change is the sole
@@ -179,11 +185,7 @@ def test_description_only_patch_redrives_map(map_recorder: _MapRecorder) -> None
     ws_id = _create_workspace(client, name="W", sources=["gitea"], desc="old")
     map_recorder.clear()
 
-    resp = client.patch(
-        f"/api/agentic_search/workspaces/{ws_id}",
-        json={"desc": "incident triage workspace"},
-        headers=_auth(),
-    )
+    resp = _patch_workspace(client, ws_id, {"desc": "incident triage workspace"})
     assert resp.status_code == 200
     assert map_recorder.started == ["gitea"]
 
@@ -203,11 +205,7 @@ def test_unmapped_source_not_reenriched_on_prose_change(
     )
     map_recorder.clear()
 
-    resp = client.patch(
-        f"/api/agentic_search/workspaces/{ws_id}",
-        json={"instructions": "changed prose"},
-        headers=_auth(),
-    )
+    resp = _patch_workspace(client, ws_id, {"instructions": "changed prose"})
     assert resp.status_code == 200
     assert map_recorder.started == []
 
@@ -226,11 +224,7 @@ def test_noop_instructions_patch_fires_nothing(map_recorder: _MapRecorder) -> No
 
     # A trailing-newline difference is normalised away by the fingerprint, so the
     # prose is unchanged → no re-enrich.
-    resp = client.patch(
-        f"/api/agentic_search/workspaces/{ws_id}",
-        json={"instructions": "be thorough\n"},
-        headers=_auth(),
-    )
+    resp = _patch_workspace(client, ws_id, {"instructions": "be thorough\n"})
     assert resp.status_code == 200
     assert map_recorder.started == []
 
@@ -242,11 +236,7 @@ def test_noop_sources_patch_fires_nothing(map_recorder: _MapRecorder) -> None:
     ws_id = _create_workspace(client, name="W", sources=["gitea"])
     map_recorder.clear()
 
-    resp = client.patch(
-        f"/api/agentic_search/workspaces/{ws_id}",
-        json={"sources": ["gitea"]},
-        headers=_auth(),
-    )
+    resp = _patch_workspace(client, ws_id, {"sources": ["gitea"]})
     assert resp.status_code == 200
     # gitea is already enabled (not newly), already mapped (no re-map), unchanged
     # prose (no re-enrich), no drift → nothing fires.
@@ -262,10 +252,6 @@ def test_unrelated_name_patch_fires_nothing(map_recorder: _MapRecorder) -> None:
     )
     map_recorder.clear()
 
-    resp = client.patch(
-        f"/api/agentic_search/workspaces/{ws_id}",
-        json={"name": "Renamed"},
-        headers=_auth(),
-    )
+    resp = _patch_workspace(client, ws_id, {"name": "Renamed"})
     assert resp.status_code == 200
     assert map_recorder.started == []

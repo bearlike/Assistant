@@ -1,40 +1,29 @@
-"""Realtime fast-grounded structured synthesis — ``POST /v1/structured/fast``.
+"""Realtime token-streaming draft synthesis — ``POST /v1/draft/stream``.
 
-Single-round-trip path: the
-:class:`~mewbo_core.structured_synthesis.StructuredSynthesizer` drives one async
-LLM call (+ one optional reask) and returns immediately with:
+Token-streaming path: the
+:class:`~mewbo_core.draft_stream.DraftStreamer` bridges one tool-light
+``.astream()`` of LLM token deltas to Flask's sync WSGI as server-sent events,
+ending with an additive terminal ``done`` frame carrying the backing
+``session_id`` (also sent up front in the ``X-Mewbo-Session`` header).
 
-    {
-        "output": <validated-payload>,
-        "citations": [{"id", "kind", "snippet", "score", "source"}, ...],
-        "status": "completed",
-        "session_id": <id>            # additive (#78)
-    }
-
-Also provides the token-streaming draft endpoint — ``POST /v1/draft/stream``:
-
-    POST /v1/draft/stream  → SSE of LLM token deltas (tool-light)
-
-**Session-full with write-behind (#78).** Both paths were sessionless by design;
-that was reclassified as a defect. They now mint a real session, run the LLM
-inside its Langfuse trace, and persist the single-turn transcript via
-:class:`~mewbo_api.realtime.recorder.RealtimeSessionRecorder` AFTER the response /
-last token — so the draft TTFT path never gains a blocking store write. The wire
-contract is unchanged except for the additive ``session_id`` (fast response body,
-draft terminal ``done`` frame + ``X-Mewbo-Session`` header).
+**Session-full with write-behind (#78).** The draft path was sessionless by
+design; that was reclassified as a defect. It now mints a real session, runs the
+LLM inside its Langfuse trace, and persists the single-turn transcript via
+:class:`~mewbo_api.realtime.recorder.RealtimeSessionRecorder` AFTER the last token
+— so the TTFT path never gains a blocking store write. The wire contract is
+unchanged except for the additive ``session_id`` (terminal ``done`` frame +
+``X-Mewbo-Session`` header).
 
 Auth mirrors ``mewbo_api.structured.routes.init_structured``:
 ``require_api_key`` is injected by the controller in ``backend.py``.
 
-The namespaces are mounted at:
-    /v1/structured  (realtime_ns) → /v1/structured/fast
-    /v1/draft       (draft_ns)    → /v1/draft/stream
+The namespace is mounted at ``/v1/draft`` (``draft_ns``) → ``/v1/draft/stream``.
 
-These coexist alongside the agentic path:
-
-    POST /v1/structured       → agentic, session-backed (StructuredResponder)
-    POST /v1/structured/fast  → retrieval-only, fast (StructuredSynthesizer)
-    POST /v1/draft/stream     → token-streaming, tool-light (DraftStreamer)
+The no-loop, retrieval-only structured synthesis lane (formerly the sibling
+``POST /v1/structured/fast``) now lives as ``mode: "synthesis"`` ON the agentic
+``POST /v1/structured`` endpoint (#85) — see ``mewbo_api.structured.synthesis``,
+which reuses the shared :class:`RealtimeSessionRecorder` + ``WikiGroundingProvider``
+glue this package owns.
 """
 from __future__ import annotations
 
@@ -47,11 +36,11 @@ from flask import Response, request, stream_with_context
 from flask_restx import Namespace, Resource, fields
 from mewbo_core.common import get_logger
 from mewbo_core.draft_stream import DraftStreamer
-from mewbo_core.structured_response import StructuredResponseError
-from mewbo_core.structured_synthesis import StructuredSynthesizer, _format_citations
+from mewbo_core.structured_synthesis import _format_citations
 
 from mewbo_api.realtime.recorder import RealtimeSessionRecorder
 from mewbo_api.request_context import request_surface
+from mewbo_api.responses import ApiResponseKit
 
 logging = get_logger(name="api.realtime.routes")
 
@@ -66,33 +55,18 @@ def _no_auth() -> AuthResult:
 _require_api_key: AuthGuard = _no_auth
 _runtime: Any = None
 
-# Re-use the parent namespace declared in mewbo_api.structured.routes; we
-# *cannot* re-declare a Namespace with the same path — instead init_realtime
-# is given the ALREADY-CREATED namespace object from the caller so it can
-# register an additional Resource on it.
-#
-# However, a Namespace *must* exist at construction time for the ``@ns.route``
-# decorator, so we create our own that is mounted at a sub-path relative to the
-# parent.  The controller calls ``api.add_namespace(realtime_ns, path="/v1/structured")``
-# which mounts it alongside the existing structured namespace — Flask-RESTX
-# merges resources on the same root path, so /fast resolves correctly.
-realtime_ns = Namespace(
-    "realtime",
-    description="Retrieval-only fast grounded structured synthesis.",
-)
-
 
 def init_realtime(api: object, require_api_key: AuthGuard, runtime: Any = None) -> None:
-    """Wire the ``/v1/structured/fast`` and ``/v1/draft/stream`` endpoints.
+    """Wire the ``/v1/draft/stream`` endpoint.
 
     Args:
         api: The :class:`flask_restx.Api` instance (same object passed to
             ``init_structured``).
         require_api_key: Auth guard injected by the controller; ``None`` return
             means "authorised".
-        runtime: Session runtime (session store seam). Used by both paths to
-            session-back the run with write-behind persistence (#78); ``None``
-            degrades gracefully to trace-only (no transcript persisted).
+        runtime: Session runtime (session store seam). Used to session-back the
+            stream with write-behind persistence (#78); ``None`` degrades
+            gracefully to trace-only (no transcript persisted).
 
     This is the ONE line the controller must add in ``backend.py``::
 
@@ -102,167 +76,7 @@ def init_realtime(api: object, require_api_key: AuthGuard, runtime: Any = None) 
     global _require_api_key, _runtime
     _require_api_key = require_api_key
     _runtime = runtime
-    api.add_namespace(realtime_ns, path="/v1/structured")  # type: ignore[attr-defined]
     api.add_namespace(draft_ns, path="/v1/draft")  # type: ignore[attr-defined]
-
-
-def _error(code: int, reason: str) -> tuple[dict, int]:
-    """Canonical structured error envelope."""
-    return {"error": {"code": code, "reason": reason}}, code
-
-
-_request_model = realtime_ns.model(
-    "FastStructuredRequest",
-    {
-        "query": fields.String(
-            required=True,
-            description="Natural-language request to answer.",
-            example="Which services does the deploy pipeline restart?",
-        ),
-        "schema": fields.Raw(
-            required=True,
-            description="JSON Schema the output object must validate against.",
-            example={
-                "type": "object",
-                "properties": {"answer": {"type": "string"}},
-                "required": ["answer"],
-            },
-        ),
-        "workspace": fields.String(
-            required=False,
-            description="Wiki slug used for retrieval grounding. Omit for no grounding.",
-            example="my-project",
-        ),
-        "model": fields.String(
-            required=False,
-            description=(
-                "Optional model override. Any configured LiteLLM model id; a non-string "
-                "value is ignored and the configured default is used."
-            ),
-            example="openai/gpt-5.4-nano",
-        ),
-    },
-)
-
-_citation_model = realtime_ns.model(
-    "Citation",
-    {
-        "id": fields.String(description="Source identifier"),
-        "kind": fields.String(description="Source kind (page / node / memory)"),
-        "snippet": fields.String(description="Extracted text excerpt"),
-        "score": fields.Float(description="Retrieval relevance score"),
-        "source": fields.String(description="Human-readable source label"),
-    },
-)
-
-_response_model = realtime_ns.model(
-    "FastStructuredResponse",
-    {
-        "output": fields.Raw(description="Schema-validated structured output"),
-        "citations": fields.List(fields.Nested(_citation_model)),
-        "status": fields.String(description="Always 'completed' on success"),
-        "session_id": fields.String(
-            description="Session id backing this run (additive; for trace/transcript lookup)"
-        ),
-    },
-)
-
-
-@realtime_ns.route("/fast")
-class FastStructuredResource(Resource):
-    """Single-round-trip schema-constrained synthesis with retrieval grounding."""
-
-    @realtime_ns.expect(_request_model)
-    @realtime_ns.response(200, "Validated output with grounding citations", _response_model)
-    @realtime_ns.response(400, "Missing or invalid query or schema")
-    @realtime_ns.response(401, "Missing or invalid API key")
-    @realtime_ns.response(422, "The answer failed schema validation after one reask")
-    @realtime_ns.response(500, "Synthesis failed unexpectedly")
-    def post(self) -> tuple[dict, int]:
-        """Run a fast structured query.
-
-        Answers the query in one round trip with a JSON object that validates
-        against the supplied schema; no tools are used. A workspace adds retrieval
-        grounding, and the matching citations come back alongside the output. An
-        answer that fails schema validation is reasked once; a second failure
-        returns 422. The optional `model` field accepts any configured LiteLLM
-        model id; a non-string value is ignored. The response also carries the
-        `session_id` backing the run, for trace and transcript lookup.
-        """
-        if (auth := _require_api_key()) is not None:
-            return auth
-
-        data = request.get_json(silent=True) or {}
-        query = data.get("query")
-        schema = data.get("schema")
-        if not query or not isinstance(query, str):
-            return {"message": "Invalid input: 'query' (string) is required"}, 400
-        if not isinstance(schema, dict):
-            return {"message": "Invalid input: 'schema' (JSON Schema object) is required"}, 400
-
-        workspace = data.get("workspace")
-        if not isinstance(workspace, str):
-            workspace = None
-
-        # Optional LiteLLM model override (e.g. ``openai/gpt-5.4-nano``); a
-        # non-string is ignored → the configured default is used. Mirrors the
-        # draft-route idiom.
-        model_override = data.get("model")
-        if not isinstance(model_override, str):
-            model_override = None
-
-        # Import the concrete grounding provider here (optional dep, lazy).
-        try:
-            from mewbo_api.realtime.grounding import WikiGroundingProvider  # noqa: PLC0415
-            grounding_provider: WikiGroundingProvider | None = WikiGroundingProvider()
-        except Exception as exc:  # noqa: BLE001
-            logging.debug("WikiGroundingProvider unavailable: {}", exc)
-            grounding_provider = None
-
-        synthesizer = StructuredSynthesizer(
-            model_name=model_override,
-            grounding_provider=grounding_provider,
-        )
-
-        # Session-back the run (#78): mint a session, run the synthesis inside its
-        # Langfuse trace, then persist write-behind AFTER the response is built.
-        recorder = RealtimeSessionRecorder.for_fast(
-            _runtime,
-            query,
-            surface=request_surface(),
-            workspace=workspace,
-            model=model_override,
-        )
-        try:
-            with recorder.trace():
-                payload, citations = asyncio.run(
-                    synthesizer.synthesize(query, schema, workspace=workspace)
-                )
-        except StructuredResponseError as exc:
-            return _error(422, str(exc))
-        except Exception as exc:  # noqa: BLE001
-            logging.warning("FastStructuredResource synthesis failed: {}", exc)
-            return _error(500, f"synthesis failed: {exc}")
-
-        citations_out = [
-            {
-                "id": c.id,
-                "kind": c.kind,
-                "snippet": c.snippet,
-                "score": c.score,
-                "source": c.source,
-            }
-            for c in citations
-        ]
-        # Write-behind: the response is fully built; persistence never blocks it.
-        if _runtime is not None:
-            recorder.persist_async(output=payload)
-        return {
-            "output": payload,
-            "citations": citations_out,
-            "status": "completed",
-            "session_id": recorder.session_id,
-        }, 200
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +87,12 @@ draft_ns = Namespace(
     "draft",
     description="Token-streaming draft answers over server-sent events.",
 )
+
+# Error-envelope/message examples for this namespace (the draft route only emits
+# the legacy ``{"message": ...}`` shape, but the kit is the one DRY home). Built
+# at module level so the import-time decorators can see it; ``Draft`` prefix
+# namespaces the generated model names on the shared Api registry.
+kit = ApiResponseKit(draft_ns, prefix="Draft")
 
 _draft_request_model = draft_ns.model(
     "DraftStreamRequest",
@@ -319,10 +139,31 @@ class DraftStreamResource(Resource):
     overhead). The wire frames are documented on the POST method below.
     """
 
+    @draft_ns.doc(
+        description=(
+            "Stream a draft answer as **server-sent events** (`text/event-stream`). "
+            "The backing session id is sent up front in the `X-Mewbo-Session` "
+            "response header.\n\n"
+            "**Event frames:**\n\n"
+            "- `data: {\"token\": \"<delta>\"}` — one per LLM token delta, in order.\n"
+            "- `data: {\"done\": true, \"session_id\": \"<id>\"}` — terminal success "
+            "frame; carries the backing session id so a streaming caller can resolve "
+            "the trace.\n"
+            "- `data: {\"error\": \"<reason>\"}` — emitted instead of `done` on a "
+            "mid-stream failure.\n\n"
+            "Pass an optional `workspace` (wiki slug) to add retrieval grounding "
+            "before streaming starts, or `model` to override the configured default "
+            "with any LiteLLM model id (a non-string value is ignored). Consume with "
+            "an SSE client (e.g. `EventSource`), not a buffered JSON reader."
+        )
+    )
     @draft_ns.expect(_draft_request_model)
-    @draft_ns.response(200, "Server-sent event stream of token frames.")
-    @draft_ns.response(400, "Missing or invalid query")
-    @draft_ns.response(401, "Missing or invalid API key")
+    @draft_ns.response(
+        200,
+        "Server-sent event stream of token frames (token / done / error); see description.",
+    )
+    @kit.errors(400, shape="message")
+    @kit.auth_error()
     def post(self) -> Response:
         """Stream a draft answer.
 
@@ -415,4 +256,4 @@ class DraftStreamResource(Resource):
         )
 
 
-__all__ = ["init_realtime", "realtime_ns", "draft_ns"]
+__all__ = ["init_realtime", "draft_ns"]

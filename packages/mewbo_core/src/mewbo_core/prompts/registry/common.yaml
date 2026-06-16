@@ -1,0 +1,49 @@
+# Shared runtime helper prompts (Gitea #89, phase 1 — VERBATIM extraction).
+#
+# Migrated from common.py: the sub-package instruction-file headings
+# (discover_project_instructions) and the git-context block (get_git_context).
+# The git subprocess logic stays in code — only the string FORMAT moves here.
+# Both entries are templated (they interpolate discovered/git values) so they
+# render through Jinja2; the byte layout is enforced by golden tests.
+
+common.instruction_headings:
+  purpose: >-
+    Heading prefixing the on-demand index of nested instruction files. The
+    `has_root` branch picks the soft "read when relevant" note vs the emphatic
+    "no root file — read before proceeding" note.
+  variables: [has_root]
+  token_budget: Injected once per session when subtree instruction files exist.
+  template: |-
+    {% if has_root -%}
+    # Sub-package instruction files
+
+    The following instruction files exist in subdirectories. Read them when working on the relevant package.
+    {%- else -%}
+    # No root-level instruction files — read before proceeding
+
+    No CLAUDE.md or AGENTS.md was found at the project root. The following instruction files exist in subdirectories. You MUST read the most relevant instruction file before starting any task — they contain critical project context.
+    {%- endif %}
+
+common.git_context:
+  purpose: >-
+    Git context block (branch / status / recent commits) injected into the
+    system prompt. Mirrors get_git_context's `"\n".join(parts)` assembly: the
+    Main-branch, Status, and Recent-commits sections are each conditional.
+  variables: [branch, default_branch, status, recent_log]
+  token_budget: Injected once per turn when the cwd is a git repo.
+  template: |-
+    Current branch: {{ branch }}
+    {%- if default_branch %}
+    Main branch: {{ default_branch }}
+    {%- endif %}
+    {% if status %}
+    Status:
+    {{ status }}
+    {%- else %}
+    Status: clean
+    {%- endif %}
+    {%- if recent_log %}
+
+    Recent commits:
+    {{ recent_log }}
+    {%- endif %}

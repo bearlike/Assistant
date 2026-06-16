@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it } from "vitest"
 import { cleanup, render, screen } from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 afterEach(cleanup)
 
@@ -49,24 +50,31 @@ function makeRun(overrides: Partial<RunPayload> = {}): RunPayload {
 }
 
 function renderPanel(run: RunPayload) {
+  // The search-bar's model pill fetches the model list via TanStack Query —
+  // mount under a provider like the app does (no network: retries off).
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <ResultsPanel
-      workspace={workspace}
-      workspaces={[workspace]}
-      sources={sources}
-      query={run.query}
-      run={run}
-      elapsedMs={run.total_ms}
-      done
-      answerReady={false}
-      isLoading={false}
-      tier="auto"
-      onTierChange={() => undefined}
-      onRun={() => undefined}
-      onPickWorkspace={() => undefined}
-      onOpenCreate={() => undefined}
-      onOpenConfig={() => undefined}
-    />,
+    <QueryClientProvider client={qc}>
+      <ResultsPanel
+        workspace={workspace}
+        workspaces={[workspace]}
+        sources={sources}
+        query={run.query}
+        run={run}
+        elapsedMs={run.total_ms}
+        done
+        answerReady={false}
+        isLoading={false}
+        tier="auto"
+        onTierChange={() => undefined}
+        model=""
+        onModelChange={() => undefined}
+        onRun={() => undefined}
+        onPickWorkspace={() => undefined}
+        onOpenCreate={() => undefined}
+        onOpenConfig={() => undefined}
+      />
+    </QueryClientProvider>,
   )
 }
 

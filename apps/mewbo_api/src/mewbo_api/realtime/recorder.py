@@ -1,11 +1,13 @@
-"""Write-behind session recorder for the realtime fast/draft paths (#78).
+"""Write-behind session recorder for the no-loop synthesis / draft paths (#78).
 
-``/v1/structured/fast`` and ``/v1/draft/stream`` were sessionless by design —
+The ``mode: "synthesis"`` lane of ``POST /v1/structured`` (the former
+``/v1/structured/fast`` sibling, folded in by #85) and ``POST /v1/draft/stream``
+are single-round-trip, latency-critical paths that were sessionless by design —
 zero session record, transcript, or Langfuse trace. #78 reclassified that as a
 defect: those surfaces must be session-full like every other entry point, WITHOUT
 regressing the latency path (draft p95 TTFT < 1.5s).
 
-:class:`RealtimeSessionRecorder` is the one atomic class both routes use to make
+:class:`RealtimeSessionRecorder` is the one atomic class both paths use to make
 that true. It owns the two halves of "session-full but fast":
 
 * **In-process trace.** It derives :class:`~mewbo_core.session_provenance.TraceProvenance`
@@ -37,7 +39,10 @@ from mewbo_core.session_provenance import TraceProvenance
 
 logging = get_logger(name="api.realtime.recorder")
 
-# Provenance tag PREFIXES for the two realtime surfaces. Kept parallel to
+# Provenance tag PREFIXES for the two low-latency surfaces. ``structured:fast``
+# stamps the no-loop ``mode: "synthesis"`` lane of ``/v1/structured`` (its
+# ``session_type`` facet stays ``structured_fast`` for dashboard parity with the
+# removed ``/v1/structured/fast`` sibling). Kept parallel to
 # ``structured_response.STRUCTURED_RUN_TAG`` ("structured:run") so the three
 # structured-family surfaces share the ``structured`` product while staying
 # individually filterable by ``session_type`` (the 2nd ``:``-segment).
@@ -97,7 +102,12 @@ class RealtimeSessionRecorder:
 
     @classmethod
     def for_fast(cls, runtime: Any, query: str, **kwargs: Any) -> RealtimeSessionRecorder:
-        """Recorder for ``POST /v1/structured/fast`` (tag ``structured:fast:<id>``)."""
+        """Recorder for the no-loop ``mode: "synthesis"`` lane of ``POST /v1/structured``.
+
+        Tags the session ``structured:fast:<id>`` so its Langfuse ``session_type``
+        facet stays ``structured_fast`` (parity with the removed
+        ``/v1/structured/fast`` sibling, #85).
+        """
         return cls(runtime=runtime, query=query, base_tag=FAST_STRUCTURED_TAG, **kwargs)
 
     @classmethod

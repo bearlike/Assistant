@@ -113,6 +113,46 @@ def test_query_nodes_combined_filters(store: JsonScgStore) -> None:
     assert [n.name for n in hits] == ["search"]
 
 
+# ── query_nodes caching + invalidation (#139) ───────────────────────────────
+
+
+def test_query_nodes_is_cached_until_a_node_write(store: JsonScgStore) -> None:
+    """Repeat query_nodes reads hit the memo; a node write invalidates it.
+
+    The landing page re-scans the node collection once per source on `/sources`
+    and `/graph`; caching by the filter triple turns the repeats into O(1) hits
+    while a write (`upsert_nodes`) keeps same-process reads correct.
+    """
+    store.upsert_nodes([_node("github", "Repo")])
+    calls = {"n": 0}
+    uncached = store._query_nodes_uncached
+
+    def counting(**kwargs: object) -> list[ScgNode]:
+        calls["n"] += 1
+        return uncached(**kwargs)  # type: ignore[arg-type]
+
+    store._query_nodes_uncached = counting  # type: ignore[method-assign]
+
+    # First read scans + memoizes; the next two are served from the cache.
+    assert {n.name for n in store.query_nodes(source_id="github")} == {"Repo"}
+    store.query_nodes(source_id="github")
+    store.query_nodes(source_id="github")
+    assert calls["n"] == 1
+
+    # A node write invalidates → the next read re-scans and sees the new node.
+    store.upsert_nodes([_node("github", "Issue")])
+    assert {n.name for n in store.query_nodes(source_id="github")} == {"Repo", "Issue"}
+    assert calls["n"] == 2
+
+
+def test_delete_source_invalidates_node_cache(store: JsonScgStore) -> None:
+    """A scoped delete drops the cached node reads (no stale graph)."""
+    store.upsert_nodes([_node("github", "Repo")])
+    assert store.query_nodes(source_id="github")  # warm the cache
+    store.delete_source("github")
+    assert store.query_nodes(source_id="github") == []
+
+
 # ── edges + neighbors ───────────────────────────────────────────────────────
 
 

@@ -32,6 +32,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC_OUTPUT_PATH = REPO_ROOT / "docs" / "openapi.json"
 
 # Markdown rendered by Scalar as the reference's introduction section.
+#
+# No mermaid/diagrams here on purpose: the pinned Scalar bundle
+# ``docs/assets/scalar.standalone.min.js`` (v1.59.3) does NOT render
+# ```mermaid``` fences in OpenAPI descriptions — the bundle contains zero
+# "mermaid" references, so a fence renders as a plain <pre> code block, not a
+# diagram (verified headless in Chrome). Lifecycles are therefore expressed as
+# plain numbered-step markdown, which renders reliably everywhere. If a future
+# Scalar bump adds native mermaid (re-run the bundle grep to confirm), these
+# step lists can become ```mermaid``` flows.
 OVERVIEW_DESCRIPTION = """\
 Everything the Mewbo web console can do is available over plain HTTP. Create \
 sessions and send queries. Stream events live. Run multi-source searches. Get \
@@ -88,13 +97,34 @@ curl -N "http://localhost:5125/api/sessions/9e2d47c1.../stream?api_key=$MEWBO_AP
 The stream closes when the run finishes. The full transcript stays available \
 through `GET /api/sessions/{session_id}/events`.
 
+The session lifecycle is four steps, all keyed by the same `session_id`:
+
+1. **Create** — `POST /api/sessions` returns a `session_id`.
+2. **Query** — `POST /api/sessions/{session_id}/query` starts a run.
+3. **Watch** — `GET /api/sessions/{session_id}/stream` pushes events live \
+   over SSE until the run reaches a terminal state.
+4. **Replay** — `GET /api/sessions/{session_id}/events` returns the full \
+   transcript at any time afterwards.
+
 ## Long-running work
 
 Searches, structured runs, and indexing jobs can outlive a single request. \
-These endpoints return a run or job id right away. Poll the matching `GET` \
-endpoint, or subscribe to the run's `/events` stream, until the status turns \
-terminal. Structured run handles have the form `<session_id>:r<seq>`, so the \
-part before the first colon is always a session you can stream.
+These endpoints return a run or job id right away, then settle into one \
+terminal status — `completed`, `failed`, or `cancelled`. The pattern is the \
+same for all of them:
+
+1. **Start** — call the create endpoint; it returns a run or job id \
+   immediately. Structured run handles have the form `<session_id>:r<seq>`, \
+   so the part before the first colon is always a session you can stream.
+2. **Follow** — either poll the matching `GET .../{run_id}` endpoint, or \
+   subscribe to its `GET .../{run_id}/events` SSE stream.
+3. **Read** — once the status is terminal, the poll stops and the stream \
+   closes; the run carries its result.
+
+For Agentic Search specifically, pick a workspace with \
+`GET /api/agentic_search/workspaces`, start a run with \
+`POST /api/agentic_search/runs`, follow it with the steps above, and read the \
+cited answer with its sources off the terminal run.
 
 ## Streaming
 
@@ -141,7 +171,6 @@ RETAG_RULES: list[tuple[str, str]] = [
     ("/api/agentic_search/runs", "Workspaces & Runs"),
     ("/api/agentic_search/sources", "Source Graph"),
     ("/api/agentic_search/scg", "Source Graph"),
-    ("/v1/structured/fast", "Fast Structured"),
     ("/v1/structured", "Structured Outputs"),
     ("/v1/draft", "Draft Streaming"),
     ("/v1/wiki", "Wiki Ingestion"),
@@ -157,7 +186,7 @@ TAG_GROUPS: list[tuple[str, list[str]]] = [
     ("Agentic Search", ["Workspaces & Runs", "Source Graph"]),
     (
         "Structured & Realtime",
-        ["Structured Outputs", "Fast Structured", "Draft Streaming", "Wiki Ingestion"],
+        ["Structured Outputs", "Draft Streaming", "Wiki Ingestion"],
     ),
     (
         "Platform",
@@ -212,11 +241,9 @@ TAG_DESCRIPTIONS: dict[str, str] = {
     "Structured Outputs": (
         "Schema-constrained agentic runs. Send a query plus a JSON Schema and "
         "get back an object that validates against it, with optional "
-        "workspace grounding and graph-first provenance."
-    ),
-    "Fast Structured": (
-        "Retrieval-only structured synthesis in one round trip. No tool use. "
-        "Same request contract as /v1/structured, tuned for fast first tokens."
+        "workspace grounding and graph-first provenance. Pass "
+        '`"mode": "synthesis"` for a no-loop, single round-trip variant that '
+        "returns inline instead of a polling handle."
     ),
     "Draft Streaming": (
         "Token-by-token draft answers over server-sent events. The lowest "

@@ -149,13 +149,33 @@ def agent_line(*, agent_id: str, line: TraceLine) -> dict[str, Any]:
     return {"type": "agent_line", "agent_id": agent_id, "line": line.model_dump()}
 
 
-def agent_done(*, agent_id: str, results_count: int, empty: bool = False) -> dict[str, Any]:
-    """A sub-agent finished; reports how many results it contributed."""
+def agent_done(
+    *,
+    agent_id: str,
+    results_count: int,
+    empty: bool = False,
+    result: str = "",
+    returned_count: int | None = None,
+) -> dict[str, Any]:
+    """A sub-agent finished; carries its terminal evidence block.
+
+    ``empty`` marks a dead-ended lane (``NO DATA`` / no output) so the console
+    styles it distinctly; ``result`` is the probe's compressed evidence block
+    (additive — older consumers ignore it) so the lane can show what it found.
+
+    ``results_count`` is the lane's KEPT card count (after cross-emitter dedup);
+    ``returned_count`` is how many it RAW-emitted before dedup (additive — the
+    console shows the ``returned − kept`` delta as "N filtered" so the trace
+    reads how much each tool contributed vs. how much was a duplicate). Defaults
+    to ``results_count`` when the caller has no separate raw tally.
+    """
     return {
         "type": "agent_done",
         "agent_id": agent_id,
         "results_count": results_count,
+        "returned_count": results_count if returned_count is None else returned_count,
         "empty": empty,
+        "result": result,
     }
 
 
@@ -172,6 +192,16 @@ def answer_delta(*, text: str) -> dict[str, Any]:
 def answer_ready(*, answer: AnswerSynthesis) -> dict[str, Any]:
     """The full cited synthesis block is ready."""
     return {"type": "answer_ready", "answer": answer.model_dump()}
+
+
+def related_questions(*, questions: list[str]) -> dict[str, Any]:
+    """Follow-up suggestions for the right rail (a parallel structured call).
+
+    Emitted once at settle, AFTER ``answer_ready`` and BEFORE the terminal
+    ``run_done`` (so the stream still delivers it), so the live view shows the
+    same follow-ups the snapshot's ``RunPayload.related_questions`` carries.
+    """
+    return {"type": "related_questions", "questions": list(questions)}
 
 
 def run_done(*, status: str, total_ms: int) -> dict[str, Any]:
@@ -196,6 +226,7 @@ __all__ = [
     "result",
     "answer_delta",
     "answer_ready",
+    "related_questions",
     "run_done",
     "error",
 ]

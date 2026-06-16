@@ -1,0 +1,100 @@
+# Catalog + agent-tree string templates (Gitea #89, phase 1).
+#
+# VERBATIM extraction from skills.py:SkillRegistry.render_catalog,
+# agent_registry.py:AgentRegistry.render_catalog, and
+# hypervisor.py:AgentHypervisor.render_agent_tree. Only the STRING templates move
+# here — the catalog/tree-walking logic (capability filtering, depth sort, status
+# counts) stays in code. Golden tests in tests/test_prompt_registry_assembly.py
+# enforce byte-equality. Header entries are static (no `variables`) so the no-row
+# caller branch can still recover the header; the joined-rows entries declare the
+# one pre-joined variable the call site builds. render() never strips: `|-` keeps
+# no trailing newline, matching the originals (the catalog "\n".join lives at the
+# call site).
+
+# -- skills catalog (skills.py:render_catalog) ------------------------------
+
+catalog.skills.header:
+  purpose: >-
+    Header line of the auto-invocable skill catalog injected into the system
+    prompt; recoverable on its own for the empty-rows branch.
+  template: "Available skills (use activate_skill to load instructions when relevant):"
+
+catalog.skills:
+  purpose: >-
+    Full skill catalog — header plus one `- name: description` row per
+    auto-invocable skill (rows joined with newlines at the call site).
+  variables: [skill_lines]
+  template: |-
+    Available skills (use activate_skill to load instructions when relevant):
+    {{ skill_lines }}
+
+# -- agent-type catalog (agent_registry.py:render_catalog) ------------------
+
+catalog.agent_types.header:
+  purpose: >-
+    Header line of the spawn_agent agent-type catalog; recoverable on its own for
+    the empty-rows branch.
+  template: "Available agent types (use spawn_agent with agent_type to delegate):"
+
+catalog.agent_types:
+  purpose: >-
+    Full agent-type catalog — header plus one `- name: description` row per
+    visible AgentDef (rows joined with newlines at the call site).
+  variables: [agent_lines]
+  template: |-
+    Available agent types (use spawn_agent with agent_type to delegate):
+    {{ agent_lines }}
+
+# -- live agent tree (hypervisor.py:render_agent_tree) ----------------------
+# Per-line / per-fragment formats; the tree-walking + counting logic stays in
+# code. Each fragment reproduces one original f-string exactly.
+
+catalog.agent_tree.header:
+  purpose: Agent-tree header — status counts plus the optional budget suffix.
+  variables: [status_parts, budget_str]
+  template: "Agents: {{ status_parts }}{{ budget_str }}"
+
+catalog.agent_tree.budget:
+  purpose: Optional session step-budget suffix appended to the tree header.
+  variables: [total_steps, session_step_budget]
+  template: " | Budget: {{ total_steps }}/{{ session_step_budget }} steps"
+
+catalog.agent_tree.step_info_last:
+  purpose: >-
+    The ", last: <tool>" suffix appended to a row's step count.
+  variables: [last_tool_id]
+  template: ", last: {{ last_tool_id }}"
+
+catalog.agent_tree.result:
+  purpose: >-
+    " | result(<status>): <summary>" suffix shown when a child has a result
+    summary (summary pre-truncated to 120 chars at the call site).
+  variables: [status, summary]
+  template: " | result({{ status }}): {{ summary }}"
+
+catalog.agent_tree.progress:
+  purpose: >-
+    " | progress: <note>" suffix shown when a child has no result yet
+    (note pre-truncated to 120 chars at the call site).
+  variables: [progress_note]
+  template: " | progress: {{ progress_note }}"
+
+catalog.agent_tree.compact:
+  purpose: '" | compacted x<n>" suffix shown when a child compacted its context.'
+  variables: [compaction_count]
+  template: " | compacted x{{ compaction_count }}"
+
+catalog.agent_tree.line:
+  purpose: >-
+    One agent-tree row: indent, short id, status, quoted task preview, and the
+    parenthesised step-info/markers/extra (all fragments pre-built at the call site).
+  variables:
+    - indent
+    - agent_id_head
+    - status
+    - task_preview
+    - step_info
+    - status_marker
+    - compact_marker
+    - extra
+  template: '{{ indent }}- [{{ agent_id_head }}] {{ status }}: "{{ task_preview }}" ({{ step_info }}{{ status_marker }}{{ compact_marker }}{{ extra }})'

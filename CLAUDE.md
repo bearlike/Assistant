@@ -1,5 +1,15 @@
 # Agents Guide — Mewbo
 
+## Handling handed-off issues (Gitea) — read first
+
+When you own a Gitea ticket end-to-end, work it in this order:
+
+1. **Read, then act.** Read the issue AND its latest comments (scope usually lives in the newest comment, not the body), identify the components it touches, make the necessary changes, and follow the instructions faithfully. Drive parallel sub-agents (the `Agent` tool) to explore/implement/review/test concurrently — reserve your own context for synthesis and verification (see DRY/KISS below).
+2. **Wire the PR to auto-close the issue.** In the PR body, reference the ticket with a closing keyword (`Closes #N` / `Fixes #N`) so merging the PR closes it automatically. For an umbrella with deliberately-open children (e.g. ops-only), name which ones stay open.
+3. **Reconcile with the target branch.** After opening the PR, confirm it is mergeable against the *current* remote target (`main` moves under you) — fetch, check for conflicts, and rebase/merge + resolve them if any, then re-run the suite before requesting merge.
+4. **Uphold DRY & KISS.** Smallest diff that solves it; search for an existing utility/component before writing anything custom; one atomic class per feature; no speculative abstractions. Spawn sub-agents per the parallel-delegation principle in (1).
+5. **Reply on the ticket.** Post a completion comment cross-referencing the PR # + commit SHA, the corrected root cause, and an honest validation caveat; keep the phased checklist in the body in lockstep.
+
 ## MANDATORY: Hydrate before touching files
 
 At the start of every conversation and every non-trivial task, call `ask_question` on `bearlike/Assistant`. Try DeepWiki (`mcp__deepwiki__Deepwiki-OSS-ask_question`) first; fall back to Devin Wiki (`mcp__devin__Devin-Wiki-Personal-ask_question`). Use `read_wiki_structure` → `read_wiki_contents` for deeper exploration. Only read local files after hydration. Include this directive in subagent prompts.
@@ -67,6 +77,7 @@ Read the deepest file that applies before editing. Every child carries `> ↑ pa
 | CLI (Rich/Textual display, agent panel) | `apps/mewbo_cli/CLAUDE.md` |
 | Home Assistant conversation agent | `apps/mewbo_ha_conversation/CLAUDE.md` |
 | Test patterns + fixtures | `tests/CLAUDE.md` |
+| Docs site: code-ref badges, Scalar, authoring | `docs/CLAUDE.md` |
 
 ## MCP tools — when to use each
 

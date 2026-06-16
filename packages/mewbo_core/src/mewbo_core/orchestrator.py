@@ -32,7 +32,7 @@ from mewbo_core.session_store import SessionStoreBase, create_session_store
 from mewbo_core.session_tools import SessionTool, SessionToolRegistry
 from mewbo_core.skills import SkillRegistry, activate_skill
 from mewbo_core.token_budget import get_token_budget
-from mewbo_core.tool_registry import ToolRegistry, filter_specs, load_registry
+from mewbo_core.tool_registry import ToolRegistry, filter_specs, get_or_build_registry
 from mewbo_core.tool_use_loop import ToolUseLoop
 
 logging = get_logger(name="core.orchestrator")
@@ -155,7 +155,12 @@ class Orchestrator:
         else:
             plugin_mcp_servers = {}
 
-        self._tool_registry = tool_registry or load_registry(
+        # Reuse a cached registry across runs whose build inputs (cwd +
+        # plugin-contributed MCP servers + MCP-config fingerprint) are identical,
+        # instead of rebuilding per query — the per-run rebuild was on the
+        # critical path to the first FE-visible event (Gitea #138). An explicit
+        # ``tool_registry`` (tests, structured runners) still bypasses the cache.
+        self._tool_registry = tool_registry or get_or_build_registry(
             cwd=cwd,
             extra_mcp_servers=plugin_mcp_servers or None,
         )
@@ -185,6 +190,7 @@ class Orchestrator:
         source_platform: str | None = None,
         invocation_id: str | None = None,
         extra_session_tools: list[SessionTool] | None = None,
+        enable_skills: bool = True,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration for a session."""
         if session_id is None:
@@ -234,6 +240,7 @@ class Orchestrator:
                     message_queue=message_queue,
                     interrupt_step=interrupt_step,
                     extra_session_tools=extra_session_tools,
+                    enable_skills=enable_skills,
                 )
 
     def _run_with_session_context(
@@ -252,6 +259,7 @@ class Orchestrator:
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
         extra_session_tools: list[SessionTool] | None = None,
+        enable_skills: bool = True,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration with Langfuse session context set."""
         state = OrchestrationState(goal=user_query, session_id=session_id)
@@ -419,6 +427,7 @@ class Orchestrator:
                 session_id=session_id,
                 session_capabilities=session_caps,
                 extra_session_tools=extra_session_tools,
+                enable_skills=enable_skills,
             )
             try:
                 task_queue, state = asyncio.run(

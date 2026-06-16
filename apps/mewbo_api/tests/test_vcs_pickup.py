@@ -226,10 +226,12 @@ def test_issue_pickup_starts_async_run(
     assert body["run_id"]
     assert body["worktree_id"] is None
 
-    # Resolver consulted with the repository key, no worktree promotion.
-    assert resolver_calls == [{"key": "acme/widget", "promote": False}]
+    # Resolver is asked to promote (issue pickups want an isolated worktree);
+    # tmp_path is not a git repo, so worktree prep fails and the run falls
+    # back to the shared main checkout — exercising the graceful degrade path.
+    assert resolver_calls == [{"key": "acme/widget", "promote": True}]
 
-    # The run is bound to the project checkout.
+    # The run is bound to the project checkout (worktree prep degraded).
     [call] = fake_runtime.start_calls
     assert call["session_id"] == body["session_id"]
     assert call["cwd"] == str(tmp_path)
@@ -257,12 +259,54 @@ def test_issue_pickup_starts_async_run(
     assert "commit and push to this branch" not in prompt
 
 
+def test_issue_pickup_uses_worktree_context(
+    client, auth_headers, fake_runtime, resolver_calls, monkeypatch, tmp_path
+) -> None:
+    """Issue pickup binds to an isolated ``mewbo/issue-<n>`` worktree."""
+    wt = SimpleNamespace(
+        project_id="wt:proj-1:mewbo-issue-7",
+        path=str(tmp_path / "wt"),
+        branch="mewbo/issue-7",
+    )
+    ensured: list[tuple[str, int]] = []
+
+    def fake_ensure_issue_worktree(target, number):
+        ensured.append((target.project_id, number))
+        return wt
+
+    monkeypatch.setattr(vcs_pickup._service, "ensure_issue_worktree", fake_ensure_issue_worktree)
+
+    resp = client.post(URL, headers=auth_headers, json=_issue_body())
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["accepted"] is True
+    assert body["worktree_id"] == wt.project_id
+
+    # Resolver was asked to promote (worktrees need a managed parent).
+    assert resolver_calls == [{"key": "acme/widget", "promote": True}]
+    assert ensured == [("proj-1", 7)]
+
+    # Run cwd is the WORKTREE path; context points at it + the issue branch.
+    [call] = fake_runtime.start_calls
+    assert call["cwd"] == wt.path
+    [(_sid, ctx)] = fake_runtime.context_events
+    assert ctx["project"] == f"managed:{wt.project_id}"
+    assert ctx["branch"] == "mewbo/issue-7"
+
+    # Branch-aware prompt: working branch line + push-the-branch instruction,
+    # NOT the shared-checkout "create a feature branch" text.
+    prompt = call["user_query"]
+    assert "mewbo/issue-7" in prompt
+    assert "isolated worktree" in prompt
+    assert "never commit directly to the default branch" not in prompt
+
+
 def test_issue_pickup_project_override_resolves_that_key(
     client, auth_headers, fake_runtime, resolver_calls
 ) -> None:
     resp = client.post(URL, headers=auth_headers, json=_issue_body(project="OtherProject"))
     assert resp.status_code == 200
-    assert resolver_calls == [{"key": "OtherProject", "promote": False}]
+    assert resolver_calls == [{"key": "OtherProject", "promote": True}]
     # Session tag stays keyed on the repository, not the project override.
     assert resp.get_json()["session_tag"] == "vcs:acme/widget:issue:7"
 
@@ -498,6 +542,58 @@ def test_pr_pickup_real_worktree_from_bare_origin(
     [(_sid, ctx)] = fake_runtime.context_events
     assert ctx["project"] == f"managed:{wt.project_id}"
     assert ctx["branch"] == "feature/pr-1"
+
+
+def test_issue_pickup_real_worktree_from_head(
+    client, auth_headers, fake_runtime, cloned_project, monkeypatch
+) -> None:
+    """End-to-end issue pickup: a real ``mewbo/issue-<n>`` worktree cut from HEAD."""
+    monkeypatch.setattr(vcs_pickup._service, "project_store", backend.project_store)
+    resp = client.post(
+        URL,
+        headers=auth_headers,
+        json=_issue_body(number=7, project=cloned_project.project_id),
+    )
+    assert resp.status_code == 200, resp.get_json()
+    body = resp.get_json()
+    assert body["accepted"] is True
+    assert body["worktree_id"]
+
+    wt = backend.project_store.get_project(body["worktree_id"])
+    assert wt is not None and wt.is_worktree
+    assert wt.branch == "mewbo/issue-7"
+    assert Path(wt.path).is_dir()
+    # Cut from the default branch (main) HEAD — NOT any PR branch in the repo.
+    assert (Path(wt.path) / "README.md").is_file()
+    assert not (Path(wt.path) / "fix.txt").exists()
+
+    [call] = fake_runtime.start_calls
+    assert call["cwd"] == wt.path
+    [(_sid, ctx)] = fake_runtime.context_events
+    assert ctx["project"] == f"managed:{wt.project_id}"
+    assert ctx["branch"] == "mewbo/issue-7"
+
+
+def test_issue_pickup_second_run_reuses_branch(
+    client, auth_headers, fake_runtime, cloned_project, monkeypatch
+) -> None:
+    """A repeat issue pickup reuses the same ``mewbo/issue-<n>`` worktree."""
+    monkeypatch.setattr(vcs_pickup._service, "project_store", backend.project_store)
+    first = client.post(
+        URL, headers=auth_headers, json=_issue_body(number=9, project=cloned_project.project_id)
+    )
+    assert first.status_code == 200, first.get_json()
+    wt_id = first.get_json()["worktree_id"]
+    assert wt_id
+
+    second = client.post(
+        URL,
+        headers=auth_headers,
+        json=_issue_body(number=9, project=cloned_project.project_id, comment_author="alice"),
+    )
+    assert second.status_code == 200, second.get_json()
+    # Same deterministic worktree on the second sighting (branch already cut).
+    assert second.get_json()["worktree_id"] == wt_id
 
 
 # ---------------------------------------------------------------------------

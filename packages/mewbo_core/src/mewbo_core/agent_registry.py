@@ -25,6 +25,7 @@ from mewbo_core.capabilities import (
     parse_capabilities,
 )
 from mewbo_core.common import get_logger
+from mewbo_core.prompt_registry import get_prompt_registry
 
 logging = get_logger(name="core.agents")
 
@@ -279,10 +280,8 @@ class AgentRegistry:
         visible = self.visible_for(session_capabilities)
         if not visible:
             return ""
-        lines = ["Available agent types (use spawn_agent with agent_type to delegate):"]
-        for agent in visible:
-            lines.append(f"- {agent.name}: {agent.description}")
-        return "\n".join(lines)
+        agent_lines = "\n".join(f"- {agent.name}: {agent.description}" for agent in visible)
+        return get_prompt_registry().render("catalog.agent_types", agent_lines=agent_lines)
 
 
 #: Alias kept for backwards compatibility and test convenience.

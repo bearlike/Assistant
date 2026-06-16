@@ -14,9 +14,10 @@ agent's own VCS tools.
 
 :class:`VcsPickupService` owns the whole pickup behavior over its injected
 collaborators: resolve the repository to a project (including never-promoted
-config projects, matched by git remote identity), prepare a worktree on a PR's
-head branch (fetch + find-or-create, surviving the session-end reaper), and
-enqueue the prompt — steering an active run or starting a fresh one. Wired by
+config projects, matched by git remote identity), prepare an isolated worktree
+— a PR's head branch (fetch + find-or-create), or a ``mewbo/issue-<n>`` branch
+cut from HEAD for an issue, both surviving the session-end reaper — and enqueue
+the prompt — steering an active run or starting a fresh one. Wired by
 :func:`init_vcs_pickup` from ``backend.py`` (same DI pattern as
 ``ide_routes.py``).
 """
@@ -44,9 +45,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mewbo_core.project_store import ProjectStoreBase, VirtualProject
     from mewbo_core.session_runtime import SessionRuntime
 
+from mewbo_api.responses import ApiResponseKit
+
 logging = get_logger(name="api.vcs_pickup")
 
 vcs_ns = Namespace("automation", description="CI/VCS automation endpoints")
+
+# One DRY home for this namespace's error examples (every vcs-pickup error path
+# returns the legacy ``{"message": ...}`` shape). Built at module level so the
+# import-time decorators can see it; ``Vcs`` prefix namespaces the generated
+# model names on the shared Api registry.
+kit = ApiResponseKit(vcs_ns, prefix="Vcs")
 
 _pickup_model = vcs_ns.model(
     "VcsPickupRequest",
@@ -132,6 +141,49 @@ AuthResult = tuple[dict, int] | None
 AuthGuard = Callable[[], AuthResult]
 # Matches backend._resolve_repo_or_404(project_key, promote=...).
 RepoResolver = Callable[..., tuple[Any, tuple[dict, int] | None]]
+
+# Success-response models. ``example=`` drives Scalar's sample body; each field
+# matches a key in ``VcsPickupService.handle``'s return shapes.
+_pickup_started_model = vcs_ns.model(
+    "VcsPickupStarted",
+    {
+        "session_id": fields.String(
+            example="9e2d47c1f0",
+            description="The tag-keyed session the run was started or continued on.",
+        ),
+        "session_tag": fields.String(
+            example="vcs:acme/widgets:pull_request:42",
+            description="Deterministic tag vcs:<owner/repo>:<kind>:<number>.",
+        ),
+        "run_id": fields.String(
+            example="9e2d47c1f0:r1",
+            description="Run handle for the started run (absent on a skipped trigger).",
+        ),
+        "resumed": fields.Boolean(
+            example=False,
+            description="True when an existing session for this item was continued.",
+        ),
+        "worktree_id": fields.String(
+            example="b1c2d3e4",
+            description="Managed worktree the run is bound to, or null for the main checkout.",
+        ),
+        "accepted": fields.Boolean(
+            example=True, description="True when a fresh run was accepted and started."
+        ),
+        "enqueued": fields.Boolean(
+            example=True,
+            description="True (202 path) when the prompt was steered into an already-active run.",
+        ),
+        "skipped": fields.Boolean(
+            example=True,
+            description="True when the trigger was a no-op (e.g. the bot's own comment).",
+        ),
+        "reason": fields.String(
+            example="comment author is the bot",
+            description="Why the trigger was skipped (present only when skipped).",
+        ),
+    },
+)
 
 
 class VcsPickupBody(BaseModel):
@@ -242,6 +294,68 @@ class VcsPickupService:
                 branch,
             )
         return wt
+
+    @staticmethod
+    def issue_branch_for(number: int) -> str:
+        """Deterministic mewbo-owned branch backing an issue pickup worktree.
+
+        Mewbo-owned (``mewbo/`` prefix) so the session-end reaper deletes the
+        branch with the worktree (``ProjectStoreBase.delete_worktree``); shared
+        per issue so repeated pickups land on the same isolated workspace.
+        """
+        return f"mewbo/issue-{number}"
+
+    @classmethod
+    def _default_base(cls, repo_path: str) -> str:
+        """Resolve the freshest base ref for a new issue branch.
+
+        Best-effort fetches origin and bases off its default branch
+        (``origin/<default>``, the repo's HEAD); falls back to the parent
+        clone's current ``HEAD`` when the remote default cannot be resolved
+        (e.g. a clone with no ``origin/HEAD`` symref).
+        """
+        cls._git_ok(repo_path, "fetch", "origin")
+        try:
+            res = cls._git(repo_path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+            ref = res.stdout.strip()
+            if ref:
+                return ref
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+            pass
+        return "HEAD"
+
+    def ensure_issue_worktree(self, target: Any, number: int) -> VirtualProject | None:
+        """Best-effort isolated worktree from HEAD for an issue pickup.
+
+        Cuts a deterministic ``mewbo/issue-<n>`` branch from the default-branch
+        HEAD so the agent works in isolation (concurrent issue pickups never
+        collide in a shared checkout) and gets a clean, push-ready branch to
+        open a pull request from. Idempotent: a repeat pickup reuses the branch
+        the first one cut (session continuity) rather than re-basing it.
+
+        Returns ``None`` — and the caller falls back to the shared main
+        checkout — when the project has no managed parent or the worktree
+        cannot be created (e.g. a non-git project path). Unlike a PR's own
+        branch, an isolated branch is a nicety for an issue, not a hard
+        requirement, so failure degrades instead of erroring.
+        """
+        if not target.project_id:
+            return None
+        branch = self.issue_branch_for(number)
+        # Only cut a fresh branch from HEAD the first time; a later pickup
+        # reuses the existing branch so the agent resumes where it left off.
+        base: str | None = None
+        if not self._git_ok(target.path, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"):
+            base = self._default_base(target.path)
+        try:
+            return self.project_store.create_worktree(target.project_id, branch, base=base)
+        except Exception as exc:  # noqa: BLE001 - best-effort; fall back to main checkout
+            logging.warning(
+                "Issue #{} worktree could not be prepared ({}); using main checkout.",
+                number,
+                exc,
+            )
+            return None
 
     # -- project resolution --------------------------------------------------
 
@@ -354,8 +468,14 @@ class VcsPickupService:
     # -- prompt ----------------------------------------------------------------
 
     @staticmethod
-    def build_prompt(body: VcsPickupBody) -> str:
-        """Render the pickup prompt handed to the agent as its user query."""
+    def build_prompt(body: VcsPickupBody, *, worktree_branch: str | None = None) -> str:
+        """Render the pickup prompt handed to the agent as its user query.
+
+        *worktree_branch* is the branch the session's isolated worktree is
+        checked out on (a PR head, or the ``mewbo/issue-<n>`` branch cut for an
+        issue pickup). When ``None`` the issue ran in the shared main checkout
+        and the agent is told to cut its own branch.
+        """
         if body.prompt:
             return body.prompt
         kind_label = "pull request" if body.kind == "pull_request" else "issue"
@@ -370,6 +490,8 @@ class VcsPickupService:
             lines.append(f"URL: {body.url}")
         if body.head_ref:
             lines.append(f"Branch: {body.head_ref} (base: {body.base_ref or 'default'})")
+        elif worktree_branch:
+            lines.append(f"Working branch: {worktree_branch} (cut from the default branch)")
         if body.body:
             lines += ["", f"{kind_label.capitalize()} description:", body.body]
         if body.comment:
@@ -386,6 +508,15 @@ class VcsPickupService:
                 "above; continue from its current state.",
                 "- Implement what is asked, run focused tests, then commit and push "
                 "to this branch so the pull request updates.",
+            ]
+        elif worktree_branch:
+            lines += [
+                f"- Your working directory is an isolated worktree on branch "
+                f"`{worktree_branch}`, cut fresh from the default branch. Commit "
+                "your work there; never touch the default branch.",
+                f"- Implement what is asked, run focused tests, then push "
+                f"`{worktree_branch}` and open a pull request that references this "
+                "issue if you have tools to do so.",
             ]
         else:
             lines += [
@@ -414,14 +545,23 @@ class VcsPickupService:
         if body.bot_login and body.comment_author == body.bot_login:
             return {"skipped": True, "reason": "comment author is the bot"}, 200
 
-        needs_worktree = body.kind == "pull_request" and bool(body.head_ref)
+        # PR pickups bind to a worktree on the (required) head branch; issue
+        # pickups get an isolated worktree cut from HEAD so the agent never
+        # works in the shared main checkout (#72 expanded intent). Both need a
+        # managed parent → promote on resolution.
+        needs_pr_worktree = body.kind == "pull_request" and bool(body.head_ref)
+        needs_worktree = needs_pr_worktree or body.kind == "issue"
         target, err = self.resolve_target(body, promote=needs_worktree)
         if err:
             return err
         assert target is not None
 
         worktree_id: str | None = None
-        if needs_worktree and body.head_ref:
+        agent_branch: str | None = None
+        issue_wt = (
+            self.ensure_issue_worktree(target, body.number) if body.kind == "issue" else None
+        )
+        if needs_pr_worktree and body.head_ref:
             try:
                 wt = self.ensure_worktree(target, body.head_ref)
             except subprocess.CalledProcessError as exc:
@@ -436,6 +576,12 @@ class VcsPickupService:
             worktree_id = wt.project_id
             project_ref = f"managed:{wt.project_id}"
             cwd = wt.path
+            agent_branch = body.head_ref
+        elif issue_wt is not None:
+            worktree_id = issue_wt.project_id
+            project_ref = f"managed:{issue_wt.project_id}"
+            cwd = issue_wt.path
+            agent_branch = issue_wt.branch
         elif target.project_id:
             project_ref = f"managed:{target.project_id}"
             cwd = target.path
@@ -446,7 +592,7 @@ class VcsPickupService:
         tag = self.session_tag_for(body.repository, body.kind, body.number)
         existing = self.runtime.session_store.resolve_tag(tag)
         session_id = self.runtime.resolve_session(session_tag=tag)
-        prompt = self.build_prompt(body)
+        prompt = self.build_prompt(body, worktree_branch=agent_branch)
 
         # A run already in flight for this item → steer it instead of 409ing.
         if self.runtime.is_running(session_id) and self.runtime.enqueue_message(
@@ -474,8 +620,8 @@ class VcsPickupService:
                 "url": body.url,
             },
         }
-        if body.head_ref:
-            context_payload["branch"] = body.head_ref
+        if agent_branch:
+            context_payload["branch"] = agent_branch
         if body.mode:
             context_payload["mode"] = body.mode
         self.runtime.append_context_event(session_id, context_payload)
@@ -548,15 +694,36 @@ def init_vcs_pickup(
 class VcsPickup(Resource):
     """Start or continue an agent session for an assigned/mentioned issue or PR."""
 
-    @vcs_ns.doc(security="apikey")
+    @vcs_ns.doc(
+        security="apikey",
+        description=(
+            "Start or continue an agent session for an issue or pull-request event "
+            "from CI (GitHub / Gitea Actions). Sessions are keyed by the "
+            "deterministic tag `vcs:<owner/repo>:<kind>:<number>`, so repeated "
+            "triggers for the same item reuse one conversation.\n\n"
+            "**Outcomes:**\n\n"
+            "- `200` — a fresh run was started (`accepted: true`, with `run_id`), or "
+            "the trigger was a no-op (`skipped: true`, e.g. the bot's own comment).\n"
+            "- `202` — a run was already active, so the prompt was enqueued as a "
+            "steering message (`enqueued: true`).\n\n"
+            "Pull-request pickups with a `head_ref` run in a worktree checked out on "
+            "that branch; issue pickups get an isolated `mewbo/issue-<n>` worktree. "
+            "When a forge token is configured server-side (`channels.vcs.tokens`), "
+            "the agent's final answer is posted back to the issue/PR as a comment."
+        ),
+    )
     @vcs_ns.expect(_pickup_model)
-    @vcs_ns.response(200, "Run started, or trigger skipped because the comment author is the bot")
-    @vcs_ns.response(202, "Prompt enqueued as a steering message into the already-active run")
-    @vcs_ns.response(400, "Invalid request body")
-    @vcs_ns.response(401, "Missing or invalid API key")
-    @vcs_ns.response(404, "Repository could not be resolved to a known project")
-    @vcs_ns.response(409, "The session is already running and the prompt could not be enqueued")
-    @vcs_ns.response(422, "The pull request branch or worktree could not be prepared")
+    @vcs_ns.response(
+        200, "Run started, or trigger skipped (e.g. the bot's own comment)", _pickup_started_model
+    )
+    @vcs_ns.response(
+        202,
+        "Prompt enqueued as a steering message into the already-active run",
+        _pickup_started_model,
+    )
+    @kit.errors(404, 409, 422, shape="message")
+    @kit.errors(400, shape="message")
+    @kit.auth_error()
     def post(self) -> tuple[dict, int]:
         """Trigger an agent pickup.
 

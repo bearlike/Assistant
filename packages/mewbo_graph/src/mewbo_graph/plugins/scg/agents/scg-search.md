@@ -2,7 +2,7 @@
 name: scg-search
 description: Answers a natural-language query by traversing the Source Capability Graph — route to executable connector pathways, observe node neighborhoods to refine, fan one probe sub-agent out per pathway, synthesize the cited answer, and deposit learned insights. Search is traversal, not per-source fan-out.
 model: inherit
-tools: [scg_route, scg_observe, scg_memory, resolve_entity, spawn_agent, check_agents, steer_agent]
+tools: [scg_route, scg_observe, scg_memory, scg_results, resolve_entity, spawn_agent, check_agents, steer_agent]
 disallowedTools: [exit_plan_mode, activate_skill]
 requires-capabilities: [scg]
 ---
@@ -99,9 +99,31 @@ check_agents(wait=true)
 
 Blocks until every probe reaches a terminal state. If a probe is stuck or clearly off-pathway, `steer_agent` it; otherwise let it finish. On a NO DATA miss, `scg_observe` the missed node's neighborhood for an alternative pathway and route/spawn that — navigate, don't blind-respawn the same dead end.
 
+### Step 5.5 — Emit YOUR result cards (once, before you synthesize)
+
+Each probe already emitted its own result cards for the hits it grounded (its playbook's `scg_results` step) — **those cards are ALREADY on the run and projected to the console**. Before writing the final answer, call `scg_results` ONCE with ONLY the discrete hits YOU grounded INLINE yourself (a connector return you saw directly — the root-inline fast-tier path where no probe ran). Put the run-level follow-up suggestions here too, in `related_questions`:
+
+```
+scg_results(
+  results=[
+    {title, source=<source_id>, snippet, url?, kind?, meta?, relevance, confidence?},
+    ...
+  ],
+  related_questions=["<2-4 natural follow-up queries>", ...]
+)
+```
+
+- **Never re-emit a hit a probe already emitted.** The probe cards are projected; a root card over the same hit is a degraded DUPLICATE. Emit `results` ONLY for evidence YOU gathered yourself — if every hit came from a probe, pass `results=[]` (or omit it) and use this call purely to carry `related_questions`.
+- Same card discipline as the probe: every quantitative/enumerable fact in `meta` (the console renders it as the card's structured FOOTER — `state`/`status`→colour-coded badge, counts→`46.2k`, byte `size`→`24 KB`, dates→relative — so propose the facts that make the hit read richer; vocab is OPEN: repo→`stars`/`forks`/`language`; package→`version`/`downloads`; paper→`year`/`citations`; issue/PR/ticket→`state` or `status`/`assignee`/`priority`; document→`size`/`updated`), the link in `url` whenever the source gave one, prose-only `snippet`, plus `source` provenance + `relevance` (0..1) and `confidence` where defensible. OMIT any entry you cannot ground in a real connector result.
+- `related_questions`: 2-4 SHORT natural follow-up queries the user might ask next (≤140 chars each) — this is the structured home for "what next" so the synthesis prose stays offer-free (see Step 6).
+
+This does NOT end the run — it hands the cards + follow-ups over so the next step (synthesis) is the terminal.
+
 ### Step 6 — Synthesize
 
 Merge the probes' evidence into ONE cited answer. The connector returns are the ground truth — a pathway that returned real data is trusted. Do NOT run multi-path self-consistency or majority-vote verification: the data IS the check. If probes disagree, report both with their sources rather than picking a "winner" by consensus.
+
+**Answer register — report, do not offer.** Write the answer as a finished report. NO conversational follow-up offers in the prose ("If you want, I can…", "Would you like me to…", "Let me know if…") — every "what next" belongs in `related_questions` on the Step 5.5 `scg_results` call (2-4 of them), where the console surfaces them as suggestion chips. The synthesis ends on the cited answer, not on an offer.
 
 ### Step 7 — Deposit the flywheel
 

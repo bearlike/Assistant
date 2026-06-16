@@ -1,6 +1,6 @@
 # CI Agent Pickup
 
-Assign a bot account to an issue, or @mention it in a comment, and Mewbo picks the item up: a CI workflow (`.github/workflows/agent-pickup.yml`) collects the issue/PR details and POSTs them to `POST /api/automation/vcs-pickup` on your Mewbo API, which starts (or continues) an agent session in the right working directory. The same workflow file runs on both **GitHub Actions** and **Gitea Actions**.
+Assign a bot account to an issue, or @mention it in a comment, and Mewbo picks the item up: a CI workflow ([`.github/workflows/agent-pickup.yml`](repo:.github/workflows/agent-pickup.yml)) collects the issue/PR details and POSTs them to [`POST /api/automation/vcs-pickup`](endpoint:POST /api/automation/vcs-pickup) on your Mewbo API, which starts (or continues) an agent session in the right working directory. The same workflow file runs on both **GitHub Actions** and **Gitea Actions**.
 
 ## How It Works
 
@@ -33,11 +33,11 @@ A concurrency group keyed on the item number serializes runs per issue/PR (witho
 **Working directory.**
 
 - **Pull request pickups** run in a **managed git worktree** checked out on the PR head branch. The endpoint fetches the branch from `origin`, creates a local tracking branch if needed, finds-or-creates the worktree (recreating it if the session-end reaper removed a clean one between mentions), and best-effort fast-forwards it to `origin/<branch>`. The agent is instructed to continue from the branch state, commit, and push so the PR updates.
-- **Issue pickups** run on the project's **main checkout**. The agent is instructed to create a feature branch (never commit to the default branch) and open a pull request referencing the issue.
+- **Issue pickups** run in an **isolated worktree cut from HEAD** — a deterministic `mewbo/issue-<number>` branch created from the default branch's latest commit. So the agent works in isolation (concurrent issue pickups never collide), commits to that branch, and opens a pull request referencing the issue. The branch is mewbo-owned, so the session-end reaper deletes it with the worktree; a repeat pickup of the same issue reuses the branch (the deterministic session tag keeps the conversation continuous). If the project has no managed parent or the worktree can't be created (e.g. a non-git project path), the pickup **degrades gracefully** to the shared main checkout and the agent is told to cut its own feature branch.
 
 ## Setup — GitHub Actions
 
-The workflow file ships in the repo at `.github/workflows/agent-pickup.yml`; you only need to configure secrets and variables (Settings → Secrets and variables → Actions).
+The workflow file ships in the repo at [`.github/workflows/agent-pickup.yml`](repo:.github/workflows/agent-pickup.yml); you only need to configure secrets and variables (Settings → Secrets and variables → Actions).
 
 **Repository secrets:**
 
@@ -48,11 +48,11 @@ The workflow file ships in the repo at `.github/workflows/agent-pickup.yml`; you
 
 **Provisioning the API key.** Mint a dedicated, revocable key instead of using
 the master token — keys minted via the key store authenticate every
-API-key-gated route, including `/api/automation/vcs-pickup`:
+API-key-gated route, including [`/api/automation/vcs-pickup`](endpoint:POST /api/automation/vcs-pickup):
 
 - Console: **Settings → Security → API keys** → create a key labeled for the
   repo (e.g. `agent-pickup CI`), or
-- API: `POST /api/keys` with the master token:
+- API: [`POST /api/keys`](endpoint:POST /api/keys) with the master token:
 
   ```bash
   curl -X POST "$MEWBO_API_URL/api/keys" \
@@ -62,7 +62,7 @@ API-key-gated route, including `/api/automation/vcs-pickup`:
   ```
 
 Store the returned `mk_...` value as the `MEWBO_API_TOKEN` repository secret.
-Revoking the key (`DELETE /api/keys/<id>`) immediately disables every workflow
+Revoking the key ([`DELETE /api/keys/<id>`](endpoint:DELETE /api/keys/<id>)) immediately disables every workflow
 that uses it, without touching the master token.
 
 **Repository variables:**
@@ -81,7 +81,7 @@ that uses it, without touching the master token.
 
 ## Setup — Gitea Actions
 
-Gitea Actions reads the **same file** — it picks up workflows from `.github/workflows/`, so nothing extra needs committing. Configure the same secrets and variables under **repo Settings → Actions → Secrets** and **→ Variables**.
+Gitea Actions reads the **same file** — it picks up workflows from [`.github/workflows/agent-pickup.yml`](repo:.github/workflows/agent-pickup.yml), so nothing extra needs committing. Configure the same secrets and variables under **repo Settings → Actions → Secrets** and **→ Variables**.
 
 Differences from GitHub that the workflow handles inline:
 
@@ -95,7 +95,7 @@ Runner requirements: a runner registered with the **`ubuntu-latest`** label must
 
 The Mewbo API must be able to map the `owner/repo` string to a local project:
 
-- **Automatic** — a configured project whose git remote matches the repository. Resolution uses the same `RepoIdentity` alias matching as the worktree routes, so the repo resolves via its Gitea host URL, a GitHub mirror URL, `owner/repo`, or the bare repo name.
+- **Automatic** — a configured project whose git remote matches the repository. Resolution uses the same [`RepoIdentity`](repo:apps/mewbo_api/src/mewbo_api/repo_identity.py) alias matching as the worktree routes, so the repo resolves via its Gitea host URL, a GitHub mirror URL, `owner/repo`, or the bare repo name.
 - **Explicit** — set the `AGENT_PROJECT` repository variable to a Mewbo project key, which overrides the `owner/repo` default.
 
 The project path must be a **git clone with an `origin` remote** that can fetch PR branches — PR pickups run `git fetch origin <branch>` in the parent clone before creating the worktree, and a pickup whose branch cannot be fetched fails with `422`.
@@ -154,7 +154,7 @@ Auth: `X-API-Key` header (the standard API key). Body is strict JSON (unknown fi
 
 | Status | Body | Meaning |
 |--------|------|---------|
-| `200` | `{"session_id", "session_tag", "run_id", "resumed", "worktree_id", "accepted": true}` | Run started. `resumed` is `true` when the tag matched an existing session; `worktree_id` is set for PR pickups, otherwise `null`. |
+| `200` | `{"session_id", "session_tag", "run_id", "resumed", "worktree_id", "accepted": true}` | Run started. `resumed` is `true` when the tag matched an existing session; `worktree_id` is set for PR pickups and for issue pickups that got an isolated worktree, `null` when an issue pickup degraded to the main checkout. |
 | `202` | `{"session_id", "session_tag", "enqueued": true, "resumed": true}` | A run was already active for this item — the prompt was enqueued as a steering message. |
 | `200` | `{"skipped": true, "reason": ...}` | Self-trigger suppressed. |
 | `400` | `{"message": "Invalid input: ..."}` | Body failed validation. |
@@ -167,7 +167,7 @@ Auth: `X-API-Key` header (the standard API key). Body is strict JSON (unknown fi
 A safe, incremental verification path (issue #72 acceptance criteria):
 
 1. **Manual dispatch first.** Run the *Agent Pickup* workflow via `workflow_dispatch` with a test issue number. This skips the assignment guard entirely and validates secrets, API reachability, and project resolution. The job log prints the JSON response and the session id.
-2. **Scratch issue + assignment.** Create a throwaway issue, assign the bot account, and watch the Actions run start and a session appear in the Mewbo console (tagged `vcs:<owner/repo>:issue:<n>`, on the main project checkout).
+2. **Scratch issue + assignment.** Create a throwaway issue, assign the bot account, and watch the Actions run start and a session appear in the Mewbo console (tagged `vcs:<owner/repo>:issue:<n>`, on an isolated `mewbo/issue-<n>` worktree cut from HEAD).
 3. **Negative check.** Assign a non-bot user to the same issue — the guard must skip the job (no run).
 4. **PR @mention.** Comment `@<bot-login> <request>` on a pull request — a session should start in a managed worktree on the PR head branch. Mention again to confirm the same session continues.
 

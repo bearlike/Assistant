@@ -106,6 +106,14 @@ class WikiEmitBlockTool(WikiSessionTool):
 
         # 5. Persist block_open then block_close.
         block_dict = validated_block.model_dump(by_alias=True)
+        # Re-scheme any wiki-page citation the model emitted as a bare path
+        # (``wiki:<page-id>``) BEFORE it lands on the log — at this one seam it
+        # fixes both the live stream and the reconciled snapshot, so the console's
+        # file SourceCard never 404s on a page ref (#70).
+        if block_dict.get("kind") == "sources":
+            from mewbo_graph.wiki.qa import QaFinalizer  # noqa: PLC0415
+
+            block_dict = QaFinalizer.tag_page_citations(block_dict, ctx.store, ctx.slug)
         ctx.store.append_qa_event(ctx.answer_id, {
             "type": "block_open",
             "index": args.index,

@@ -40,10 +40,13 @@ from ..schemas import Workspace
 # connector tools a run's sources unlock. Unioned with the run's scoped grant.
 # ``scg_observe`` (Search-on-Graph navigation) is granted here so it is available
 # once it lands; ``filter_specs`` silently drops it until then (graceful).
+# ``scg_results`` is the root agent's terminal result-emit step (#95) — the api
+# projects its ``tool_result`` transcript event into the run's ``result`` events.
 TRAVERSAL_TOOLS: tuple[str, ...] = (
     "scg_route",
     "scg_observe",
     "scg_memory",
+    "scg_results",
     "spawn_agent",
     "check_agents",
     "steer_agent",

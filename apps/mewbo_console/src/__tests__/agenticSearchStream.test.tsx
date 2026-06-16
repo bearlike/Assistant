@@ -79,6 +79,52 @@ describe("reduceRun attach + first-frame attach", () => {
     expect(s.results).toHaveLength(0)
     expect(s.attached).toBe(false)
   })
+
+  it("agent_done projects the probe's evidence onto the lane (#86)", () => {
+    let s = reduceRun(initialRunStreamState, { type: "attach", runId: "r1" })
+    s = reduceRun(s, {
+      type: "agent_start",
+      agent_id: "a1",
+      source_id: "github",
+      name: "scg-path-probe",
+      slot: 0,
+    })
+    s = reduceRun(s, {
+      type: "agent_done",
+      agent_id: "a1",
+      results_count: 0,
+      empty: false,
+      result: "EVIDENCE (pathway: github#search_issues): 2 issues filed last week.",
+    })
+    const lane = s.trace.find((a) => a.agent_id === "a1")
+    expect(lane).toBeDefined()
+    // The evidence rides the lane (TraceDrawer renders it as the response panel)…
+    expect(lane?.result).toContain("EVIDENCE (pathway: github#search_issues)")
+    // …and the terminal line marks it done + non-empty.
+    expect(lane?.lines.at(-1)).toMatchObject({ done: true, empty: false })
+  })
+
+  it("agent_done flags a NO-DATA dead-end as empty (#86)", () => {
+    let s = reduceRun(initialRunStreamState, { type: "attach", runId: "r1" })
+    s = reduceRun(s, {
+      type: "agent_start",
+      agent_id: "a2",
+      source_id: "linear",
+      name: "scg-path-probe",
+      slot: 1,
+    })
+    s = reduceRun(s, {
+      type: "agent_done",
+      agent_id: "a2",
+      results_count: 0,
+      empty: true,
+      result: "NO DATA on pathway linear#search for: matching issues",
+    })
+    const lane = s.trace.find((a) => a.agent_id === "a2")
+    expect(lane).toBeDefined()
+    expect(lane?.result).toMatch(/^NO DATA/)
+    expect(lane?.lines.at(-1)).toMatchObject({ done: true, empty: true })
+  })
 })
 
 // ── View integration: stream flips off "Starting search…" ────────────────────
@@ -93,6 +139,7 @@ vi.mock("../api/agenticSearch", async (orig) => {
     startRun: vi.fn(),
     getRun: vi.fn(),
     getWorkspaceGraph: vi.fn(),
+    getWorkspaceGraphSummary: vi.fn(),
     streamRun: vi.fn(),
   }
 })

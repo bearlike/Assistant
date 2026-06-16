@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { EventRecord } from "../types";
-import { buildTimeline, getActiveTurn, turnHasWidget } from "../utils/timeline";
+import { buildTimeline, getActiveStreamText, getActiveTurn, turnHasWidget } from "../utils/timeline";
 import { buildLogs } from "../utils/logs";
 
 // Minimal helper — only fields the timeline builder reads.
@@ -624,5 +624,65 @@ describe("LLM resilience events — retry / fallback / halt in buildLogs", () =>
       ev("2026-06-05T10:00:10Z", "recovery", { action: "something_else" }),
     ]);
     expect(logs.filter((l) => l.type === "recovery_halt")).toHaveLength(0);
+  });
+});
+
+describe("getActiveStreamText — live token deltas (#137)", () => {
+  test("coalesces root deltas into one growing message", () => {
+    const events: EventRecord[] = [
+      ev("2026-06-15T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-06-15T10:00:01Z", "agent_message_delta", { text: "Hel", depth: 0, step: 0 }),
+      ev("2026-06-15T10:00:02Z", "agent_message_delta", { text: "lo ", depth: 0, step: 0 }),
+      ev("2026-06-15T10:00:03Z", "agent_message_delta", { text: "world", depth: 0, step: 0 }),
+    ];
+    expect(getActiveStreamText(events)).toBe("Hello world");
+  });
+
+  test("a final agent_message reconciles (replaces) the streamed buffer", () => {
+    const events: EventRecord[] = [
+      ev("2026-06-15T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-06-15T10:00:01Z", "agent_message_delta", { text: "Hel", depth: 0, step: 0 }),
+      ev("2026-06-15T10:00:02Z", "agent_message_delta", { text: "lo wrld", depth: 0, step: 0 }),
+      // Authoritative per-step text wins over any delta drift.
+      ev("2026-06-15T10:00:03Z", "agent_message", { text: "Hello world", depth: 0 }),
+    ];
+    expect(getActiveStreamText(events)).toBe("Hello world");
+  });
+
+  test("joins finalized steps with a blank line, keeps in-flight tail", () => {
+    const events: EventRecord[] = [
+      ev("2026-06-15T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-06-15T10:00:01Z", "agent_message_delta", { text: "Checking…", depth: 0, step: 0 }),
+      ev("2026-06-15T10:00:02Z", "agent_message", { text: "Checking the file.", depth: 0 }),
+      ev("2026-06-15T10:00:03Z", "agent_message_delta", { text: "The answer", depth: 0, step: 1 }),
+    ];
+    expect(getActiveStreamText(events)).toBe("Checking the file.\n\nThe answer");
+  });
+
+  test("ignores sub-agent (depth>0) deltas — root narration only", () => {
+    const events: EventRecord[] = [
+      ev("2026-06-15T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-06-15T10:00:01Z", "agent_message_delta", { text: "child noise", depth: 1, step: 0 }),
+      ev("2026-06-15T10:00:02Z", "agent_message_delta", { text: "root text", depth: 0, step: 0 }),
+    ];
+    expect(getActiveStreamText(events)).toBe("root text");
+  });
+
+  test("graceful no-op: no deltas → empty string", () => {
+    const events: EventRecord[] = [
+      ev("2026-06-15T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-06-15T10:00:01Z", "tool_result", { tool_id: "shell", result: "ok" }),
+    ];
+    expect(getActiveStreamText(events)).toBe("");
+  });
+
+  test("graceful no-op: turn already closed → empty string", () => {
+    const events: EventRecord[] = [
+      ev("2026-06-15T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-06-15T10:00:01Z", "agent_message_delta", { text: "streamed", depth: 0, step: 0 }),
+      ev("2026-06-15T10:00:02Z", "assistant", { text: "done!" }),
+    ];
+    // The turn-closing assistant bubble is authoritative; no live preview.
+    expect(getActiveStreamText(events)).toBe("");
   });
 });

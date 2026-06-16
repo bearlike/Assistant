@@ -14,11 +14,30 @@ not-already-mapped/in-flight source — and never for a demo/unknown source, a
 disabled SCG, or a missing runtime.
 
 NO real LLM / session / MCP connector is ever touched.
+
+--- Thread synchronisation seam ---
+
+``on_workspace_saved`` now launches the fan-out (step 2 — ``_mappable``/
+``_drifted``/``_reenrich`` resolution + ``_start_map`` loop) on a daemon thread
+and returns that ``Thread`` (or ``None`` when the SCG gate is off / no runtime).
+Tests that assert on fan-out effects call ``_join(thread)`` before the assertion
+so they don't race.  The seam is chosen because:
+
+- it is the minimal, honest join point — the thread IS the fan-out;
+- it doesn't add any test-only attribute to the production class;
+- ``None`` from a gate-off path is accepted without joining (there is nothing to
+  wait for — the test that follows asserts that the recorder is EMPTY, which is
+  trivially true without joining).
+
+Tests that only assert on the synchronous step-1 effect (virtual-config refresh)
+do NOT join — that effect is guaranteed settled before ``on_workspace_saved``
+returns.
 """
 
 from __future__ import annotations
 
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +54,23 @@ _MERGED = {
         "internet-search": {"transport": "streamable_http", "url": "http://x/mcp/IS"},
     }
 }
+
+# Generous but bounded join timeout so a stalled test fails fast.
+_JOIN_TIMEOUT = 5.0  # seconds
+
+
+def _join(thread: threading.Thread | None, timeout: float = _JOIN_TIMEOUT) -> None:
+    """Wait for the background fan-out thread to finish (asserts it did not time out).
+
+    ``None`` (gate-off / no-runtime path) is a no-op because there is nothing to
+    wait for in that case.
+    """
+    if thread is None:
+        return
+    thread.join(timeout=timeout)
+    assert not thread.is_alive(), (
+        f"fan-out thread {thread.name!r} did not finish within {timeout}s"
+    )
 
 
 @pytest.fixture()
@@ -104,7 +140,10 @@ def _map_recorder(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_refreshes_virtual_config_even_when_scg_disabled(
     store: JsonAgenticSearchStore,
 ) -> None:
-    """The virtual MCP config is refreshed regardless of the SCG gate."""
+    """The virtual MCP config is refreshed regardless of the SCG gate.
+
+    Step 1 is synchronous — no join needed.
+    """
     WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
@@ -124,13 +163,14 @@ def test_auto_maps_newly_enabled_configured_sources(
     store: JsonAgenticSearchStore, _scg_on: None, _map_recorder: list[str]
 ) -> None:
     """A create with two configured sources maps both exactly once."""
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea", "internet-search"],
         prev_sources=None,
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert sorted(_map_recorder) == ["gitea", "internet-search"]
 
 
@@ -138,13 +178,14 @@ def test_only_newly_enabled_sources_are_mapped(
     store: JsonAgenticSearchStore, _scg_on: None, _map_recorder: list[str]
 ) -> None:
     """On an update, only the sources NOT in the prior selection are mapped."""
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea", "internet-search"],
         prev_sources=["gitea"],  # gitea was already enabled
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == ["internet-search"]
 
 
@@ -152,13 +193,14 @@ def test_demo_or_unconfigured_source_not_mapped(
     store: JsonAgenticSearchStore, _scg_on: None, _map_recorder: list[str]
 ) -> None:
     """A demo/unconfigured id (no MCP connector) is skipped, not mapped."""
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["demo-web", "gitea"],
         prev_sources=None,
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == ["gitea"]  # demo-web raised LookupError in the builder
 
 
@@ -177,13 +219,14 @@ def test_already_in_flight_source_not_remapped(
             status="running",
         )
     )
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea", "internet-search"],
         prev_sources=None,
         runtime=_FakeRuntime(),
     )
+    _join(t)
     # gitea is in-flight → skipped; only internet-search maps.
     assert _map_recorder == ["internet-search"]
 
@@ -198,13 +241,14 @@ def test_already_mapped_source_not_remapped(
     monkeypatch.setattr(
         WorkspaceSourceSync, "_mapped_source_ids", staticmethod(lambda: {"gitea"})
     )
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea", "internet-search"],
         prev_sources=None,
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == ["internet-search"]
 
 
@@ -220,13 +264,14 @@ def test_failed_job_does_not_block_remap(
             status="failed",
         )
     )
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea"],
         prev_sources=None,
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == ["gitea"]
 
 
@@ -236,14 +281,18 @@ def test_failed_job_does_not_block_remap(
 def test_no_automap_when_scg_disabled(
     store: JsonAgenticSearchStore, _map_recorder: list[str]
 ) -> None:
-    """SCG disabled (the default) → config refreshed, but no map fired."""
-    WorkspaceSourceSync.on_workspace_saved(
+    """SCG disabled (the default) → config refreshed, but no map fired.
+
+    Returns None — no join needed.
+    """
+    result = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea"],
         prev_sources=None,
         runtime=_FakeRuntime(),
     )
+    assert result is None
     assert _map_recorder == []
     assert WorkspaceMcpConfig.attached_server_names(store, "ws-1") == ["gitea"]
 
@@ -251,14 +300,18 @@ def test_no_automap_when_scg_disabled(
 def test_no_automap_without_runtime(
     store: JsonAgenticSearchStore, _scg_on: None, _map_recorder: list[str]
 ) -> None:
-    """No wired runtime → no map (the drive seam needs one)."""
-    WorkspaceSourceSync.on_workspace_saved(
+    """No wired runtime → no map (the drive seam needs one).
+
+    Returns None — no join needed.
+    """
+    result = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea"],
         prev_sources=None,
         runtime=None,
     )
+    assert result is None
     assert _map_recorder == []
 
 
@@ -293,13 +346,14 @@ def test_drifted_already_mapped_source_is_remapped(
         "_stored_manifest_hashes",
         staticmethod(lambda: {"gitea": "STALE-HASH"}),
     )
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea"],
         prev_sources=["gitea"],  # already enabled — only the drift path can map it
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == ["gitea"]
 
 
@@ -318,13 +372,14 @@ def test_unchanged_already_mapped_source_is_not_remapped(
         "_stored_manifest_hashes",
         staticmethod(lambda: {"gitea": _live_hash()}),  # live == stored → no drift
     )
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea"],
         prev_sources=["gitea"],
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == []
 
 
@@ -351,13 +406,14 @@ def test_drift_remap_skipped_when_already_in_flight(
             status="running",
         )
     )
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id="ws-1",
         new_sources=["gitea"],
         prev_sources=["gitea"],
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == []
 
 
@@ -398,13 +454,14 @@ def test_workspace_nl_context_rides_the_map_input(
             sources=["gitea"], instructions="prefer gitea#search_issues for repo lookups",
         )
     )
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id=ws.id,
         new_sources=["gitea"],
         prev_sources=None,
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert captured, "the map drive was never invoked"
     nl = captured[0].nl_context
     assert nl is not None
@@ -444,13 +501,14 @@ def test_no_nl_context_when_workspace_has_no_prose(
         ),
     )
     ws = store.create_workspace(WorkspaceInput(name="W", sources=["gitea"]))
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id=ws.id,
         new_sources=["gitea"],
         prev_sources=None,
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert captured and captured[0].nl_context is None
 
 
@@ -517,13 +575,14 @@ def test_prose_change_redrives_already_mapped_source(
     # Now the workspace prose changes to v2 (the route applies the update first).
     store.update_workspace(ws.id, {"instructions": "v2 — prefer search_issues"})
 
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id=ws.id,
         new_sources=["gitea"],
         prev_sources=["gitea"],  # unchanged selection — only the prose moved
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == ["gitea"]
     # The new fingerprint is persisted so the NEXT identical save is a no-op.
     assert WorkspaceMcpConfig.nl_fingerprint_of(store, ws.id) == (
@@ -555,13 +614,14 @@ def test_unchanged_prose_does_not_redrive(
         ["gitea"],
         nl_fingerprint=NlContextFingerprint.of(instructions="steady", desc=""),
     )
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id=ws.id,
         new_sources=["gitea"],
         prev_sources=["gitea"],
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == []
 
 
@@ -590,11 +650,123 @@ def test_prose_change_skips_unmapped_source(
         nl_fingerprint=NlContextFingerprint.of(instructions="v1", desc=""),
     )
     store.update_workspace(ws.id, {"instructions": "v2"})
-    WorkspaceSourceSync.on_workspace_saved(
+    t = WorkspaceSourceSync.on_workspace_saved(
         store=store,
         workspace_id=ws.id,
         new_sources=["gitea"],
         prev_sources=["gitea"],  # already enabled → not newly mappable either
         runtime=_FakeRuntime(),
     )
+    _join(t)
     assert _map_recorder == []
+
+
+# ── NEW: background fan-out tests (route promptness + error isolation) ────────
+
+
+def test_on_workspace_saved_returns_before_builder_unblocks(
+    monkeypatch: pytest.MonkeyPatch,
+    store: JsonAgenticSearchStore,
+    _scg_on: None,
+) -> None:
+    """``on_workspace_saved`` returns (201 path) before the builder MCP handshake completes.
+
+    The descriptor build is replaced with a blocking stub gated by a threading
+    ``Event``.  We verify:
+
+    1. ``on_workspace_saved`` returns a live thread BEFORE the event is set.
+    2. Setting the event lets the thread complete.
+    3. After joining, ``MapSourceJob.start`` was invoked (the job was started).
+    """
+    import mewbo_api.agentic_search.scg.descriptors as desc_mod
+    import mewbo_api.agentic_search.scg.map_job as map_job_mod
+
+    build_gate = threading.Event()
+    started: list[str] = []
+
+    class _FakeBuilt:
+        raw = {"tools": [{"name": "t"}]}
+
+    def _blocking_build(self: Any) -> _FakeBuilt:
+        build_gate.wait()  # blocks until the test releases it
+        if self.source_id not in _MERGED["servers"]:
+            raise LookupError(f"{self.source_id} not configured")
+        return _FakeBuilt()
+
+    def _fake_start(source: Any, *, store: Any, runtime: Any, model: Any = None) -> Any:
+        started.append(source.source_id)
+        return MapJobRecord(
+            job_id=f"map-{source.source_id}",
+            source_id=source.source_id,
+            source_type=source.source_type,
+            status="queued",
+        )
+
+    # Patch single binding — the module source_sync imports from
+    monkeypatch.setattr(desc_mod.SourceDescriptorBuilder, "build", _blocking_build)
+    monkeypatch.setattr(map_job_mod.MapSourceJob, "start", staticmethod(_fake_start))
+
+    t = WorkspaceSourceSync.on_workspace_saved(
+        store=store,
+        workspace_id="ws-prompt",
+        new_sources=["gitea"],
+        prev_sources=None,
+        runtime=_FakeRuntime(),
+    )
+
+    # on_workspace_saved must have returned while the build is still blocked.
+    assert t is not None, "expected a Thread (SCG enabled + runtime wired)"
+    assert t.is_alive(), "fan-out thread should still be running (build gate closed)"
+
+    # Release the gate and wait for the thread to finish.
+    build_gate.set()
+    _join(t)
+
+    # After joining, the job was started.
+    assert started == ["gitea"]
+
+
+def test_one_source_builder_error_does_not_affect_others(
+    monkeypatch: pytest.MonkeyPatch,
+    store: JsonAgenticSearchStore,
+    _scg_on: None,
+) -> None:
+    """An exception inside ``SourceDescriptorBuilder.build`` for one source does not
+    prevent the other sources in the same fan-out from being mapped.
+    """
+    import mewbo_api.agentic_search.scg.descriptors as desc_mod
+    import mewbo_api.agentic_search.scg.map_job as map_job_mod
+
+    started: list[str] = []
+
+    class _FakeBuilt:
+        raw = {"tools": [{"name": "t"}]}
+
+    def _selective_build(self: Any) -> _FakeBuilt:
+        if self.source_id == "gitea":
+            raise RuntimeError("simulated MCP timeout for gitea")
+        return _FakeBuilt()
+
+    def _fake_start(source: Any, *, store: Any, runtime: Any, model: Any = None) -> Any:
+        started.append(source.source_id)
+        return MapJobRecord(
+            job_id=f"map-{source.source_id}",
+            source_id=source.source_id,
+            source_type=source.source_type,
+            status="queued",
+        )
+
+    monkeypatch.setattr(desc_mod.SourceDescriptorBuilder, "build", _selective_build)
+    monkeypatch.setattr(map_job_mod.MapSourceJob, "start", staticmethod(_fake_start))
+
+    t = WorkspaceSourceSync.on_workspace_saved(
+        store=store,
+        workspace_id="ws-iso",
+        new_sources=["gitea", "internet-search"],
+        prev_sources=None,
+        runtime=_FakeRuntime(),
+    )
+    _join(t)
+
+    # gitea failed, but internet-search must still have been mapped.
+    assert started == ["internet-search"]

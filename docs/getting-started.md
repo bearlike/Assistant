@@ -60,7 +60,7 @@ Adds the Home Assistant tool for smart-home control via the CLI or API.
 uv sync --extra ha
 ```
 
-Then set `home_assistant.enabled` and credentials in `configs/app.json`. See [Home Assistant](clients-home-assistant.md).
+Then set `home_assistant.enabled` and credentials in [`configs/app.json`](repo:configs/app.json). See [Home Assistant](clients-home-assistant.md).
 
 ### All extras (developer) {#dev-setup}
 
@@ -99,8 +99,8 @@ The two files you'll edit most:
 
 | File | Purpose |
 |------|---------|
-| `configs/app.json` | Runtime settings, LLM keys, integrations |
-| `configs/mcp.json` | MCP server definitions |
+| [`configs/app.json`](repo:configs/app.json) | Runtime settings, LLM keys, integrations |
+| [`configs/mcp.json`](repo:configs/mcp.json) | MCP server definitions |
 
 To scaffold both from scratch, run `/init` from the CLI after a bare `uv sync`.
 
@@ -109,13 +109,13 @@ To scaffold both from scratch, run `/init` from the CLI after a bare `uv sync`.
 
 ## First run {#first-run}
 
-After copying and editing `configs/app.json`:
+After copying and editing [`configs/app.json`](repo:configs/app.json):
 
 ```bash
 uv run mewbo
 ```
 
-On first run, type `/init` to scaffold any missing config files. A minimal working `configs/app.json`:
+On first run, type `/init` to scaffold any missing config files. A minimal working [`configs/app.json`](repo:configs/app.json):
 
 ```json
 {
@@ -140,7 +140,7 @@ cp docker.example.env docker.env
 docker compose pull && docker compose up -d
 ```
 
-Required variables in `docker.env`:
+Required variables in [`docker.env`](repo:docker.env):
 
 | Variable | Purpose |
 |----------|---------|
@@ -182,7 +182,7 @@ Commit message format:
 <emoji> <verb>(<scope>): <message>
 ```
 
-Pre-push checks run `scripts/ci/check.sh`. This covers ruff format/check, mypy, and pytest.
+Pre-push checks run [`scripts/ci/check.sh`](repo:scripts/ci/check.sh). This covers ruff format/check, mypy, and pytest.
 
 ## Next steps {#next-steps}
 

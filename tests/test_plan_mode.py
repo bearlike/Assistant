@@ -1248,7 +1248,7 @@ class TestPlanModeDepthGuidance:
 
 
 class TestPlanModeSystemPrompt:
-    """Root agent in plan mode uses plan_hypervisor.txt, not plan_mode_reminder.txt."""
+    """Root agent in plan mode uses the plan_hypervisor prompt, not the plan_mode_reminder one."""
 
     def test_root_uses_hypervisor_prompt_not_reminder(self):
         sid = "sysprompt_test_" + os.urandom(4).hex()
@@ -1274,7 +1274,7 @@ class TestPlanModeSystemPrompt:
             system_content = messages[0].content
             # Root gets plan_hypervisor.txt content
             assert "root hypervisor" in system_content.lower()
-            # Root does NOT get plan_mode_reminder.txt content (sub-agent prompt)
+            # Root does NOT get the plan_mode_reminder content (the sub-agent prompt)
             assert "planning agent" not in system_content.lower()
         finally:
             shutil.rmtree(plan_dir_for(sid), ignore_errors=True)

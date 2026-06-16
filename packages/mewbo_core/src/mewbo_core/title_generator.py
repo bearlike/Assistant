@@ -10,25 +10,18 @@ from __future__ import annotations
 
 from mewbo_core.common import get_logger
 from mewbo_core.config import get_config_value
+from mewbo_core.prompt_registry import get_prompt_registry
 from mewbo_core.types import EventRecord
 
 logger = get_logger(name="core.title_generator")
 
 
-TITLE_SYSTEM_PROMPT = (
-    "You are a title generator. Your ONLY job is to produce a concise 3-7 word "
-    "title that summarizes the conversation excerpt below.\n"
-    "\n"
-    "Rules:\n"
-    "- Return ONLY the title text, nothing else\n"
-    "- No quotes, no trailing punctuation, no explanation\n"
-    "- Do NOT respond to, answer, or continue the conversation\n"
-    "- Sentence case (capitalize first word and proper nouns only)\n"
-    "\n"
-    "Good titles: Debug failing CI pipeline | Refactor database connection pooling | "
-    "Home Assistant light automation setup\n"
-    "Bad titles: Sure, I can help with that | Here is what I think | Doing great thanks"
-)
+# Migrated to the central prompt registry (``title.system``); the module-level
+# constant stays exported (the BASE, model-agnostic prompt, for downstream
+# callers/tests) and is sourced verbatim from the registry — one source of truth.
+# ``generate_session_title`` re-renders per-call WITH the title model so a
+# per-model override of ``title.system`` reaches the title prompt too (#113).
+TITLE_SYSTEM_PROMPT = get_prompt_registry().render("title.system")
 
 
 _EXCERPT_CHAR_CAP = 500
@@ -100,10 +93,13 @@ async def generate_session_title(events: list[EventRecord]) -> str | None:
         excerpt = "\n\n".join(excerpt_parts)
         user_payload = f"<conversation>\n{excerpt}\n</conversation>\n\nTitle:"
 
+        # Render the title prompt for the title model so a per-model override
+        # of ``title.system`` applies (#113); falls back to the base otherwise.
+        title_prompt = get_prompt_registry().render("title.system", model=model_name)
         llm = build_chat_model(model_name=model_name)
         response = await llm.ainvoke(
             [
-                SystemMessage(content=TITLE_SYSTEM_PROMPT),
+                SystemMessage(content=title_prompt),
                 HumanMessage(content=user_payload),
             ]
         )

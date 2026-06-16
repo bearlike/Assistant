@@ -7,8 +7,10 @@ import {
   Plus,
 } from 'lucide-react';
 import { CommandSpec, CreateWorktreeInput, QueryMode, SessionContext } from '../types';
+import { SkillSummary } from '../api/contracts';
 import { useMcpTools } from '../hooks/useMcpTools';
 import { useSkills } from '../hooks/useSkills';
+import { useProjectFiles } from '../hooks/useProjectFiles';
 import { useProjects } from '../hooks/useProjects';
 import { useModels } from '../hooks/useModels';
 import { useCommands } from '../hooks/useCommands';
@@ -16,10 +18,12 @@ import { useContainerCompact } from '../hooks/useContainerCompact';
 import { useProjectGit } from '../hooks/useProjectGit';
 import { executeCommand } from '../api/client';
 import { parseCommandInput } from '../lib/commands';
+import { parseMentionInput, spliceMention } from '../lib/mentions';
 import { FILE_INPUT_ACCEPT, filterAttachments } from '../lib/attachments';
 import { toast } from 'sonner';
 import { ConfigMenu, McpOption, McpStatus } from './ConfigMenu';
 import { CommandPalette } from './CommandPalette';
+import { FileMentionPicker } from './FileMentionPicker';
 import { CommandDialog } from './CommandDialog';
 import {
   DropdownMenu,
@@ -203,6 +207,80 @@ export function InputBar({
     setPaletteOpen(commandModeActive);
   }, [commandModeActive]);
 
+  // ── @file mentions ──────────────────────────────────────────────────────
+  // Caret position drives the active-token detection. We track it alongside
+  // the value (updated on every change + caret-moving key/click) so the
+  // mention parser sees where the user actually is, not just the text.
+  const [caretPos, setCaretPos] = useState(0);
+  const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+  const parsedMention = useMemo(
+    () => parseMentionInput(inputValue, caretPos),
+    [inputValue, caretPos],
+  );
+  // `@` and `/` are mutually exclusive — a command always wins (it owns the
+  // start of the message), so suppress the mention picker in command mode.
+  const mentionModeActive = parsedMention !== null && !commandModeActive;
+  const {
+    files: mentionFiles,
+    attachments: mentionAttachments,
+  } = useProjectFiles({
+    session: sessionId ?? null,
+    project: activeProject,
+    enabled: Boolean(sessionId || activeProject),
+  });
+  useEffect(() => {
+    setMentionPickerOpen(mentionModeActive);
+  }, [mentionModeActive]);
+
+  // Wrap the parent value setter so a caret-bearing change updates both. The
+  // textarea's onChange fires before the browser settles selectionStart only
+  // for paste/IME edge cases — close enough; key/click handlers refresh it.
+  const handleInputChange = useCallback((value: string) => {
+    setInputValue(value);
+    const el = textareaRef.current;
+    if (el) setCaretPos(el.selectionStart ?? value.length);
+    else setCaretPos(value.length);
+  }, []);
+  const syncCaret = useCallback(() => {
+    const el = textareaRef.current;
+    if (el) setCaretPos(el.selectionStart ?? 0);
+  }, []);
+
+  // Filtered+ranked mention candidates, shared by the picker render and the
+  // Enter-to-select shortcut so both pick the SAME top row.
+  const mentionQuery = parsedMention?.query ?? '';
+  const mentionMatches = useMemo(() => {
+    const q = mentionQuery.toLowerCase();
+    const atts = (q
+      ? mentionAttachments.filter((a) => a.toLowerCase().includes(q))
+      : mentionAttachments);
+    const fls = (q
+      ? mentionFiles.filter((f) => f.toLowerCase().includes(q))
+      : mentionFiles);
+    // Attachments first (matches the picker's group order).
+    return [...atts, ...fls];
+  }, [mentionQuery, mentionAttachments, mentionFiles]);
+
+  const insertMention = useCallback(
+    (path: string) => {
+      if (!parsedMention) return;
+      const spliced = spliceMention(inputValue, caretPos, parsedMention, path);
+      setInputValue(spliced.value);
+      setMentionPickerOpen(false);
+      // Restore focus + caret just past the inserted token on the next tick
+      // (after React commits the new value).
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(spliced.caret, spliced.caret);
+          setCaretPos(spliced.caret);
+        }
+      });
+    },
+    [inputValue, caretPos, parsedMention],
+  );
+
   // Transcript commands ('/compact' and friends) are handled async on the
   // backend: the server writes the user event, flips is_running=true, runs
   // the handler in a thread, and writes completion at the end. Polling
@@ -253,6 +331,24 @@ export function InputBar({
     },
     [commandMut, sessionId],
   );
+  // Selecting a skill from the slash palette inserts `/skill-name ` into the
+  // composer — it is NOT a command-endpoint dispatch. The orchestrator detects
+  // a leading `/skill-name` on a normal message turn and runs the skill (see
+  // backend `_resolve_skill`), so the user submits it like any other message.
+  const insertSkill = useCallback((skill: SkillSummary) => {
+    const next = `/${skill.name} `;
+    setInputValue(next);
+    setPaletteOpen(false);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+        setCaretPos(next.length);
+      }
+    });
+  }, []);
+
   // Sync local state from session context when navigating between sessions
   useEffect(() => {
     setActiveProject(sessionContext?.project ?? null);
@@ -508,6 +604,14 @@ export function InputBar({
     if (!inputValue.trim()) {
       return;
     }
+    // @mention path: when the picker is open with at least one candidate,
+    // Enter accepts the top row instead of submitting the turn (mirrors the
+    // slash palette's Enter-intercept). Mention mode is checked before the
+    // command path but is mutually exclusive with it (a `/` always wins).
+    if (mentionPickerOpen && mentionModeActive && mentionMatches.length > 0) {
+      insertMention(mentionMatches[0]);
+      return;
+    }
     // Slash-command path: intercept before the normal submit. Commands
     // bypass the isSubmitting gate — they don't enqueue a turn, they call
     // a dedicated endpoint, so a previous submission shouldn't block them.
@@ -571,10 +675,29 @@ export function InputBar({
     }
     setIsFullScreen(false);
   };
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Escape dismisses the open mention picker without touching the run/Stop
+    // confirm (the composer's Esc-opens-Stop lives in InputComposerBody and
+    // only fires while running).
+    if (e.key === 'Escape' && mentionPickerOpen) {
+      e.preventDefault();
+      setMentionPickerOpen(false);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
+      return;
+    }
+    // Arrow/Home/End move the caret — refresh our tracked position on the next
+    // tick so the mention parser re-evaluates the active token.
+    if (
+      e.key === 'ArrowLeft' ||
+      e.key === 'ArrowRight' ||
+      e.key === 'Home' ||
+      e.key === 'End'
+    ) {
+      requestAnimationFrame(syncCaret);
     }
   };
   const renderPlusMenu = (direction: 'up' | 'down') => (
@@ -709,7 +832,7 @@ export function InputBar({
         <InputComposerBody
           variant="dialog"
           inputValue={inputValue}
-          onInputChange={setInputValue}
+          onInputChange={handleInputChange}
           onSubmit={handleSubmit}
           onKeyDown={handleKeyDown}
           isSubmitting={isSubmitting}
@@ -753,37 +876,52 @@ export function InputBar({
             aria-hidden="true"
           />
           <div className="relative">
-            <div ref={containerRef} className={`${INPUT_CONTAINER_BASE} ${isExpanded ? INPUT_CONTAINER_GLOW : ''}`}>
-              <InputComposerBody
-                variant="home"
-                inputValue={inputValue}
-                onInputChange={setInputValue}
-                onSubmit={handleSubmit}
-                onKeyDown={handleKeyDown}
-                isSubmitting={isSubmitting}
-                isExpanded={isExpanded}
-                queryMode={queryMode}
-                onToggleFullScreen={() => setIsFullScreen(true)}
-                attachedFiles={attachedFiles}
-                onClearAttachments={() => setAttachedFiles([])}
-                plusMenu={inlinePlusMenu}
-                configMenu={inlineConfigMenu}
-                textareaRef={textareaRef}
-                placeholder="Describe a task..."
-                ariaLabel="Task description"
-                showVoice
-                showStop={false}
-                showMaximize
-                onFocus={() => {
-                  setIsFocused(true);
-                  onFocusChange?.(true, !inputValue.trim());
-                }}
-                onBlur={() => {
-                  setIsFocused(false);
-                  onFocusChange?.(false, !inputValue.trim());
-                }}
-              />
-            </div>
+            {/* Home composer: `@file` references resolve against the chosen
+                project (no session yet). The mention picker anchors the input
+                container and opens DOWN (home mode). Slash commands stay
+                detail-only — they need a live session to dispatch. */}
+            <FileMentionPicker
+              open={mentionPickerOpen}
+              query={mentionQuery}
+              files={mentionFiles}
+              attachments={mentionAttachments}
+              side="bottom"
+              onOpenChange={(v) => setMentionPickerOpen(v && mentionModeActive)}
+              onSelect={insertMention}
+              anchor={
+                <div ref={containerRef} className={`${INPUT_CONTAINER_BASE} ${isExpanded ? INPUT_CONTAINER_GLOW : ''}`}>
+                  <InputComposerBody
+                    variant="home"
+                    inputValue={inputValue}
+                    onInputChange={handleInputChange}
+                    onSubmit={handleSubmit}
+                    onKeyDown={handleKeyDown}
+                    isSubmitting={isSubmitting}
+                    isExpanded={isExpanded}
+                    queryMode={queryMode}
+                    onToggleFullScreen={() => setIsFullScreen(true)}
+                    attachedFiles={attachedFiles}
+                    onClearAttachments={() => setAttachedFiles([])}
+                    plusMenu={inlinePlusMenu}
+                    configMenu={inlineConfigMenu}
+                    textareaRef={textareaRef}
+                    placeholder="Describe a task..."
+                    ariaLabel="Task description"
+                    showVoice
+                    showStop={false}
+                    showMaximize
+                    onFocus={() => {
+                      setIsFocused(true);
+                      onFocusChange?.(true, !inputValue.trim());
+                    }}
+                    onBlur={() => {
+                      setIsFocused(false);
+                      onFocusChange?.(false, !inputValue.trim());
+                    }}
+                  />
+                </div>
+              }
+            />
           </div>
         </div>
         {fullScreenOverlay}
@@ -822,10 +960,15 @@ export function InputBar({
               </Alert>
             </div>
           )}
+          {/* `/` palette (commands + skills) and the `@` mention picker share
+              the SAME anchor (the composer shell). They are mutually exclusive
+              by mode, so only one popover is ever open — nesting keeps a single
+              composer instance. */}
           <CommandPalette
             open={paletteOpen}
             query={parsedCommand?.name ?? ''}
             commands={commands}
+            skills={availableSkills}
             side={popupDirection === 'down' ? 'bottom' : 'top'}
             onOpenChange={(v) => setPaletteOpen(v && commandModeActive)}
             onSelect={(cmd) => {
@@ -834,40 +977,52 @@ export function InputBar({
               // dispatcher, not just an autocomplete affordance.
               void dispatchCommand(cmd, parsedCommand?.args ?? []);
             }}
+            onSelectSkill={insertSkill}
             anchor={
-              <div
-                className="composer-shell"
-                data-running={isRunning ? 'true' : undefined}
-                data-focused={isExpanded ? 'true' : undefined}
-                data-command-mode={commandModeActive ? 'true' : undefined}
-              >
-                <InputComposerBody
-                  variant="detail"
-                  inputValue={inputValue}
-                  onInputChange={setInputValue}
-                  onSubmit={handleSubmit}
-                  onKeyDown={handleKeyDown}
-                  isSubmitting={isSubmitting}
-                  isExpanded={isExpanded}
-                  isRunning={isRunning}
-                  runStatus={runStatus}
-                  onStop={onStop}
-                  queryMode={queryMode}
-                  onToggleFullScreen={() => setIsFullScreen(true)}
-                  attachedFiles={attachedFiles}
-                  onClearAttachments={() => setAttachedFiles([])}
-                  plusMenu={inlinePlusMenu}
-                  configMenu={inlineConfigMenu}
-                  textareaRef={textareaRef}
-                  placeholder={detailPlaceholder}
-                  ariaLabel="Session query"
-                  showVoice
-                  showStop
-                  showMaximize
-                  onFocus={() => setIsFocused(true)}
-                  onBlur={() => setIsFocused(false)}
-                />
-              </div>
+              <FileMentionPicker
+                open={mentionPickerOpen}
+                query={mentionQuery}
+                files={mentionFiles}
+                attachments={mentionAttachments}
+                side={popupDirection === 'down' ? 'bottom' : 'top'}
+                onOpenChange={(v) => setMentionPickerOpen(v && mentionModeActive)}
+                onSelect={insertMention}
+                anchor={
+                  <div
+                    className="composer-shell"
+                    data-running={isRunning ? 'true' : undefined}
+                    data-focused={isExpanded ? 'true' : undefined}
+                    data-command-mode={commandModeActive ? 'true' : undefined}
+                  >
+                    <InputComposerBody
+                      variant="detail"
+                      inputValue={inputValue}
+                      onInputChange={handleInputChange}
+                      onSubmit={handleSubmit}
+                      onKeyDown={handleKeyDown}
+                      isSubmitting={isSubmitting}
+                      isExpanded={isExpanded}
+                      isRunning={isRunning}
+                      runStatus={runStatus}
+                      onStop={onStop}
+                      queryMode={queryMode}
+                      onToggleFullScreen={() => setIsFullScreen(true)}
+                      attachedFiles={attachedFiles}
+                      onClearAttachments={() => setAttachedFiles([])}
+                      plusMenu={inlinePlusMenu}
+                      configMenu={inlineConfigMenu}
+                      textareaRef={textareaRef}
+                      placeholder={detailPlaceholder}
+                      ariaLabel="Session query"
+                      showVoice
+                      showStop
+                      showMaximize
+                      onFocus={() => setIsFocused(true)}
+                      onBlur={() => setIsFocused(false)}
+                    />
+                  </div>
+                }
+              />
             }
           />
         </div>

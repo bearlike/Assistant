@@ -7,6 +7,7 @@ import importlib
 import json
 import os
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -695,6 +696,56 @@ def _build_manifest_payload(
     return {"tools": tools}
 
 
+def _resolve_mcp_config(
+    mcp_config_path: str,
+    *,
+    cwd: str | None = None,
+    extra_mcp_servers: dict[str, dict] | None = None,
+) -> dict[str, object] | None:
+    """Return the normalized, merged MCP config used for discovery + hashing.
+
+    Centralizes the global-vs-merged-vs-extra-servers branch so the startup
+    config hash (the non-blocking gate, Gitea #130) is computed against the
+    exact same config the discovery path would connect with. Returns ``None``
+    when MCP support is unavailable or the config can't be read.
+    """
+    try:
+        from mewbo_tools.integration.mcp import _normalize_mcp_config
+
+        if extra_mcp_servers:
+            from mewbo_core.config import get_merged_mcp_config
+
+            return _normalize_mcp_config(
+                get_merged_mcp_config(cwd, extra_servers=extra_mcp_servers)
+            )
+        from mewbo_tools.integration.mcp import _load_mcp_config
+
+        return _normalize_mcp_config(_load_mcp_config(mcp_config_path or None, cwd=cwd))
+    except Exception as exc:
+        logging.debug("Could not resolve MCP config for hashing: {}", exc)
+        return None
+
+
+def _config_fingerprint(config: dict[str, object] | None) -> str | None:
+    """Stable hash of the resolved MCP config (reuses the pool's hasher)."""
+    if config is None:
+        return None
+    try:
+        from mewbo_tools.integration.mcp_pool import _config_hash
+
+        return _config_hash(config)
+    except Exception:
+        return None
+
+
+def _manifest_has_mcp_tools(manifest: dict[str, JsonValue]) -> bool:
+    """True when a cached manifest already carries at least one MCP tool."""
+    tools = manifest.get("tools", [])
+    if not isinstance(tools, list):
+        return False
+    return any(isinstance(t, dict) and t.get("kind") == "mcp" for t in tools)
+
+
 def _try_pool_discovery(
     mcp_config_path: str,
     *,
@@ -759,6 +810,26 @@ def _ensure_auto_manifest(
         except Exception as exc:
             logging.warning("Failed to read existing MCP manifest: {}", exc)
 
+    # Non-blocking startup (Gitea #130 Phase 1): when the cached manifest was
+    # built from the SAME MCP config we have now, reuse it instead of doing a
+    # blocking live connect. A slow/dead server in an unchanged config thus
+    # never stalls the ready banner — its tools come from cache and the pool
+    # connects lazily on first use (get_or_connect). A config edit changes the
+    # hash and re-triggers discovery; `/mcp` refresh clears the cache to force
+    # a re-probe (e.g. to pick up a server that has since come back up).
+    config_for_hash = _resolve_mcp_config(
+        mcp_config_path, cwd=cwd, extra_mcp_servers=extra_mcp_servers
+    )
+    current_hash = _config_fingerprint(config_for_hash)
+    if (
+        existing_manifest is not None
+        and current_hash is not None
+        and existing_manifest.get("config_hash") == current_hash
+        and _manifest_has_mcp_tools(existing_manifest)
+    ):
+        logging.debug("MCP config unchanged; using cached manifest (non-blocking startup)")
+        return manifest_path
+
     # Try pool-based discovery first (faster, persistent connections)
     pool_tools = _try_pool_discovery(mcp_config_path, cwd=cwd, extra_mcp_servers=extra_mcp_servers)
 
@@ -790,6 +861,10 @@ def _ensure_auto_manifest(
             global_failure = exc
 
     payload = _build_manifest_payload(mcp_tools)
+    # Stamp the config fingerprint so the next startup can short-circuit the
+    # blocking discovery when the config is unchanged (Phase 1 gate above).
+    if current_hash is not None:
+        payload["config_hash"] = current_hash
     if (failures or global_failure) and existing_manifest:
         payload_tools = payload.get("tools", [])
         if not isinstance(payload_tools, list):
@@ -971,6 +1046,90 @@ def load_registry(
     return registry
 
 
+class ToolRegistryCache:
+    """Process-wide reuse of built ``ToolRegistry`` objects, keyed by build inputs.
+
+    ``Orchestrator.__init__`` builds the tool registry on every run (per-query),
+    paying ``load_registry``'s cost — reading the MCP manifest, constructing every
+    ``ToolSpec``, probing Home-Assistant/LSP status — *before* the run emits its
+    first event. That work is identical across runs whose inputs are identical, so
+    the result is cached and the SAME registry handed back on the next run within a
+    session (Gitea #138 — kill the blank-shell wait).
+
+    The key is exactly the set of inputs that change what ``load_registry``
+    produces: the project ``cwd``, any plugin-contributed ``extra_mcp_servers``,
+    and the resolved MCP-config fingerprint (so an edit to ``mcp.json`` still forces
+    a rebuild — the same signal that gates the manifest rebuild in
+    ``_ensure_auto_manifest``). Allowed-tools scoping is applied per-run downstream
+    (``filter_specs`` over ``list_specs``), never at build time, so it is
+    deliberately NOT part of the key.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty, lock-guarded cache."""
+        self._lock = threading.Lock()
+        self._cache: dict[str, ToolRegistry] = {}
+
+    @staticmethod
+    def _key(cwd: str | None, extra_mcp_servers: dict[str, dict] | None) -> str:
+        servers = (
+            json.dumps(extra_mcp_servers, sort_keys=True, default=str)
+            if extra_mcp_servers
+            else ""
+        )
+        config = _resolve_mcp_config(
+            get_mcp_config_path() or "", cwd=cwd, extra_mcp_servers=extra_mcp_servers
+        )
+        fingerprint = _config_fingerprint(config) or ""
+        return "\x00".join((cwd or "", servers, fingerprint))
+
+    def get_or_build(
+        self,
+        *,
+        cwd: str | None = None,
+        extra_mcp_servers: dict[str, dict] | None = None,
+    ) -> ToolRegistry:
+        """Return a cached registry for these inputs, building exactly once."""
+        key = self._key(cwd, extra_mcp_servers)
+        with self._lock:
+            cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        # Build OUTSIDE the lock so a slow ``load_registry`` for one scope never
+        # blocks another scope's lookup. A rare concurrent cold miss builds twice;
+        # ``setdefault`` makes both callers converge on the first-stored instance.
+        registry = load_registry(cwd=cwd, extra_mcp_servers=extra_mcp_servers)
+        with self._lock:
+            return self._cache.setdefault(key, registry)
+
+    def clear(self) -> None:
+        """Drop every cached registry."""
+        with self._lock:
+            self._cache.clear()
+
+
+_REGISTRY_CACHE = ToolRegistryCache()
+
+
+def get_or_build_registry(
+    *,
+    cwd: str | None = None,
+    extra_mcp_servers: dict[str, dict] | None = None,
+) -> ToolRegistry:
+    """Return a cached ``ToolRegistry`` for these inputs, building once per scope.
+
+    The single seam ``Orchestrator`` uses to avoid rebuilding the registry on
+    every run in a session. Falls through to :func:`load_registry` on a cache
+    miss. See :class:`ToolRegistryCache` for the keying contract.
+    """
+    return _REGISTRY_CACHE.get_or_build(cwd=cwd, extra_mcp_servers=extra_mcp_servers)
+
+
+def reset_registry_cache() -> None:
+    """Drop all cached registries (tests; an explicit ``/mcp`` refresh)."""
+    _REGISTRY_CACHE.clear()
+
+
 def filter_specs(
     specs: list[ToolSpec],
     *,
@@ -980,13 +1139,17 @@ def filter_specs(
     """Filter tool specs by allowlist and/or denylist.
 
     If *allowed* is non-empty only specs whose ``tool_id`` is in the list
-    are kept.  Then any spec whose ``tool_id`` appears in *denied* (merged
-    with the config ``agent.default_denied_tools``) is removed.  Deny
-    always takes precedence over allow.
+    are kept — EXCEPT ``always_load`` specs (the ``tool_search`` tool),
+    which are exempt from the allowlist gate so a scoped sub-agent never
+    loses the means to fetch its deferred MCP tools (#131).  Then any spec
+    whose ``tool_id`` appears in *denied* (merged with the config
+    ``agent.default_denied_tools``) is removed.  Deny always takes
+    precedence over allow — an explicit deny removes even an
+    ``always_load`` tool.
     """
     if allowed:
         allowed_set = set(allowed)
-        specs = [s for s in specs if s.tool_id in allowed_set]
+        specs = [s for s in specs if s.tool_id in allowed_set or is_always_load(s)]
 
     denied_set: set[str] = set(denied or [])
     config_denied_raw = get_config_value("agent", "default_denied_tools", default=[])
@@ -1003,9 +1166,12 @@ def filter_specs(
 __all__ = [
     "TOOL_SEARCH_TOOL_ID",
     "ToolRegistry",
+    "ToolRegistryCache",
     "ToolSpec",
     "filter_specs",
+    "get_or_build_registry",
     "is_always_load",
     "is_deferred",
     "load_registry",
+    "reset_registry_cache",
 ]

@@ -1,0 +1,60 @@
+# Controllable model → tool-variant map (Gitea #113, Phase A).
+#
+# OPERATOR-TUNABLE DATA, NOT CODE. This file is the single home for the
+# model-capability profiles that decide which *variant of a tool* a model gets —
+# today the edit tool (`structured_patch` vs `search_replace_block`). Edit it to
+# onboard a model or flip a preference WITHOUT touching Python; it is loaded
+# through one validated atomic loader (`model_variants.py:ModelVariantRegistry`)
+# and linted by `validate_all()` in CI, exactly like the prompt registry next
+# door in `registry/*.yaml`.
+#
+# It is the SIBLING of the prompt-override layering: a model gets BOTH its
+# tool variant (here, keyed by model-name prefix) AND its prompt override
+# (`registry/*.yaml`, `kind: model` overrides keyed by the SAME prefix). The two
+# data files are PAIRED by the shared model-prefix key — so a model that prefers
+# structured_patch can be given the matching prompt nudge by adding an override
+# under the same prefix, no code change.
+#
+# Matching: `match` is a model-name PREFIX, compared against the model id with
+# its provider prefix stripped (e.g. `openai/gpt-5-mini` → `gpt-5-mini`),
+# lowercased. The LONGEST matching prefix wins. No match → `defaults.edit_tool`.
+#
+# Pairing-form note: the prompt registry's `kind: model` overrides match the
+# RAW configured model id (provider prefix included if present); this map
+# additionally strips a leading `provider/`. Configured ids are bare in practice
+# (the proxy prefix is added only at the LiteLLM call seam), so both agree —
+# author a paired prompt override under the same prefix you use here.
+#
+# Precedence at the call site (`llm.model_prefers_structured_patch`):
+#   1. `agent.edit_tool` config (explicit operator override) — wins outright.
+#   2. `llm.structured_patch_models` config allowlist (runtime override layer).
+#   3. THIS FILE (the migrated defaults; operator-editable).
+#   4. `defaults.edit_tool` below (the conservative built-in fallback).
+
+version: 1
+
+# Conservative fallback when no profile matches: Claude / Gemini / most
+# open-weight models are trained on diff/patch text and do better with
+# Aider-style SEARCH/REPLACE blocks.
+defaults:
+  edit_tool: search_replace_block
+
+# Migrated verbatim from the old in-code `model_prefers_structured_patch`
+# built-in list. GPT-5-class, o3/o4, Codex and GPT-4 emit structured JSON tool
+# calls that map naturally to the per-file `structured_patch` (file_edit_tool).
+profiles:
+  - match: gpt-5
+    edit_tool: structured_patch
+    note: GPT-5 class — structured JSON tool calls map to per-file structured_patch.
+  - match: o3
+    edit_tool: structured_patch
+    note: o3 reasoning class — structured tool calls.
+  - match: o4
+    edit_tool: structured_patch
+    note: o4 reasoning class — structured tool calls.
+  - match: codex
+    edit_tool: structured_patch
+    note: Codex models — structured patch edit format.
+  - match: gpt-4
+    edit_tool: structured_patch
+    note: GPT-4 family (gpt-4, gpt-4o, gpt-4.1, …) — structured patch edit format.

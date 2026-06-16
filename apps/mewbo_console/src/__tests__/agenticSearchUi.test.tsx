@@ -44,6 +44,8 @@ function renderLanding(
         sources={[]}
         tier="auto"
         onTierChange={vi.fn()}
+        model=""
+        onModelChange={vi.fn()}
         onPickWorkspace={vi.fn()}
         onSubmit={vi.fn()}
         onOpenCreate={vi.fn()}

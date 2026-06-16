@@ -44,6 +44,7 @@ from mewbo_core.config import (
     reset_config,
     start_preflight,
 )
+from mewbo_core.context import _iter_attachments
 from mewbo_core.exit_plan_mode import PLAN_DIR_ROOT, plan_file_for, session_temp_dir
 from mewbo_core.key_store import KeyStoreBase, create_key_store
 from mewbo_core.notifications import NotificationStore
@@ -55,6 +56,8 @@ from mewbo_core.share_store import ShareStore
 from mewbo_core.tool_registry import ToolSpec, load_registry
 from mewbo_core.types import EventRecord
 from mewbo_core.worktree import WorktreeBranchInUseError, WorktreeManager
+from mewbo_tools.integration.file_catalog import FileCatalog
+from mewbo_tools.integration.reference_expansion import expand_references
 from pydantic import ValidationError
 from werkzeug.exceptions import NotFound
 from werkzeug.utils import secure_filename
@@ -62,6 +65,7 @@ from werkzeug.utils import secure_filename
 from mewbo_api.config_view import ConfigSchemaView
 from mewbo_api.repo_identity import RepoIdentity
 from mewbo_api.request_context import request_surface
+from mewbo_api.responses import ApiResponseKit
 
 # ``done_reason`` taxonomy — the orchestrator and /command paths share these
 # canonical values so every consumer (notifications, status badge,
@@ -326,6 +330,12 @@ api = Api(
 
 ns = api.namespace("api", description="Mewbo operations")
 
+# One DRY home for the error-response half of the OpenAPI contract on this
+# namespace. ``kit.errors(...)`` / ``kit.auth_error()`` attach example-bearing
+# error bodies (envelope or legacy ``{"message"}`` shape) per route — see
+# ``responses.py``. Wire it once here so import-time decorators can see it.
+kit = ApiResponseKit(ns, prefix="Api")
+
 
 @app.errorhandler(NotFound)
 def _handle_not_found(exc: NotFound) -> tuple[dict, int]:
@@ -556,19 +566,20 @@ logging.info("agentic_search namespace registered at /api")
 
 
 # -- Structured-response namespace ----------------------------------------
-# Schema-constrained, tool-using synthesis over the core StructuredResponder
-# (down-only compose). POST /v1/structured returns a JSON-Schema-validated
-# object after a bounded agentic session.
+# Schema-constrained synthesis over the core StructuredResponder (down-only
+# compose). POST /v1/structured returns a JSON-Schema-validated object — the
+# default 'agentic' mode after a bounded session, or an inline no-loop
+# 'synthesis' mode (the former /v1/structured/fast lane, folded in by #85).
 from mewbo_api.structured import init_structured  # noqa: E402
 
 init_structured(api, _require_api_key, runtime=runtime)
 logging.info("structured namespace registered at /v1/structured")
 
-# Retrieval-only fast grounded synthesis (POST /v1/structured/fast) — #50.
+# Token-streaming draft synthesis (POST /v1/draft/stream) — #50/#78.
 from mewbo_api.realtime import init_realtime  # noqa: E402
 
 init_realtime(api, _require_api_key, runtime=runtime)
-logging.info("realtime fast-structured endpoint registered at /v1/structured/fast")
+logging.info("realtime draft-stream endpoint registered at /v1/draft/stream")
 
 # -- VCS automation namespace ----------------------------------------------
 # Agent pickup for GitHub/Gitea Actions: assigning or @mentioning the bot on
@@ -656,6 +667,35 @@ def _build_context_payload(request_data: dict[str, object]) -> dict[str, object]
     if mode is not None:
         payload["mode"] = mode
     return payload
+
+
+def _session_attachment_map(session_id: str) -> dict[str, str]:
+    """Map a session's attachment display names → the best path to render.
+
+    Lets a user reference an uploaded file inline as ``@<filename>`` even
+    though it lives in the session's attachment store (outside the project
+    tree). Prefers the parsed-Markdown sidecar written at upload time, falling
+    back to the raw file. Returns ``{}`` when the session has no attachments.
+    """
+    try:
+        events = runtime.session_store.load_transcript(session_id)
+    except Exception:  # noqa: BLE001 - never block expansion on a store read
+        return {}
+    attachments_dir = os.path.join(
+        runtime.session_store.root_dir, session_id, "attachments"
+    )
+    mapping: dict[str, str] = {}
+    for att in _iter_attachments(events):
+        stored_name = att.get("stored_name")
+        filename = att.get("filename") or stored_name
+        if not stored_name or not filename:
+            continue
+        raw = os.path.join(attachments_dir, str(stored_name))
+        sidecar = parsed_sidecar_path(raw)
+        path = sidecar if os.path.isfile(sidecar) else raw
+        if os.path.isfile(path):
+            mapping[str(filename)] = path
+    return mapping
 
 
 def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | None:
@@ -747,6 +787,88 @@ def _resolve_project_cwd(request_data: dict[str, object]) -> str | None:
             f"In Docker, mount it via docker-compose.override.yml."
         )
     return project.path
+
+
+class ExternalCwdPolicy:
+    """Gate and validate caller-supplied host paths for session working directories.
+
+    Resolution order (applied by :meth:`resolve`):
+    1. Explicit ``cwd`` from the request (top-level or ``context.cwd``) —
+       wins over a project-derived path when ``api.allow_external_cwd`` is on.
+    2. Project-derived path via :func:`_resolve_project_cwd` — unchanged
+       existing behaviour.
+    3. ``None`` — caller falls back to ``session_temp_dir``.
+
+    The flag and validation are co-located here so the route functions stay
+    thin; DI with ``AppConfig`` keeps this testable without touching module
+    globals.
+    """
+
+    def __init__(self, config: AppConfig) -> None:
+        """Initialise with the application config (reads ``api.allow_external_cwd``)."""
+        self._enabled: bool = config.api.allow_external_cwd
+
+    @staticmethod
+    def _extract_cwd(request_data: dict[str, object]) -> str | None:
+        """Extract the caller-supplied ``cwd`` from request body or context."""
+        raw = request_data.get("cwd")
+        if not raw or not isinstance(raw, str):
+            ctx = request_data.get("context")
+            if isinstance(ctx, dict):
+                raw = ctx.get("cwd")
+        if not raw or not isinstance(raw, str):
+            return None
+        return raw.strip() or None
+
+    def resolve(
+        self,
+        request_data: dict[str, object],
+    ) -> tuple[str | None, tuple[dict, int] | None]:
+        """Resolve the working directory for a session start.
+
+        Returns ``(cwd, None)`` on success or ``(None, error_response)`` when
+        the caller provided a ``cwd`` that failed validation.
+        On success ``cwd`` may be ``None`` — the caller should fall back to
+        ``session_temp_dir`` or another default.
+        """
+        raw_cwd = self._extract_cwd(request_data)
+        if raw_cwd is not None:
+            if not self._enabled:
+                return None, (
+                    {
+                        "error": {
+                            "code": 403,
+                            "reason": (
+                                "api.allow_external_cwd is disabled; "
+                                "explicit cwd is not permitted."
+                            ),
+                        }
+                    },
+                    403,
+                )
+            if not os.path.exists(raw_cwd):
+                return None, (
+                    {
+                        "error": {
+                            "code": 400,
+                            "reason": f"cwd path does not exist: {raw_cwd}",
+                        }
+                    },
+                    400,
+                )
+            if not os.path.isdir(raw_cwd):
+                return None, (
+                    {
+                        "error": {
+                            "code": 400,
+                            "reason": f"cwd path is not a directory: {raw_cwd}",
+                        }
+                    },
+                    400,
+                )
+            return raw_cwd, None
+        # No explicit cwd → delegate to project resolution.
+        return None, None
 
 
 def _resolve_skill_instructions(
@@ -1184,14 +1306,725 @@ sync_query_model = ns.model(
 )
 
 
+# ---------------------------------------------------------------------------
+# Response (success) models. Documentation only — never attached via
+# ``marshal_with`` (which would filter the real body), only via ``@api.response``
+# so Scalar synthesizes a sample body from the ``example=`` values. Field names
+# and examples mirror what the handlers actually return; reused across endpoints
+# that share a shape (DRY).
+# ---------------------------------------------------------------------------
+
+key_mint_response_model = ns.model(
+    "KeyMintResponse",
+    {
+        "id": fields.String(example="k_7f3a9c21", description="Stable key id; use it to revoke."),
+        "label": fields.String(example="ci-deploy", description="Label supplied at mint time."),
+        "key": fields.String(
+            example="msk-2f9a1c7e4b8d3a6f0e5c2b1a9d8e7f60",
+            description="The plaintext API key — shown ONCE, never retrievable again.",
+        ),
+        "created_at": fields.String(
+            example="2026-06-15T18:24:05.412903+00:00",
+            description="ISO-8601 UTC creation timestamp.",
+        ),
+    },
+)
+
+key_record_model = ns.model(
+    "KeyRecord",
+    {
+        "id": fields.String(example="k_7f3a9c21"),
+        "label": fields.String(example="ci-deploy"),
+        "created_at": fields.String(example="2026-06-15T18:24:05.412903+00:00"),
+        "revoked": fields.Boolean(example=False, description="True once the key has been revoked."),
+    },
+)
+
+keys_list_model = ns.model(
+    "KeysListResponse",
+    {
+        "keys": fields.List(
+            fields.Nested(key_record_model),
+            description="Metadata for every key; hashes and plaintext are never included.",
+        )
+    },
+)
+
+key_revoke_model = ns.model(
+    "KeyRevokeResponse",
+    {
+        "id": fields.String(example="k_7f3a9c21"),
+        "revoked": fields.Boolean(example=True),
+    },
+)
+
+model_capability_model = ns.model(
+    "ModelCapability",
+    {
+        "supports_vision": fields.Boolean(
+            example=True, description="Whether the model accepts image attachments."
+        ),
+    },
+)
+
+models_list_model = ns.model(
+    "ModelsListResponse",
+    {
+        "models": fields.List(
+            fields.String,
+            example=["anthropic/claude-opus-4-8", "openai/gpt-5.4-nano"],
+            description="Model names served by the configured LLM proxy.",
+        ),
+        "default": fields.String(
+            example="anthropic/claude-opus-4-8", description="The default model name."
+        ),
+        "capabilities": fields.Raw(
+            example={
+                "anthropic/claude-opus-4-8": {"supports_vision": True},
+                "openai/gpt-5.4-nano": {"supports_vision": False},
+            },
+            description="Per-model capability map keyed by model name.",
+        ),
+    },
+)
+
+repo_identity_model = ns.model(
+    "RepoIdentity",
+    {
+        "host": fields.String(example="github.com"),
+        "owner": fields.String(example="bearlike"),
+        "name": fields.String(example="Assistant"),
+    },
+)
+
+project_model = ns.model(
+    "Project",
+    {
+        "name": fields.String(example="Assistant"),
+        "path": fields.String(example="/srv/repos/Assistant"),
+        "description": fields.String(example="Mewbo monorepo"),
+        "available": fields.Boolean(
+            example=True, description="Whether the project path exists on disk."
+        ),
+        "source": fields.String(
+            example="config", description="`config` (static) or `managed` (server-owned)."
+        ),
+        "project_id": fields.String(
+            example="6f1c2d3e4a5b", description="Managed-project id (managed entries only)."
+        ),
+        "is_worktree": fields.Boolean(example=False),
+        "parent_project_id": fields.String(example=None),
+        "branch": fields.String(example=None),
+        "repo": fields.Nested(
+            repo_identity_model,
+            allow_null=True,
+            description="Canonical git identity (git checkouts only).",
+        ),
+        "aliases": fields.List(
+            fields.String,
+            example=["github.com/bearlike/Assistant", "bearlike/Assistant", "Assistant"],
+            description="Addressable aliases for the same repository.",
+        ),
+    },
+)
+
+projects_list_model = ns.model(
+    "ProjectsListResponse",
+    {"projects": fields.List(fields.Nested(project_model))},
+)
+
+vproject_model = ns.model(
+    "ManagedProject",
+    {
+        "project_id": fields.String(example="6f1c2d3e4a5b"),
+        "name": fields.String(example="my-service"),
+        "description": fields.String(example="Payments service monorepo"),
+        "parent_project_id": fields.String(example=None),
+        "branch": fields.String(example=None),
+        "is_worktree": fields.Boolean(example=False),
+        "path": fields.String(example="/app/data/projects/6f1c2d3e4a5b"),
+        "path_source": fields.String(
+            example="created",
+            description="`provided` (caller path) or `created` (server-provisioned).",
+        ),
+        "folder_created": fields.Boolean(example=True),
+        "created_at": fields.String(example="2026-06-15T18:24:05.412903+00:00"),
+        "updated_at": fields.String(example="2026-06-15T18:24:05.412903+00:00"),
+    },
+)
+
+worktree_model = ns.model(
+    "Worktree",
+    {
+        "project_id": fields.String(
+            example="wt:6f1c2d3e4a5b:feature-checkout-flow",
+            description="The worktree's own managed id (null for unmanaged on-disk worktrees).",
+        ),
+        "name": fields.String(example="feature/checkout-flow"),
+        "branch": fields.String(example="feature/checkout-flow"),
+        "path": fields.String(example="/app/data/worktrees/wt-feature-checkout-flow"),
+        "managed": fields.Boolean(
+            example=True, description="True for API-created worktrees, false for plain-git ones."
+        ),
+        "is_worktree": fields.Boolean(example=True),
+        "parent_project_id": fields.String(example="6f1c2d3e4a5b"),
+        "parent_path": fields.String(example="/srv/repos/my-service"),
+        "clean": fields.Boolean(
+            example=True, description="True when the worktree has no uncommitted changes."
+        ),
+    },
+)
+
+worktrees_list_model = ns.model(
+    "WorktreesListResponse",
+    {"worktrees": fields.List(fields.Nested(worktree_model))},
+)
+
+branches_list_model = ns.model(
+    "BranchesListResponse",
+    {
+        "branches": fields.List(
+            fields.String, example=["main", "feature/checkout-flow"]
+        ),
+        "current_branch": fields.String(
+            example="main", description="The checked-out branch, or null when HEAD is detached."
+        ),
+        "branches_in_use": fields.List(
+            fields.String,
+            example=["feature/checkout-flow"],
+            description="Branches already checked out by the parent repo or another worktree.",
+        ),
+        "git_repo": fields.Boolean(
+            example=True,
+            description="False (with a `reason`) when the path is missing or not a git repo.",
+        ),
+        "reason": fields.String(
+            example="not_git",
+            description="Why `git_repo` is false: `missing_path` or `not_git`.",
+        ),
+    },
+)
+
+session_summary_model = ns.model(
+    "SessionSummary",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "title": fields.String(example="Refactor the billing pipeline"),
+        "status": fields.String(
+            example="completed", description="`idle`, `running`, `completed`, or `incomplete`."
+        ),
+        "done_reason": fields.String(example="completed"),
+        "origin": fields.String(
+            example="user", description="`user`, `wiki`, `search`, or `channel`."
+        ),
+        "recoverable": fields.Boolean(example=False),
+        "created_at": fields.String(example="2026-06-15T18:24:05.412903+00:00"),
+        "updated_at": fields.String(example="2026-06-15T18:31:42.108551+00:00"),
+    },
+)
+
+sessions_list_model = ns.model(
+    "SessionsListResponse",
+    {"sessions": fields.List(fields.Nested(session_summary_model))},
+)
+
+session_create_response_model = ns.model(
+    "SessionCreateResponse",
+    {"session_id": fields.String(example="9e2d47c1a0b34f12")},
+)
+
+session_query_accepted_model = ns.model(
+    "SessionQueryAccepted",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "accepted": fields.Boolean(example=True),
+    },
+)
+
+session_status_model = ns.model(
+    "SessionStatusResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "status": fields.String(example="running"),
+        "done_reason": fields.String(example=""),
+        "title": fields.String(example="Refactor the billing pipeline"),
+        "recoverable": fields.Boolean(example=False),
+    },
+)
+
+session_event_model = ns.model(
+    "SessionEvent",
+    {
+        "type": fields.String(
+            example="tool_result",
+            description="Event kind (`user`, `tool_result`, `completion`, …).",
+        ),
+        "ts": fields.String(example="2026-06-15T18:24:06.001234+00:00"),
+        "payload": fields.Raw(
+            example={"tool_id": "shell", "operation": "get", "result": "ok"},
+            description="Event-specific payload.",
+        ),
+    },
+)
+
+session_events_model = ns.model(
+    "SessionEventsResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "events": fields.List(fields.Nested(session_event_model)),
+        "running": fields.Boolean(example=False),
+        "status": fields.String(example="completed"),
+        "done_reason": fields.String(example="completed"),
+        "title": fields.String(example="Refactor the billing pipeline"),
+        "recoverable": fields.Boolean(example=False),
+    },
+)
+
+session_message_enqueued_model = ns.model(
+    "SessionMessageEnqueued",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "enqueued": fields.Boolean(example=True),
+        "run_id": fields.String(
+            example="9e2d47c1a0b34f12:r2",
+            description="New run id (present only when an idle session was re-engaged).",
+        ),
+    },
+)
+
+session_interrupt_model = ns.model(
+    "SessionInterruptResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "interrupted": fields.Boolean(example=True),
+    },
+)
+
+session_recover_response_model = ns.model(
+    "SessionRecoverResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "action": fields.String(example="retry"),
+        "accepted": fields.Boolean(example=True),
+        "run_id": fields.String(
+            example="9e2d47c1a0b34f12:r3",
+            description="Generic recovery run id; absent for wiki-indexing recovery.",
+        ),
+        "job_id": fields.String(
+            example=None,
+            description="Wiki-indexing job id (returned instead of `run_id` for indexing).",
+        ),
+        "slug": fields.String(
+            example=None, description="Wiki repo slug (wiki-indexing recovery only)."
+        ),
+        "status": fields.String(example=None),
+    },
+)
+
+session_fork_response_model = ns.model(
+    "SessionForkResponse",
+    {
+        "session_id": fields.String(
+            example="a1b2c3d4e5f60718", description="The newly forked session id."
+        ),
+        "forked_from": fields.String(example="9e2d47c1a0b34f12"),
+        "forked_at": fields.String(
+            example=None, description="Fork-point timestamp, or null for a full-history fork."
+        ),
+    },
+)
+
+plan_decision_model = ns.model(
+    "PlanDecisionResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "approved": fields.Boolean(example=True),
+    },
+)
+
+session_title_model = ns.model(
+    "SessionTitleResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "title": fields.String(example="Refactor the billing pipeline"),
+    },
+)
+
+session_archive_model = ns.model(
+    "SessionArchiveResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "archived": fields.Boolean(example=True),
+    },
+)
+
+agent_node_model = ns.model(
+    "AgentNode",
+    {
+        "agent_id": fields.String(example="sub-1a2b"),
+        "parent_id": fields.String(example="root"),
+        "depth": fields.Integer(example=1),
+        "model": fields.String(example="anthropic/claude-opus-4-8"),
+        "action": fields.String(example="spawn"),
+        "detail": fields.String(example="explore the auth module"),
+        "status": fields.String(example="completed"),
+        "steps_completed": fields.Integer(example=4),
+        "input_tokens": fields.Integer(example=18234),
+        "output_tokens": fields.Integer(example=2041),
+        "ts": fields.String(example="2026-06-15T18:24:10.882001+00:00"),
+    },
+)
+
+agents_tree_model = ns.model(
+    "AgentTreeResponse",
+    {
+        "agents": fields.List(fields.Nested(agent_node_model)),
+        "running": fields.Boolean(example=False),
+        "total_steps": fields.Integer(example=12),
+        "total_input_tokens": fields.Integer(
+            example=42310, description="Peak context pressure (root peak + sum of per-agent peaks)."
+        ),
+        "total_input_tokens_billed": fields.Integer(
+            example=88120, description="Cumulative billed input tokens."
+        ),
+        "total_output_tokens": fields.Integer(example=5102),
+    },
+)
+
+usage_model = ns.model(
+    "UsageResponse",
+    {
+        "root_peak_input_tokens": fields.Integer(example=24110),
+        "sub_peak_input_tokens": fields.Integer(example=18200),
+        "total_input_tokens_billed": fields.Integer(example=88120),
+        "total_output_tokens": fields.Integer(example=5102),
+    },
+)
+
+share_record_model = ns.model(
+    "ShareRecord",
+    {
+        "token": fields.String(example="shr_4f9a2c7e1b8d"),
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "created_at": fields.String(example="2026-06-15T18:24:05.412903+00:00"),
+    },
+)
+
+session_export_model = ns.model(
+    "SessionExportResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "events": fields.List(fields.Nested(session_event_model)),
+        "summary": fields.Raw(
+            example={"status": "completed", "title": "Refactor the billing pipeline"},
+            description="The stored session summary.",
+        ),
+    },
+)
+
+share_lookup_model = ns.model(
+    "ShareLookupResponse",
+    {
+        "token": fields.String(example="shr_4f9a2c7e1b8d"),
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "created_at": fields.String(example="2026-06-15T18:24:05.412903+00:00"),
+        "events": fields.List(fields.Nested(session_event_model)),
+        "summary": fields.Raw(
+            example={"status": "completed", "title": "Refactor the billing pipeline"}
+        ),
+    },
+)
+
+files_list_model = ns.model(
+    "FilesListResponse",
+    {
+        "files": fields.List(
+            fields.String,
+            example=["src/app.py", "README.md", "tests/test_app.py"],
+            description="Git-indexed project files the composer can reference.",
+        ),
+        "attachments": fields.List(
+            fields.String,
+            example=["spec.pdf"],
+            description="Session attachment display names (session-scoped queries only).",
+        ),
+    },
+)
+
+git_diff_model = ns.model(
+    "GitDiffResponse",
+    {
+        "git_repo": fields.Boolean(
+            example=True, description="False (with a `reason`) when there is no git project."
+        ),
+        "diff": fields.String(
+            example="diff --git a/src/app.py b/src/app.py\n@@ -1 +1 @@\n-old\n+new\n",
+            description="Unified diff (present when `git_repo` is true).",
+        ),
+        "reason": fields.String(
+            example="no_project",
+            description="Why no diff: `no_project`, `not_git`, or `git_error`.",
+        ),
+    },
+)
+
+command_spec_model = ns.model(
+    "CommandSpec",
+    {
+        "name": fields.String(example="compact"),
+        "args": fields.List(fields.String, example=[]),
+        "render": fields.String(
+            example="transcript", description="`transcript`, `dialog`, or `notification`."
+        ),
+    },
+)
+
+commands_list_model = ns.model(
+    "CommandsListResponse",
+    {"commands": fields.List(fields.Nested(command_spec_model))},
+)
+
+command_inline_model = ns.model(
+    "CommandInlineResult",
+    {
+        "render": fields.String(example="dialog"),
+        "title": fields.String(example="Token usage"),
+        "body": fields.String(example="Root: 24,110 tokens; sub-agents: 18,200 tokens."),
+        "metadata": fields.Raw(example={"total": 42310}),
+    },
+)
+
+command_accepted_model = ns.model(
+    "CommandAccepted",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "accepted": fields.Boolean(example=True),
+        "render": fields.String(example="transcript"),
+    },
+)
+
+notification_model = ns.model(
+    "Notification",
+    {
+        "id": fields.String(example="ntf_8a1c2d3e"),
+        "title": fields.String(example="'Refactor the billing pipeline' completed"),
+        "message": fields.String(example="Turn finished successfully."),
+        "level": fields.String(example="info", description="`info` or `warning`."),
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "event_type": fields.String(example="completed"),
+        "dismissed": fields.Boolean(example=False),
+        "metadata": fields.Raw(example={"done_reason": "completed"}),
+    },
+)
+
+notifications_list_model = ns.model(
+    "NotificationsListResponse",
+    {"notifications": fields.List(fields.Nested(notification_model))},
+)
+
+notification_dismiss_response_model = ns.model(
+    "NotificationDismissResponse",
+    {"dismissed": fields.Integer(example=2, description="Number of notifications dismissed.")},
+)
+
+notification_clear_response_model = ns.model(
+    "NotificationClearResponse",
+    {"cleared": fields.Integer(example=5, description="Number of notifications cleared.")},
+)
+
+tool_spec_model = ns.model(
+    "ToolSpec",
+    {
+        "tool_id": fields.String(example="shell"),
+        "name": fields.String(example="Shell"),
+        "kind": fields.String(example="builtin", description="`builtin` or `mcp`."),
+        "enabled": fields.Boolean(example=True),
+        "description": fields.String(example="Run a shell command in the project directory."),
+        "disabled_reason": fields.String(example=None),
+        "server": fields.String(
+            example=None, description="Originating MCP server (MCP tools only)."
+        ),
+        "scope": fields.String(
+            example="global", description="`global`, `project`, or `plugin`."
+        ),
+    },
+)
+
+tools_list_model = ns.model(
+    "ToolsListResponse",
+    {"tools": fields.List(fields.Nested(tool_spec_model))},
+)
+
+skill_spec_model = ns.model(
+    "SkillSpec",
+    {
+        "name": fields.String(example="deep-research"),
+        "description": fields.String(example="Fan-out web research with cited synthesis."),
+        "allowed_tools": fields.List(fields.String, example=["web_search", "web_url_read"]),
+        "user_invocable": fields.Boolean(example=True),
+        "disable_model_invocation": fields.Boolean(example=False),
+        "context": fields.String(example=None),
+        "source": fields.String(example="builtin", description="`builtin` or `plugin:<name>`."),
+    },
+)
+
+skills_list_model = ns.model(
+    "SkillsListResponse",
+    {"skills": fields.List(fields.Nested(skill_spec_model))},
+)
+
+config_validation_error_model = ns.model(
+    "ConfigValidationError",
+    {
+        "message": fields.String(example="Validation failed"),
+        "errors": fields.List(
+            fields.Raw,
+            example=[{"loc": ["llm", "default_model"], "msg": "field required", "type": "missing"}],
+            description="Pydantic validation errors; nothing was saved.",
+        ),
+    },
+)
+
+config_response_model = ns.model(
+    "ConfigResponse",
+    {
+        "config": fields.Raw(
+            example={"llm": {"default_model": "anthropic/claude-opus-4-8"}},
+            description="Configuration values with protected/secret values stripped.",
+        ),
+        "secrets": fields.Raw(
+            example={"llm.api_key": True, "langfuse.public_key": False},
+            description="Is-set map for secret fields (never the values themselves).",
+        ),
+    },
+)
+
+plugin_model = ns.model(
+    "Plugin",
+    {
+        "name": fields.String(example="code-review"),
+        "description": fields.String(example="Multi-agent code review."),
+        "version": fields.String(example="1.2.0"),
+        "marketplace": fields.String(example="official"),
+        "scope": fields.String(example="user"),
+        "skills": fields.Integer(example=1),
+        "agents": fields.Integer(example=0),
+        "commands": fields.Integer(example=1),
+        "mcp_servers": fields.Integer(example=0),
+        "has_hooks": fields.Boolean(example=False),
+    },
+)
+
+plugins_list_model = ns.model(
+    "PluginsListResponse",
+    {"plugins": fields.List(fields.Nested(plugin_model))},
+)
+
+marketplace_plugins_model = ns.model(
+    "MarketplacePluginsResponse",
+    {
+        "plugins": fields.List(
+            fields.Raw,
+            example=[{"name": "code-review", "marketplace": "official", "version": "1.2.0"}],
+            description="Plugins available to install.",
+        )
+    },
+)
+
+plugin_install_response_model = ns.model(
+    "PluginInstallResponse",
+    {
+        "installed": fields.String(example="code-review"),
+        "version": fields.String(example="1.2.0"),
+    },
+)
+
+# The plugin install/uninstall routes return a bare ``{"error": "..."}`` shape
+# (an ``error`` string, not the kit's ``{"error": {code, reason}}`` envelope).
+plugin_error_model = ns.model(
+    "PluginError",
+    {"error": fields.String(example="name and marketplace required")},
+)
+
+plugin_uninstall_model = ns.model(
+    "PluginUninstallResponse",
+    {"uninstalled": fields.String(example="code-review")},
+)
+
+attachment_descriptor_model = ns.model(
+    "AttachmentDescriptor",
+    {
+        "id": fields.String(example="a1b2c3d4e5f6"),
+        "filename": fields.String(example="spec.pdf"),
+        "stored_name": fields.String(example="a1b2c3d4e5f6_spec.pdf"),
+        "content_type": fields.String(example="application/pdf"),
+        "size_bytes": fields.Integer(example=20481),
+        "uploaded_at": fields.String(example="2026-06-15T18:24:05.412903+00:00"),
+        "parsed": fields.Boolean(
+            example=True, description="True when a Markdown sidecar was written at upload time."
+        ),
+    },
+)
+
+attachments_response_model = ns.model(
+    "AttachmentsResponse",
+    {"attachments": fields.List(fields.Nested(attachment_descriptor_model))},
+)
+
+worktree_absent_model = ns.model(
+    "WorktreeAbsentResponse",
+    {
+        "status": fields.String(
+            example="already_absent",
+            description="Idempotent marker: the worktree was already gone.",
+        )
+    },
+)
+
+# The /command route returns its own ``{error, message?, name?}`` error shape
+# (distinct from both kit wire-shapes), so it is documented with bespoke models.
+command_error_model = ns.model(
+    "CommandError",
+    {
+        "error": fields.String(example="bad_args", description="Machine-readable error code."),
+        "message": fields.String(example="name and args[] required"),
+    },
+)
+
+command_unknown_model = ns.model(
+    "CommandUnknown",
+    {
+        "error": fields.String(example="unknown_command"),
+        "name": fields.String(example="frobnicate", description="The unrecognized command name."),
+    },
+)
+
+command_running_model = ns.model(
+    "CommandSessionRunning",
+    {"message": fields.String(example="Session is already running.")},
+)
+
+
 @ns.route("/keys")
 class ApiKeys(Resource):
     """Mint and list API keys (master-token-only)."""
 
-    @api.doc(security="apikey")
-    @api.response(201, "Key created. The plaintext key is in the response body.")
-    @api.response(400, "Missing label.")
-    @api.response(401, "Master token required.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Mint a new API key for the `X-API-Key` header. The plaintext key "
+            "is returned exactly once in the `key` field — store it immediately, "
+            "it cannot be retrieved again. Requires the **master** token; keys "
+            "minted here cannot manage other keys.\n\n"
+            "`curl -XPOST -H 'X-API-Key: <master>' -d '{\"label\":\"ci-deploy\"}' "
+            "<base>/api/keys`"
+        ),
+    )
+    @ns.response(
+        201, "Key created. The plaintext key is in the response body.", key_mint_response_model
+    )
+    @kit.errors(400, shape="message", descriptions={400: "The `label` field is missing or empty."})
+    @kit.auth_error()
     @ns.expect(key_mint_model)
     def post(self) -> tuple[dict, int]:
         """Mint an API key
@@ -1216,9 +2049,17 @@ class ApiKeys(Resource):
             "created_at": record["created_at"],
         }, 201
 
-    @api.doc(security="apikey")
-    @api.response(200, "Key metadata list.")
-    @api.response(401, "Master token required.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "List metadata for every API key — id, label, creation time, and "
+            "revocation state. Hashes and plaintext values are never returned. "
+            "Requires the **master** token. Use a key's `id` with "
+            "`DELETE /api/keys/{key_id}` to revoke it."
+        ),
+    )
+    @ns.response(200, "Key metadata list.", keys_list_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List API keys
 
@@ -1239,10 +2080,16 @@ class ApiKey(Resource):
     @api.doc(
         security="apikey",
         params={"key_id": "Key id returned by POST /api/keys."},
+        description=(
+            "Permanently revoke a key by its `id`. Any request presenting a "
+            "revoked key is rejected with 401 from that point on. Requires the "
+            "**master** token. Revocation is irreversible — mint a new key to "
+            "replace it."
+        ),
     )
-    @api.response(200, "Key revoked.")
-    @api.response(404, "Key not found.")
-    @api.response(401, "Master token required.")
+    @ns.response(200, "Key revoked.", key_revoke_model)
+    @kit.errors(404, shape="message", descriptions={404: "No key with that id exists."})
+    @kit.auth_error()
     def delete(self, key_id: str) -> tuple[dict, int]:
         """Revoke an API key
 
@@ -1261,9 +2108,17 @@ class ApiKey(Resource):
 class Models(Resource):
     """List available LLM models."""
 
-    @api.doc(security="apikey")
-    @api.response(200, "Model names, default model, and capability map.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "List the model names served by the configured LLM proxy, the "
+            "default model, and a per-model capability map. Read "
+            "`capabilities[name].supports_vision` to decide whether image "
+            "attachments can be sent to a given model before uploading them."
+        ),
+    )
+    @ns.response(200, "Model names, default model, and capability map.", models_list_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List available models
 
@@ -1318,9 +2173,18 @@ def _enrich_project_identity(entry: dict) -> dict:
 class Projects(Resource):
     """List all projects (config-defined + managed)."""
 
-    @api.doc(security="apikey")
-    @api.response(200, "Unified project list.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "List configuration-defined and managed projects in one array. Each "
+            "entry carries an `available` flag (does its path exist on disk) and, "
+            "for git checkouts, a `repo` identity plus `aliases` (e.g. "
+            "`owner/repo`) that address the same project elsewhere in the API. "
+            "Managed worktrees appear as child entries with `is_worktree` set."
+        ),
+    )
+    @ns.response(200, "Unified project list.", projects_list_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List projects
 
@@ -1387,10 +2251,18 @@ def _vproject_to_dict(p: VirtualProject) -> dict:
 class VirtualProjects(Resource):
     """Create managed projects."""
 
-    @api.doc(security="apikey")
-    @api.response(201, "Project created.")
-    @api.response(400, "Missing name.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Register a server-managed project (as opposed to a static config "
+            "one). When `path` is omitted the server provisions a folder. Use "
+            "the returned `project_id` with the other `/api/v_projects` endpoints "
+            "and as `managed:<project_id>` when creating sessions."
+        ),
+    )
+    @ns.response(201, "Project created.", vproject_model)
+    @kit.errors(400, shape="message", descriptions={400: "The `name` field is missing or empty."})
+    @kit.auth_error()
     @ns.expect(project_create_model)
     def post(self) -> tuple[dict, int]:
         """Create a managed project
@@ -1421,10 +2293,16 @@ class VirtualProject_(Resource):
     @api.doc(
         security="apikey",
         params={"project_id": "Managed project id returned by POST /api/v_projects."},
+        description=(
+            "Fetch a managed project's full record: filesystem path, worktree "
+            "linkage (`is_worktree`, `parent_project_id`, `branch`), and "
+            "timestamps. Only **managed** ids are accepted here; configured "
+            "projects are listed via GET /api/projects."
+        ),
     )
-    @api.response(200, "Project record.")
-    @api.response(404, "Project not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Project record.", vproject_model)
+    @kit.errors(404, shape="message", descriptions={404: "No managed project with that id exists."})
+    @kit.auth_error()
     def get(self, project_id: str) -> tuple[dict, int]:
         """Get a managed project
 
@@ -1444,10 +2322,15 @@ class VirtualProject_(Resource):
     @api.doc(
         security="apikey",
         params={"project_id": "Managed project id returned by POST /api/v_projects."},
+        description=(
+            "Update a managed project's `name` and/or `description`. Fields "
+            "omitted from the body are left unchanged. A project's path and "
+            "worktree linkage are immutable after creation."
+        ),
     )
-    @api.response(200, "Updated project record.")
-    @api.response(404, "Project not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Updated project record.", vproject_model)
+    @kit.errors(404, shape="message", descriptions={404: "No managed project with that id exists."})
+    @kit.auth_error()
     @ns.expect(project_patch_model)
     def patch(self, project_id: str) -> tuple[dict, int]:
         """Update a managed project
@@ -1471,10 +2354,15 @@ class VirtualProject_(Resource):
     @api.doc(
         security="apikey",
         params={"project_id": "Managed project id returned by POST /api/v_projects."},
+        description=(
+            "Remove a managed project record. Returns 204 with an empty body on "
+            "success. Deleting a project that has worktrees removes only the "
+            "project record itself."
+        ),
     )
-    @api.response(204, "Project deleted.")
-    @api.response(404, "Project not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.response(204, "Project deleted (empty body).")
+    @kit.errors(404, shape="message", descriptions={404: "No managed project with that id exists."})
+    @kit.auth_error()
     def delete(self, project_id: str) -> tuple[dict, int]:
         """Delete a managed project
 
@@ -1666,11 +2554,25 @@ class VirtualProjectBranches(Resource):
                 "such as `owner/repo` (any alias of the repository resolves)."
             ),
         },
+        description=(
+            "List `branches`, the `current_branch` (null when HEAD is detached), "
+            "and `branches_in_use` — branches already checked out by the parent "
+            "repo or another worktree, which `git worktree add` would refuse. "
+            "When the path is missing or not a git repo the call still returns "
+            "200 with `git_repo` false and a `reason`."
+        ),
     )
-    @api.response(200, "Branch listing, or `git_repo: false` with a reason.")
-    @api.response(404, "Project not found.")
-    @api.response(409, "Ambiguous bare repo name; disambiguate with host/owner/repo.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Branch listing, or `git_repo: false` with a reason.", branches_list_model)
+    @kit.errors(
+        404,
+        409,
+        shape="message",
+        descriptions={
+            404: "No project resolves from this id, name, or git identity.",
+            409: "A bare repo name matched multiple repositories; use host/owner/repo.",
+        },
+    )
+    @kit.auth_error()
     def get(self, project_id: str) -> tuple[dict, int]:
         """List branches
 
@@ -1781,11 +2683,24 @@ class VirtualProjectWorktrees(Resource):
                 "such as `owner/repo` (any alias of the repository resolves)."
             ),
         },
+        description=(
+            "List the union of worktrees created through this API and worktrees "
+            "added on disk with plain git. Each entry has a `managed` flag — "
+            "managed entries carry a `project_id` sessions can be pinned to — and "
+            "a `clean` flag indicating it has no uncommitted changes."
+        ),
     )
-    @api.response(200, "Worktree list.")
-    @api.response(404, "Project not found.")
-    @api.response(409, "Ambiguous bare repo name; disambiguate with host/owner/repo.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Worktree list.", worktrees_list_model)
+    @kit.errors(
+        404,
+        409,
+        shape="message",
+        descriptions={
+            404: "No project resolves from this id, name, or git identity.",
+            409: "A bare repo name matched multiple repositories; use host/owner/repo.",
+        },
+    )
+    @kit.auth_error()
     def get(self, project_id: str) -> tuple[dict, int]:
         """List worktrees
 
@@ -1812,12 +2727,27 @@ class VirtualProjectWorktrees(Resource):
                 "such as `owner/repo` (any alias of the repository resolves)."
             ),
         },
+        description=(
+            "Check out `branch` in a new worktree folder and register it as a "
+            "child managed project. Pass `base` to create a fresh branch from "
+            "that ref instead of requiring `branch` to exist. Configured projects "
+            "are promoted to managed projects automatically. Worktree lifecycle "
+            "is system-owned: a clean worktree is removed when its session ends."
+        ),
     )
-    @api.response(201, "Worktree created.")
-    @api.response(400, "Missing branch, invalid input, or not a git repository.")
-    @api.response(404, "Project not found.")
-    @api.response(409, "Branch already checked out elsewhere, or worktree path exists.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(201, "Worktree created.", vproject_model)
+    @kit.errors(
+        400,
+        404,
+        409,
+        shape="message",
+        descriptions={
+            400: "The `branch` field is missing, or the project is not a git repository.",
+            404: "No project resolves from this id, name, or git identity.",
+            409: "The branch is already checked out elsewhere, or the worktree path exists.",
+        },
+    )
+    @kit.auth_error()
     @ns.expect(worktree_create_model)
     def post(self, project_id: str) -> tuple[dict, int]:
         """Create a worktree
@@ -1889,12 +2819,25 @@ class VirtualProjectWorktree(Resource):
                 "type": "boolean",
             },
         },
+        description=(
+            "Remove a managed worktree. Idempotent: deleting one that is already "
+            "gone returns 200 with status `already_absent`. A worktree with "
+            "uncommitted changes is refused with 409 unless `force=true`. "
+            "Worktrees created outside this API must be removed with git directly."
+        ),
     )
-    @api.response(204, "Worktree removed.")
-    @api.response(200, "Worktree already absent; nothing to do.")
-    @api.response(400, "Worktree does not belong to this project.")
-    @api.response(409, "Worktree has uncommitted changes and `force` was not set.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.response(204, "Worktree removed (empty body).")
+    @ns.response(200, "Worktree already absent; nothing to do.", worktree_absent_model)
+    @kit.errors(
+        400,
+        409,
+        shape="message",
+        descriptions={
+            400: "The worktree does not belong to this project.",
+            409: "The worktree has uncommitted changes and `force` was not set.",
+        },
+    )
+    @kit.auth_error()
     def delete(self, project_id: str, worktree_id: str) -> tuple[dict, int]:
         """Remove a worktree
 
@@ -1943,9 +2886,15 @@ class Sessions(Resource):
                 "type": "boolean",
             },
         },
+        description=(
+            "List one summary per session — status, title, timestamps, and an "
+            "`origin` (`user`, `wiki`, `search`, or `channel`) describing what "
+            "created it. Archived sessions are hidden unless "
+            "`include_archived=true`."
+        ),
     )
-    @api.response(200, "Session summaries.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Session summaries.", sessions_list_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List sessions
 
@@ -1961,9 +2910,31 @@ class Sessions(Resource):
         sessions = runtime.list_sessions(include_archived=include_archived)
         return {"sessions": sessions}, 200
 
-    @api.doc(security="apikey")
-    @api.response(200, "Session created; body carries the new `session_id`.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Create an empty session and return its `session_id`. Optionally bind "
+            "a project, apply a lookup `session_tag`, and persist initial context "
+            "(e.g. the model). Clients may declare capabilities via the "
+            "`X-Mewbo-Capabilities` header (comma separated). Run queries with "
+            "POST /api/sessions/{session_id}/query. An explicit `cwd` requires "
+            "`api.allow_external_cwd`."
+        ),
+    )
+    @ns.response(
+        200,
+        "Session created; body carries the new `session_id`.",
+        session_create_response_model,
+    )
+    @kit.errors(
+        400,
+        403,
+        descriptions={
+            400: "An explicit `cwd` was supplied but the path does not exist / is not a dir.",
+            403: "An explicit `cwd` was supplied but `api.allow_external_cwd` is disabled.",
+        },
+    )
+    @kit.auth_error()
     @ns.expect(session_create_model)
     def post(self) -> tuple[dict, int]:
         """Create a session
@@ -1994,19 +2965,27 @@ class Sessions(Resource):
             ]
             if client_capabilities:
                 context_payload["client_capabilities"] = client_capabilities
+        # External cwd (Grove / workspace managers): explicit cwd wins.
+        ext_policy = ExternalCwdPolicy(get_config())
+        ext_cwd, ext_err = ext_policy.resolve(payload)
+        if ext_err is not None:
+            return ext_err
+        if ext_cwd is not None:
+            context_payload["cwd"] = ext_cwd
         # Include project in context if provided
-        try:
-            project_cwd = _resolve_project_cwd(payload)
-        except ValueError:
-            project_cwd = None
-        if project_cwd:
-            project_name = payload.get("project") or ""
-            if not project_name:
-                ctx = payload.get("context")
-                if isinstance(ctx, dict):
-                    project_name = ctx.get("project", "")
-            context_payload["project"] = project_name
-            _populate_worktree_context(project_name, context_payload)
+        if ext_cwd is None:
+            try:
+                project_cwd = _resolve_project_cwd(payload)
+            except ValueError:
+                project_cwd = None
+            if project_cwd:
+                project_name = payload.get("project") or ""
+                if not project_name:
+                    ctx = payload.get("context")
+                    if isinstance(ctx, dict):
+                        project_name = ctx.get("project", "")
+                context_payload["project"] = project_name
+                _populate_worktree_context(project_name, context_payload)
         if "model" not in context_payload:
             context_payload["model"] = get_config_value("llm", "default_model", default="unknown")
         if context_payload:
@@ -2021,12 +3000,35 @@ class SessionQuery(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Start an asynchronous run for `query` and return 202 immediately; "
+            "follow progress via the events or stream endpoints. The slash "
+            "commands `/terminate` and `/status` are handled inline without "
+            "starting a run (`/status` returns 200 with the session state). A "
+            "session runs one turn at a time, so a second call while one is "
+            "active returns 409. `@file`/`@dir`/`@diff`/`@url` references in the "
+            "query are expanded before the run."
+        ),
     )
-    @api.response(202, "Run started; poll the events endpoint or open the stream.")
-    @api.response(200, "Slash command handled inline (`/status`).")
-    @api.response(400, "Missing query or invalid project.")
-    @api.response(409, "Session is already running.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(
+        202,
+        "Run started; poll the events endpoint or open the stream.",
+        session_query_accepted_model,
+    )
+    @ns.response(200, "Slash command handled inline (`/status`).", session_status_model)
+    @kit.errors(
+        400,
+        shape="message",
+        descriptions={400: "The `query` field is missing, or the named project is invalid."},
+    )
+    @kit.errors(
+        403,
+        descriptions={403: "An explicit `cwd` was supplied but `api.allow_external_cwd` is off."},
+    )
+    @kit.errors(
+        409, shape="message", descriptions={409: "A run is already active for this session."}
+    )
+    @kit.auth_error()
     @ns.expect(session_query_model)
     def post(self, session_id: str) -> tuple[dict, int]:
         """Run a session query
@@ -2062,6 +3064,15 @@ class SessionQuery(Resource):
             if client_capabilities:
                 context_payload["client_capabilities"] = client_capabilities
         source_platform = _request_surface()
+
+        # External cwd (Grove / workspace managers): explicit cwd wins.
+        ext_policy = ExternalCwdPolicy(get_config())
+        ext_cwd, ext_err = ext_policy.resolve(request_data)
+        if ext_err is not None:
+            return ext_err
+        if ext_cwd is not None:
+            context_payload["cwd"] = ext_cwd
+
         # Use model from context if provided, else config default
         if "model" not in context_payload:
             context_payload["model"] = get_config_value("llm", "default_model", default="unknown")
@@ -2075,11 +3086,23 @@ class SessionQuery(Resource):
         # Skill activation: resolve from top-level "skill" field or context.skill.
         skill_instructions = _resolve_skill_instructions(request_data, user_query, context_payload)
 
-        # Resolve project → cwd, falling back to a per-session temp dir
-        try:
-            project_cwd = _resolve_project_cwd(request_data) or session_temp_dir(session_id)
-        except ValueError as exc:
-            return {"message": str(exc)}, 400
+        # Resolve project → cwd: explicit external cwd wins, then project, then temp dir.
+        if ext_cwd is not None:
+            project_cwd = ext_cwd
+        else:
+            try:
+                project_cwd = _resolve_project_cwd(request_data) or session_temp_dir(session_id)
+            except ValueError as exc:
+                return {"message": str(exc)}, 400
+
+        # Inline @<ref> context expansion — files/dirs/@diff/URLs resolved
+        # against the session cwd, pre-LLM. File/dir refs are scoped to the
+        # project's git index (or session attachments); see reference_expansion.
+        user_query = expand_references(
+            user_query,
+            project_cwd,
+            attachments=_session_attachment_map(session_id),
+        )
 
         # Extract model for orchestration (may differ from config default)
         model_name = str(context_payload.get("model", "")) or None
@@ -2132,10 +3155,17 @@ class SessionEvents(Resource):
                 "type": "string",
             },
         },
+        description=(
+            "Return the session's event timeline plus authoritative run state — "
+            "`running`, `status`, `done_reason`, `title`, and `recoverable`. Pass "
+            "`after` (the `ts` of your last event) to fetch only newer events "
+            "while polling; the status fields are always computed from the full "
+            "transcript. Prefer the stream endpoint for push delivery."
+        ),
     )
-    @api.response(200, "Events plus authoritative session status.")
-    @api.response(404, "Session not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Events plus authoritative session status.", session_events_model)
+    @kit.errors(404, descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
     def get(self, session_id: str) -> tuple[dict, int]:
         """Poll session events
 
@@ -2280,9 +3310,16 @@ class SessionStream(Resource):
                 "type": "string",
             },
         },
+        description=(
+            "Open a Server-Sent Events stream. The stored backlog is replayed "
+            "first, then new events are pushed as they happen (`data: <json>` "
+            "frames). Heartbeat comments keep the connection alive and a terminal "
+            "`stream_end` frame is sent when the run finishes. EventSource cannot "
+            "set headers, so the key may be passed as the `api_key` query param."
+        ),
     )
     @api.response(200, "Server-Sent Events stream (`text/event-stream`).")
-    @api.response(401, "Missing or invalid API key.")
+    @kit.auth_error()
     def get(self, session_id: str) -> Response:
         """Stream session events
 
@@ -2319,12 +3356,25 @@ class SessionMessage(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "While a run is active, the `text` is enqueued as a steering message "
+            "and the call returns 202. On an idle or finished session the message "
+            "re-engages it: a fresh run starts with `text` as its query and the "
+            "call returns 200 with the new `run_id` (form `<session_id>:r<seq>`). "
+            "Only a terminated session rejects."
+        ),
     )
-    @api.response(202, "Steering message enqueued into the active run.")
-    @api.response(200, "Idle session re-engaged; body carries the new `run_id`.")
-    @api.response(400, "Missing text.")
-    @api.response(409, "Session could not be re-engaged.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(
+        202, "Steering message enqueued into the active run.", session_message_enqueued_model
+    )
+    @ns.response(
+        200,
+        "Idle session re-engaged; body carries the new `run_id`.",
+        session_message_enqueued_model,
+    )
+    @kit.errors(400, shape="message", descriptions={400: "The `text` field is missing or empty."})
+    @kit.errors(409, shape="message", descriptions={409: "The session could not be re-engaged."})
+    @kit.auth_error()
     @ns.expect(session_message_model)
     def post(self, session_id: str) -> tuple[dict, int]:
         """Send a session message
@@ -2347,6 +3397,9 @@ class SessionMessage(Resource):
         # No active run → re-engage: start a fresh run with this message.
         model = get_config_value("llm", "default_model", default="unknown")
         runtime.append_context_event(session_id, {"model": model})
+        # Resolve cwd from session context (honours persisted external cwd) or
+        # fall back to the per-session temp dir for sessions without a project.
+        session_cwd = _resolve_session_cwd(session_id) or session_temp_dir(session_id)
         budget = int(get_config_value("agent", "session_step_budget", default=0))
         max_iters = int(get_config_value("agent", "max_iters", default=30))
         run_id = runtime.start_async(
@@ -2355,7 +3408,7 @@ class SessionMessage(Resource):
             model_name=str(model) or None,
             approval_callback=auto_approve,
             hook_manager=_hook_manager,
-            cwd=session_temp_dir(session_id),
+            cwd=session_cwd,
             max_iters=max_iters,
             session_step_budget=budget,
             source_platform=_request_surface(),
@@ -2372,10 +3425,19 @@ class SessionInterrupt(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Stop the currently executing step of an active run and return 202. "
+            "Interrupting an idle session is an idempotent no-op that returns 200 "
+            "with `interrupted` false, so the call is always safe to make."
+        ),
     )
-    @api.response(202, "Current step interrupted.")
-    @api.response(200, "Session was idle; nothing to interrupt (`interrupted: false`).")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(202, "Current step interrupted.", session_interrupt_model)
+    @ns.response(
+        200,
+        "Session was idle; nothing to interrupt (`interrupted: false`).",
+        session_interrupt_model,
+    )
+    @kit.auth_error()
     def post(self, session_id: str) -> tuple[dict, int]:
         """Interrupt a session
 
@@ -2468,11 +3530,28 @@ class SessionRecovery(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Restart work on a failed or incomplete session. `retry` re-runs the "
+            "last user query (optionally replaced via `edited_text`); `continue` "
+            "resumes from where the run stopped. The run inherits the session's "
+            "prior context. Wiki indexing sessions resume from their checkpoint "
+            "and return a `job_id` to monitor instead of a `run_id`."
+        ),
     )
-    @api.response(202, "Recovery run started; body carries `run_id` (or `job_id` for wiki jobs).")
-    @api.response(400, "Invalid action, or nothing to recover from.")
-    @api.response(409, "Session is already running.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(
+        202,
+        "Recovery run started; body carries `run_id` (or `job_id` for wiki jobs).",
+        session_recover_response_model,
+    )
+    @kit.errors(
+        400,
+        shape="message",
+        descriptions={400: "`action` is not `retry`/`continue`, or nothing to recover from."},
+    )
+    @kit.errors(
+        409, shape="message", descriptions={409: "A run is already active for this session."}
+    )
+    @kit.auth_error()
     @ns.expect(session_recover_model)
     def post(self, session_id: str) -> tuple[dict, int]:
         """Recover a session
@@ -2576,11 +3655,26 @@ class SessionFork(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Copy the transcript into a new session and return its id. Pass "
+            "`from_ts` to fork from a specific point instead of the full history, "
+            "and optionally apply a new `tag` or `model`. Set `compact: true` to "
+            "compact the forked transcript in the background. A running session "
+            "cannot be forked."
+        ),
     )
-    @api.response(201, "Fork created; body carries the new `session_id`.")
-    @api.response(400, "Fork failed (for example, an unknown fork point).")
-    @api.response(409, "Cannot fork a running session.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(
+        201, "Fork created; body carries the new `session_id`.", session_fork_response_model
+    )
+    @kit.errors(
+        400,
+        shape="message",
+        descriptions={400: "The fork failed (for example, an unknown `from_ts` fork point)."},
+    )
+    @kit.errors(
+        409, shape="message", descriptions={409: "Cannot fork a session while it is running."}
+    )
+    @kit.auth_error()
     @ns.expect(session_fork_model)
     def post(self, session_id: str) -> tuple[dict, int]:
         """Fork a session
@@ -2649,12 +3743,27 @@ class SessionPlanApprove(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Resolve a pending plan-mode proposal. Approval (`approved: true`) "
+            "immediately starts a new act-mode run that implements the plan; "
+            "rejection leaves the session dormant so the user can send refinement "
+            "guidance via the query endpoint. Returns 404 when no proposal is "
+            "pending or a run is already active."
+        ),
     )
-    @api.response(200, "Decision recorded.")
-    @api.response(400, "`approved` must be a boolean.")
-    @api.response(404, "No pending plan proposal, or a run is already active.")
-    @api.response(500, "Plan approved but the follow-up run could not start.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Decision recorded.", plan_decision_model)
+    @kit.errors(400, shape="message", descriptions={400: "`approved` must be a boolean."})
+    @kit.errors(
+        404,
+        shape="message",
+        descriptions={404: "No pending plan proposal, or a run is already active."},
+    )
+    @kit.errors(
+        500,
+        shape="message",
+        descriptions={500: "The plan was approved but the follow-up run could not start."},
+    )
+    @kit.auth_error()
     @ns.expect(plan_approve_model)
     def post(self, session_id: str) -> tuple[dict, int]:
         """Approve or reject a plan
@@ -2717,12 +3826,25 @@ class SessionPlanFile(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Return the session's current `plan.md` as `text/markdown`. A plan "
+            "file exists only after a plan-mode run has written one; otherwise the "
+            "call returns 404."
+        ),
     )
     @api.response(200, "Plan content (`text/markdown`).")
-    @api.response(400, "Invalid session id.")
-    @api.response(404, "No plan file for this session.")
-    @api.response(500, "Plan file could not be read.")
-    @api.response(401, "Missing or invalid API key.")
+    @kit.errors(
+        400,
+        404,
+        500,
+        shape="message",
+        descriptions={
+            400: "The session id is invalid (path traversal guard).",
+            404: "No plan file exists for this session.",
+            500: "The plan file could not be read.",
+        },
+    )
+    @kit.auth_error()
     def get(self, session_id: str) -> tuple[dict, int] | Response:
         """Fetch the session plan
 
@@ -2767,9 +3889,16 @@ class SessionAgents(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Return the session's sub-agent lifecycle events (status, model, "
+            "per-agent token counts) plus rollups: `total_steps`, "
+            "`total_input_tokens` (peak context pressure), and "
+            "`total_input_tokens_billed` (cumulative billed input). Use it to "
+            "render a live agent tree alongside the event stream."
+        ),
     )
-    @api.response(200, "Agent tree and token rollups.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Agent tree and token rollups.", agents_tree_model)
+    @kit.auth_error()
     def get(self, session_id: str) -> tuple[dict, int]:
         """Get the agent tree
 
@@ -2836,9 +3965,15 @@ class SessionUsage(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Return token usage split between the root agent and sub-agents, "
+            "including peak and billed input figures plus compaction statistics. "
+            "`total_input_tokens_billed` is the cost-accounting number; the peak "
+            "fields describe context pressure."
+        ),
     )
-    @api.response(200, "Token usage breakdown.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Token usage breakdown.", usage_model)
+    @kit.auth_error()
     def get(self, session_id: str) -> tuple[dict, int]:
         """Get token usage
 
@@ -2873,10 +4008,14 @@ class SessionArchive(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Hide the session from the default session list. Archiving is fully "
+            "reversible with DELETE on the same path."
+        ),
     )
-    @api.response(200, "Session archived.")
-    @api.response(404, "Session not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Session archived.", session_archive_model)
+    @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
     def post(self, session_id: str) -> tuple[dict, int]:
         """Archive a session
 
@@ -2894,10 +4033,11 @@ class SessionArchive(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description="Restore an archived session to the default session list.",
     )
-    @api.response(200, "Session unarchived.")
-    @api.response(404, "Session not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Session unarchived.", session_archive_model)
+    @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
     def delete(self, session_id: str) -> tuple[dict, int]:
         """Unarchive a session
 
@@ -2919,11 +4059,16 @@ class SessionTitle(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Save a user-provided display title for the session. Titles are "
+            "trimmed and capped at 120 characters. Use POST on the same path to "
+            "have the model generate a title instead."
+        ),
     )
-    @api.response(200, "Title saved.")
-    @api.response(400, "Missing or empty title.")
-    @api.response(404, "Session not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Title saved.", session_title_model)
+    @kit.errors(400, shape="message", descriptions={400: "The `title` field is missing or empty."})
+    @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
     @ns.expect(title_patch_model)
     def patch(self, session_id: str) -> tuple[dict, int]:
         """Rename a session
@@ -2949,11 +4094,16 @@ class SessionTitle(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Ask the configured model to produce a title from the transcript, "
+            "save it, and append a `title_update` event to the session. Returns "
+            "422 when no usable title could be generated."
+        ),
     )
-    @api.response(200, "Generated title saved.")
-    @api.response(404, "Session not found.")
-    @api.response(422, "No usable title could be generated.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Generated title saved.", session_title_model)
+    @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
+    @kit.errors(422, shape="message", descriptions={422: "No usable title could be generated."})
+    @kit.auth_error()
     def post(self, session_id: str) -> tuple[dict, int]:
         """Generate a session title
 
@@ -2999,11 +4149,23 @@ class SessionAttachments(Resource):
                 "type": "string",
             },
         },
+        description=(
+            "Upload one or more files as `multipart/form-data` under the `files` "
+            "field (a single `file` field also works). Documents are parsed to "
+            "Markdown at upload time so later runs read them without re-parsing. "
+            "Unsupported file types are rejected, as are image uploads when the "
+            "`model` hint names a non-vision model. Reference the returned "
+            "descriptors in the `attachments` field of a query."
+        ),
     )
-    @api.response(200, "Saved attachment descriptors.")
-    @api.response(400, "No files, unsupported file type, or image sent to a non-vision model.")
-    @api.response(404, "Session not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Saved attachment descriptors.", attachments_response_model)
+    @kit.errors(
+        400,
+        shape="message",
+        descriptions={400: "No files, an unsupported type, or an image to a non-vision model."},
+    )
+    @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
     def post(self, session_id: str) -> tuple[dict, int]:
         """Upload attachments
 
@@ -3112,10 +4274,14 @@ class SessionShare(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Mint a share token for the session. Anyone holding the token can "
+            "read the transcript via GET /api/share/{token} without an API key."
+        ),
     )
-    @api.response(200, "Share record with the new token.")
-    @api.response(404, "Session not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Share record with the new token.", share_record_model)
+    @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
     def post(self, session_id: str) -> tuple[dict, int]:
         """Create a share link
 
@@ -3138,10 +4304,14 @@ class SessionExport(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Return the full event transcript and the stored summary in one "
+            "payload, suitable for download or offline analysis."
+        ),
     )
-    @api.response(200, "Transcript and summary.")
-    @api.response(404, "Session not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Transcript and summary.", session_export_model)
+    @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
     def get(self, session_id: str) -> tuple[dict, int]:
         """Export a session
 
@@ -3161,22 +4331,120 @@ class SessionExport(Resource):
 
 
 def _resolve_session_cwd(session_id: str) -> str | None:
-    """Return the project filesystem path for a session, or None if unresolvable."""
+    """Return the project filesystem path for a session, or None if unresolvable.
+
+    Checks (in order, most-recent-context-event wins):
+    1. An explicit ``cwd`` persisted by :class:`ExternalCwdPolicy` — returned
+       directly when the path still exists as a directory.
+    2. A ``project`` name resolved via :func:`_resolve_project_cwd` — the
+       existing behaviour.
+    """
     events = runtime.session_store.load_transcript(session_id)
-    # Walk backwards to find the most recent context event that names a project.
-    project_name: str | None = None
+    # Walk backwards to find the most recent context event with a cwd or project.
     for event in reversed(events):
-        if event.get("type") == "context":
-            payload = event.get("payload", {})
-            if isinstance(payload, dict) and payload.get("project"):
-                project_name = str(payload["project"])
-                break
-    if not project_name:
-        return None
-    try:
-        return _resolve_project_cwd({"project": project_name})
-    except ValueError:
-        return None
+        if event.get("type") != "context":
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        # External cwd persisted by ExternalCwdPolicy takes priority.
+        raw_cwd = payload.get("cwd")
+        if raw_cwd and isinstance(raw_cwd, str) and os.path.isdir(raw_cwd):
+            return raw_cwd
+        # Project-derived path (existing behaviour).
+        project_name = payload.get("project")
+        if project_name and isinstance(project_name, str):
+            try:
+                return _resolve_project_cwd({"project": project_name})
+            except ValueError:
+                return None
+    return None
+
+
+@ns.route("/files")
+class FileCatalogView(Resource):
+    """List referenceable project files for the composer's `@`-mention picker."""
+
+    @api.doc(
+        security="apikey",
+        params={
+            "project": {
+                "description": "Project name to scope files to (home composer).",
+                "in": "query",
+                "type": "string",
+            },
+            "session": {
+                "description": (
+                    "Session id to scope files to (in-session composer); also "
+                    "includes the session's attachments."
+                ),
+                "in": "query",
+                "type": "string",
+            },
+            "q": {
+                "description": "Optional case-insensitive substring filter.",
+                "in": "query",
+                "type": "string",
+            },
+            "limit": {
+                "description": "Max files to return (default 200, cap 2000).",
+                "in": "query",
+                "type": "integer",
+            },
+        },
+        description=(
+            "List the files an `@<ref>` may resolve to: the project's git index "
+            "(tracked + new-but-not-`.gitignore`d) plus any files attached to the "
+            "session. Pass `project` (home composer) or `session` (in-session "
+            "composer). Falls back to a bounded filesystem walk for non-git "
+            "projects, and returns empty lists when nothing resolves."
+        ),
+    )
+    @ns.response(200, "The project's git-indexed files plus session attachments.", files_list_model)
+    @kit.errors(
+        404,
+        shape="message",
+        descriptions={404: "A `session` was supplied but no session with that id exists."},
+    )
+    @kit.auth_error()
+    def get(self) -> tuple[dict, int]:
+        """List referenceable files
+
+        Returns the files an `@<ref>` may resolve to: the project's git index
+        (tracked + new-but-not-`.gitignore`d) plus any files attached to the
+        session. Pass `project` (home composer) or `session` (in-session
+        composer). Falls back to a bounded filesystem walk for non-git
+        projects.
+        """
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+
+        project = request.args.get("project")
+        session_id = request.args.get("session")
+        cwd: str | None = None
+        if project:
+            try:
+                cwd = _resolve_project_cwd({"project": project})
+            except ValueError:
+                cwd = None
+        if cwd is None and session_id:
+            if session_id not in runtime.session_store.list_sessions():
+                return {"message": "Session not found."}, 404
+            cwd = _resolve_session_cwd(session_id)
+
+        limit = min(max(int(request.args.get("limit", 200) or 200), 1), 2000)
+        files = FileCatalog(cwd).list_files(limit=limit) if cwd else []
+        # Session attachments are referenceable by their display filename.
+        attachments = (
+            sorted(_session_attachment_map(session_id).keys()) if session_id else []
+        )
+
+        query = (request.args.get("q") or "").strip().lower()
+        if query:
+            files = [f for f in files if query in f.lower()]
+            attachments = [a for a in attachments if query in a.lower()]
+        return {"files": files[:limit], "attachments": attachments}, 200
 
 
 @ns.route("/sessions/<string:session_id>/git-diff")
@@ -3198,11 +4466,20 @@ class SessionGitDiff(Resource):
                 "enum": ["uncommitted", "branch"],
             },
         },
+        description=(
+            "Return a unified git diff for the session's bound project. `scope` "
+            "selects `uncommitted` (working tree vs HEAD, the default) or `branch` "
+            "(vs the merge base with origin/main or origin/master). When the "
+            "session has no project, or it is not a git repo, the call still "
+            "returns 200 with `git_repo` false and a `reason`."
+        ),
     )
-    @api.response(200, "Unified diff, or `git_repo: false` with a reason.")
-    @api.response(400, "Invalid scope.")
-    @api.response(404, "Session not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Unified diff, or `git_repo: false` with a reason.", git_diff_model)
+    @kit.errors(
+        400, shape="message", descriptions={400: "`scope` must be `uncommitted` or `branch`."}
+    )
+    @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
     def get(self, session_id: str) -> tuple[dict, int]:
         """Get the session diff
 
@@ -3278,9 +4555,14 @@ class ShareLookup(Resource):
         params={
             "token": "Share token returned by POST /api/sessions/{session_id}/share.",
         },
+        description=(
+            "Public endpoint. Return the shared session's transcript and summary "
+            "for a valid token — no API key required; possession of the token is "
+            "the only credential."
+        ),
     )
-    @api.response(200, "Shared transcript and summary.")
-    @api.response(404, "Share token not found.")
+    @ns.response(200, "Shared transcript and summary.", share_lookup_model)
+    @kit.errors(404, shape="message", descriptions={404: "No share token matches."})
     def get(self, token: str) -> tuple[dict, int]:
         """Resolve a share link
 
@@ -3305,9 +4587,17 @@ class ShareLookup(Resource):
 class CommandRegistry(Resource):
     """List the server-side command registry for client discovery."""
 
-    @api.doc(security="apikey")
-    @api.response(200, "Command registry.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Return the server-side slash command registry — each command's "
+            "`name`, `args`, and render `kind` — so clients can build command "
+            "palettes without hardcoding the list. Execute one against a session "
+            "via POST /api/sessions/{session_id}/command."
+        ),
+    )
+    @ns.response(200, "Command registry.", commands_list_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List commands
 
@@ -3330,14 +4620,25 @@ class SessionCommand(Resource):
     @api.doc(
         security="apikey",
         params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Execute a server-side slash command (e.g. `compact`) against the "
+            "session. Commands that render into the transcript run asynchronously "
+            "like a query: the call returns 202 and output arrives on the event "
+            "stream. Dialog and notification commands execute inline and return "
+            "their result with 200. Discover commands via GET /api/commands."
+        ),
     )
-    @api.response(200, "Inline command result (dialog or notification render).")
-    @api.response(202, "Transcript command started; watch the event stream.")
-    @api.response(400, "Missing name or invalid arguments.")
-    @api.response(404, "Unknown command.")
-    @api.response(409, "Session is already running.")
-    @api.response(500, "Command handler failed.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(
+        200, "Inline command result (dialog or notification render).", command_inline_model
+    )
+    @ns.response(
+        202, "Transcript command started; watch the event stream.", command_accepted_model
+    )
+    @ns.response(400, "Missing name or invalid arguments.", command_error_model)
+    @ns.response(404, "Unknown command.", command_unknown_model)
+    @ns.response(409, "Session is already running.", command_running_model)
+    @ns.response(500, "Command handler failed.", command_error_model)
+    @kit.auth_error()
     @ns.expect(session_command_model)
     def post(self, session_id: str) -> tuple[dict, int]:
         """Run a command
@@ -3499,9 +4800,14 @@ class Notifications(Resource):
                 "type": "boolean",
             },
         },
+        description=(
+            "List session lifecycle notifications (created, completed, failed). "
+            "Dismissed entries are hidden unless `include_dismissed=true`. Dismiss "
+            "with POST /api/notifications/dismiss."
+        ),
     )
-    @api.response(200, "Notification list.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Notification list.", notifications_list_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List notifications
 
@@ -3522,9 +4828,15 @@ class Notifications(Resource):
 class NotificationDismiss(Resource):
     """Dismiss notifications."""
 
-    @api.doc(security="apikey")
-    @api.response(200, "Number of notifications dismissed.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Mark the given notification ids as dismissed. Accepts either an "
+            "`ids` array or a single `id`. Returns the number dismissed."
+        ),
+    )
+    @ns.response(200, "Number of notifications dismissed.", notification_dismiss_response_model)
+    @kit.auth_error()
     @ns.expect(notification_dismiss_model)
     def post(self) -> tuple[dict, int]:
         """Dismiss notifications
@@ -3550,9 +4862,15 @@ class NotificationDismiss(Resource):
 class NotificationClear(Resource):
     """Clear notifications."""
 
-    @api.doc(security="apikey")
-    @api.response(200, "Number of notifications cleared.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Delete dismissed notifications, or every notification when "
+            "`clear_all` is true. Returns the number cleared."
+        ),
+    )
+    @ns.response(200, "Number of notifications cleared.", notification_clear_response_model)
+    @kit.auth_error()
     @ns.expect(notification_clear_model)
     def post(self) -> tuple[dict, int]:
         """Clear notifications
@@ -3589,9 +4907,16 @@ class Tools(Resource):
                 "type": "string",
             },
         },
+        description=(
+            "List every known tool integration with its enablement state, the MCP "
+            "server it comes from, and a `scope` of `global`, `project`, or "
+            "`plugin`. Pass `project` to include tools configured inside that "
+            "project. Use the `tool_id` values in a session's `mcp_tools` "
+            "allowlist to scope what a run may call."
+        ),
     )
-    @api.response(200, "Tool list.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Tool list.", tools_list_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List tools
 
@@ -3676,9 +5001,15 @@ class Skills(Resource):
                 "type": "string",
             },
         },
+        description=(
+            "List the available skills, including those contributed by installed "
+            "plugins, with their descriptions, tool allowlists, and invocation "
+            "flags. Pass `project` to include project-local skills. Activate a "
+            "skill for a run via the `skill` field of a query."
+        ),
     )
-    @api.response(200, "Skill list.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Skill list.", skills_list_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List skills
 
@@ -3733,10 +5064,24 @@ class Skills(Resource):
 class MewboQuery(Resource):
     """Legacy sync endpoint (CLI compatibility)."""
 
-    @api.doc(security="apikey")
-    @api.response(200, "Completed run with the executed action steps.", task_queue_model)
-    @api.response(400, "Missing query or invalid project.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Run the query to completion and return the full result in one "
+            "response, including the executed action steps and the `session_id`. "
+            "Prefer the asynchronous session endpoints for interactive use; this "
+            "remains for simple CLI-style clients. A new session is created "
+            "automatically unless `session_id`, `session_tag`, or `fork_from` "
+            "selects an existing one."
+        ),
+    )
+    @ns.response(200, "Completed run with the executed action steps.", task_queue_model)
+    @kit.errors(
+        400,
+        shape="message",
+        descriptions={400: "The `query` field is missing, or the named project is invalid."},
+    )
+    @kit.auth_error()
     @ns.expect(sync_query_model)
     def post(self) -> tuple[dict, int]:
         """Run a synchronous query
@@ -3776,6 +5121,13 @@ class MewboQuery(Resource):
         except ValueError as exc:
             return {"message": str(exc)}, 400
 
+        # Inline @<ref> context expansion (see reference_expansion.py).
+        user_query = expand_references(
+            user_query,
+            project_cwd,
+            attachments=_session_attachment_map(session_id),
+        )
+
         logging.info("Received user query: {}", user_query)
         task_queue: TaskQueue = runtime.run_sync(
             user_query=user_query,
@@ -3807,9 +5159,17 @@ class MewboQuery(Resource):
 class ConfigSchemaResource(Resource):
     """Serve the JSON Schema for AppConfig (protected fields stripped)."""
 
-    @api.doc(security="apikey")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Return the JSON Schema describing the application configuration. "
+            "Protected fields are stripped entirely and secret fields are marked "
+            "`writeOnly`, so the schema can drive a settings UI directly. The "
+            "current values are served separately by GET /api/config."
+        ),
+    )
     @api.response(200, "Configuration JSON Schema.")
-    @api.response(401, "Missing or invalid API key.")
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """Get the configuration schema
 
@@ -3827,9 +5187,17 @@ class ConfigSchemaResource(Resource):
 class ConfigResource(Resource):
     """Read and update the application configuration."""
 
-    @api.doc(security="apikey")
-    @api.response(200, "Configuration values and secret status map.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Return the current configuration with protected and secret values "
+            "stripped, plus a `secrets` map reporting which secret fields are set "
+            "(true/false) without revealing their values. Update with PATCH on "
+            "the same path."
+        ),
+    )
+    @ns.response(200, "Configuration values and secret status map.", config_response_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """Get configuration
 
@@ -3845,12 +5213,27 @@ class ConfigResource(Resource):
         secrets = view.secret_status(data)
         return {"config": view.strip_values(data), "secrets": secrets}, 200
 
-    @api.doc(security="apikey")
-    @api.response(200, "Updated configuration values and secret status map.")
-    @api.response(400, "Empty payload.")
-    @api.response(403, "Attempted to modify a protected field.")
-    @api.response(422, "Merged configuration failed validation; nothing was saved.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Deep-merge the request body into the stored configuration, validate "
+            "the result, and persist it. Attempts to modify protected fields are "
+            "rejected with 403. A merge that fails validation returns 422 with the "
+            "validation errors and changes nothing. Mirrors the shape served by "
+            "GET /api/config/schema."
+        ),
+    )
+    @ns.response(
+        200, "Updated configuration values and secret status map.", config_response_model
+    )
+    @kit.errors(400, shape="message", descriptions={400: "The request body was empty."})
+    @kit.errors(403, shape="message", descriptions={403: "The patch touched a protected field."})
+    @ns.response(
+        422,
+        "Merged configuration failed validation; nothing was saved.",
+        config_validation_error_model,
+    )
+    @kit.auth_error()
     @ns.expect(config_patch_model)
     def patch(self) -> tuple[dict, int]:
         """Update configuration
@@ -3891,9 +5274,16 @@ class ConfigResource(Resource):
 class PluginList(Resource):
     """List installed plugins and their components."""
 
-    @api.doc(security="apikey")
-    @api.response(200, "Installed plugin list.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "List each installed plugin with its version, source marketplace, "
+            "scope, and component counts (skills, agents, commands, MCP servers, "
+            "hooks). Browse installable plugins via GET /api/plugins/marketplace."
+        ),
+    )
+    @ns.response(200, "Installed plugin list.", plugins_list_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List installed plugins
 
@@ -3933,9 +5323,15 @@ class PluginList(Resource):
 class PluginMarketplace(Resource):
     """List and install plugins from configured marketplaces."""
 
-    @api.doc(security="apikey")
-    @api.response(200, "Available plugin list.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "List the plugins available for installation from the configured "
+            "marketplaces. Install one with POST on this same path."
+        ),
+    )
+    @ns.response(200, "Available plugin list.", marketplace_plugins_model)
+    @kit.auth_error()
     def get(self) -> tuple[dict, int]:
         """List marketplace plugins
 
@@ -3953,11 +5349,19 @@ class PluginMarketplace(Resource):
             "plugins": discover_marketplace_plugins(marketplace_dirs=cfg.resolve_marketplace_dirs())
         }, 200
 
-    @api.doc(security="apikey")
-    @api.response(200, "Plugin installed.")
-    @api.response(400, "Missing fields or unknown plugin/marketplace.")
-    @api.response(500, "Installation failed.")
-    @api.response(401, "Missing or invalid API key.")
+    @api.doc(
+        security="apikey",
+        description=(
+            "Install the named plugin from a configured marketplace. Its skills, "
+            "commands, agents, and MCP servers become available to sessions "
+            "started after installation. Both `name` and `marketplace` are "
+            "required (from GET /api/plugins/marketplace)."
+        ),
+    )
+    @ns.response(200, "Plugin installed.", plugin_install_response_model)
+    @ns.response(400, "Missing fields or unknown plugin/marketplace.", plugin_error_model)
+    @ns.response(500, "Installation failed.", plugin_error_model)
+    @kit.auth_error()
     @ns.expect(plugin_install_model)
     def post(self) -> tuple[dict, int]:
         """Install a plugin
@@ -4000,10 +5404,15 @@ class PluginDetail(Resource):
     @api.doc(
         security="apikey",
         params={"plugin_name": "Name of an installed plugin, as listed by GET /api/plugins."},
+        description=(
+            "Remove an installed plugin and its components from the install "
+            "directory. Sessions started afterward no longer see its skills, "
+            "commands, agents, or MCP servers."
+        ),
     )
-    @api.response(200, "Plugin uninstalled.")
-    @api.response(404, "Plugin not found.")
-    @api.response(401, "Missing or invalid API key.")
+    @ns.response(200, "Plugin uninstalled.", plugin_uninstall_model)
+    @ns.response(404, "Plugin not found.", plugin_error_model)
+    @kit.auth_error()
     def delete(self, plugin_name: str) -> tuple[dict, int]:
         """Uninstall a plugin
 

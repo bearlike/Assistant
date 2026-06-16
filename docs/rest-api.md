@@ -24,7 +24,24 @@ search:
         url: "../openapi.json",
         darkMode: dark,
         hideDarkModeToggle: true,
-        hideModels: false
+        hideModels: false,
+        // Developers can retarget the reference at their own stack and run
+        // live requests from this page: the server URL is an editable
+        // {baseUrl} variable (default the self-hosted port), and the API-key
+        // panel is surfaced from the spec's `apikey` (X-API-KEY) scheme so a
+        // key can be entered once and reused across every "Test Request".
+        servers: [
+          {
+            url: "{baseUrl}",
+            description: "Your Mewbo server (edit the base URL below)",
+            variables: {
+              baseUrl: { default: "http://localhost:5125" }
+            }
+          }
+        ],
+        authentication: {
+          preferredSecurityScheme: "apikey"
+        }
       });
     };
     var app = create();

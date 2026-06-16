@@ -172,7 +172,7 @@ When using a proxy (`llm.api_base` is set), the proxy must advertise model capab
 
 ### Seeing cache savings
 
-Cache savings appear immediately in the per-turn chip as **cache read** tokens. Accumulated session savings are visible in the context window bar popover under **Cache reads** (with a tooltip noting the per-provider billing rate). The `/api/sessions/{id}/usage` endpoint surfaces `total_cache_read_tokens` for programmatic access.
+Cache savings appear immediately in the per-turn chip as **cache read** tokens. Accumulated session savings are visible in the context window bar popover under **Cache reads** (with a tooltip noting the per-provider billing rate). The [GET /api/sessions/{session_id}/usage](endpoint:GET /api/sessions/{session_id}/usage) endpoint surfaces `total_cache_read_tokens` for programmatic access.
 
 ---
 

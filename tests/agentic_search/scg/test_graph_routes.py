@@ -206,6 +206,56 @@ def test_disabled_scg_degrades_to_all_unmapped(monkeypatch):
     assert body["edges"] == []
 
 
+# ── summary projection (#139) ────────────────────────────────────────────────
+
+
+def test_graph_summary_returns_stats_without_node_edge_arrays(_scg_on):
+    """The summary route projects {scope, stats} only — no full node/edge payload."""
+    _seed_two_source_scg()
+    ws_id = _make_workspace(["github", "notion"])
+
+    client = backend.app.test_client()
+    resp = client.get(
+        f"/api/agentic_search/workspaces/{ws_id}/graph/summary", headers=_auth()
+    )
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    body = resp.get_json()
+
+    # Only scope + stats — the heavy arrays are absent (the landing win).
+    assert set(body) == {"scope", "stats"}
+    assert body["scope"] == ["github", "notion"]
+    # github is mapped (Repo + search), notion is not.
+    assert body["stats"]["unmapped"] == ["notion"]
+    assert body["stats"]["totalNodes"] >= 2
+    assert "totalEdges" in body["stats"]
+    # Same redaction guarantee as the full route.
+    assert "oauth:repo" not in resp.get_data(as_text=True)
+
+
+def test_graph_summary_disabled_scg_degrades_to_all_unmapped(monkeypatch):
+    """SCG off → empty stats + every source unmapped (200, never 503), no arrays."""
+    monkeypatch.setattr(ScgConfig, "enabled", staticmethod(lambda: False))
+    ws_id = _make_workspace(["github", "slack"])
+
+    client = backend.app.test_client()
+    resp = client.get(
+        f"/api/agentic_search/workspaces/{ws_id}/graph/summary", headers=_auth()
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert set(body) == {"scope", "stats"}
+    assert sorted(body["stats"]["unmapped"]) == ["github", "slack"]
+
+
+def test_graph_summary_unknown_workspace_404s(_scg_on):
+    """An unknown workspace id 404s on the summary route too."""
+    client = backend.app.test_client()
+    resp = client.get(
+        "/api/agentic_search/workspaces/does-not-exist/graph/summary", headers=_auth()
+    )
+    assert resp.status_code == 404
+
+
 # ── 404 ──────────────────────────────────────────────────────────────────────
 
 

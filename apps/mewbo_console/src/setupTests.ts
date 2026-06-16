@@ -18,6 +18,12 @@ class ResizeObserverStub {
 }
 globalThis.ResizeObserver = globalThis.ResizeObserver ?? ResizeObserverStub;
 
+// jsdom lacks Element.scrollIntoView — cmdk calls it on the selected item when
+// a list mounts with rows (e.g. the file-mention picker / slash palette).
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = vi.fn();
+}
+
 // jsdom lacks matchMedia — stub it for hooks that use media queries (e.g. useIsMobile)
 Object.defineProperty(window, "matchMedia", {
   writable: true,

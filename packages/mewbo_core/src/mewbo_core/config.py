@@ -335,9 +335,11 @@ class LLMConfig(BaseModel):
         default_factory=list,
         description=(
             "Model IDs (or glob prefixes ending in '*') that prefer the "
-            "structured_patch edit tool over search_replace_block. "
-            "Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; "
-            "only set this to override or extend."
+            "structured_patch edit tool over search_replace_block. Runtime "
+            "override layer ON TOP of the controllable model→tool-variant map "
+            "(mewbo_core/prompts/model_variants.yaml), which now holds the "
+            "built-in defaults (GPT-5/o3/o4/Codex/GPT-4); only set this to "
+            "override or extend without editing that file."
         ),
         json_schema_extra={"x-advanced": True},
     )
@@ -399,9 +401,7 @@ class LLMConfig(BaseModel):
         data = payload.get("data", [])
         return sorted([item.get("id") for item in data if item.get("id")])
 
-    def resolve_available_model(
-        self, model: str, *, fallback: str, timeout: float = 4.0
-    ) -> str:
+    def resolve_available_model(self, model: str, *, fallback: str, timeout: float = 4.0) -> str:
         """Return *model* if the proxy still advertises it, else *fallback*.
 
         Guards a persisted/stale model id (e.g. a wiki reindex replaying an old
@@ -874,6 +874,15 @@ class APIConfig(BaseModel):
         examples=["msk-strong-password"],
         json_schema_extra={"x-protected": True},
     )
+    allow_external_cwd: bool = Field(
+        False,
+        description=(
+            "Allow callers to anchor sessions in an arbitrary host path via the "
+            "`cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. "
+            "Off by default; enable only for trusted external workspace managers "
+            "such as Grove that manage their own worktrees."
+        ),
+    )
 
 
 class HookEntry(BaseModel):
@@ -1037,9 +1046,7 @@ class PluginsConfig(BaseModel):
             existing_names = {d.name for d in dirs}
             missing = []
             for entry in self.marketplaces:
-                canonical = marketplace_dir_name(
-                    entry, default_host=self.marketplace_default_host
-                )
+                canonical = marketplace_dir_name(entry, default_host=self.marketplace_default_host)
                 # Legacy pre-host-agnostic leaf name (and Claude Code's own
                 # leaf-named cache) — reuse those clones instead of re-cloning
                 # the same catalog under the new canonical name.
@@ -1094,6 +1101,18 @@ class WebIdeConfig(BaseModel):
     memory: str = Field(default="1g", pattern=r"^\d+[mgMG]$")
     pids_limit: int = Field(default=512, ge=64, le=4096)
     network: str = Field(default="mewbo-ide", pattern=r"^[a-zA-Z0-9_-]+$")
+    proxy_url: str = Field(
+        default="http://127.0.0.1:5126",
+        description=(
+            "Base URL the API uses to reach the ide-proxy for readiness "
+            "probes. The default suits a host-networked API, where the proxy "
+            "is published on loopback 127.0.0.1:5126. A bridge-networked API "
+            "(e.g. one joined to extra Docker networks via a compose override) "
+            "cannot reach that loopback: attach it to the `network` above and "
+            "point this at the proxy's in-network name, e.g. "
+            "http://mewbo-ide-proxy:8080."
+        ),
+    )
     state_dir: str = Field(default="/tmp/mewbo-ide")
 
 
@@ -1127,12 +1146,25 @@ class ToolSearchConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Tool Search"})
 
-    mode: Literal["off", "on"] = Field(
-        "off",
+    mode: Literal["off", "on", "auto"] = Field(
+        "auto",
         description=(
-            "'off' (default) keeps every tool's schema in the initial bind. "
-            "'on' defers MCP tools and any spec with metadata.deferred=True; "
-            "the model loads schemas on demand via tool_search."
+            "'off' keeps every tool's schema in the initial bind. "
+            "'on' always defers MCP tools and any spec with "
+            "metadata.deferred=True; the model loads schemas on demand via "
+            "tool_search. 'auto' defers only when the number of deferrable "
+            "tools exceeds auto_threshold — so lean / zero-MCP sessions keep "
+            "verbatim binding and pay nothing, while many-MCP sessions are "
+            "spared ~240 tokens per tool every turn."
+        ),
+    )
+    auto_threshold: int = Field(
+        25,
+        ge=0,
+        description=(
+            "In 'auto' mode, defer tool schemas only when more than this "
+            "many deferrable tools (MCP + metadata.deferred specs) are "
+            "registered. Ignored when mode is 'off' or 'on'."
         ),
     )
 

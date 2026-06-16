@@ -562,7 +562,18 @@ def _build_blueprint() -> Blueprint:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"answer {answer_id} not found")
             )
-        return jsonify(ans.model_dump(mode="json", by_alias=True))
+        # Resolve the deterministic provenance trail's ``graph:<node_id>`` refs to
+        # readable labels for the retrieval-details panel (entity hashes →
+        # ``name (type)`` / ``file#Symbol``). NON-destructive: the stored snapshot
+        # keeps raw ids (the memory depositor anchors off them) — only the wire is
+        # humanised (#70).
+        from mewbo_graph.wiki.qa import AccessedSourceResolver  # noqa: PLC0415
+
+        data = ans.model_dump(mode="json", by_alias=True)
+        data["accessedSources"] = AccessedSourceResolver.resolve_refs(
+            _store(), ans.slug, ans.accessed_sources
+        )
+        return jsonify(data)
 
     @bp.route("/index", methods=["POST"])
     def post_index():

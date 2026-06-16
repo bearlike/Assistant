@@ -381,6 +381,41 @@ describe("reduceRun", () => {
     expect(toRunPayload(state).total_ms).toBe(4200)
   })
 
+  it("folds a related_questions event onto the live stream state", () => {
+    const state = fold([
+      started,
+      { type: "answer_ready", answer: runPayload.answer as never },
+      { type: "related_questions", questions: ["how is auth wired?", "rate limits?"] },
+      { type: "run_done", status: "completed", total_ms: 1000 },
+    ])
+    expect(state.related_questions).toEqual(["how is auth wired?", "rate limits?"])
+    expect(toRunPayload(state).related_questions).toEqual([
+      "how is auth wired?",
+      "rate limits?",
+    ])
+  })
+
+  it("folds returned_count onto the lane from agent_done", () => {
+    let state = fold([
+      started,
+      { type: "agent_start", agent_id: "a1", source_id: "github", name: "GitHub", slot: 0 },
+    ])
+    state = fold(
+      [
+        {
+          type: "agent_done",
+          agent_id: "a1",
+          results_count: 2,
+          returned_count: 3,
+          empty: false,
+        },
+      ],
+      state,
+    )
+    expect(state.trace[0].results_count).toBe(2)
+    expect(state.trace[0].returned_count).toBe(3)
+  })
+
   it("folds an error event into a terminal failed state", () => {
     const state = fold([
       started,

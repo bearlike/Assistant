@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from flask import request
-from flask_restx import Namespace, Resource
+from flask_restx import Namespace, Resource, fields
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -17,11 +17,71 @@ from mewbo_api.ide import (
     IdeManager,
     MaxLifetimeReached,
 )
+from mewbo_api.responses import ApiResponseKit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from mewbo_core.session_runtime import SessionRuntime
 
 ide_ns = Namespace("ide", description="Per-session Web IDE (code-server) management")
+
+# One DRY home for this namespace's error examples (every IDE route returns the
+# legacy ``{"message": ...}`` shape; the extend 409 returns a distinct
+# ``max_lifetime`` body documented inline on that route). Built at module level
+# so the import-time decorators can see it; ``Ide`` prefix namespaces the
+# generated model names on the shared Api registry.
+kit = ApiResponseKit(ide_ns, prefix="Ide")
+
+# The JSON shape of an IDE instance (``IdeInstance.to_dict``). ``password`` is on
+# POST responses only. Examples drive Scalar's sample body.
+_ide_instance_model = ide_ns.model(
+    "IdeInstance",
+    {
+        "session_id": fields.String(example="9e2d47c1f0"),
+        "status": fields.String(
+            example="running", description="Container lifecycle state."
+        ),
+        "url": fields.String(
+            example="https://ide.example.com/s/9e2d47c1f0/",
+            description="Browser entry point for the code-server instance.",
+        ),
+        "project_name": fields.String(example="my-project"),
+        "project_path": fields.String(example="/srv/projects/my-project"),
+        "created_at": fields.String(example="2026-06-15T10:00:00+00:00"),
+        "expires_at": fields.String(
+            example="2026-06-15T14:00:00+00:00",
+            description="When the instance is reaped unless extended.",
+        ),
+        "max_deadline": fields.String(
+            example="2026-06-22T10:00:00+00:00",
+            description="Hard ceiling past which extension is refused.",
+        ),
+        "remaining_seconds": fields.Integer(example=14400),
+        "extensions": fields.Integer(
+            example=0, description="How many times the deadline has been pushed."
+        ),
+        "cpus": fields.Float(example=2.0),
+        "memory": fields.String(example="2g"),
+        "password": fields.String(
+            example="hunter2-9e2d47",
+            description="code-server access password — returned on POST only.",
+        ),
+    },
+)
+
+# The extend route's 409 body is a distinct shape (NOT the standard envelope).
+_ide_max_lifetime_model = ide_ns.model(
+    "IdeMaxLifetimeError",
+    {
+        "error": fields.String(
+            example="max_lifetime_reached",
+            description="Stable error code for the lifetime ceiling.",
+        ),
+        "max_deadline": fields.String(
+            example="2026-06-22T10:00:00+00:00",
+            description="The ceiling the requested deadline exceeded.",
+        ),
+    },
+)
 
 AuthResult = tuple[dict, int] | None
 AuthGuard = Callable[[], AuthResult]
@@ -129,6 +189,20 @@ def _session_exists(session_id: str) -> bool:
 class IdeResource(Resource):
     """Create, fetch, or delete the IDE instance bound to a session."""
 
+    @ide_ns.doc(
+        description=(
+            "Create the session's code-server container, or reconnect to an existing "
+            "one. Returns `201` on first create and `200` on reconnect; the response "
+            "body is the IDE instance and — uniquely on this verb — includes the "
+            "`password` so any browser tab can open the IDE. The session must exist "
+            "and carry a project in its context (else `404`/`409`). Idempotent: call "
+            "it again from another tab to reconnect."
+        )
+    )
+    @ide_ns.response(201, "IDE container created", _ide_instance_model)
+    @ide_ns.response(200, "Reconnected to the existing IDE container", _ide_instance_model)
+    @kit.errors(404, 409, 503, shape="message")
+    @kit.auth_error()
     def post(self, session_id: str) -> tuple[dict, int]:
         """Create or reconnect to the session's code-server container."""
         error = _precheck(session_id)
@@ -150,6 +224,17 @@ class IdeResource(Resource):
         # entry point for both initial create and reconnect from any tab.
         return instance.to_dict(include_password=True), (201 if created else 200)
 
+    @ide_ns.doc(
+        description=(
+            "Return the current state of the session's IDE instance. The `password` "
+            "is omitted here (it is only returned by `POST`), so this is the cheap "
+            "poll the session page hits every ~30s. `404` when no instance exists "
+            "for the session."
+        )
+    )
+    @ide_ns.response(200, "Current IDE instance state", _ide_instance_model)
+    @kit.errors(404, 503, shape="message")
+    @kit.auth_error()
     def get(self, session_id: str) -> tuple[dict, int]:
         """Return current instance state or 404 if none exists."""
         error = _precheck(session_id)
@@ -164,6 +249,16 @@ class IdeResource(Resource):
             return {"message": "no ide instance for session"}, 404
         return instance.to_dict(), 200
 
+    @ide_ns.doc(
+        description=(
+            "Stop and remove the session's code-server container, deleting its Mongo "
+            "record and deadline file. Returns `204` (no body) on success; `404` if "
+            "the session had no IDE instance to remove."
+        )
+    )
+    @ide_ns.response(204, "IDE container stopped and removed (no body)")
+    @kit.errors(404, 503, shape="message")
+    @kit.auth_error()
     def delete(self, session_id: str) -> tuple[dict, int]:
         """Stop and remove the container, deleting Mongo + deadline file."""
         error = _precheck(session_id)
@@ -179,10 +274,46 @@ class IdeResource(Resource):
         return {}, 204
 
 
+_ide_extend_model = ide_ns.model(
+    "IdeExtendRequest",
+    {
+        "hours": fields.Integer(
+            example=4,
+            min=1,
+            max=168,
+            description=(
+                "Extend the deadline by this many hours (1–168). "
+                "Mutually exclusive with expires_at."
+            ),
+        ),
+        "expires_at": fields.String(
+            example="2026-06-15T18:00:00+00:00",
+            description="Set an absolute new deadline (ISO 8601). Mutually exclusive with hours.",
+        ),
+    },
+)
+
+
 @ide_ns.route("/sessions/<string:session_id>/ide/extend")
 class IdeExtendResource(Resource):
     """Extend the deadline of a running IDE instance."""
 
+    @ide_ns.doc(
+        description=(
+            "Push the IDE instance's `expires_at` forward. Supply **exactly one** of "
+            "`hours` (1–168, relative) or `expires_at` (absolute ISO 8601). The new "
+            "deadline is clamped to the instance's `max_deadline`; exceeding it "
+            "returns `409` with a `max_lifetime_reached` body carrying that ceiling."
+        )
+    )
+    @ide_ns.expect(_ide_extend_model)
+    @ide_ns.response(200, "Deadline extended; updated IDE instance state", _ide_instance_model)
+    @ide_ns.response(
+        409, "Requested deadline exceeds the lifetime ceiling", _ide_max_lifetime_model
+    )
+    @kit.errors(404, 503, shape="message")
+    @kit.errors(400, shape="message")
+    @kit.auth_error()
     def post(self, session_id: str) -> tuple[dict, int]:
         """Push ``expires_at`` forward, rejecting requests past ``max_deadline``."""
         error = _precheck(session_id)

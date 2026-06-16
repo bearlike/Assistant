@@ -44,6 +44,43 @@ The legacy one-shot client is kept as a fallback for environments
 where the pool can't start (e.g. constrained sandboxes), but the pool
 is the default. If a tool needs MCP, request it through the pool.
 
+### Non-blocking init — a slow/dead server never stalls (Gitea #130)
+
+A slow or unreachable MCP server (cold container, dead host, hung
+`tools/list`) must never block startup or an unrelated tool call. Reducing
+the connect timeout is **not** the fix — any server can legitimately take
+arbitrary time. The pool enforces this with four cooperating seams:
+
+- **Non-blocking startup (Phase 1, `tool_registry._ensure_auto_manifest`).**
+  Discovery is gated on a stored `config_hash`: when the cached manifest was
+  built from the *same* MCP config, startup reuses it and does **no** live
+  connect. The pool then connects **lazily on first use**. A config edit
+  changes the hash and re-triggers discovery; `/mcp` refresh deletes the
+  manifest + `reset_mcp_pool()` to force a re-probe (the "I fixed my server,
+  reconnect now" path — also clears backoff/quarantine state).
+- **Deferred wait-on-first-use (Phase 2).**
+  `refresh_if_config_changed(..., connect=False)` updates config + prunes
+  removed/changed servers but **never eagerly dials** — the connect is
+  deferred to `get_or_connect(server)` for the one server actually needed.
+  This is the natural place the on-demand `tool_search` round-trip (#131)
+  waits for a still-connecting server.
+- **Generalized quarantine + backoff (Phase 3, `_record_failure`).**
+  Every connect failure is unwrapped (`unwrap_exception_group` peels the
+  opaque anyio `TaskGroup` wrapper — reused by #132) and classified
+  (`classify_connect_failure` → auth/config/dns/refused/timeout/other).
+  **Auth/config never auto-retry** — they quarantine until the config hash
+  changes (`skip_reason`). Transient causes get **exponential, capped
+  backoff** (`next_retry_at`); a server inside its backoff window fast-fails
+  in `get_or_connect` instead of being re-dialed. `status_snapshot()` surfaces
+  connected/backoff/quarantined/failed/pending in `/mcp`.
+- **No per-tool-call churn (Phase 4, `MCPToolRunner._invoke_via_pool`).**
+  A server that `pool.is_connected()` skips the config reload + refresh
+  entirely, so a healthy tool call never re-dials every other (possibly dead)
+  server mid-query.
+
+Deferred to a follow-up (Phase 5, stretch): MCP `notifications/tools/
+list_changed` re-listing and a per-server `required: true` hard-fail flag.
+
 ## File edit tools
 
 `integration/edit_common.py` is the shared helper for both edit
@@ -53,10 +90,15 @@ have to discriminate.
 
 The active implementation is selected by `AgentConfig.edit_tool`. When
 empty (default), `ToolUseLoop._configured_edit_tool_id()` auto-picks
-based on model identity via `llm.model_prefers_structured_patch()`.
-Keep this auto-select function in sync with provider behavior — some
-models hallucinate the structured-patch shape when given the
-search-replace tool and vice versa.
+based on the ACTIVE model identity via `llm.model_prefers_structured_patch()`.
+**The model→variant decision is controllable DATA, not code (#113):** that
+function now reads `mewbo_core/prompts/model_variants.yaml` (via
+`ModelVariantRegistry`), where the gpt-5/o3/o4/codex/gpt-4 → structured_patch
+defaults were migrated. Onboard a model or flip its preferred variant by editing
+that file (longest-prefix match), not Python; `llm.structured_patch_models` config
+still overrides on top. Selection reads the active model, so a #54-escalated model
+gets ITS variant. Pair a variant with a per-model prompt nudge via a `kind: model`
+override on the `file.tools.*` entry under the SAME prefix.
 
 If you need to add a new edit tool variant, put the shared
 diff-emission helpers in `edit_common.py` so all variants behave
@@ -82,6 +124,28 @@ Passive diagnostics: after every file edit, `ToolUseLoop` runs an
 edited file and appends them as a tool result message. This is what
 catches "you forgot to import this" / "undefined name" without
 explicitly invoking the LSP tool.
+
+## Inline `@<ref>` expansion + file catalog (#119/#124)
+
+`integration/reference_expansion.py:ReferenceExpander` is the submit-time
+preprocessor that expands `@file`/`@dir/`/`@diff`/`@https://…` tokens in a user
+message into bounded inline context blocks (truncate-not-reject caps, dedupe, no
+recursion, unresolved → literal). It lives HERE, not in an app, on purpose: BOTH
+the API and the in-process CLI invoke it at their own submit seams, and an app
+can't import another app — so the reusable engine sits one layer down. Each app
+calls the thin `expand_references(text, cwd, attachments=)` helper; the API also
+builds the session's attachment map first. It composes existing renderers
+(`mewbo_core.attachments.parse_to_markdown` for docs+URLs, `git diff HEAD`,
+`FileCatalog`) — never a parser per type.
+
+`integration/file_catalog.py:FileCatalog` is the single "what files belong to
+this project?" authority, git-index first (`git ls-files --cached --others
+--exclude-standard` → tracked + new-but-not-`.gitignore`d; worktree-safe via
+`-C`), bounded-walk fallback for non-git dirs. It backs THREE agreeing callers:
+the expander's scoping gate (`contains`), the API's `/api/files` autocomplete
+endpoint, and the CLI completer (`list_files`). `.gitignore`d secrets/artifacts
+are out of scope by construction. Both classes never raise — a missing repo /
+absent `git` / unreadable tree degrades to empty, never a broken request.
 
 ## Aider bridge
 
