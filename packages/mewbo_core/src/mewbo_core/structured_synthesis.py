@@ -29,9 +29,9 @@ from mewbo_core.common import get_logger
 from mewbo_core.components import langfuse_invoke_config
 from mewbo_core.config import get_config_value
 from mewbo_core.llm import build_chat_model
+from mewbo_core.prompt_registry import get_prompt_registry
 from mewbo_core.structured_response import (
     DEFAULT_MAX_FAILURES,
-    FORCE_EMIT_DIRECTIVE,
     EmitStructuredResponseTool,
     StructuredResponseError,
     build_emit_schema,
@@ -86,21 +86,24 @@ class GroundingProvider(Protocol):
 # Compact grounded-context formatter
 # ---------------------------------------------------------------------------
 
-_GROUNDED_HEADER = (
-    "## Grounded context\n\n"
-    "The following snippets were retrieved from the workspace and MUST be "
-    "used to populate the structured answer.  Cite only what is present here.\n\n"
-)
+_GROUNDED_HEADER = get_prompt_registry().render("structured.grounded_header")
 
 
 def _format_citations(citations: list[Citation]) -> str:
     """Format citations into a compact block for the system message."""
     if not citations:
         return ""
+    registry = get_prompt_registry()
     lines = [_GROUNDED_HEADER]
     for i, c in enumerate(citations, start=1):
         lines.append(
-            f"[{i}] ({c.kind}) score={c.score:.3f} — {c.snippet.strip()}\n"
+            registry.render(
+                "structured.grounded_citation",
+                i=i,
+                kind=c.kind,
+                score=c.score,
+                snippet=c.snippet,
+            )
         )
     return "".join(lines)
 
@@ -200,7 +203,12 @@ class StructuredSynthesizer:
         model = build_chat_model(model_name=model_name)
         bound_model = model.bind_tools([emit_schema])
 
-        system_content = FORCE_EMIT_DIRECTIVE
+        # Render the force-emit directive for the resolved model so a per-model
+        # override of ``structured.force_emit_directive`` applies (#113); falls
+        # back to the base (== module-level ``FORCE_EMIT_DIRECTIVE``) otherwise.
+        system_content = get_prompt_registry().render(
+            "structured.force_emit_directive", model=model_name or None
+        )
         if grounded_context:
             system_content = grounded_context + "\n\n" + system_content
 
@@ -237,9 +245,8 @@ class StructuredSynthesizer:
 
         # The first response had a tool call that failed validation.
         # We feed back the reask message.
-        reask_content = (
-            "Your previous response did not validate against the schema. "
-            "Correct the field errors and call emit_result again."
+        reask_content = get_prompt_registry().render(
+            "structured.synthesis_reask", model=model_name or None
         )
         messages = messages + [
             response,

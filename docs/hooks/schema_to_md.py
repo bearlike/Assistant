@@ -11,15 +11,18 @@ log = logging.getLogger("mkdocs.hooks.schema_to_md")
 SCHEMA_PATH = Path("configs/app.schema.json")
 OUTPUT_PATH = Path("docs/configuration.md")
 
-_SCHEMA_URL = "https://github.com/bearlike/Assistant/blob/main/configs/app.schema.json"
-HEADER = f"""\
+# Repo-file references use the `repo:` badge scheme (docs/hooks/code_refs.py);
+# `app.json` is the user-created, gitignored config — NOT a committed artifact —
+# so it stays inline code rather than a badge that would 404 on GitHub.
+HEADER = """\
 <!-- AUTO-GENERATED from configs/app.schema.json. Do not edit manually. -->
 # Configuration Reference
 
 Mewbo is configured via `configs/app.json`. This reference is auto-generated
-from the JSON Schema at [`configs/app.schema.json`]({_SCHEMA_URL}).
+from the JSON Schema at [`configs/app.schema.json`](repo:configs/app.schema.json).
 
-Copy `configs/app.example.json` to `configs/app.json` to get started.
+Copy [`configs/app.example.json`](repo:configs/app.example.json) to
+`configs/app.json` to get started.
 See [Get Started](getting-started.md) for the full setup walkthrough.
 """
 

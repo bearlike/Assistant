@@ -31,6 +31,8 @@ from mewbo_core.structured_response import (
 from pydantic import BaseModel, Field
 
 from mewbo_api.request_context import request_surface
+from mewbo_api.responses import ApiResponseKit
+from mewbo_api.structured.synthesis import SynthesisRunner
 
 
 class RunProvenance(BaseModel):
@@ -85,6 +87,12 @@ structured_ns = Namespace(
     "structured",
     description="Schema-constrained, tool-using structured responses.",
 )
+
+# One DRY home for the ``{error: {code, reason}}`` envelope examples this module
+# returns (built at module level so the import-time decorators can see it). A
+# unique ``Structured`` prefix namespaces the generated model names on the shared
+# Api registry.
+kit = ApiResponseKit(structured_ns, prefix="Structured")
 
 
 def init_structured(api: object, require_api_key: AuthGuard, runtime: Any = None) -> None:
@@ -207,6 +215,97 @@ _request_model = structured_ns.model(
             ),
             example="openai/gpt-5.4-nano",
         ),
+        "mode": fields.String(
+            required=False,
+            enum=["agentic", "synthesis"],
+            description=(
+                "Execution strategy. Omit (default 'agentic') for the tool-using, "
+                "session-backed run that returns a run handle to poll. 'synthesis' "
+                "selects a no-loop, retrieval-only single round-trip (no tools): it "
+                "returns inline with status 'completed', the validated output, and "
+                "grounding citations — lower latency for cheap structured extraction."
+            ),
+            example="synthesis",
+        ),
+    },
+)
+
+
+# Success-response models. ``example=`` is what Scalar synthesizes the sample
+# body from, so each field carries a realistic value matching the handler's
+# actual ``return`` shape.
+_provenance_model = structured_ns.model(
+    "StructuredRunProvenance",
+    {
+        "recipes_routed": fields.Integer(
+            example=2,
+            description="Count of scg_route calls that proposed pathways.",
+        ),
+        "probes_run": fields.Integer(
+            example=3, description="Distinct probe sub-agents spawned."
+        ),
+        "probe_status": fields.Raw(
+            example={"a-r1a2-1": "completed", "a-r1a2-2": "completed"},
+            description="Per-probe agent_id → terminal status (or 'running').",
+        ),
+    },
+)
+
+_run_handle_model = structured_ns.model(
+    "StructuredRunHandle",
+    {
+        "run_id": fields.String(
+            example="9e2d47c1f0:r1",
+            description=(
+                "Run handle of the form <session_id>:r<seq>; "
+                "poll GET /v1/structured/{run_id}."
+            ),
+        ),
+        "status": fields.String(
+            example="completed",
+            description="'completed' when the output is attached inline, else 'running'.",
+        ),
+        "output": fields.Raw(
+            example={
+                "summary": "The API exposes 4 public HTTP endpoints.",
+                "endpoints": ["POST /v1/structured", "GET /v1/structured/{run_id}"],
+            },
+            description=(
+                "The schema-validated result object — present only once the run has completed."
+            ),
+        ),
+        "workspace": fields.String(
+            example="my-project",
+            description="The grounding workspace echoed from the request (may be null).",
+        ),
+        "citations": fields.List(
+            fields.Raw,
+            description="Grounding citations (synthesis mode only).",
+        ),
+    },
+)
+
+_run_status_model = structured_ns.model(
+    "StructuredRunStatus",
+    {
+        "run_id": fields.String(example="9e2d47c1f0:r1"),
+        "status": fields.String(
+            example="completed",
+            description="Run state: 'completed', 'running', or a terminal session status.",
+        ),
+        "output": fields.Raw(
+            example={
+                "summary": "The API exposes 4 public HTTP endpoints.",
+                "endpoints": ["POST /v1/structured", "GET /v1/structured/{run_id}"],
+            },
+            description="The schema-validated result object, attached once the run has completed.",
+        ),
+        "provenance": fields.Nested(
+            _provenance_model,
+            description=(
+                "Graph-first pathway/probe provenance (additive; absent for plain/wiki runs)."
+            ),
+        ),
     },
 )
 
@@ -215,14 +314,39 @@ _request_model = structured_ns.model(
 class StructuredResource(Resource):
     """Kick off a schema-constrained agentic synthesis and return a run handle."""
 
+    @structured_ns.doc(
+        description=(
+            "Run a schema-constrained, tool-using structured query and get back a "
+            "JSON object that validates against your `schema`.\n\n"
+            "**Two execution modes** (set via the `mode` field):\n\n"
+            "- **`agentic`** (default) — kicks off a session-backed, tool-using run "
+            "and returns a **run handle** of the form `<session_id>:r<seq>`. The "
+            "request waits a few seconds, so fast runs come back inline with "
+            "`status:\"completed\"` and `output` attached; slower runs return "
+            "`status:\"running\"` — poll `GET /v1/structured/{run_id}` until it "
+            "completes, or attach to `GET /api/sessions/{session_id}/stream` using "
+            "the part of the handle before the first `:`.\n"
+            "- **`synthesis`** — a no-loop, retrieval-only single round-trip (no "
+            "tools). Returns **inline** with `status:\"completed\"`, the validated "
+            "`output`, and grounding `citations` — lower latency for cheap "
+            "structured extraction.\n\n"
+            "`workspace` grounds the run on a wiki slug or a search workspace (a "
+            "mapped search workspace also grants graph traversal tools, making the "
+            "agentic run graph-first). `model` overrides the configured default "
+            "with any LiteLLM model id; a non-string value is ignored.\n\n"
+            "Example: `{\"query\": \"List the public endpoints\", \"schema\": "
+            "{\"type\": \"object\", ...}, \"mode\": \"synthesis\"}`."
+        )
+    )
     @structured_ns.expect(_request_model)
-    @structured_ns.response(200, "Run handle, with output attached when the run completed inline")
-    @structured_ns.response(400, "Missing or invalid query or schema")
-    @structured_ns.response(401, "Missing or invalid API key")
-    @structured_ns.response(409, "A structured run is already active for this session")
-    @structured_ns.response(422, "The run could not be started")
-    @structured_ns.response(500, "The run failed to start")
-    @structured_ns.response(503, "Structured responses are not configured on this server")
+    @structured_ns.response(
+        200,
+        "Run handle (agentic) or inline result (synthesis); output attached when completed",
+        _run_handle_model,
+    )
+    @kit.errors(409, 422, 500)
+    @kit.errors(400, 503, shape="message")
+    @kit.auth_error()
     def post(self) -> tuple[dict, int]:
         """Run a structured query.
 
@@ -233,7 +357,10 @@ class StructuredResource(Resource):
         Slower runs return status `running`: poll GET /v1/structured/{run_id}, or
         attach to GET /api/sessions/{session_id}/stream using the part of the handle
         before the first colon. The optional `model` field accepts any configured
-        LiteLLM model id; a non-string value is ignored.
+        LiteLLM model id; a non-string value is ignored. Set `mode` to `synthesis`
+        for a no-loop, retrieval-only single round-trip (no tools) that returns
+        inline with status `completed` plus grounding citations — lower latency for
+        cheap structured extraction.
         """
         if (auth := _require_api_key()) is not None:
             return auth
@@ -253,6 +380,14 @@ class StructuredResource(Resource):
         # non-string is ignored → the configured default is used. Matches the
         # draft-route idiom (``/v1/draft/stream``).
         model = data.get("model") if isinstance(data.get("model"), str) else None
+
+        # ``mode: "synthesis"`` selects the no-loop, single-round-trip strategy
+        # (the former /v1/structured/fast lane, folded in by #85): a synchronous
+        # StructuredSynthesizer call instead of the agentic ToolUseLoop — ~1–3s,
+        # retrieval-only, no tools. Anything else (incl. the default 'agentic')
+        # takes the tool-using, session-backed path below.
+        if isinstance(data.get("mode"), str) and data["mode"] == "synthesis":
+            return self._run_synthesis(query, schema, workspace, model)
 
         responder = self._build_responder(schema, workspace, tools, model)
         try:
@@ -276,6 +411,38 @@ class StructuredResource(Resource):
                 "workspace": workspace,
             }, 200
         return {"run_id": run_id, "status": "running", "workspace": workspace}, 200
+
+    @staticmethod
+    def _run_synthesis(
+        query: str,
+        schema: dict[str, Any],
+        workspace: str | None,
+        model: str | None,
+    ) -> tuple[dict, int]:
+        """Run the no-loop synthesis mode and shape its response/error envelope.
+
+        The single round-trip completes inline, so the body carries the validated
+        ``output`` + grounding ``citations`` with status ``completed`` (no polling
+        needed); the ``<session_id>:r1`` run handle still resolves via
+        ``GET /v1/structured/<run_id>`` once the write-behind persist lands. A
+        schema-validation failure after the bounded reask is a 422 envelope; any
+        other failure is a 500 — same canonical ``{error: {code, reason}}`` shape
+        as the agentic path, never a raw exception or the internal tool name.
+        """
+        try:
+            body = SynthesisRunner(runtime=_runtime).run(
+                query=query,
+                schema=schema,
+                workspace=workspace,
+                model=model,
+                surface=request_surface(),
+            )
+        except StructuredResponseError as exc:
+            return _error(422, str(exc))
+        except Exception as exc:  # noqa: BLE001 — surface as a structured error
+            logging.warning("structured synthesis failed: {}", exc)
+            return _error(500, f"structured synthesis failed: {exc}")
+        return body, 200
 
     @staticmethod
     def _build_responder(
@@ -384,18 +551,29 @@ class StructuredRunResource(Resource):
     """Resolve a run handle to its latest structured output or status."""
 
     @structured_ns.doc(
+        description=(
+            "Resolve a run handle returned by `POST /v1/structured` to its current "
+            "state. While the run is in flight the body is `{run_id, status}`. Once "
+            "a validated output exists, `status` is `completed` and `output` carries "
+            "the schema-validated object; graph-grounded runs also carry a "
+            "`provenance` object summarizing the pathways routed and probes "
+            "executed. A run that ends without a valid output returns 422 with an "
+            "error envelope. Poll this endpoint until `status` is `completed` (or a "
+            "4xx)."
+        ),
         params={
             "run_id": (
                 "Run handle returned by POST /v1/structured, "
                 "in the form <session_id>:r<seq>."
             )
-        }
+        },
     )
-    @structured_ns.response(200, "Run status, with output and provenance once completed")
-    @structured_ns.response(401, "Missing or invalid API key")
-    @structured_ns.response(404, "No run exists for this handle")
-    @structured_ns.response(422, "The run finished without a valid structured output")
-    @structured_ns.response(503, "Structured responses are not configured on this server")
+    @structured_ns.response(
+        200, "Run status, with output and provenance once completed", _run_status_model
+    )
+    @kit.errors(404, 422)
+    @kit.errors(503, shape="message")
+    @kit.auth_error()
     def get(self, run_id: str) -> tuple[dict, int]:
         """Get a structured run.
 

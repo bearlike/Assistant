@@ -10,6 +10,7 @@ from typing import Any
 
 from mewbo_core.common import count_tokens, get_logger
 from mewbo_core.config import get_config_value
+from mewbo_core.prompt_registry import get_prompt_registry
 from mewbo_core.types import EventRecord
 
 logger = get_logger(name="core.compact")
@@ -102,129 +103,25 @@ def record_compaction(
         )
 
 
-COMPACT_PROMPT = """\
-You are summarizing a conversation to fit within a context window.
-Do NOT use any tools. Do NOT generate code. This is a summarization task only.
+def get_compact_prompt(model: str | None = None) -> str:
+    """Return the active compaction system prompt for *model*.
 
-Produce your response in two parts:
+    Reads ``compaction.caveman_mode`` from config. When true, renders the
+    caveman-augmented prompt (the ``caveman`` scenario of ``compact.system``)
+    that instructs the summarizer to drop filler while preserving code, paths,
+    URLs, and error strings verbatim. When false (default), renders the standard
+    prompt. Both bodies live in the central prompt registry.
 
-<analysis>
-Reason about what information is critical to preserve vs what can be safely discarded.
-Consider: active tasks, recent errors, file context, user preferences expressed.
-This section will be removed from the final summary.
-</analysis>
-
-<summary>
-## Primary Request
-What the user originally asked for and the overall goal.
-
-## Key Technical Concepts
-Important technical details, architecture decisions, constraints discovered.
-
-## Files and Code
-Key files read or modified, with brief relevant context.
-
-## Errors and Fixes
-Any errors encountered and how they were resolved.
-
-## Current State
-Where the conversation left off, what is in progress.
-
-## Pending Tasks
-Anything the user asked for that has not been completed yet.
-</summary>
-"""
-
-
-# Caveman-style terse summarization prompt. Layers linguistic compression rules
-# (inspired by JuliusBrussee/caveman Claude Code skill) on top of the same
-# <analysis>/<summary> output structure so downstream parsers are unaffected.
-# Rules target prose inside sections; headings, code, paths, URLs, and error
-# strings must pass through verbatim. Empirical reduction on prose-heavy
-# compaction summaries: ~30-60% output tokens vs baseline prompt.
-CAVEMAN_COMPACT_PROMPT = """\
-You are summarizing a conversation to fit within a context window.
-Do NOT use any tools. Do NOT generate code. This is a summarization task only.
-
-=== TERSE MODE: ACTIVE ===
-Write all summary prose like smart caveman. Technical substance stays exact. Only fluff dies.
-
-Drop rules:
-- Articles: a, an, the.
-- Filler adverbs: just, really, basically, actually, simply, essentially, generally.
-- Pleasantries: sure, certainly, of course, happy to, let me, I'd recommend.
-- Hedging: perhaps, maybe, might be worth, it would be good to, I think.
-- Redundant phrasing: "in order to" -> "to"; "make sure to" -> "ensure";
-  "the reason is because" -> "because"; "utilize" -> "use".
-- Connective fluff: however, furthermore, additionally, moreover, in addition.
-- Pronoun subjects when obvious: prefer imperative ("Fix auth bug.")
-  over "you should fix the auth bug".
-
-Style rules:
-- Fragments OK. Short synonyms. Imperative voice preferred.
-- Pattern: [thing] [action] [reason]. [next step].
-- One word when one word is enough.
-
-Preserve EXACTLY (never compress these):
-- Code blocks (fenced ``` or indented) and inline backticks.
-- URLs, file paths, CLI commands.
-- Library, API, class, and function names.
-- Error strings (quote verbatim).
-- Numeric values, dates, versions, env vars.
-- Markdown headings (##) below — do not rename or reorder.
-- Bullet hierarchy and list ordering.
-
-Auto-Clarity escape: for security warnings, irreversible destructive actions,
-or user confusion, revert to normal prose in that section. Resume terse next.
-
-Persistence: every section stays terse. No drift. Still terse if unsure.
-No filler creep after many bullets.
-
-Example:
-- Not: "The user originally asked me to help with debugging an authentication
-       middleware issue that was causing token validation to fail intermittently."
-- Yes: "User: debug auth middleware. Token validation fails intermittently."
-
-Produce your response in two parts:
-
-<analysis>
-Reason about what information is critical to preserve vs what can be safely discarded.
-Consider: active tasks, recent errors, file context, user preferences expressed.
-This section will be removed from the final summary.
-</analysis>
-
-<summary>
-## Primary Request
-What user originally asked. Goal in one line.
-
-## Key Technical Concepts
-Architecture decisions, constraints, technical details. Fragments OK.
-
-## Files and Code
-Files read or modified. Path + one-line why.
-
-## Errors and Fixes
-Errors encountered (quote verbatim). Fix applied.
-
-## Current State
-Where conversation left off. What is in progress.
-
-## Pending Tasks
-What user asked for that is not yet done.
-</summary>
-"""
-
-
-def get_compact_prompt() -> str:
-    """Return the active compaction system prompt.
-
-    Reads ``compaction.caveman_mode`` from config. When true, returns the
-    caveman-augmented prompt that instructs the summarizer to drop filler
-    while preserving code, paths, URLs, and error strings verbatim. When
-    false (default), returns the standard prompt.
+    ``model`` threads the summarization model through to the registry so a
+    per-model override of ``compact.system`` reaches the compaction prompt too
+    (#113) — not just the loop's per-step prompts. ``None`` renders the base.
+    The scenario (caveman) still wins over a model override per registry
+    resolution order.
     """
     caveman = bool(get_config_value("compaction", "caveman_mode", default=False))
-    return CAVEMAN_COMPACT_PROMPT if caveman else COMPACT_PROMPT
+    return get_prompt_registry().render(
+        "compact.system", model=model, scenario="caveman" if caveman else None
+    )
 
 
 def _strip_analysis(text: str) -> str:
@@ -340,14 +237,12 @@ async def compact_conversation(
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    system_content = get_compact_prompt()
+    # Render the compaction prompt for the model that will actually summarize
+    # (the primary candidate) so its per-model override applies (#113).
+    system_content = get_compact_prompt(model=models[0])
     if focus_prompt and focus_prompt.strip():
-        system_content += (
-            "\n\n## User Focus\n"
-            "The user invoked compaction with a focus directive. Bias the "
-            "summary toward content matching this directive without dropping "
-            "critical state (active tasks, recent errors, file context):\n"
-            f"{focus_prompt.strip()}"
+        system_content += get_prompt_registry().render(
+            "compact.focus_suffix", model=models[0], focus_prompt=focus_prompt.strip()
         )
     msgs = [
         SystemMessage(content=system_content),

@@ -6,11 +6,14 @@ import { useEffect, useReducer, useRef } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import {
+  cancelRun,
   createWorkspace,
   deleteWorkspace,
+  fetchTiers,
   getRun,
   getScgStatus,
   getWorkspaceGraph,
+  getWorkspaceGraphSummary,
   listMapJobs,
   listSources,
   listWorkspaceRuns,
@@ -38,6 +41,7 @@ import type {
 } from "../types/agenticSearch"
 
 const SOURCES_KEY = ["agentic-search", "sources"] as const
+const TIERS_KEY = ["agentic-search", "tiers"] as const
 const WORKSPACES_KEY = ["agentic-search", "workspaces"] as const
 const SCG_KEY = ["agentic-search", "scg"] as const
 const runKey = (runId: string | null) =>
@@ -48,6 +52,8 @@ const workspaceRunsKey = (workspaceId: string | null) =>
   ["agentic-search", "workspace-runs", workspaceId] as const
 const workspaceGraphKey = (workspaceId: string | null) =>
   ["agentic-search", "workspace-graph", workspaceId] as const
+const workspaceGraphSummaryKey = (workspaceId: string | null) =>
+  ["agentic-search", "workspace-graph-summary", workspaceId] as const
 
 export function useSources() {
   return useQuery({
@@ -56,6 +62,16 @@ export function useSources() {
     // The catalog is live (configured servers + SCG tool overrides); map-job
     // completion invalidates SOURCES_KEY so freshly-mapped tools show up.
     staleTime: 60_000,
+  })
+}
+
+/** Tier→model presets (`GET /tiers`) — config-backed, changes only on a
+ *  settings edit, so a long staleTime keeps the composer render cheap. */
+export function useTiers() {
+  return useQuery({
+    queryKey: TIERS_KEY,
+    queryFn: fetchTiers,
+    staleTime: 5 * 60_000,
   })
 }
 
@@ -134,6 +150,17 @@ export function useStartRun() {
 }
 
 /**
+ * Cancel an in-flight run (`POST /runs/<id>/cancel`). Fire-and-forget: the live
+ * SSE stream emits the `cancelled` terminal frame that flips the view, so this
+ * mutation seeds no cache — it's pure steering, like the composer's Stop.
+ */
+export function useCancelRun() {
+  return useMutation<void, Error, string>({
+    mutationFn: (runId) => cancelRun(runId),
+  })
+}
+
+/**
  * A workspace's persisted run history. Pass `null` to keep the query idle —
  * callers (e.g. the workspace-card popover) enable it lazily on open.
  */
@@ -155,6 +182,21 @@ export function useWorkspaceGraph(workspaceId: string | null) {
   return useQuery({
     queryKey: workspaceGraphKey(workspaceId),
     queryFn: () => getWorkspaceGraph(workspaceId as string),
+    enabled: Boolean(workspaceId),
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * The workspace graph's `scope` + `stats` only (#139) — the cheap read the
+ * landing health band uses. Pass `null` to keep it idle. Separate query key
+ * from `useWorkspaceGraph` so the band never pulls the full node/edge payload
+ * onto the landing critical path; both share the BE's warm `query_nodes` cache.
+ */
+export function useWorkspaceGraphSummary(workspaceId: string | null) {
+  return useQuery({
+    queryKey: workspaceGraphSummaryKey(workspaceId),
+    queryFn: () => getWorkspaceGraphSummary(workspaceId as string),
     enabled: Boolean(workspaceId),
     staleTime: 60_000,
   })
@@ -404,6 +446,10 @@ export function reduceRun(
         source_id: event.source_id,
         slot: event.slot,
         lines: [],
+        // Instrument fidelity (additive): the lane's kind + driving model arrive
+        // on `agent_start`, the rest (steps/duration/tokens/count) on done.
+        kind: event.kind,
+        model: event.model,
       }
       return { ...state, trace: [...state.trace, agent] }
     }
@@ -426,6 +472,15 @@ export function reduceRun(
           a.agent_id === event.agent_id
             ? {
                 ...a,
+                result: event.result ?? a.result,
+                // Per-lane instrument totals fold onto the lane (additive — a
+                // BE that doesn't emit them leaves the fields undefined).
+                results_count: event.results_count,
+                returned_count: event.returned_count ?? a.returned_count,
+                steps: event.steps ?? a.steps,
+                duration_ms: event.duration_ms ?? a.duration_ms,
+                input_tokens: event.input_tokens ?? a.input_tokens,
+                output_tokens: event.output_tokens ?? a.output_tokens,
                 lines: [
                   ...a.lines,
                   {
@@ -459,6 +514,10 @@ export function reduceRun(
           }
     case "answer_ready":
       return { ...ensureAttached(state), answer: event.answer, answerReady: true }
+    case "related_questions":
+      // Follow-ups from the parallel structured call — land them live (the
+      // snapshot carries the same list on `RunPayload.related_questions`).
+      return { ...ensureAttached(state), related_questions: event.questions }
     case "run_done":
       return { ...ensureAttached(state), status: event.status, totalMs: event.total_ms, done: true }
     case "cancelled":

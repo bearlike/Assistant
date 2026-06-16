@@ -45,6 +45,7 @@ class SearchRun:
         runtime: Any = None,
         project: str | None = None,
         tier: str | None = None,
+        model: str | None = None,
         source_platform: str | None = None,
     ) -> RunPayload | None:
         """Create + launch a run for *query*. Returns None if the workspace is gone.
@@ -53,7 +54,9 @@ class SearchRun:
         in-flight query, scopes ``allowed_tools`` from the workspace sources,
         then hands off to the per-run resolved runner. ``tier`` (the budget
         knob) defaults to the configured ``scg`` default and rides the record
-        so the runner reads it per run. ``source_platform`` (the originating
+        so the runner reads it per run; ``model`` (an explicit per-run
+        override) rides the same way and wins over the tier's configured
+        model. ``source_platform`` (the originating
         client surface — the route forwards ``request_surface()``) is passed to
         the runner so the orchestrated drive stamps ``surface:<platform>`` on the
         Langfuse trace (#77). A synchronous runner (echo) returns the terminal
@@ -86,6 +89,7 @@ class SearchRun:
             # The route validated an explicit tier; Pydantic re-validates here
             # (the config default is Literal-typed at its definition).
             tier=cast("SearchTierLiteral", tier or ScgConfig.default_tier()),
+            model=model,
             created_at=now,
             started_at=now,
             source_ids=list(workspace.sources),
@@ -134,6 +138,7 @@ class SearchRun:
                 workspace_id=workspace_id,
                 status="failed",
                 tier=run.tier,
+                model=run.model,
                 error=str(exc),
             )
 

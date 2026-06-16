@@ -1,7 +1,7 @@
 # Agentic Wiki
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-wiki-01-landing.jpg" alt="The Agentic Wiki landing page in the Mewbo Console, with a repository URL field, a Generate Wiki button, and a card for an already-indexed project" style="width: 100%; max-width: 960px; height: auto;" />
+  <img src="../mewbo-wiki-01-landing.jpg" alt="The Agentic Wiki landing page in the Mewbo Console: a repository URL field with a Generate Wiki button, a resumable 'Incomplete indexes' notice, and cards for already-indexed projects (bearlike/SideStage, bearlike/Assistant, bearlike/Grove) showing their host, branch, and page counts" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
 
 Paste a repository URL and Mewbo writes the documentation for it. The **Agentic Wiki** indexes a codebase, maps its structure into a code memory graph, and generates a navigable, grounded wiki. Every page is backed by the source files it describes. Ask a question about the repo and a sub-agent answers from that same graph: fast, authoritative, and grounded in the code itself.
@@ -18,7 +18,11 @@ A generated wiki (branded **MewboWiki** inside the product) is a full documentat
 - **Copy badge.** On any wiki project's landing page, the **Copy badge** button generates a markdown snippet you can paste straight into your repository's README. It links back to the project's wiki page.
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-wiki-02-overview.jpg" alt="A MewboWiki overview page showing a Grove Overview article with a runtime-model flow diagram, a left-hand page index, an On this page outline, and an Ask MewboWiki question box" style="width: 100%; max-width: 960px; height: auto;" />
+  <img src="../mewbo-wiki-07-badge.jpg" alt="The 'Add the wiki badge' popover in MewboWiki, previewing an 'Ask Mewbo Wiki' badge and the markdown snippet to drop into a repository README, beside the Edit Wiki, Graph, Copy badge, and Copy link toolbar" style="width: 100%; max-width: 540px; height: auto;" />
+</div>
+
+<div style="display: flex; justify-content: center;">
+  <img src="../mewbo-wiki-02-overview.jpg" alt="A MewboWiki overview page for Grove showing the Grove Overview article with a runtime-model flow diagram, a left-hand page index, an On this page outline, Refresh and Re-index controls, and an Ask MewboWiki question box" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
 
 ---
@@ -37,6 +41,20 @@ clone → scan → graph → plan → pages → finalize
 4. **Plan** the set of pages to write.
 5. **Pages:** sub-agents write each page in parallel, grounded in the scanned source.
 6. **Finalize:** dedupe, attach the repository description, and publish.
+
+### Tailor the index first
+
+Before the run starts, a short wizard scopes it to your repository in three steps:
+
+- **Source** — point at a Git repository or a document catalogue. The host is auto-detected (GitHub, GitLab, Gitea, Bitbucket, Azure DevOps, or any generic Git URL), and a private repo can take an access token that is held only for the session.
+- **Generation** — choose the depth (**Comprehensive** for full coverage, or **Concise** for a fast tour), the wiki language, and the model that authors every page.
+- **Scope** — trim what gets indexed. Lockfiles, build output, and vendored code are excluded by default; switch to *Include only* to index a focused subset.
+
+<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 8px;">
+  <img src="../mewbo-wiki-04-index-source.jpg" alt="Step one of the Configure indexing wizard, Source: choosing a Git repository, entering a repository URL, and selecting the Gitea platform with an optional access-token field" style="width: 100%; max-width: 320px; height: auto;" />
+  <img src="../mewbo-wiki-05-index-generation.jpg" alt="Step two of the Configure indexing wizard, Generation: picking the Comprehensive wiki depth, the English language, and the claude-sonnet-4-6 authoring model" style="width: 100%; max-width: 320px; height: auto;" />
+  <img src="../mewbo-wiki-06-index-scope.jpg" alt="Step three of the Configure indexing wizard, Scope: an Exclude-paths filter listing node_modules, dist, and .git plus lockfile and map-file patterns to skip" style="width: 100%; max-width: 320px; height: auto;" />
+</div>
 
 The landing-page card and the indexing screen read the same progress signal, so they never disagree about which phase a run is in. As it writes, the indexer also **deposits a few durable notes** into the memory layer (described below): short, anchored facts about each subsystem. The wiki starts out already knowing the non-obvious things about the codebase.
 

@@ -2,9 +2,10 @@
 # Configuration Reference
 
 Mewbo is configured via `configs/app.json`. This reference is auto-generated
-from the JSON Schema at [`configs/app.schema.json`](https://github.com/bearlike/Assistant/blob/main/configs/app.schema.json).
+from the JSON Schema at [`configs/app.schema.json`](repo:configs/app.schema.json).
 
-Copy `configs/app.example.json` to `configs/app.json` to get started.
+Copy [`configs/app.example.json`](repo:configs/app.example.json) to
+`configs/app.json` to get started.
 See [Get Started](getting-started.md) for the full setup walkthrough.
 
 ## Runtime
@@ -57,7 +58,7 @@ LLM provider connection and model selection.
 | `proxy_model_prefix` | string | `openai` | LiteLLM provider prefix prepended to model names when api_base is set. LiteLLM strips this prefix before forwarding the model name to the proxy, so the proxy receives the model ID it advertises in /v1/models. Leave as 'openai' for LiteLLM proxy, Bifrost, and OpenRouter. Only relevant when api_base is configured. |
 | `reasoning_effort` | string | `""` | Reasoning effort hint for supported models. One of low, medium, high, none, or empty. |
 | `reasoning_effort_models` | list[string] |  | Model name patterns that support the reasoning_effort parameter. |
-| `structured_patch_models` | list[string] |  | Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; only set this to override or extend. |
+| `structured_patch_models` | list[string] |  | Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Runtime override layer ON TOP of the controllable model→tool-variant map (mewbo_core/prompts/model_variants.yaml), which now holds the built-in defaults (GPT-5/o3/o4/Codex/GPT-4); only set this to override or extend without editing that file. |
 
 ## Context
 
@@ -180,6 +181,7 @@ REST API authentication.
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `master_token` | string | `msk-strong-password` | Bearer token required for all REST API requests. Change from the default before deploying. ⚠️ |
+| `allow_external_cwd` | boolean | `false` | Allow callers to anchor sessions in an arbitrary host path via the `cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. Off by default; enable only for trusted external workspace managers such as Grove that manage their own worktrees. |
 
 ## Agent
 

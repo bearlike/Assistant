@@ -416,6 +416,7 @@ class SessionRuntime:
         source_platform: str | None = None,
         invocation_id: str | None = None,
         extra_session_tools: list[SessionTool] | None = None,
+        enable_skills: bool = True,
     ) -> str:
         """Start an asynchronous orchestration run for the session.
 
@@ -460,6 +461,30 @@ class SessionRuntime:
                 source_platform=source_platform,
                 invocation_id=invocation_id,
                 extra_session_tools=extra_session_tools,
+                enable_skills=enable_skills,
+            )
+
+        # Emit an instant ``run_accepted`` lifecycle marker BEFORE the background
+        # run thread begins its heavy synchronous setup (``Orchestrator.__init__``
+        # → tool-registry build + project-instruction discovery, which precede the
+        # first run-phase ``append_event``). Without it the session page sits blank
+        # for that whole window; with it the FE renders the session shell + a
+        # "starting…" state immediately (Gitea #138). It rides the same
+        # ``append_event`` → ``SessionEventBus`` → SSE choke-point as every other
+        # event, so no new transport is needed — additive only. Skipped when a run
+        # is already active (the registry would refuse the start) so we never emit
+        # a marker for a run that does not begin.
+        if not self._run_registry.is_running(session_id):
+            self.append_event(
+                session_id,
+                {
+                    "type": "run_accepted",
+                    "payload": {
+                        "session_id": session_id,
+                        "run_id": run_id,
+                        "ts": _utc_now(),
+                    },
+                },
             )
 
         started = self._run_registry.start(
@@ -512,8 +537,15 @@ class SessionRuntime:
         source_platform: str | None = None,
         invocation_id: str | None = None,
         extra_session_tools: list[SessionTool] | None = None,
+        enable_skills: bool = True,
     ) -> TaskQueue:
-        """Run an orchestration request synchronously."""
+        """Run an orchestration request synchronously.
+
+        ``enable_skills=False`` opts a headless product drive (search/wiki) out
+        of auto-skill injection so the agent never burns its first step
+        activating a host ``~/.claude`` skill (default ``True`` — CLI/channel
+        behavior unchanged).
+        """
         return orchestrate_session(
             user_query=user_query,
             model_name=model_name,
@@ -539,6 +571,7 @@ class SessionRuntime:
             source_platform=source_platform,
             invocation_id=invocation_id,
             extra_session_tools=extra_session_tools,
+            enable_skills=enable_skills,
         )
 
     def cancel(self, session_id: str) -> bool:

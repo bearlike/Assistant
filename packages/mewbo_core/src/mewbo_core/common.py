@@ -36,6 +36,8 @@ def get_mock_speaker() -> type[MockSpeaker]:
 
 _LOG_CONFIGURED = False
 _SESSION_SINKS: dict[str, dict[str, int]] = {}
+_STDERR_SINK_ID: int | None = None
+_CLI_LOG_SINK_ID: int | None = None
 
 
 def _resolve_log_level() -> str:
@@ -79,8 +81,46 @@ def _configure_logging() -> None:
         )
     else:
         format_str = "{time:YYYY-MM-DD HH:mm:ss} [{extra[name]}] <level>{level}</level> {message}"
-    loguru_logger.add(sys.stderr, level=log_level, format=format_str, colorize=colorize)
+    global _STDERR_SINK_ID
+    _STDERR_SINK_ID = loguru_logger.add(
+        sys.stderr, level=log_level, format=format_str, colorize=colorize
+    )
     _LOG_CONFIGURED = True
+
+
+def set_cli_log_file(
+    log_file_path: str, *, overwrite: bool = False, quiet_console: bool = True
+) -> str:
+    """Stream all CLI logs to a file, keeping the terminal (TUI) output clean.
+
+    Adds an unfiltered loguru file sink at the active verbosity level. When
+    ``quiet_console`` is set (the default), the stderr sink is removed so log
+    lines no longer interleave with the Rich/Textual UI — they go only to the
+    file. ``overwrite`` truncates the file at startup instead of appending.
+
+    Returns the absolute path actually written to.
+    """
+    global _CLI_LOG_SINK_ID, _STDERR_SINK_ID
+    _configure_logging()
+    resolved = os.path.abspath(os.path.expanduser(log_file_path))
+    parent = os.path.dirname(resolved)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if _CLI_LOG_SINK_ID is not None:
+        loguru_logger.remove(_CLI_LOG_SINK_ID)
+        _CLI_LOG_SINK_ID = None
+    _CLI_LOG_SINK_ID = loguru_logger.add(
+        resolved,
+        level=_resolve_log_level(),
+        format=_session_log_format(),
+        colorize=False,
+        mode="w" if overwrite else "a",
+        enqueue=True,
+    )
+    if quiet_console and _STDERR_SINK_ID is not None:
+        loguru_logger.remove(_STDERR_SINK_ID)
+        _STDERR_SINK_ID = None
+    return resolved
 
 
 def _resolve_session_log_dir() -> str:
@@ -176,7 +216,21 @@ def get_unique_timestamp() -> int:
 
 
 def get_system_prompt(name: str = "action-planner") -> str:
-    """Get the system prompt for the task queue."""
+    """Get the system prompt for the task queue.
+
+    Routes through the central prompt registry when *name* has a ``file.*``
+    entry (the standalone, ``system.txt``-sized prompts inventoried in
+    ``prompts/registry/files.yaml``). The historical ``.strip()`` is preserved
+    so the bytes are unchanged. Names the registry does not inventory (tool
+    prompts loaded by path) fall back to the legacy file read.
+    """
+    from mewbo_core.prompt_registry import get_prompt_registry
+
+    registry = get_prompt_registry()
+    prompt_id = f"file.{name}"
+    if registry.has(prompt_id):
+        return registry.render(prompt_id).strip()
+
     logging = get_logger(name="core.common.get_system_prompt")
     prompt_resource = resources.files("mewbo_core").joinpath("prompts").joinpath(f"{name}.txt")
     with resources.as_file(prompt_resource) as system_prompt_path:
@@ -372,17 +426,15 @@ def get_git_context(cwd: str | None = None, max_status_chars: int = 2000) -> str
 
     recent_log = _run_git("log", "--oneline", "-n", "5")
 
-    parts = [f"Current branch: {branch}"]
-    if default_branch:
-        parts.append(f"Main branch: {default_branch}")
-    if status:
-        parts.append(f"\nStatus:\n{status}")
-    else:
-        parts.append("\nStatus: clean")
-    if recent_log:
-        parts.append(f"\nRecent commits:\n{recent_log}")
+    from mewbo_core.prompt_registry import get_prompt_registry
 
-    return "\n".join(parts)
+    return get_prompt_registry().render(
+        "common.git_context",
+        branch=branch,
+        default_branch=default_branch or "",
+        status=status or "",
+        recent_log=recent_log or "",
+    )
 
 
 def discover_project_instructions(cwd: str | None = None) -> str | None:
@@ -421,20 +473,11 @@ def discover_project_instructions(cwd: str | None = None) -> str | None:
         for src in subtree:
             rel = Path(src.path).relative_to(work_dir)
             lines.append(f"- {rel}")
-        if sources:
-            heading = (
-                "# Sub-package instruction files\n\n"
-                "The following instruction files exist in subdirectories. "
-                "Read them when working on the relevant package."
-            )
-        else:
-            heading = (
-                "# No root-level instruction files — read before proceeding\n\n"
-                "No CLAUDE.md or AGENTS.md was found at the project root. "
-                "The following instruction files exist in subdirectories. "
-                "You MUST read the most relevant instruction file before "
-                "starting any task — they contain critical project context."
-            )
+        from mewbo_core.prompt_registry import get_prompt_registry
+
+        heading = get_prompt_registry().render(
+            "common.instruction_headings", has_root=bool(sources)
+        )
         parts.append(heading + "\n\n" + "\n".join(lines))
 
     if not parts:
@@ -469,6 +512,12 @@ def render_jinja_prompt(name: str, **variables: object) -> str:
             errors (``TemplateSyntaxError``, ``UndefinedError``) propagate
             directly and are NOT swallowed.
     """
+    # These prompts are inventoried in the central registry as ``file.*``
+    # entries (so they can grow per-model overrides later), but rendering stays
+    # here on a tolerant default-``Undefined`` env: callers (HA) rely on a
+    # missing variable rendering blank rather than raising, which the registry's
+    # ``StrictUndefined`` deliberately does not allow. Making these strict is a
+    # behaviour change for a later phase, not this verbatim extraction.
     log = get_logger(name="core.common.render_jinja_prompt")
     template_env = Environment(loader=PackageLoader("mewbo_core", "prompts"))
     last_exc: TemplateNotFound | None = None

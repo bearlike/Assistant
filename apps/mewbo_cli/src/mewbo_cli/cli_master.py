@@ -5,13 +5,17 @@
 import argparse
 import json
 import os
+import queue
 import sys
-from collections.abc import Callable, Iterable
+import threading
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import ThreadedCompleter
 from prompt_toolkit.history import FileHistory
 from rich import box
 from rich.columns import Columns
@@ -96,6 +100,7 @@ from mewbo_tools.integration.mcp import (
     save_mcp_config,
     tool_auto_approved,
 )
+from mewbo_tools.integration.reference_expansion import expand_references
 
 from mewbo_cli.aider_ui import (
     render_diff,
@@ -106,6 +111,7 @@ from mewbo_cli.aider_ui import (
 )
 from mewbo_cli.cli_agent_display import AgentDisplayManager
 from mewbo_cli.cli_commands import get_registry
+from mewbo_cli.cli_completer import MewboCompleter
 from mewbo_cli.cli_context import CliState, CommandContext
 from mewbo_cli.cli_dialogs import _confirm_rich_panel
 
@@ -372,6 +378,15 @@ def run_cli(args: argparse.Namespace) -> int:
     if args.config:
         set_app_config_path(args.config)
     config = get_config()
+    if getattr(args, "log_file", None):
+        from mewbo_core.common import set_cli_log_file
+
+        log_path = set_cli_log_file(
+            args.log_file,
+            overwrite=getattr(args, "log_overwrite", False),
+            quiet_console=not getattr(args, "log_console", False),
+        )
+        console.print(f"[dim]Streaming logs to {log_path}[/dim]")
     logging.info(
         "Config paths: app={} mcp={}",
         get_app_config_path(),
@@ -477,7 +492,14 @@ def run_cli(args: argparse.Namespace) -> int:
         return _run_single_query(console, store, runtime, state, tool_registry, args.query, args)
 
     history_path = _ensure_history_path(args.history_file)
-    session: PromptSession[str] = PromptSession(history=FileHistory(history_path))
+    completer = ThreadedCompleter(
+        MewboCompleter(registry.list_commands(), skill_registry)
+    )
+    session: PromptSession[str] = PromptSession(
+        history=FileHistory(history_path),
+        completer=completer,
+        complete_while_typing=True,
+    )
 
     while True:
         try:
@@ -568,6 +590,11 @@ def _run_query(
     prompt_func: Callable[[str], str] | None,
     skill_instructions: str | None = None,
 ) -> None:
+    # Inline @<ref> expansion (files/dirs/@diff/URLs) against the CLI's cwd,
+    # pre-LLM. The CLI runs the engine in-process, so it shares the same
+    # reusable expander as the API rather than POSTing for expansion.
+    query = expand_references(query, os.getcwd()) or query
+
     initial_plan = None
     mode = _resolve_query_mode(query, state)
 
@@ -617,7 +644,7 @@ def _run_query(
             transient=True,
         ) as live:
             live.get_renderable = lambda: agent_display.render()  # type: ignore[method-assign]
-            with key_listener:
+            with key_listener, _stream_tokens_to(agent_display, state.session_id):
                 task_queue = runtime.run_sync(
                     user_query=query,
                     model_name=state.model_name,
@@ -1008,6 +1035,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-color", action="store_true")
     parser.add_argument(
+        "--log-file",
+        default=None,
+        help="Stream all logs to this file and keep the terminal output clean",
+    )
+    parser.add_argument(
+        "--log-overwrite",
+        "--overwrite",
+        dest="log_overwrite",
+        action="store_true",
+        help="Truncate --log-file at startup instead of appending",
+    )
+    parser.add_argument(
+        "--log-console",
+        dest="log_console",
+        action="store_true",
+        help="With --log-file, ALSO keep logs on stderr (default: file only)",
+    )
+    parser.add_argument(
         "--auto-approve",
         action="store_true",
         help="Automatically approve all permission prompts",
@@ -1185,6 +1230,53 @@ def _render_tool_payload(payload: dict[str, object], style: str) -> RenderableTy
             cwd if isinstance(cwd, str) else None,
         )
     return None
+
+
+@contextmanager
+def _stream_tokens_to(
+    agent_display: AgentDisplayManager,
+    session_id: str | None,
+) -> Iterator[None]:
+    """Pump streamed root-agent token deltas into the live agent display.
+
+    Subscribes to the in-process ``SessionEventBus`` for *session_id* and drains
+    ``agent_message_delta`` events (root agent, depth 0) on a daemon thread,
+    feeding them to ``agent_display.on_token_delta`` so the user sees assistant
+    text appear as the model produces it (true TTFT — Gitea #137). Best-effort
+    and self-contained: a missing session id or any bus error degrades to a
+    no-op, and the subscription is always torn down on exit. The CLI runs the
+    loop in-process, so the same singleton bus ``append_event`` publishes to is
+    reachable here — no separate transport.
+    """
+    if not session_id:
+        yield
+        return
+    from mewbo_core.session_event_bus import get_session_event_bus
+
+    bus = get_session_event_bus()
+    sub = bus.subscribe(session_id)
+    stop = threading.Event()
+
+    def _drain() -> None:
+        while not stop.is_set():
+            try:
+                event = sub.queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if event.get("type") != "agent_message_delta":
+                continue
+            payload = event.get("payload") or {}
+            if payload.get("depth", 0) != 0:
+                continue  # only the root agent's tokens drive the top-level preview
+            agent_display.on_token_delta(str(payload.get("text", "")))
+
+    thread = threading.Thread(target=_drain, name="cli-token-stream", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        bus.unsubscribe(session_id, sub)
 
 
 def _build_cli_hook_manager(

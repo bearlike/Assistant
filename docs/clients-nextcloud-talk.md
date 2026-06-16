@@ -9,7 +9,7 @@ The Nextcloud Talk integration allows users to interact with Mewbo directly from
 ## How it works
 
 1. A Nextcloud Talk bot is registered on the server pointing to the Mewbo API webhook endpoint.
-2. When a user @mentions the bot, Nextcloud POSTs an ActivityStreams 2.0 webhook to `POST /api/webhooks/nextcloud-talk`.
+2. When a user @mentions the bot, Nextcloud POSTs an ActivityStreams 2.0 webhook to [`POST /api/webhooks/nextcloud-talk`](endpoint:POST /api/webhooks/nextcloud-talk).
 3. The adapter verifies the HMAC-SHA256 signature, parses the message, and creates or continues a session.
 4. Non-mentioned messages are silently ignored. The bot only responds when triggered.
 5. When the session completes, the final answer is sent back via the Nextcloud OCS Bot API with `replyTo` (creating a visual quote link).

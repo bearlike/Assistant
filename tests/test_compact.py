@@ -7,8 +7,6 @@ import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from mewbo_core.compact import (
-    CAVEMAN_COMPACT_PROMPT,
-    COMPACT_PROMPT,
     CompactionMode,
     CompactionResult,
     _extract_file_references,
@@ -19,6 +17,15 @@ from mewbo_core.compact import (
     get_compact_prompt,
     record_compaction,
     resolve_compact_models,
+)
+from mewbo_core.prompt_registry import get_prompt_registry
+
+# The compaction prompts moved to the central prompt registry (Gitea #89);
+# byte-equality is pinned by tests/test_prompt_registry_compact.py. These
+# bindings keep the behavioral coverage below pointed at the live text.
+COMPACT_PROMPT = get_prompt_registry().render("compact.system")
+CAVEMAN_COMPACT_PROMPT = get_prompt_registry().render(
+    "compact.system", scenario="caveman"
 )
 
 # -- Helpers ----------------------------------------------------------------
@@ -402,15 +409,15 @@ class TestGetCompactPrompt:
     def test_defaults_to_standard_when_config_missing(self):
         # Unknown config key falls through to default=False -> standard prompt.
         with patch("mewbo_core.compact.get_config_value", return_value=False):
-            assert get_compact_prompt() is COMPACT_PROMPT
+            assert get_compact_prompt() == COMPACT_PROMPT
 
     def test_caveman_mode_true_returns_caveman_prompt(self):
         with patch("mewbo_core.compact.get_config_value", return_value=True):
-            assert get_compact_prompt() is CAVEMAN_COMPACT_PROMPT
+            assert get_compact_prompt() == CAVEMAN_COMPACT_PROMPT
 
     def test_caveman_mode_false_returns_standard_prompt(self):
         with patch("mewbo_core.compact.get_config_value", return_value=False):
-            assert get_compact_prompt() is COMPACT_PROMPT
+            assert get_compact_prompt() == COMPACT_PROMPT
 
     def test_caveman_prompt_preserves_output_structure(self):
         # Downstream _extract_summary regex requires these tags.

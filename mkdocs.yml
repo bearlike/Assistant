@@ -30,6 +30,36 @@ theme:
       - "How does the agent hypervisor work?"
       - "How do I add MCP tools?"
       - "How do I connect Home Assistant?"
+  # Code-reference badges (theme >= 1.4.0): authors write `repo:`/`endpoint:`
+  # link schemes and the theme rewrites them into DeepWiki-style badges. File
+  # badges auto-derive from repo_url (GitHub blob at the build SHA); endpoint
+  # badges deep-link into the Scalar reference page below. The tags map MUST
+  # stay in sync with RETAG_RULES in scripts/ci/generate_openapi_spec.py.
+  code_refs:
+    endpoint:
+      reference_page: rest-api/
+      tags:
+        /api/sessions: Sessions
+        /api/query: Sessions
+        /api/commands: Sessions
+        /api/share: Sessions
+        /api/projects: Projects & Worktrees
+        /api/v_projects: Projects & Worktrees
+        /api/keys: API Keys
+        /api/models: Models
+        /api/tools: Tools & Skills
+        /api/skills: Tools & Skills
+        /api/plugins: Plugins
+        /api/notifications: Notifications
+        /api/config: Configuration
+        /api/agentic_search/workspaces: Workspaces & Runs
+        /api/agentic_search/runs: Workspaces & Runs
+        /api/agentic_search/sources: Source Graph
+        /api/agentic_search/scg: Source Graph
+        /v1/structured: Structured Outputs
+        /v1/draft: Draft Streaming
+        /v1/wiki: Wiki Ingestion
+        /api/automation: Automation
   versions_root: Assistant
   show_version_switcher: true
   show_build_info: true
@@ -59,6 +89,7 @@ theme:
     "Home Assistant": lucide:house-plug
     "Nextcloud Talk": lucide:message-circle
     Email: lucide:mail
+    "CI Agent Pickup": lucide:bot
 
     Capabilities: lucide:sparkles
     "Workspace & Execution": lucide:hammer
@@ -121,6 +152,8 @@ markdown_extensions:
 
 exclude_docs: |
   superpowers/
+  hooks/
+  CLAUDE.md
 
 plugins:
   - search

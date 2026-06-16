@@ -104,10 +104,10 @@ Open the **Plugins** view from the left-hand navigation. The view shows all inst
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/plugins` | List installed plugins and their components |
-| `GET` | `/api/plugins/marketplace` | List available plugins from all configured marketplaces |
-| `POST` | `/api/plugins/marketplace` | Install a plugin: body `{"name": "plugin-name", "marketplace": "Official"}` |
-| `DELETE` | `/api/plugins/<name>` | Uninstall a plugin by name |
+| `GET` | [/api/plugins](endpoint:GET /api/plugins) | List installed plugins and their components |
+| `GET` | [/api/plugins/marketplace](endpoint:GET /api/plugins/marketplace) | List available plugins from all configured marketplaces |
+| `POST` | [/api/plugins/marketplace](endpoint:POST /api/plugins/marketplace) | Install a plugin: body `{"name": "plugin-name", "marketplace": "Official"}` |
+| `DELETE` | [/api/plugins/{plugin_name}](endpoint:DELETE /api/plugins/{plugin_name}) | Uninstall a plugin by name |
 
 ---
 
@@ -230,7 +230,7 @@ This keeps core widget-agnostic: the full contract for a capability bundle is **
 
 ## Built-in plugins
 
-Some plugins ship inside the core package at `packages/mewbo_core/src/mewbo_core/builtin_plugins/`. They are discovered through the same plugin pipeline as user and marketplace plugins, byte-for-byte normal plugins indistinguishable except for their location on the scan path. No `installed_plugins.json` entry is needed.
+Some plugins ship inside the core package at [packages/mewbo_core/src/mewbo_core/builtin_plugins/](repo:packages/mewbo_core/src/mewbo_core/builtin_plugins). They are discovered through the same plugin pipeline as user and marketplace plugins, byte-for-byte normal plugins indistinguishable except for their location on the scan path. No `installed_plugins.json` entry is needed.
 
 Currently bundled:
 
@@ -246,7 +246,7 @@ The built-in path is resolved via `importlib.resources`, so it survives editable
 
 To develop a plugin locally before publishing it to a marketplace, place the plugin directory anywhere on disk and point `plugins.registry_paths` at a custom `installed_plugins.json` that references it. Alternatively, use the CLI install flow with a `./relative-path` source in a local `marketplace.json`.
 
-The minimum viable plugin is a directory containing only `.claude-plugin/plugin.json`. Everything else (`skills/`, `agents/`, `hooks/`, `.mcp.json`, `session_tools`) is optional and discovered automatically. The bundled [widget-builder](features-widgets.md) is a complete working example. See `packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/`.
+The minimum viable plugin is a directory containing only `.claude-plugin/plugin.json`. Everything else (`skills/`, `agents/`, `hooks/`, `.mcp.json`, `session_tools`) is optional and discovered automatically. The bundled [widget-builder](features-widgets.md) is a complete working example. See [packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/](repo:packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder).
 
 ---
 

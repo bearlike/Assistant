@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Quick reference for common failures. For session-level debugging, see the
-[debug methodology in CLAUDE.md](https://github.com/bearlike/Assistant/blob/main/CLAUDE.md#debugging-session-errors-trace-methodology).
+[debug methodology in CLAUDE.md](repo:CLAUDE.md).
 
 ## LLM connectivity
 
@@ -9,7 +9,7 @@ Quick reference for common failures. For session-level debugging, see the
 
 Checks:
 
-1. Verify `llm.api_key` in `configs/app.json` is set and correct.
+1. Verify `llm.api_key` in [`configs/app.json`](repo:configs/app.json) is set and correct.
 2. Model name must use `provider/model` syntax: `anthropic/claude-sonnet-4-6`, `openai/gpt-4o`.
 3. If using a proxy: set `llm.api_base` and verify `llm.proxy_model_prefix` matches what the proxy expects.
 4. Test connectivity directly:
@@ -31,7 +31,7 @@ Causes:
 - `tool_id` mismatch between what the LLM was told and what's in the registry.
 - MCP server not connected (see [MCP server not found](#mcp-server-not-found) below).
 
-Fix: Check `GET /api/tools` (API) or `/mcp` (CLI) to see what tools are actually registered.
+Fix: Check [`GET /api/tools`](endpoint:GET /api/tools) (API) or `/mcp` (CLI) to see what tools are actually registered.
 
 ## MCP server not found
 
@@ -39,7 +39,7 @@ Fix: Check `GET /api/tools` (API) or `/mcp` (CLI) to see what tools are actually
 
 Causes:
 
-- `configs/mcp.json` path doesn't match the container mount (Docker: paths must be identical between host and container).
+- [`configs/mcp.json`](repo:configs/mcp.json) path doesn't match the container mount (Docker: paths must be identical between host and container).
 - Project `.mcp.json` not merged. CWD not set correctly in the request.
 - Key name mismatch: both `mcpServers` and `servers` are accepted. Verify the key in your config file.
 

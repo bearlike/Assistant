@@ -69,17 +69,26 @@ export interface ScgGraphEdge {
   };
 }
 
+export interface WorkspaceGraphStats {
+  totalNodes: number;
+  totalEdges: number;
+  kinds: Partial<Record<ScgNodeKind, number>>;
+  perLayer: Record<ScgGraphLayer, number>;
+  /** Workspace sources with no SCG graph yet (rendered as ghost nodes). */
+  unmapped: string[];
+}
+
 export interface WorkspaceGraph {
   /** The resolved source-id scope this view was assembled for. */
   scope: string[];
   nodes: ScgGraphNode[];
   edges: ScgGraphEdge[];
-  stats: {
-    totalNodes: number;
-    totalEdges: number;
-    kinds: Partial<Record<ScgNodeKind, number>>;
-    perLayer: Record<ScgGraphLayer, number>;
-    /** Workspace sources with no SCG graph yet (rendered as ghost nodes). */
-    unmapped: string[];
-  };
+  stats: WorkspaceGraphStats;
 }
+
+/**
+ * `GET /workspaces/<id>/graph/summary` — the graph's `scope` + `stats` only
+ * (no node/edge arrays). The landing health band reads four numbers off
+ * `stats`, so it fetches this instead of the full graph (#139).
+ */
+export type WorkspaceGraphSummary = Pick<WorkspaceGraph, "scope" | "stats">;

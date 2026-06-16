@@ -369,6 +369,25 @@ guards live in the prompts (`mewbo_graph/.../agents/wiki-qa.md`,
   `wiki_read_file` so the citation carries a precise range (a bare path can't open
   the right lines). The console renders these as chips + a source card.
 
+**Two #70 citation/provenance fixes — both at a single deterministic seam:**
+
+- **Page citations are re-schemed at the EMIT seam.** The QA agent sometimes
+  cites a wiki PAGE as a bare path; the console's `fileCitations` then treats it
+  as a source FILE and the `SourceCard` 404s `/source` (pages live in the page
+  store, not the clone). `wiki_emit_block` runs the `sources` block through
+  `QaFinalizer.tag_page_citations` (`mewbo_graph.wiki.qa`) BEFORE it lands on the
+  log — a bare ref whose id ∈ the real page set becomes `wiki:<page-id>`. One seam
+  fixes the LIVE stream AND the reconciled snapshot together; the FE already drops
+  `wiki:` from the file cards. File / `path#L…` / `graph:` refs pass through.
+- **Retrieve-details hashes are resolved at READ.** `accessed_sources` records
+  graph nodes as `graph:<node_id>` (content-addressed sha1 — opaque in the panel).
+  `GET /v1/wiki/qa/<id>` humanises them via `AccessedSourceResolver.resolve_refs`
+  (`qa.py`): AST node → `file#Symbol` (one `query_graph` pass), entity →
+  `name (type)` (`get_entity`), miss → `unknown (<hash[:8]>)`. **NON-destructive**
+  — the stored snapshot keeps raw ids because `QaMemoryDepositor` anchors off them
+  (`graph:<id>` → `entity_key`); resolving at read also stays current across a
+  re-index. The FE wire stays `string[]` (no FE change).
+
 **Source-blob endpoint** `GET /v1/wiki/projects/<slug>/source?path=&start=&end=`
 → `{path,startLine,endLine,totalLines,content}` (`routes.py:get_project_source`).
 Backs the FE cited-sources viewer: the console parses each `path#L<a>-<b>`

@@ -13,6 +13,12 @@
           "title": "Master Token",
           "type": "string",
           "x-protected": true
+        },
+        "allow_external_cwd": {
+          "default": false,
+          "description": "Allow callers to anchor sessions in an arbitrary host path via the `cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. Off by default; enable only for trusted external workspace managers such as Grove that manage their own worktrees.",
+          "title": "Allow External Cwd",
+          "type": "boolean"
         }
       },
       "title": "API Server",
@@ -547,7 +553,7 @@
           "type": "array"
         },
         "structured_patch_models": {
-          "description": "Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; only set this to override or extend.",
+          "description": "Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Runtime override layer ON TOP of the controllable model\u2192tool-variant map (mewbo_core/prompts/model_variants.yaml), which now holds the built-in defaults (GPT-5/o3/o4/Codex/GPT-4); only set this to override or extend without editing that file.",
           "items": {
             "type": "string"
           },
@@ -1070,14 +1076,22 @@
       "description": "Deferred tool loading via on-demand schema fetching.\n\nWhen ``mode='on'``, MCP tool schemas (and any spec with\n``metadata.deferred=True``) are stripped from the initial ``bind_tools``\ncall and surfaced to the model by name only via\n``<available-deferred-tools>``. The model fetches schemas it actually\nneeds by calling the built-in ``tool_search`` tool. Mirrors Claude\nCode's ``ToolSearchTool`` mechanism \u2014 saves substantial context tokens\non sessions with many MCP servers connected.",
       "properties": {
         "mode": {
-          "default": "off",
-          "description": "'off' (default) keeps every tool's schema in the initial bind. 'on' defers MCP tools and any spec with metadata.deferred=True; the model loads schemas on demand via tool_search.",
+          "default": "auto",
+          "description": "'off' keeps every tool's schema in the initial bind. 'on' always defers MCP tools and any spec with metadata.deferred=True; the model loads schemas on demand via tool_search. 'auto' defers only when the number of deferrable tools exceeds auto_threshold \u2014 so lean / zero-MCP sessions keep verbatim binding and pay nothing, while many-MCP sessions are spared ~240 tokens per tool every turn.",
           "enum": [
             "off",
-            "on"
+            "on",
+            "auto"
           ],
           "title": "Mode",
           "type": "string"
+        },
+        "auto_threshold": {
+          "default": 25,
+          "description": "In 'auto' mode, defer tool schemas only when more than this many deferrable tools (MCP + metadata.deferred specs) are registered. Ignored when mode is 'off' or 'on'.",
+          "minimum": 0,
+          "title": "Auto Threshold",
+          "type": "integer"
         }
       },
       "title": "Tool Search",
@@ -1135,6 +1149,12 @@
           "default": "mewbo-ide",
           "pattern": "^[a-zA-Z0-9_-]+$",
           "title": "Network",
+          "type": "string"
+        },
+        "proxy_url": {
+          "default": "http://127.0.0.1:5126",
+          "description": "Base URL the API uses to reach the ide-proxy for readiness probes. The default suits a host-networked API, where the proxy is published on loopback 127.0.0.1:5126. A bridge-networked API (e.g. one joined to extra Docker networks via a compose override) cannot reach that loopback: attach it to the `network` above and point this at the proxy's in-network name, e.g. http://mewbo-ide-proxy:8080.",
+          "title": "Proxy Url",
           "type": "string"
         },
         "state_dir": {

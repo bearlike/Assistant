@@ -288,6 +288,13 @@ blocks so a sources-only stream still hits the terminal branch.
   `GET /v1/wiki/projects/<slug>/source` and highlighting the cited range.
   Accessed-files + model are demoted to a small secondary footer (kept — they're
   appreciated provenance — just not the primary content).
+- **The two #70 bugs are BE fixes — this FE is unchanged.** A wiki PAGE cited as
+  a bare path used to 404 the file `SourceCard`; it is re-schemed `wiki:<page-id>`
+  server-side at the emit seam, so `fileCitations` drops it (the existing `wiki:`
+  path). The retrieval-details `graph:<hash>` entity refs are resolved to
+  `name (type)` / `file#Symbol` server-side at the qa-snapshot route — the wire
+  stays `string[]` and `shortenCitation` keeps rendering them. Don't reintroduce
+  a FE-side page-set fetch or hash resolver; both live BE-side (`mewbo_graph.wiki.qa`).
 
 ## Recovery UI (Gitea #54)
 

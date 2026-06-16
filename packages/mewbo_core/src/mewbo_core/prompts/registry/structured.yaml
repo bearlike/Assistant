@@ -1,0 +1,52 @@
+# Structured-response + grounded-synthesis prompts (Gitea #89, phase 1).
+#
+# VERBATIM extraction from structured_response.py / structured_synthesis.py — the
+# YAML reproduces each original literal byte-for-byte (golden tests in
+# tests/test_prompt_registry_structured.py enforce this). Double-quoted scalars
+# carry explicit `\n` so trailing-newline behaviour is exact; static entries (no
+# `variables`) pass through untouched (literal braces are safe). Templated entries
+# declare EXACTLY the variables their template uses.
+
+structured.force_emit_directive:
+  purpose: >-
+    Force the structured run to conclude by calling emit_result (never prose);
+    injected via the skill_instructions seam.
+  token_budget: "keep terse; injected as system prompt every structured drive"
+  template: "You are operating in STRUCTURED OUTPUT mode. Your ONLY way to finish this task is to call the `emit_result` tool exactly once with arguments that validate against its schema. Do NOT answer in prose, do NOT write a final text message, and do NOT stop until you have called `emit_result`. Use any grounding tools you need first, then call `emit_result` to deliver the structured answer. A reply that does not call `emit_result` is a failure."
+
+structured.redrive_directive:
+  purpose: >-
+    Sharper belt-and-suspenders re-drive directive; inlines the force-emit text
+    verbatim so assertions keyed on the base directive match either drive.
+  template: "You are operating in STRUCTURED OUTPUT mode. Your ONLY way to finish this task is to call the `emit_result` tool exactly once with arguments that validate against its schema. Do NOT answer in prose, do NOT write a final text message, and do NOT stop until you have called `emit_result`. Use any grounding tools you need first, then call `emit_result` to deliver the structured answer. A reply that does not call `emit_result` is a failure. You did not call `emit_result` last time. Do not gather any more context — call `emit_result` NOW with your best structured answer."
+
+structured.redrive_query:
+  purpose: Concise user query used for the belt-and-suspenders re-drive turn.
+  template: "You must finish by calling the emit_result tool. Call emit_result now with the structured answer."
+
+structured.reask_giveup:
+  purpose: >-
+    Terminal give-up message after the schema-validation cap is hit (the Nth
+    failure terminates the run).
+  variables: [attempts, detail]
+  template: "Schema validation failed {{ attempts }}x — giving up. Last error: {{ detail }}"
+
+structured.reask_fix_fields:
+  purpose: Bounded reask asking the model to fix the failing schema fields and re-emit.
+  variables: [detail]
+  template: "Your output did not match the schema. {{ detail }}. Fix these fields and call emit_result again."
+
+structured.grounded_header:
+  purpose: >-
+    Header prepended to the grounded-context block when retrieval citations are
+    present in fast synthesis.
+  template: "## Grounded context\n\nThe following snippets were retrieved from the workspace and MUST be used to populate the structured answer.  Cite only what is present here.\n\n"
+
+structured.grounded_citation:
+  purpose: One compact citation line in the grounded-context block (fast synthesis).
+  variables: [i, kind, score, snippet]
+  template: "[{{ i }}] ({{ kind }}) score={{ '%.3f' | format(score) }} — {{ snippet.strip() }}\n"
+
+structured.synthesis_reask:
+  purpose: Reask message fed back to the model after a failed validation in fast synthesis.
+  template: "Your previous response did not validate against the schema. Correct the field errors and call emit_result again."

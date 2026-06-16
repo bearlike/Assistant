@@ -141,11 +141,15 @@ def model_supports_vision(model_name: str | None) -> bool:
 # ---------------------------------------------------------------------
 
 
-def parse_to_markdown(path: str) -> str | None:
-    """Convert a document at ``path`` to Markdown via markitdown.
+def parse_to_markdown(source: str) -> str | None:
+    """Convert a document to Markdown via markitdown.
 
-    Returns the Markdown text on success, ``None`` if markitdown is not
-    installed or parsing failed. Lazy import keeps test/import surface
+    ``source`` is either a local filesystem path or a URI
+    (``http(s)://``, ``file://``, ``data:``) — markitdown fetches and
+    renders both through the SAME converter suite, so the inline
+    ``@<ref>`` expander reuses this one renderer for files and web pages
+    alike. Returns the Markdown text on success, ``None`` if markitdown is
+    not installed or parsing failed. Lazy import keeps test/import surface
     light when attachments aren't used.
     """
     try:
@@ -155,12 +159,18 @@ def parse_to_markdown(path: str) -> str | None:
         return None
     try:
         md = MarkItDown(enable_plugins=False)
-        result = md.convert(path)
+        # URIs go through ``convert_uri`` (it handles the fetch); local
+        # paths through ``convert``. Detect a scheme without over-matching
+        # a bare Windows drive letter or a relative path.
+        if "://" in source or source.startswith("data:"):
+            result = md.convert_uri(source)
+        else:
+            result = md.convert(source)
         text = getattr(result, "text_content", None) or getattr(result, "markdown", None)
         if isinstance(text, str) and text.strip():
             return text
     except Exception as exc:  # noqa: BLE001
-        logging.warning("markitdown failed for %s: %s", path, exc)
+        logging.warning("markitdown failed for %s: %s", source, exc)
     return None
 
 

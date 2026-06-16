@@ -6,6 +6,9 @@ Endpoint under ``/api/agentic_search``:
   the workspace-scoped SCG multiplex (schema + memory + entity layers), wire
   shape mirroring the wiki ``/v1/wiki/projects/<slug>/graph`` endpoint so the
   console reuses the same ``KnowledgeGraphRenderer`` mechanism.
+- ``GET /workspaces/<id>/graph/summary`` — the same assembly projected to
+  ``{scope, stats}`` only (no node/edge arrays), the cheap read the landing
+  health band uses so it never downloads the full graph (#139).
 
 The view assembler is :class:`~mewbo_graph.scg.graph_view.ScgGraphView` (the #76
 multiplex twin of the wiki ``KnowledgeGraphView``). This module is the thin
@@ -46,9 +49,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
-from flask_restx import Namespace, Resource
+from flask_restx import Namespace, Resource, fields
 from mewbo_core.common import get_logger
 from pydantic import BaseModel, ConfigDict, Field
+
+from mewbo_api.responses import ApiResponseKit
 
 from . import store as store_mod
 from .mcp_config import WorkspaceMcpConfig
@@ -173,6 +178,105 @@ graph_ns = Namespace(
     description="Agentic Search — workspace SCG multiplex graph view.",
 )
 
+# This module owns a SEPARATE namespace from ``routes.py``; it therefore builds
+# its OWN error-documentation kit (distinct ``prefix`` so the generated model
+# names never collide on the shared ``Api`` registry).
+kit = ApiResponseKit(graph_ns, prefix="SearchGraph")
+
+
+# -- Success-response models (documentation only — real sample bodies) -------
+#
+# The wire is camelCase (``WorkspaceGraphWire.dump()`` serialises by alias), so
+# the example keys mirror exactly what the console consumes.
+
+graph_node_data_model = graph_ns.model(
+    "WorkspaceGraphNodeData",
+    {
+        "id": fields.String(example="github:search_issues"),
+        "label": fields.String(example="search_issues"),
+        "kind": fields.String(example="capability"),
+        "layer": fields.String(
+            example="schema", description="One of `schema`, `memory`, `entity`, `cross`."
+        ),
+        "sourceId": fields.String(example="github"),
+        "sourceKey": fields.String(example="github::search_issues"),
+        "unmapped": fields.Boolean(
+            example=None, description="True on a ghost node for an unmapped source."
+        ),
+    },
+)
+
+graph_node_model = graph_ns.model(
+    "WorkspaceGraphNode",
+    {"data": fields.Nested(graph_node_data_model)},
+)
+
+graph_edge_data_model = graph_ns.model(
+    "WorkspaceGraphEdgeData",
+    {
+        "id": fields.String(example="e-github-1"),
+        "source": fields.String(example="github:search_issues"),
+        "target": fields.String(example="github:get_issue"),
+        "kind": fields.String(example="pathway"),
+        "layer": fields.String(example="schema"),
+        "weight": fields.Float(example=1.0),
+    },
+)
+
+graph_edge_model = graph_ns.model(
+    "WorkspaceGraphEdge",
+    {"data": fields.Nested(graph_edge_data_model)},
+)
+
+graph_per_layer_model = graph_ns.model(
+    "WorkspaceGraphPerLayer",
+    {
+        "schema": fields.Integer(example=12),
+        "memory": fields.Integer(example=3),
+        "entity": fields.Integer(example=0),
+    },
+)
+
+graph_stats_model = graph_ns.model(
+    "WorkspaceGraphStats",
+    {
+        "totalNodes": fields.Integer(example=15),
+        "totalEdges": fields.Integer(example=18),
+        "kinds": fields.Raw(
+            example={"capability": 12, "note": 3},
+            description="Node count per kind.",
+        ),
+        "perLayer": fields.Nested(graph_per_layer_model),
+        "unmapped": fields.List(
+            fields.String,
+            example=["linear"],
+            description="Scoped sources that produced zero schema nodes.",
+        ),
+    },
+)
+
+workspace_graph_model = graph_ns.model(
+    "WorkspaceGraphResponse",
+    {
+        "scope": fields.List(
+            fields.String,
+            example=["github", "linear"],
+            description="The workspace's resolved enabled-source scope.",
+        ),
+        "nodes": fields.List(fields.Nested(graph_node_model)),
+        "edges": fields.List(fields.Nested(graph_edge_model)),
+        "stats": fields.Nested(graph_stats_model),
+    },
+)
+
+workspace_graph_summary_model = graph_ns.model(
+    "WorkspaceGraphSummaryResponse",
+    {
+        "scope": fields.List(fields.String, example=["github", "linear"]),
+        "stats": fields.Nested(graph_stats_model),
+    },
+)
+
 
 def init_agentic_search_graph(
     api: object, require_api_key: AuthGuard, runtime: Any = None
@@ -203,6 +307,31 @@ def _scope_for_workspace(
         WorkspaceMcpConfig.attached_server_names(store, workspace.id)
         or list(workspace.sources)
     )
+
+
+def _resolve_scope(workspace_id: str) -> tuple[list[str] | None, AuthResult]:
+    """Auth + resolve a workspace's source scope, shared by both graph routes.
+
+    Returns ``(scope, None)`` on success or ``(None, response)`` when the API key
+    is missing/invalid or the workspace is unknown — so the full-graph and the
+    lighter summary route apply the identical guard without duplicating it.
+    """
+    if (auth := _require_api_key()) is not None:
+        return None, auth
+    store = store_mod.get_store()
+    workspace = store.get_workspace(workspace_id)
+    if workspace is None:
+        return None, ({"message": "workspace not found"}, 404)
+    return _scope_for_workspace(store, workspace), None
+
+
+def _safe_graph_payload(workspace_id: str, scope: list[str]) -> WorkspaceGraphWire:
+    """Assemble the workspace graph, degrading to the empty wire on any failure."""
+    try:
+        return _build_graph_payload(scope)
+    except Exception as exc:  # noqa: BLE001 — never 500 the viewer
+        logging.warning("workspace graph assembly failed for %s: %s", workspace_id, exc)
+        return _empty_wire(scope)
 
 
 # ── Payload assembly (typed end to end) ─────────────────────────────────────
@@ -353,14 +482,25 @@ class WorkspaceGraphResource(Resource):
 
     @graph_ns.doc(
         "get_workspace_graph",
+        description=(
+            "Returns the capability graph scoped to the workspace's enabled sources "
+            "as cytoscape-style `nodes` and `edges` plus `stats` and the resolved "
+            "`scope`. Render it directly with a cytoscape-compatible viewer; every "
+            "element carries a `layer` (`schema`/`memory`/`entity`/`cross`) so "
+            "clients can toggle layers, and a never-mapped source appears as one "
+            "ghost node flagged `unmapped`. Degrades gracefully — a disabled or "
+            "unavailable graph backend still returns 200 with an empty schema layer "
+            "and every source listed unmapped; only an unknown workspace 404s. No "
+            "node or edge ever carries a credential."
+        ),
         params={
             "workspace_id": "Workspace id returned by "
             "POST /api/agentic_search/workspaces.",
         },
     )
-    @graph_ns.response(200, "The workspace graph.")
-    @graph_ns.response(401, "Missing or invalid API key.")
-    @graph_ns.response(404, "Workspace not found.")
+    @graph_ns.response(200, "The workspace graph.", workspace_graph_model)
+    @kit.errors(404, shape="message")
+    @kit.auth_error()
     def get(self, workspace_id: str) -> tuple[dict[str, Any], int]:
         """Get the workspace graph.
 
@@ -374,21 +514,65 @@ class WorkspaceGraphResource(Resource):
         schema layer and every source listed as unmapped. Only an unknown
         workspace returns 404. No node or edge ever carries a credential.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
-        store = store_mod.get_store()
-        workspace = store.get_workspace(workspace_id)
-        if workspace is None:
-            return {"message": "workspace not found"}, 404
-        scope = _scope_for_workspace(store, workspace)
-        try:
-            payload = _build_graph_payload(scope)
-        except Exception as exc:  # noqa: BLE001 — never 500 the viewer
-            logging.warning(
-                "workspace graph assembly failed for %s: %s", workspace_id, exc
-            )
-            payload = _empty_wire(scope)
-        return payload.dump(), 200
+        scope, err = _resolve_scope(workspace_id)
+        if scope is None:
+            return err  # type: ignore[return-value]
+        return _safe_graph_payload(workspace_id, scope).dump(), 200
 
 
-__all__ = ["WorkspaceGraphWire", "graph_ns", "init_agentic_search_graph"]
+@graph_ns.route("/workspaces/<string:workspace_id>/graph/summary")
+class WorkspaceGraphSummaryResource(Resource):
+    """The workspace graph's `stats` only — the cheap projection for the landing.
+
+    The landing health band renders just four numbers (mapped-source coverage,
+    node·edge counts, memory notes), so it has no need for the full node/edge
+    arrays the dialog renders. This route reuses the SAME assembly path
+    (``_build_graph_payload`` — warm via the SCG store's ``query_nodes`` cache)
+    but returns only ``{scope, stats}``, keeping the on-landing payload tiny and
+    decoupling the band from the heavier full-graph fetch.
+    """
+
+    @graph_ns.doc(
+        "get_workspace_graph_summary",
+        description=(
+            "Returns the resolved `scope` and the aggregate `stats` (node/edge "
+            "counts, per-kind and per-layer tallies, and the unmapped-source list) — "
+            "the same figures the full graph carries, minus the node/edge arrays. Use "
+            "this for a landing health band so it never downloads the full graph. "
+            "Degrades and 404s identically to the full graph route."
+        ),
+        params={
+            "workspace_id": "Workspace id returned by "
+            "POST /api/agentic_search/workspaces.",
+        },
+    )
+    @graph_ns.response(
+        200,
+        "The workspace graph stats (no nodes/edges).",
+        workspace_graph_summary_model,
+    )
+    @kit.errors(404, shape="message")
+    @kit.auth_error()
+    def get(self, workspace_id: str) -> tuple[dict[str, Any], int]:
+        """Get the workspace graph summary.
+
+        Returns the resolved `scope` and the aggregate `stats` (node/edge
+        counts, per-kind and per-layer tallies, and the unmapped-source list)
+        — the same figures the full graph carries, without the node/edge
+        arrays. Degrades and 404s identically to the full graph route.
+        """
+        scope, err = _resolve_scope(workspace_id)
+        if scope is None:
+            return err  # type: ignore[return-value]
+        payload = _safe_graph_payload(workspace_id, scope)
+        return {
+            "scope": payload.scope,
+            "stats": payload.stats.model_dump(by_alias=True, exclude_none=True),
+        }, 200
+
+
+__all__ = [
+    "WorkspaceGraphWire",
+    "graph_ns",
+    "init_agentic_search_graph",
+]

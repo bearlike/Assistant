@@ -9,6 +9,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 afterEach(cleanup)
 
@@ -37,19 +38,25 @@ const wsB: Workspace = {
 }
 
 function renderBar(over: Partial<React.ComponentProps<typeof SearchBar>> = {}) {
+  // SearchBar reads the tier→model presets via useTiers (TanStack Query), so
+  // a provider is required; queries fail fast (retry: false) and the bar
+  // renders its graceful fallbacks — these tests don't depend on tiers data.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <SearchBar
-      value=""
-      onChange={vi.fn()}
-      onSubmit={vi.fn()}
-      workspace={wsA}
-      workspaces={[wsA, wsB]}
-      onPickWorkspace={vi.fn()}
-      onNewWorkspace={vi.fn()}
-      variant="hero"
-      autoFocus
-      {...over}
-    />,
+    <QueryClientProvider client={qc}>
+      <SearchBar
+        value=""
+        onChange={vi.fn()}
+        onSubmit={vi.fn()}
+        workspace={wsA}
+        workspaces={[wsA, wsB]}
+        onPickWorkspace={vi.fn()}
+        onNewWorkspace={vi.fn()}
+        variant="hero"
+        autoFocus
+        {...over}
+      />
+    </QueryClientProvider>,
   )
 }
 

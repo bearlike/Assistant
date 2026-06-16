@@ -248,6 +248,34 @@ class TestAgentHypervisor:
 
         asyncio.run(_test())
 
+    def test_try_admit_non_blocking(self):
+        """try_admit grabs a free slot, returns False immediately when full."""
+
+        async def _test():
+            reg = AgentHypervisor(max_concurrent=1)
+            assert await reg.try_admit() is True  # one slot taken
+            assert await reg.try_admit() is False  # full → no wait, no block
+            reg.release()
+            assert await reg.try_admit() is True  # slot freed → admits again
+
+        asyncio.run(_test())
+
+    def test_try_admit_is_race_free_under_concurrency(self):
+        """Concurrent try_admit on N slots admits EXACTLY N (the #117 contract).
+
+        Pins the non-blocking admission's atomicity: an unlocked semaphore's
+        acquire() does not suspend, so the locked()-check + acquire() runs as
+        one synchronous unit and over-admission is impossible even when many
+        callers race via asyncio.gather.
+        """
+
+        async def _test():
+            reg = AgentHypervisor(max_concurrent=3)
+            results = await asyncio.gather(*[reg.try_admit() for _ in range(20)])
+            assert sum(1 for r in results if r) == 3
+
+        asyncio.run(_test())
+
     def test_cleanup_empties_registry(self):
         async def _test():
             reg = AgentHypervisor()

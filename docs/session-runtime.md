@@ -78,8 +78,8 @@ Every session has an **origin**: the surface or subsystem that created it. Origi
 |--------|-----------------|
 | `wiki` | Session is tagged `wiki:job` (indexing run) or `wiki:qa` (Q&A query) |
 | `search` | Session is tagged `agentic_search` |
-| `structured` | Session is tagged `structured:run` (`POST /v1/structured`, including MCP `structured_query`) or `structured:fast` (`POST /v1/structured/fast`) |
-| `draft` | Session is tagged `draft:stream` (`POST /v1/draft/stream`) |
+| `structured` | Session is tagged `structured:run` ([`POST /v1/structured`](endpoint:POST /v1/structured) agentic mode, including MCP `structured_query`) or `structured:fast` (`POST /v1/structured` with `mode:"synthesis"`) |
+| `draft` | Session is tagged `draft:stream` ([`POST /v1/draft/stream`](endpoint:POST /v1/draft/stream)) |
 | `channel` | Session carries a channel tag with a `:room:` or `:thread:` segment, such as `nextcloud-talk:room:<token>` |
 | `user` | Everything else: direct console, CLI, or API sessions |
 

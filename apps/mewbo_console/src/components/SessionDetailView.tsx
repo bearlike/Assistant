@@ -9,7 +9,7 @@ import { useSessionUsage } from "../hooks/useSessionUsage";
 import { useSessionQuery } from "../hooks/useSessionQuery";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { SessionContext, SessionSummary, SessionUsage, TurnMeta } from "../types";
-import { buildTimeline, getActiveTurn, turnHasWidget } from "../utils/timeline";
+import { buildTimeline, getActiveStreamText, getActiveTurn, turnHasWidget } from "../utils/timeline";
 import { mergeDiffFiles } from "../utils/diff";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { extractSummaryTesting } from "../utils/logs";
@@ -70,6 +70,10 @@ export function SessionDetailView({
   );
   const liveTurn = useMemo(() => getActiveTurn(events), [events]);
   const activeTurnId = liveTurn?.id ?? null;
+  // Live assistant text streamed from the in-flight turn (Gitea #137). Empty
+  // string when no deltas have arrived (non-streaming model / legacy events),
+  // so ConversationTimeline falls back to the "Working…" beat.
+  const streamingText = useMemo(() => getActiveStreamText(events), [events]);
   const selectedTurn = useMemo(() => {
     if (!selectedTurnId) {
       return null;
@@ -343,6 +347,7 @@ export function SessionDetailView({
         onOpenFiles={handleOpenFiles}
         activeTurnId={activeTurnId}
         isRunning={running || submitting}
+        streamingText={streamingText}
         onShowActiveTrace={handleShowLiveTrace}
         onApprovePlan={handleApprovePlan}
         onRetryFrom={handleRetryFrom}

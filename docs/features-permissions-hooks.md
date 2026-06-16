@@ -89,7 +89,7 @@ See [configuration.md](configuration.md#permissions) for field descriptions.
 
 ## Hooks
 
-Hooks run custom code at specific moments in a session's life. They are declared in the `hooks` section of `configs/app.json`. A failing hook is logged as a warning and never blocks execution, so hooks are safe to use for side effects even if the external endpoint is flaky.
+Hooks run custom code at specific moments in a session's life. They are declared in the `hooks` section of [`configs/app.json`](repo:configs/app.json). A failing hook is logged as a warning and never blocks execution, so hooks are safe to use for side effects even if the external endpoint is flaky.
 
 ### When hooks fire
 

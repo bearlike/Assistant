@@ -179,6 +179,7 @@ class EchoSearchRunner:
             workspace_id=run.workspace_id,
             status="completed",
             tier=run.tier,
+            model=run.model,
             total_ms=fixtures.DEMO_TOTAL_MS,
             answer=answer,
             results=results,
@@ -245,9 +246,16 @@ def get_search_runner() -> SearchRunner:
             from mewbo_graph.scg.store import get_scg_store
 
             from .scg.orchestrated_runner import OrchestratedSearchRunner
+            from .scg.related_questions import RelatedQuestionsRunner
 
             if get_scg_store().list_sources():
-                return OrchestratedSearchRunner()
+                # Arm the parallel follow-up generator on a cheap brain (the
+                # fast-tier model — a trivial task regardless of the run's tier).
+                # Only the production path arms it, so fake-runtime tests stay
+                # LLM-free unless they inject their own stubbed runner.
+                return OrchestratedSearchRunner(
+                    RelatedQuestionsRunner(model=ScgConfig.model_for_tier("fast"))
+                )
     except Exception as exc:  # pragma: no cover — resolution fail-soft
         logging.warning("orchestrated runner resolution skipped: {}", exc)
     return EchoSearchRunner()

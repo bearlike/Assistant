@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, ChevronDown, Info, MoreHorizontal, Pencil } from 'lucide-react';
-import { MessageBubble } from './MessageBubble';
+import { MessageBubble, MarkdownContent } from './MessageBubble';
 import { WidgetCard } from './WidgetCard';
 import { CopyButton } from './CopyButton';
 import { ScrollToBottom } from './ScrollToBottom';
@@ -28,6 +28,8 @@ interface ConversationTimelineProps {
   onOpenFiles: (turn: TurnMeta, file?: DiffFile) => void;
   activeTurnId?: string | null;
   isRunning?: boolean;
+  /** Live assistant text streamed from the in-flight turn (Gitea #137). */
+  streamingText?: string;
   onShowActiveTrace?: () => void;
   onApprovePlan?: (approved: boolean) => void;
   onRetryFrom?: (fromTs: string) => void;
@@ -77,6 +79,28 @@ function PendingAssistantRow({ onShowTrace }: { onShowTrace?: () => void }) {
             <span>Trace</span>
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Live assistant bubble that grows as `agent_message_delta` tokens stream in
+ * (Gitea #137). Renders the same markdown surface as a settled assistant
+ * message plus a blinking caret (reusing the `wiki-caret` keyframe already in
+ * index.css). Mounts only while the active turn is running and tokens have
+ * arrived; the turn-closing `assistant` bubble built by `buildTimeline`
+ * supersedes it, so the final text is authoritative and never duplicated.
+ */
+function StreamingAssistantRow({ text }: { text: string }) {
+  return (
+    <div className="pt-1.5" role="status" aria-live="polite" aria-busy="true">
+      <div className="text-[hsl(var(--foreground))] text-sm">
+        <MarkdownContent content={text} />
+        <span
+          aria-hidden="true"
+          className="inline-block w-[2px] h-[1em] align-text-bottom -mb-px ml-px bg-[hsl(var(--primary))] animate-[wiki-caret_900ms_steps(2)_infinite]"
+        />
       </div>
     </div>
   );
@@ -261,6 +285,7 @@ export function ConversationTimeline({
   onOpenFiles,
   activeTurnId,
   isRunning = false,
+  streamingText,
   onShowActiveTrace,
   onApprovePlan,
   onRetryFrom,
@@ -451,7 +476,12 @@ export function ConversationTimeline({
                   </div>
                 </div>
               </div>
-              {showPending && <PendingAssistantRow onShowTrace={onShowActiveTrace} />}
+              {showPending &&
+                (streamingText ? (
+                  <StreamingAssistantRow text={streamingText} />
+                ) : (
+                  <PendingAssistantRow onShowTrace={onShowActiveTrace} />
+                ))}
               </Fragment>
             );
           }

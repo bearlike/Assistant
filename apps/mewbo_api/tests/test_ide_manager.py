@@ -492,19 +492,34 @@ def test_probe_ready_200() -> None:
             return None
 
     with patch("urllib.request.urlopen", return_value=FakeResp()):
-        assert IdeManager._probe_ready(VALID_SID) is True
+        assert IdeManager._probe_ready("http://127.0.0.1:5126", VALID_SID) is True
 
 
 def test_probe_ready_connection_refused() -> None:
     import urllib.error
 
     with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
-        assert IdeManager._probe_ready(VALID_SID) is False
+        assert IdeManager._probe_ready("http://127.0.0.1:5126", VALID_SID) is False
 
 
 def test_probe_ready_timeout() -> None:
     with patch("urllib.request.urlopen", side_effect=TimeoutError("slow")):
-        assert IdeManager._probe_ready(VALID_SID) is False
+        assert IdeManager._probe_ready("http://127.0.0.1:5126", VALID_SID) is False
+
+
+def test_probe_ready_targets_configured_proxy_url() -> None:
+    """The probe URL is built from ``proxy_url`` so a bridge-networked API
+    can reach the proxy by its in-network name instead of host loopback."""
+    captured: dict[str, str] = {}
+
+    def fake_urlopen(req: Any, timeout: float) -> None:
+        captured["url"] = req.full_url
+        raise TimeoutError("stop after capturing the URL")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        IdeManager._probe_ready("http://mewbo-ide-proxy:8080/", VALID_SID)
+
+    assert captured["url"] == f"http://mewbo-ide-proxy:8080/ide/{VALID_SID}/healthz"
 
 
 def test_probe_ready_non_200() -> None:
@@ -518,7 +533,7 @@ def test_probe_ready_non_200() -> None:
             return None
 
     with patch("urllib.request.urlopen", return_value=FakeResp()):
-        assert IdeManager._probe_ready(VALID_SID) is False
+        assert IdeManager._probe_ready("http://127.0.0.1:5126", VALID_SID) is False
 
 
 # ---------------------------------------------------------------------------

@@ -55,7 +55,7 @@ docs = [
   # vX.Y.Z in the fork, update this URL, then refresh the lock:
   #
   #   uv lock --upgrade-package mkdocs-shadcn-mewbo
-  "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.3.0/mkdocs_shadcn_mewbo-1.3.0-py3-none-any.whl",
+  "mkdocs-shadcn-mewbo @ https://github.com/mewbo-com/mkdocs-shadcn/releases/download/v1.5.0/mkdocs_shadcn_mewbo-1.5.0-py3-none-any.whl",
   "mkdocstrings[python]",
   "pymdown-extensions>=10.20.1",
 ]

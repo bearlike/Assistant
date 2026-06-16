@@ -30,6 +30,7 @@ from mewbo_core.capabilities import (
     parse_capabilities,
 )
 from mewbo_core.common import get_logger
+from mewbo_core.prompt_registry import get_prompt_registry
 
 if TYPE_CHECKING:
     from mewbo_core.tool_registry import ToolSpec
@@ -336,10 +337,8 @@ class SkillRegistry:
         auto = self.list_auto_invocable(session_capabilities)
         if not auto:
             return ""
-        lines = ["Available skills (use activate_skill to load instructions when relevant):"]
-        for skill in auto:
-            lines.append(f"- {skill.name}: {skill.description}")
-        return "\n".join(lines)
+        skill_lines = "\n".join(f"- {skill.name}: {skill.description}" for skill in auto)
+        return get_prompt_registry().render("catalog.skills", skill_lines=skill_lines)
 
     def maybe_reload(self) -> bool:
         """Check if any skill files changed and reload if so.

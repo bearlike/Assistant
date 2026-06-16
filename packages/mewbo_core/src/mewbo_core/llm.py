@@ -80,7 +80,13 @@ def model_prefers_structured_patch(model_name: str | None) -> bool:
     are trained on diff/patch text formats and work better with
     ``aider_edit_block_tool`` (search_replace_block).
 
-    The config key ``llm.structured_patch_models`` overrides the built-in list.
+    Precedence (Gitea #113 — the model→tool-variant map is now controllable data):
+    1. ``llm.structured_patch_models`` config allowlist (runtime override layer).
+    2. The operator-tunable ``prompts/model_variants.yaml`` map, loaded through
+       ``ModelVariantRegistry`` — this is where the built-in defaults now live
+       (gpt-5/o3/o4/codex/gpt-4), so they are editable without touching code.
+       Its conservative ``defaults.edit_tool`` (``search_replace_block``) is the
+       sane built-in fallback when no profile matches.
     """
     if not model_name:
         return False
@@ -91,15 +97,10 @@ def model_prefers_structured_patch(model_name: str | None) -> bool:
     )
     if _matches_model_list(raw, allowlist) or _matches_model_list(normalized, allowlist):
         return True
-    # Built-in: GPT-5+, o3/o4 class, Codex models → structured_patch
-    # Claude, Gemini, other open-weights → search_replace_block (aider-style)
-    return (
-        normalized.startswith("gpt-5")
-        or normalized.startswith("o3")
-        or normalized.startswith("o4")
-        or normalized.startswith("codex")
-        or "gpt-4" in normalized
-    )
+    # Controllable data file (migrated built-in defaults; operator-editable).
+    from mewbo_core.model_variants import get_model_variant_registry
+
+    return get_model_variant_registry().edit_tool_for(model_name) == "structured_patch"
 
 
 def register_proxy_model_capabilities(

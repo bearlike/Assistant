@@ -1,9 +1,45 @@
 import { ArrowUpRight, Sparkles } from "lucide-react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+import rehypeHighlight from "rehype-highlight"
+import rehypeSlug from "rehype-slug"
+
 import { cn } from "@/lib/utils"
 
 import { CopyButton } from "../CopyButton"
+import { buildMarkdownComponents } from "../wiki/markdownComponents"
 import type { RunAnswer, SearchResult, SourceCatalogEntry } from "../../types/agenticSearch"
 import { SrcAvatar } from "./SrcAvatar"
+
+// The synthesis is LLM-authored markdown (bullets, bold, inline `code` for
+// source_keys/ids). Reuse the console's ONE markdown renderer (the wiki-QA
+// single-renderer rule — see wiki/CLAUDE.md "one renderer") instead of
+// hand-rolling a second. A search synthesis has no wiki-page links, so
+// onNavigatePage is a no-op and mermaid stays off. Built once at module scope
+// (it depends only on the callbacks) per the console "components map outside the
+// render function" rule.
+const SYNTHESIS_MD = buildMarkdownComponents({
+  onNavigatePage: () => undefined, // no wiki-page links in a search synthesis
+  enableMermaid: false,
+})
+
+/** Render the synthesis tldr as markdown, with an optional streaming cursor. */
+function SynthesisMarkdown({ source, cursor }: { source: string; cursor?: boolean }) {
+  return (
+    <div className="max-w-[64ch] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight, rehypeSlug]}
+        components={SYNTHESIS_MD}
+      >
+        {source}
+      </ReactMarkdown>
+      {cursor && (
+        <span className="inline-block animate-pulse text-[hsl(var(--primary))]">▌</span>
+      )}
+    </div>
+  )
+}
 
 /** Render the answer as Markdown for the clipboard (tldr + bullet list). */
 function answerToMarkdown(answer: RunAnswer): string {
@@ -47,12 +83,12 @@ export function AnswerCard({
   return (
     <section
       className={cn(
-        "relative rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-[var(--elev-2)]",
+        "relative rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-[var(--elev-2)]",
         "before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-r before:bg-[hsl(var(--primary))]",
         !ready && !done && "before:animate-pulse"
       )}
     >
-      <header className="flex items-start gap-3 mb-3">
+      <header className="flex items-start gap-3 mb-2.5">
         <div className="flex items-center gap-2 flex-1">
           <span className="inline-flex items-center justify-center h-6 w-6 rounded-md bg-[hsl(var(--primary)/0.15)] text-[hsl(var(--primary))]">
             <Sparkles className="h-3.5 w-3.5" />
@@ -75,9 +111,7 @@ export function AnswerCard({
 
       {partial && answer.tldr.length > 0 ? (
         // Terminal-without-final-answer: the partial tldr, frozen.
-        <p className="text-[15px] leading-relaxed max-w-[64ch] text-[hsl(var(--foreground))] [text-wrap:pretty]">
-          {answer.tldr}
-        </p>
+        <SynthesisMarkdown source={answer.tldr} />
       ) : !ready && !streaming ? (
         <div className="space-y-2">
           <SkeletonLine width="90%" />
@@ -86,16 +120,11 @@ export function AnswerCard({
         </div>
       ) : !ready && streaming ? (
         // Typewriter: tldr tokens arriving via `answer_delta`, bullets pending.
-        <p className="text-[15px] leading-relaxed max-w-[64ch] text-[hsl(var(--foreground))] [text-wrap:pretty]">
-          {answer.tldr}
-          <span className="ml-1 inline-block animate-pulse text-[hsl(var(--primary))]">▌</span>
-        </p>
+        <SynthesisMarkdown source={answer.tldr} cursor />
       ) : (
         <>
-          <p className="text-[15px] leading-relaxed max-w-[64ch] text-[hsl(var(--foreground))] [text-wrap:pretty]">
-            {answer.tldr}
-          </p>
-          <ul className="mt-4 space-y-2.5">
+          <SynthesisMarkdown source={answer.tldr} />
+          <ul className="mt-3 space-y-2">
             {answer.bullets.slice(0, visibleBullets).map((b, i) => (
               <li key={i} className="flex items-start gap-2 text-[14px] [text-wrap:pretty]">
                 <span className="mt-2 inline-block h-1 w-1 rounded-full bg-[hsl(var(--muted-foreground))] flex-none" />
@@ -125,8 +154,11 @@ export function AnswerCard({
           </ul>
 
           {visibleBullets >= answer.bullets.length && (
-            <footer className="flex items-center gap-3 mt-5 pt-3 border-t border-[hsl(var(--border))]">
-              <ConfidenceBar confidence={answer.confidence} />
+            <footer className="flex items-center gap-3 mt-4 pt-2.5 border-t border-[hsl(var(--border))]">
+              {/* Confidence is a settle-derived heuristic (data-bearing probes /
+                  probes run). 0 means "no probe ran" → unknown, NOT zero faith;
+                  suppress the chip rather than render an unearned 0%. */}
+              {answer.confidence > 0 && <ConfidenceBar confidence={answer.confidence} />}
               <button
                 type="button"
                 onClick={onAsk}
@@ -153,30 +185,33 @@ function SkeletonLine({ width }: { width: string }) {
   )
 }
 
-// Map a confidence value to a semantic CSS token.
-// We don't have a --warning token; --primary is the brand clay (orange-amber)
-// which fits the "medium" tier, and --agent-3 is yellow which fits "low".
-function confidenceColor(pct: number): string {
-  if (pct >= 80) return "hsl(var(--success))"
-  if (pct >= 60) return "hsl(var(--primary))"
-  if (pct >= 40) return "hsl(var(--agent-3))"
-  return "hsl(var(--destructive))"
+// Map a confidence value to a semantic tier + token. We don't have a --warning
+// token; --primary is the brand clay (orange-amber) which fits "medium", and
+// --agent-3 is yellow which fits "low".
+function confidenceTier(pct: number): { color: string; label: string } {
+  if (pct >= 80) return { color: "hsl(var(--success))", label: "High confidence" }
+  if (pct >= 60) return { color: "hsl(var(--primary))", label: "Medium confidence" }
+  if (pct >= 40) return { color: "hsl(var(--agent-3))", label: "Low confidence" }
+  return { color: "hsl(var(--destructive))", label: "Low confidence" }
 }
 
+// A calm labelled pill — not a debug-looking colored progress bar. A small
+// tinted dot + a worded tier (not a bare "100%" green readout) reads as a
+// provenance signal, not telemetry.
 function ConfidenceBar({ confidence }: { confidence: number }) {
   const pct = Math.round(confidence * 100)
-  const color = confidenceColor(pct)
+  const { color, label } = confidenceTier(pct)
   return (
-    <div className="flex items-center gap-2 flex-1 text-xs">
-      <span className="relative inline-block h-1 w-24 rounded-full bg-[hsl(var(--muted))] overflow-hidden">
-        <span
-          className="absolute inset-y-0 left-0 transition-[width,background-color] duration-150 ease-out"
-          style={{ width: `${pct}%`, background: color }}
-        />
-      </span>
-      <span className="font-mono" style={{ color }}>
-        {pct}% confidence
-      </span>
-    </div>
+    <span
+      className="inline-flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))] flex-1"
+      aria-label={`${label} (${pct}%)`}
+    >
+      <span
+        className="inline-block h-2 w-2 rounded-full flex-none"
+        style={{ background: color }}
+      />
+      <span>{label}</span>
+      <span className="font-mono tabular-nums text-[11px] opacity-70">{pct}%</span>
+    </span>
   )
 }

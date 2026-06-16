@@ -18,6 +18,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 from mewbo_core.agent_context import AgentContext, AgentDepthExceeded
 from mewbo_core.classes import ActionStep
 from mewbo_core.common import MockSpeaker, get_logger
@@ -30,6 +32,12 @@ from mewbo_core.tool_registry import ToolRegistry, ToolSpec, filter_specs
 from mewbo_core.types import Event
 
 logging = get_logger(name="core.spawn_agent")
+
+# Cap the compressed child result echoed onto the ``stop`` lifecycle event so a
+# verbose sub-agent answer can't bloat the parent transcript / run event log.
+# Mirrors the ``AgentResult.summary`` cap (here a touch larger so a probe's
+# whole evidence block survives for the trace's response panel).
+_SUB_AGENT_SUMMARY_CAP = 1500
 
 
 @dataclass
@@ -50,6 +58,156 @@ class AgentError:
             parts.append(f"at tool '{self.last_tool}'")
         parts.append(f": {self.error}")
         return " ".join(parts)
+
+
+class SpawnAgentTask(BaseModel):
+    """One entry in a ``spawn_agents`` batch (Gitea #117).
+
+    Carries the SAME per-task fields as the single ``spawn_agent`` schema, but
+    validated at definition: ``extra="forbid"`` rejects stray keys so a
+    malformed fan-out fails fast instead of silently dropping a field, and a
+    blank ``task`` is refused (an empty delegation is never intentional).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    task: str = Field(min_length=1)
+    model: str | None = None
+    allowed_tools: list[str] | None = None
+    denied_tools: list[str] | None = None
+    # Deprecated — retained for schema/prompt compatibility, never enforced.
+    max_steps: int | None = None
+    acceptance_criteria: str | None = None
+    agent_type: str | None = None
+    # Opt-in bounded auto-retry (#118), parsed downstream by ``RetryPolicy``.
+    # A batch entry can carry it just like a single spawn — one transient
+    # failure in a wide fan-out then re-delegates instead of dropping a lane.
+    retry: dict[str, Any] | None = None
+
+    def to_args(self) -> dict[str, Any]:
+        """Project to the ``args`` dict the single-spawn path consumes.
+
+        Unset (``None``) fields are dropped so the downstream ``args.get(...)``
+        defaults apply exactly as they do for an ad-hoc ``spawn_agent`` call —
+        keeping the batch a thin reuse of ``_spawn_one`` rather than a fork.
+        """
+        return {k: v for k, v in self.model_dump().items() if v is not None}
+
+
+@dataclass
+class _SpawnOutcome:
+    """Internal result of one admission+spawn attempt.
+
+    Shared by the single (``run_async``) and batch (``run_batch_async``) entry
+    points so both flow through the identical ``_spawn_one`` path. ``content``
+    is the verbatim ``MockSpeaker`` payload the single tool returns (kept
+    byte-stable); ``agent_id`` is the spawned child's id (``None`` when no slot
+    was admitted); ``status`` is the lifecycle/admission state
+    (``submitted``/``completed``/``failed``/``cancelled``/``cannot_solve``/``rejected``).
+    """
+
+    content: str
+    agent_id: str | None
+    status: str
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Bounded auto-retry / re-delegation policy for a spawned sub-agent (#118).
+
+    Opt-in via the ``retry`` spawn-schema field; **DEFAULT OFF** (``max == 0``)
+    so an unset/absent ``retry`` is byte-identical in behaviour to the historical
+    single-attempt path. On a *retryable* terminal failure the spawn bridge
+    re-delegates the **same task on the same handle** (retaining the one already
+    held semaphore slot for the whole sequence) up to ``max`` extra attempts,
+    sleeping :meth:`backoff_for` with exponential growth between them.
+
+    Model-level causes are deliberately NOT re-escalated here: every child
+    ``ToolUseLoop`` run already drives the #54 fallback ladder internally, so a
+    fresh attempt gets a fresh ladder — this layer only re-runs a whole child
+    whose loop died. ``rejected`` (declined at admission, before the loop) and
+    ``cancelled`` (parent-cancelled → ``CancelledError``, re-raised, never
+    retried) are structurally unreachable by the retry loop.
+    """
+
+    max: int = 0
+    on: tuple[str, ...] = ("timeout", "failed")
+    backoff: float = 1.0
+
+    # The coarse retry-cause vocabulary. ``failed`` is the catch-all transient
+    # terminal failure; ``timeout`` is the timeout-flavoured subset (mapped via
+    # the #54 classifier so this layer never re-derives provider semantics).
+    _CAUSES: frozenset[str] = frozenset({"timeout", "failed"})
+
+    @classmethod
+    def from_value(cls, value: object) -> RetryPolicy:
+        """Parse + validate the schema ``retry`` object. Unset/invalid → OFF.
+
+        Validation is total (never raises): a malformed field degrades to the
+        safe default rather than failing a spawn, since ``retry`` is an optional
+        resilience hint, not a correctness contract.
+        """
+        if not isinstance(value, Mapping):
+            return cls()
+        raw_max: Any = value.get("max", 0)
+        try:
+            max_retries = max(0, int(raw_max))
+        except (TypeError, ValueError):
+            max_retries = 0
+        on_val = value.get("on")
+        if isinstance(on_val, (list, tuple)):
+            on = tuple(str(x) for x in on_val if str(x) in cls._CAUSES)
+        else:
+            on = ("timeout", "failed")
+        if not on:  # an explicit-but-empty/invalid list falls back to both
+            on = ("timeout", "failed")
+        raw_backoff: Any = value.get("backoff", 1.0)
+        try:
+            backoff = max(0.0, float(raw_backoff))
+        except (TypeError, ValueError):
+            backoff = 1.0
+        return cls(max=max_retries, on=on, backoff=backoff)
+
+    @property
+    def enabled(self) -> bool:
+        """True when at least one retry is permitted."""
+        return self.max > 0
+
+    def should_retry(self, cause: str, attempt: int) -> bool:
+        """True when another attempt is allowed for this failure ``cause``.
+
+        ``attempt`` is the number of attempts made so far (the one that just
+        failed). Total attempts are bounded at ``max + 1``.
+        """
+        return attempt <= self.max and cause in self.on
+
+    def backoff_for(self, attempt: int) -> float:
+        """Exponential backoff (seconds) before the next attempt.
+
+        ``attempt`` is the failed attempt's index (1-based), so the first retry
+        waits ``backoff``, the second ``2 * backoff``, etc.
+        """
+        return self.backoff * (2 ** (max(1, attempt) - 1))
+
+    @staticmethod
+    def classify_cause(exc: BaseException) -> str:
+        """Map a child-loop exception to a coarse retry cause.
+
+        Reuses the #54 ``RetryStrategy`` classifier's reason taxonomy (DRY — the
+        delegation layer never re-derives provider/timeout semantics): a
+        timeout/deadline-flavoured failure is ``"timeout"``; everything else
+        (transient or otherwise) collapses to the generic ``"failed"``.
+        """
+        from mewbo_core.llm_resilience import LlmResilienceExhausted, RetryStrategy
+
+        reason = ""
+        inner: BaseException = exc
+        if isinstance(exc, LlmResilienceExhausted):
+            reason = exc.reason or ""
+            inner = exc.last_error or exc
+        if reason not in ("timeout", "deadline"):
+            reason = RetryStrategy.classify(inner).reason
+        return "timeout" if reason in ("timeout", "deadline") else "failed"
 
 
 def _coerce_list(value: object) -> list[str]:
@@ -173,8 +331,72 @@ SPAWN_AGENT_SCHEMA: dict[str, object] = {
                         "from the agent registry."
                     ),
                 },
+                "retry": {
+                    "type": "object",
+                    "description": (
+                        "Optional bounded auto-retry for THIS sub-agent. Default "
+                        "off. On a transient terminal failure the SAME task is "
+                        "re-delegated up to 'max' times with exponential backoff "
+                        "— use for a wide fan-out so one transient failure does "
+                        "not silently drop a workstream. Model-level failures "
+                        "already reuse the built-in fallback ladder within each "
+                        "attempt; cancelled/rejected agents are never retried."
+                    ),
+                    "properties": {
+                        "max": {
+                            "type": "integer",
+                            "description": "Max extra retry attempts (0 = off, default).",
+                        },
+                        "on": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["timeout", "failed"]},
+                            "description": "Failure causes to retry. Default: both.",
+                        },
+                        "backoff": {
+                            "type": "number",
+                            "description": "Base backoff seconds between attempts. Default 1.0.",
+                        },
+                    },
+                },
             },
             "required": ["task"],
+        },
+    },
+}
+
+
+# Batch fan-out (Gitea #117). The array's ``items`` schema IS the single
+# ``spawn_agent`` parameters object (DRY — one source of truth for the per-task
+# fields), so every entry takes the same fields and a new spawn field is picked
+# up by both tools automatically.
+SPAWN_AGENTS_SCHEMA: dict[str, object] = {
+    "type": "function",
+    "function": {
+        "name": "spawn_agents",
+        "description": (
+            "Fan out MULTIPLE independent sub-agents in ONE call — the preferred "
+            "path when you have N genuinely independent subtasks. Every entry is "
+            "admitted together (reliable parallel admission even if you can't emit "
+            "N parallel tool-calls), returning an ORDERED list of agent_ids you "
+            "monitor with check_agents. Each entry takes the SAME fields as "
+            "spawn_agent. Entries that can't get a concurrency slot come back "
+            "'rejected' in their slot without affecting their siblings. Do NOT "
+            "use for sequential work — use your tools directly."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": SPAWN_AGENT_SCHEMA["function"]["parameters"],  # type: ignore[index]
+                    "description": (
+                        "Independent sub-tasks to spawn concurrently. Order is "
+                        "preserved in the returned agent_ids."
+                    ),
+                },
+            },
+            "required": ["tasks"],
         },
     },
 }
@@ -271,6 +493,7 @@ class SpawnAgentTool:
         agent_registry: Any = None,
         session_tool_registry: SessionToolRegistry | None = None,
         session_capabilities: tuple[str, ...] = (),
+        enable_skills: bool = True,
     ) -> None:
         """Initialize with parent context and shared registries."""
         self._agent_context = agent_context
@@ -283,6 +506,11 @@ class SpawnAgentTool:
         self._agent_registry = agent_registry
         self._session_tool_registry = session_tool_registry
         self._session_capabilities = session_capabilities
+        # Children inherit the parent drive's skill policy: a headless search
+        # run disables auto-skill injection for the ROOT *and* every probe it
+        # spawns (the audit found every server-side agent burning step 1 on
+        # ``activate_skill``).
+        self._enable_skills = enable_skills
         # Plan-mode context — set by ToolUseLoop.run() so children
         # inherit the session's plan path and mode.
         self.session_id: str | None = None
@@ -291,18 +519,100 @@ class SpawnAgentTool:
         self._lifecycle_tasks: list[asyncio.Task[None]] = []
 
     async def run_async(self, action_step: ActionStep) -> MockSpeaker:
-        """Execute a sub-agent asynchronously. Returns result as MockSpeaker."""
+        """Execute a single sub-agent. Returns the result as a MockSpeaker.
+
+        Thin wrapper over :meth:`_spawn_one` (blocking admission) — the batch
+        path (:meth:`run_batch_async`) shares the same core.
+        """
         args = (
             action_step.tool_input
             if isinstance(action_step.tool_input, dict)
             else {"task": str(action_step.tool_input)}
         )
+        outcome = await self._spawn_one(args, blocking_admit=True)
+        return MockSpeaker(content=outcome.content)
+
+    async def run_batch_async(self, action_step: ActionStep) -> MockSpeaker:
+        """Fan out a batch of independent sub-agents from ONE tool call (#117).
+
+        Pure composition over :meth:`_spawn_one` — every entry is admitted
+        through the SAME hypervisor semaphore (non-blocking, so an
+        over-subscribed batch marks the surplus ``rejected`` instead of
+        stalling) and root children run on the existing non-blocking lifecycle
+        path. Returns the ordered ``agent_id``s; the model collects results via
+        the existing ``check_agents``. The orchestration loop is untouched.
+        """
+        raw = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
+        raw_tasks = raw.get("tasks")
+        if not isinstance(raw_tasks, list) or not raw_tasks:
+            return MockSpeaker(
+                content="ERROR: spawn_agents requires a non-empty 'tasks' array."
+            )
+        try:
+            tasks = [SpawnAgentTask.model_validate(entry) for entry in raw_tasks]
+        except ValidationError as exc:
+            return MockSpeaker(content=f"ERROR: invalid spawn_agents task: {exc}")
+
+        agents: list[dict[str, Any]] = []
+        agent_ids: list[str | None] = []
+        spawned = 0
+        rejected = 0
+        for idx, task in enumerate(tasks):
+            # blocking_admit=False → siblings never stall behind one full slot.
+            outcome = await self._spawn_one(task.to_args(), blocking_admit=False)
+            agent_ids.append(outcome.agent_id)
+            if outcome.agent_id is not None:
+                spawned += 1
+            else:
+                rejected += 1
+            agents.append(
+                {
+                    "index": idx,
+                    "agent_id": outcome.agent_id,
+                    "status": outcome.status,
+                    "task": task.task[:200],
+                }
+            )
+
+        summary = f"Spawned {spawned}/{len(tasks)} agent(s)"
+        if rejected:
+            summary += f"; {rejected} rejected (no free concurrency slot)"
+        summary += ". Use check_agents to monitor progress and collect results."
+        return MockSpeaker(
+            content=json.dumps(
+                {
+                    "kind": "agent_batch",
+                    "text": summary,
+                    "agents": agents,
+                    "agent_ids": agent_ids,
+                    "spawned": spawned,
+                    "rejected": rejected,
+                }
+            )
+        )
+
+    async def _spawn_one(
+        self, args: dict[str, Any], *, blocking_admit: bool
+    ) -> _SpawnOutcome:
+        """Admit and launch ONE sub-agent — shared core of single + batch spawn.
+
+        ``blocking_admit`` selects the admission mode: ``True`` (single spawn)
+        waits up to the hypervisor timeout for a slot; ``False`` (batch fan-out)
+        tries non-blocking so an over-subscribed batch rejects the surplus entry
+        in place. Returns a :class:`_SpawnOutcome` carrying the verbatim
+        single-tool ``content`` plus the structured ``agent_id``/``status``.
+        """
+        from mewbo_core.prompt_registry import get_prompt_registry
+
+        registry_prompts = get_prompt_registry()
         task_desc = str(args.get("task", ""))
         acceptance_criteria = str(args.get("acceptance_criteria", "") or "")
         if acceptance_criteria:
             # Ref: [DeepMind-Delegation §4.1] Contract-first decomposition —
             # delegation is contingent upon the outcome having precise verification.
-            task_desc += f"\n\nAcceptance criteria: {acceptance_criteria}"
+            task_desc += registry_prompts.render(
+                "spawn.acceptance_criteria", acceptance_criteria=acceptance_criteria
+            )
         model_override = args.get("model")
 
         # agent_type: look up registered agent definition and apply its config.
@@ -312,7 +622,11 @@ class SpawnAgentTool:
                 agent_type, self._session_capabilities
             )
             if agent_def is None:
-                return MockSpeaker(content=f"ERROR: Unknown agent type '{agent_type}'")
+                return _SpawnOutcome(
+                    content=f"ERROR: Unknown agent type '{agent_type}'",
+                    agent_id=None,
+                    status="rejected",
+                )
             # Prepend agent system prompt to task, running the plugin-generic
             # body substitution first so ``${SESSION_ID}``,
             # ``${CLAUDE_PLUGIN_ROOT}``, and bash-style ``${VAR:-default}``
@@ -322,7 +636,9 @@ class SpawnAgentTool:
                 "CLAUDE_PLUGIN_ROOT": agent_def.plugin_root,
             }
             rendered_body = substitute_agent_body(agent_def.body, body_subs)
-            task_desc = f"{rendered_body}\n\n---\n\nTask: {task_desc}"
+            task_desc = registry_prompts.render(
+                "spawn.task_body", body=rendered_body, task=task_desc
+            )
             # Apply agent's tool scope if specified and not overridden by caller
             if agent_def.allowed_tools and "allowed_tools" not in args:
                 args["allowed_tools"] = agent_def.allowed_tools
@@ -340,15 +656,25 @@ class SpawnAgentTool:
         # 1. Resolve and validate model.
         resolved_model = self._resolve_model(model_override)
         if resolved_model.startswith("ERROR:"):
-            return MockSpeaker(content=resolved_model)
+            return _SpawnOutcome(content=resolved_model, agent_id=None, status="rejected")
 
-        # 2. Admission control.
-        if not await registry.admit():
-            return MockSpeaker(content="ERROR: Max concurrent agents reached. Try again later.")
+        # 2. Admission control. Blocking single-spawn waits for a slot; the
+        # batch path admits non-blocking so the surplus is rejected, not stalled.
+        admitted = await registry.admit() if blocking_admit else await registry.try_admit()
+        if not admitted:
+            return _SpawnOutcome(
+                content="ERROR: Max concurrent agents reached. Try again later.",
+                agent_id=None,
+                status="rejected",
+            )
 
         child_ctx: AgentContext | None = None
         handle: AgentHandle | None = None
         tq = None  # Initialized early so error handlers can read partial results
+        # Set once the non-blocking root path hands slot ownership to the
+        # background lifecycle manager — the finally must then NOT release (the
+        # lifecycle manager releases exactly once when the child settles).
+        slot_transferred = False
         try:
             # 3. Create child context.
             child_ctx = self._agent_context.child(model_name=resolved_model)
@@ -361,6 +687,11 @@ class SpawnAgentTool:
                 depth=child_ctx.depth,
                 model_name=child_ctx.model_name,
                 task_description=task_desc[:200],
+                # The AgentDef name this child was spawned as (``None`` for an
+                # ad-hoc spawn) — carried on the handle so every lifecycle event
+                # (incl. the background ``stop`` in ``_run_child_lifecycle``,
+                # which only holds the handle) can stamp the lane identity.
+                agent_type=agent_type if isinstance(agent_type, str) else None,
                 status="submitted",
                 message_queue=child_ctx.message_queue,
             )
@@ -371,60 +702,38 @@ class SpawnAgentTool:
             # 5. Filter tool specs (Claude Code "filter before binding" pattern).
             child_specs = self._filter_tool_specs(args)
 
-            # 6. Create and run child loop.
-            # Import here to avoid circular import at module level.
-            from mewbo_core.tool_use_loop import ToolUseLoop
-
+            # 6. Resolve child tool scope + opt-in bounded-retry policy (#118).
             # Ref: [DeepMind-Delegation §4.7] Privilege attenuation — sub-agents
             # inherit parent's approval policy (not None, which blocks all writes).
             child_allowed_tools = _coerce_list(args.get("allowed_tools") or []) or None
-            child_loop = ToolUseLoop(
-                agent_context=child_ctx,
-                tool_registry=self._tool_registry,
-                permission_policy=self._permission_policy,
-                approval_callback=self._approval_callback,
-                hook_manager=self._hook_manager,
-                project_instructions=self._project_instructions,
-                session_tool_registry=self._session_tool_registry,
-                allowed_tools=child_allowed_tools,
-                cwd=self._cwd,
-                session_id=self.session_id,
-                session_capabilities=self._session_capabilities,
-            )
-            # Ref: [A2A v1.0] Transition to "running" when execution begins
+            retry = RetryPolicy.from_value(args.get("retry"))
+            # Ref: [A2A v1.0] Transition to "running" when execution begins.
             handle.status = "running"
-            # Populate asyncio_task so cancel_agent() and 3-phase cleanup work.
-            # No step limit — the child runs until natural completion
-            # (text response without tool calls), cancellation, or error.
-            # Safety: session budget, stall detection, LLM timeouts.
-            child_task = asyncio.create_task(
-                child_loop.run(
-                    task_desc,
-                    tool_specs=child_specs,
-                    mode=self.parent_mode,
-                )
-            )
-            handle.asyncio_task = child_task
 
             # Ref: [DeepMind-Delegation §4.4] Root agent delegates non-blockingly
             # to maintain continuous monitoring capability (epoll model).
             if self._agent_context.depth == 0:
-                # Non-blocking: lifecycle manager handles completion in background
+                # Non-blocking: the lifecycle manager drives the child (with
+                # bounded retry) and stores the result in the background.
                 lm_task = asyncio.create_task(
                     self._run_child_lifecycle(
-                        child_task,
                         child_ctx,
                         handle,
+                        child_specs,
+                        child_allowed_tools,
                         task_desc,
+                        retry,
                     )
                 )
                 self._lifecycle_tasks.append(lm_task)
                 # Store child_id before clearing refs (finally guard)
                 child_id = child_ctx.agent_id
-                # Prevent finally block from cleaning up — lifecycle manager owns it
+                # Prevent finally block from cleaning up — lifecycle manager owns
+                # both the handle AND the semaphore slot (released once on settle).
                 child_ctx = None
                 handle = None
-                return MockSpeaker(
+                slot_transferred = True
+                return _SpawnOutcome(
                     content=json.dumps(
                         {
                             "agent_id": child_id,
@@ -435,16 +744,34 @@ class SpawnAgentTool:
                                 "progress and collect results."
                             ),
                         }
-                    )
+                    ),
+                    agent_id=child_id,
+                    status="submitted",
                 )
 
-            # Blocking: current behavior for non-root agents.
-            tq, state = await child_task
+            # Blocking: current behavior for non-root agents. The retry driver
+            # re-delegates the SAME task on a retryable terminal failure (a
+            # single attempt when retry is off), raising the last error once the
+            # attempt budget is spent.
+            tq, state = await self._drive_with_retry(
+                child_ctx=child_ctx,
+                handle=handle,
+                child_specs=child_specs,
+                child_allowed_tools=child_allowed_tools,
+                task_desc=task_desc,
+                retry=retry,
+            )
 
             # 7. Mark done.
             await registry.mark_done(child_ctx.agent_id, "completed")
             self._hook_manager.run_on_agent_stop(handle)
-            self._emit_event(child_ctx, "stop", state.done_reason or "completed", handle=handle)
+            self._emit_event(
+                child_ctx,
+                "stop",
+                state.done_reason or "completed",
+                handle=handle,
+                summary=(tq.task_result or "")[:_SUB_AGENT_SUMMARY_CAP],
+            )
 
             # Ref: [CoA §3.1] Build Communication Unit — compressed context for parent
             from mewbo_core.hypervisor import AgentResult
@@ -454,8 +781,13 @@ class SpawnAgentTool:
                 status="completed" if state.done else "failed",
                 steps_used=handle.steps_completed,
                 summary=(tq.task_result or "")[:500],
+                attempts=handle.attempts,
             )
-            return MockSpeaker(content=json.dumps(asdict(result)))
+            return _SpawnOutcome(
+                content=json.dumps(asdict(result)),
+                agent_id=child_ctx.agent_id,
+                status=result.status,
+            )
 
         except AgentDepthExceeded as exc:
             # child() raises this before `handle` is built or registered, so
@@ -468,7 +800,11 @@ class SpawnAgentTool:
                 steps_used=0,
                 warnings=[str(exc)],
             )
-            return MockSpeaker(content=json.dumps(asdict(result)))
+            return _SpawnOutcome(
+                content=json.dumps(asdict(result)),
+                agent_id=None,
+                status="cannot_solve",
+            )
 
         except asyncio.CancelledError:
             if child_ctx:
@@ -506,8 +842,15 @@ class SpawnAgentTool:
                 warnings=[str(exc)],
                 # Ref: [DeepMind-Delegation §6.1] Checkpoint — partial work survives failure
                 summary=partial_result,
+                # #118 — the last error after a spent retry budget; attempts shows
+                # how many re-delegations were tried before giving up.
+                attempts=handle.attempts if handle else 1,
             )
-            return MockSpeaker(content=json.dumps(asdict(result)))
+            return _SpawnOutcome(
+                content=json.dumps(asdict(result)),
+                agent_id=child_ctx.agent_id if child_ctx else None,
+                status="failed",
+            )
 
         finally:
             if child_ctx:
@@ -518,7 +861,11 @@ class SpawnAgentTool:
                         await registry.cancel_agent(child.agent_id)
 
                 await registry.unregister(child_ctx.agent_id)
-            registry.release()
+            # Skip the release when ownership transferred to the background
+            # lifecycle manager (root non-blocking path) — releasing here too
+            # would double-release the slot and inflate the semaphore (#117).
+            if not slot_transferred:
+                registry.release()
 
     # ------------------------------------------------------------------
     # Model resolution
@@ -629,6 +976,7 @@ class SpawnAgentTool:
                 "last_tool_id": h.last_tool_id,
                 "progress_note": h.progress_note,
                 "compaction_count": h.compaction_count,
+                "attempts": h.attempts,  # #118 — retry provenance for the console
                 "result": (
                     {
                         "status": h.result.status,
@@ -714,25 +1062,142 @@ class SpawnAgentTool:
         action: str,
         detail: str,
         handle: AgentHandle | None = None,
+        summary: str | None = None,
     ) -> None:
-        """Emit a sub_agent lifecycle event."""
+        """Emit a sub_agent lifecycle event.
+
+        ``summary`` (additive, set only on the terminal ``stop``) carries the
+        child's compressed result — the Communication Unit a downstream consumer
+        can project as the sub-agent's actual response (e.g. the agentic-search
+        trace's per-lane evidence block, where the lifecycle ``detail`` is just
+        the ``done_reason``). Omitted on every other phase, so existing consumers
+        that read only the legacy keys are unaffected.
+        """
         if ctx.event_logger is not None:
-            event: Event = {
-                "type": "sub_agent",
-                "payload": {
-                    "action": action,
-                    "agent_id": ctx.agent_id,
-                    "parent_id": ctx.parent_id,
-                    "depth": ctx.depth,
-                    "model": ctx.model_name,
-                    "detail": detail,
-                    "status": handle.status if handle else action,
-                    "steps_completed": handle.steps_completed if handle else 0,
-                    "input_tokens": handle.input_tokens if handle else 0,
-                    "output_tokens": handle.output_tokens if handle else 0,
-                },
+            payload: dict[str, Any] = {
+                "action": action,
+                "agent_id": ctx.agent_id,
+                "parent_id": ctx.parent_id,
+                "depth": ctx.depth,
+                "model": ctx.model_name,
+                "detail": detail,
+                "status": handle.status if handle else action,
+                "steps_completed": handle.steps_completed if handle else 0,
+                "input_tokens": handle.input_tokens if handle else 0,
+                "output_tokens": handle.output_tokens if handle else 0,
             }
+            # ``agent_type`` (additive) carries the spawned AgentDef name so a
+            # consumer can label the lane by its DEFINITION (e.g.
+            # ``scg-path-probe``) instead of falling back to the model name —
+            # the agentic-search trace projection's lane identity. Read off the
+            # handle so the terminal ``stop`` (emitted from the background
+            # lifecycle manager, which holds only the handle) carries it too.
+            # Omitted for an ad-hoc spawn (no ``agent_type``) so legacy consumers
+            # reading only the existing keys are untouched.
+            if handle is not None and handle.agent_type:
+                payload["agent_type"] = handle.agent_type
+            if summary:
+                payload["summary"] = summary
+            event: Event = {"type": "sub_agent", "payload": payload}
             ctx.event_logger(event)
+
+    # ------------------------------------------------------------------
+    # Bounded retry driver  (Ref: Gitea #118)
+    # ------------------------------------------------------------------
+
+    def _build_child_loop(
+        self,
+        child_ctx: AgentContext,
+        child_allowed_tools: list[str] | None,
+    ) -> Any:
+        """Construct a fresh child ``ToolUseLoop`` for one attempt.
+
+        A fresh loop per attempt means each retry gets its own #54
+        ``RetryStrategy`` (the model-fallback ladder) — so model-level recovery
+        is reused, never reinvented at this layer.
+        """
+        # Import here to avoid a circular import at module load time.
+        from mewbo_core.tool_use_loop import ToolUseLoop
+
+        return ToolUseLoop(
+            agent_context=child_ctx,
+            tool_registry=self._tool_registry,
+            permission_policy=self._permission_policy,
+            approval_callback=self._approval_callback,
+            hook_manager=self._hook_manager,
+            project_instructions=self._project_instructions,
+            session_tool_registry=self._session_tool_registry,
+            allowed_tools=child_allowed_tools,
+            cwd=self._cwd,
+            session_id=self.session_id,
+            session_capabilities=self._session_capabilities,
+            enable_skills=self._enable_skills,
+        )
+
+    async def _drive_with_retry(
+        self,
+        *,
+        child_ctx: AgentContext,
+        handle: AgentHandle,
+        child_specs: list[ToolSpec],
+        child_allowed_tools: list[str] | None,
+        task_desc: str,
+        retry: RetryPolicy,
+    ) -> tuple[Any, Any]:
+        """Run the child loop, re-delegating the SAME task on a retryable failure.
+
+        Returns ``(tq, state)`` from the first successful attempt. Re-raises the
+        LAST exception once the attempt budget is spent or the failure cause is
+        not in ``retry.on`` (default off ⇒ exactly one attempt, identical to the
+        historical path). ``CancelledError`` is never retried — parent
+        cancellation is terminal and bubbles straight up.
+
+        Slot discipline (#118): the one semaphore slot already acquired in
+        ``run_async`` is *held across all attempts* — re-admission re-uses that
+        slot rather than releasing and racing for a new one, so concurrency stays
+        bounded exactly as on the no-retry path. ``handle.attempts`` is bumped per
+        attempt so the agent tree / ``check_agents`` surface the re-delegation.
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            handle.attempts = attempt
+            # Each attempt is a fresh run on the SAME handle/agent_id: reset the
+            # transient running state (the prior attempt's loop marked it failed
+            # in its own finally) so the tree reflects the live attempt.
+            handle.status = "running"
+            handle.error = None
+            child_loop = self._build_child_loop(child_ctx, child_allowed_tools)
+            child_task = asyncio.create_task(
+                child_loop.run(task_desc, tool_specs=child_specs, mode=self.parent_mode)
+            )
+            # Populate asyncio_task so cancel_agent() and 3-phase cleanup target
+            # the live attempt.
+            handle.asyncio_task = child_task
+            try:
+                return await child_task
+            except asyncio.CancelledError:
+                raise  # parent cancellation is terminal — never retried
+            except Exception as exc:  # noqa: BLE001 — child-loop failure is opaque
+                cause = RetryPolicy.classify_cause(exc)
+                if not retry.should_retry(cause, attempt):
+                    raise
+                delay = retry.backoff_for(attempt)
+                self._emit_event(
+                    child_ctx,
+                    "retry",
+                    f"attempt {attempt} {cause}; re-delegating (max {retry.max})",
+                    handle=handle,
+                )
+                logging.warning(
+                    "Sub-agent {} attempt {} failed ({}); retrying in {:.1f}s",
+                    child_ctx.agent_id[:8],
+                    attempt,
+                    cause,
+                    delay,
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
 
     # ------------------------------------------------------------------
     # Non-blocking lifecycle manager  (Ref: [DeepMind-Delegation §4.4])
@@ -740,15 +1205,17 @@ class SpawnAgentTool:
 
     async def _run_child_lifecycle(
         self,
-        child_task: asyncio.Task[Any],
         child_ctx: AgentContext,
         handle: AgentHandle,
+        child_specs: list[ToolSpec],
+        child_allowed_tools: list[str] | None,
         task_desc: str,
+        retry: RetryPolicy,
     ) -> None:
         """Background lifecycle manager for non-blocking child execution.
 
-        Wraps child execution, stores the ``AgentResult`` on the handle,
-        and notifies the parent via ``send_to_parent``.
+        Drives the child (with bounded retry), stores the ``AgentResult`` on the
+        handle, and notifies the parent via ``send_to_parent``.
 
         Ref: [DeepMind-Delegation §4.5] Lifecycle events at phase transitions.
         Ref: [CoA §3.1] CU stored on handle for async retrieval.
@@ -756,7 +1223,14 @@ class SpawnAgentTool:
         registry = self._agent_context.registry
         tq = None
         try:
-            tq, state = await child_task
+            tq, state = await self._drive_with_retry(
+                child_ctx=child_ctx,
+                handle=handle,
+                child_specs=child_specs,
+                child_allowed_tools=child_allowed_tools,
+                task_desc=task_desc,
+                retry=retry,
+            )
 
             await registry.mark_done(child_ctx.agent_id, "completed")
             self._hook_manager.run_on_agent_stop(handle)
@@ -765,6 +1239,7 @@ class SpawnAgentTool:
                 "stop",
                 state.done_reason or "completed",
                 handle=handle,
+                summary=(tq.task_result or "")[:_SUB_AGENT_SUMMARY_CAP],
             )
 
             from mewbo_core.hypervisor import AgentResult
@@ -774,6 +1249,7 @@ class SpawnAgentTool:
                 status="completed" if state.done else "failed",
                 steps_used=handle.steps_completed,
                 summary=(tq.task_result or "")[:500],
+                attempts=handle.attempts,
             )
 
         except asyncio.CancelledError:
@@ -786,6 +1262,7 @@ class SpawnAgentTool:
                 content="Cancelled",
                 status="cancelled",
                 steps_used=handle.steps_completed,
+                attempts=handle.attempts,
             )
 
         except Exception as exc:
@@ -814,6 +1291,7 @@ class SpawnAgentTool:
                 steps_used=handle.steps_completed,
                 warnings=[str(exc)],
                 summary=partial,
+                attempts=handle.attempts,
             )
 
         finally:
@@ -862,8 +1340,11 @@ class SpawnAgentTool:
 __all__ = [
     "AgentError",
     "CHECK_AGENTS_SCHEMA",
+    "RetryPolicy",
     "SPAWN_AGENT_SCHEMA",
+    "SPAWN_AGENTS_SCHEMA",
     "STEER_AGENT_SCHEMA",
+    "SpawnAgentTask",
     "SpawnAgentTool",
     "substitute_agent_body",
 ]

@@ -187,9 +187,9 @@ class TraceProvenance:
                 return {"product": "search", "session_type": "scg_map", "search_id": parts[2]}
             if head == "structured" and len(parts) >= 2:
                 # ``structured:run`` (agentic /v1/structured) and ``structured:fast``
-                # (sessionless /v1/structured/fast, now session-backed) share the
+                # (its no-loop ``mode:"synthesis"`` lane, #85) share the
                 # ``structured`` product; the second segment is the session_type so
-                # the two realtime variants stay distinguishable in a trace filter.
+                # the two execution strategies stay distinguishable in a trace filter.
                 return {"product": "structured", "session_type": f"structured_{parts[1]}"}
             if head == "draft" and len(parts) >= 2:
                 # ``draft:stream`` — token-streaming /v1/draft/stream.

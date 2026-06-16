@@ -86,7 +86,7 @@ Inside a running session, `/fork [tag]` creates a new session branching from the
 
 ### Forking from a message
 
-In the console, every message has a "Fork from here" option that creates a new session with history up to that point. In the CLI, use `/fork` to branch from the current session state. The API equivalent is `POST /api/sessions` with `fork_from` and `fork_at_ts`.
+In the console, every message has a "Fork from here" option that creates a new session with history up to that point. In the CLI, use `/fork` to branch from the current session state. The API equivalent is [`POST /api/sessions`](endpoint:POST /api/sessions) with `fork_from` and `fork_at_ts`.
 
 ## Token usage
 

@@ -4,7 +4,10 @@
 
 import { API_BASE, API_KEY } from "./client"
 import { sseStream } from "./sse"
-import type { WorkspaceGraph } from "../components/agentic_search/graph/types"
+import type {
+  WorkspaceGraph,
+  WorkspaceGraphSummary,
+} from "../components/agentic_search/graph/types"
 import type {
   MapJobEvent,
   MapJobRecord,
@@ -14,6 +17,7 @@ import type {
   ScgStatus,
   SearchEvent,
   SearchTier,
+  SearchTiersInfo,
   SourceCatalogEntry,
   Workspace,
   WorkspaceInput,
@@ -54,6 +58,15 @@ export async function listSources(): Promise<SourceCatalogEntry[]> {
   })
   const payload = await readJson<{ sources: SourceCatalogEntry[] }>(res)
   return payload.sources
+}
+
+/** `GET /tiers` — the search-budget tiers + the model preset each runs on
+ *  (resolved server-side exactly like the drive: tier map → llm default). */
+export async function fetchTiers(): Promise<SearchTiersInfo> {
+  const res = await fetch(withBase("/api/agentic_search/tiers"), {
+    headers: jsonHeaders(),
+  })
+  return readJson<SearchTiersInfo>(res)
 }
 
 export async function listWorkspaces(): Promise<Workspace[]> {
@@ -101,6 +114,9 @@ export interface RunInput {
   project?: string
   /** Search budget tier; the server defaults to `scg.default_tier` (auto). */
   tier?: SearchTier
+  /** Explicit model override (LiteLLM name) — wins over the tier's configured
+   *  model for this run only. Omit to let the tier pick. */
+  model?: string
 }
 
 /** Result of starting a run — the synchronous `POST /runs` envelope. */
@@ -140,6 +156,23 @@ export async function getWorkspaceGraph(workspaceId: string): Promise<WorkspaceG
   return readJson<WorkspaceGraph>(res)
 }
 
+/**
+ * Fetch only the workspace graph's `scope` + `stats` (#139) — the cheap landing
+ * health-band read that skips the full node/edge payload. Same graceful
+ * degradation as `getWorkspaceGraph`; only an unknown workspace 404s.
+ */
+export async function getWorkspaceGraphSummary(
+  workspaceId: string
+): Promise<WorkspaceGraphSummary> {
+  const res = await fetch(
+    withBase(
+      `/api/agentic_search/workspaces/${encodeURIComponent(workspaceId)}/graph/summary`
+    ),
+    { headers: jsonHeaders() }
+  )
+  return readJson<WorkspaceGraphSummary>(res)
+}
+
 /** List a workspace's persisted run history (most recent first). */
 export async function listWorkspaceRuns(workspaceId: string): Promise<RunRecord[]> {
   const res = await fetch(
@@ -158,6 +191,20 @@ export async function getRun(runId: string): Promise<RunRecord> {
   )
   const payload = await readJson<{ run: RunRecord }>(res)
   return payload.run
+}
+
+/**
+ * Request cancellation of an in-flight run (`POST /runs/<id>/cancel`). The
+ * server flips the run to `cancelled` and the live SSE stream emits a
+ * `cancelled` terminal frame, so the view transitions off the streaming state
+ * via the stream — this is fire-and-forget steering, not a state source.
+ */
+export async function cancelRun(runId: string): Promise<void> {
+  const res = await fetch(
+    withBase(`/api/agentic_search/runs/${encodeURIComponent(runId)}/cancel`),
+    { method: "POST", headers: jsonHeaders() }
+  )
+  await readJson<unknown>(res)
 }
 
 /**

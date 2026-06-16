@@ -145,6 +145,46 @@ class QaFinalizer:
                 out.append(it)
         return out
 
+    # ── page-citation tagging (the seam every citation crosses) ─────────────
+
+    @staticmethod
+    def tag_page_citations(
+        block: dict[str, Any], store: WikiStoreBase, slug: str
+    ) -> dict[str, Any]:
+        """Re-scheme any bare-path ``sources`` item that is actually a wiki page.
+
+        The QA agent is asked to cite pages as ``wiki:<page-id>`` but sometimes
+        emits a bare page path; the console's ``fileCitations`` then treats it as
+        a source FILE and the ``SourceCard`` 404s against ``/source`` (pages live
+        in the page store, not the indexing clone). Tagging the ref
+        ``wiki:<page-id>`` HERE — at the one seam every citation crosses, before it
+        lands on the event log — fixes it for BOTH the live SSE stream and the
+        reloaded snapshot at once (the FE already drops ``wiki:`` from the file
+        cards). File refs (``path`` / ``path#L…``) and already-schemed refs
+        (``graph:`` / ``wiki:``) pass through untouched. Deterministic: membership
+        in the project's real page-id set is the authority, never a guess.
+        """
+        items = block.get("items")
+        if not isinstance(items, list):
+            return block
+        page_ids = {p.id for p in store.list_pages(slug)}
+        if not page_ids:
+            return block
+        block = dict(block)
+        block["items"] = [QaFinalizer._tag_page_ref(str(it), page_ids) for it in items]
+        return block
+
+    @staticmethod
+    def _tag_page_ref(ref: str, page_ids: set[str]) -> str:
+        """``<bare-page-id>`` / ``pages/<id>`` → ``wiki:<id>`` when it IS a page."""
+        ref = ref.strip()
+        # A ``#`` ⇒ a file line-range ref; a ``:`` ⇒ already schemed (graph:/wiki:)
+        # or a ``path:line`` colon form — leave every one of those alone.
+        if not ref or "#" in ref or ":" in ref:
+            return ref
+        candidate = ref[len("pages/"):] if ref.startswith("pages/") else ref
+        return f"wiki:{candidate}" if candidate in page_ids else ref
+
 
 class QaMemoryDepositor:
     """Distill a finalized Q&A answer into memory note(s) and graft them onto the multiplex.
@@ -331,4 +371,54 @@ class QaMemoryDepositor:
         return ref
 
 
-__all__ = ["QaFinalizer", "QaMemoryDepositor"]
+class AccessedSourceResolver:
+    """Resolve a QA answer's provenance refs to human labels for the console.
+
+    The probe trail records graph nodes as ``graph:<node_id>`` — a content-
+    addressed sha1 id (an AST symbol's node id OR an abstract-entity id). Surfaced
+    raw, those read as opaque hashes in the console's retrieval-details panel.
+    This maps each id back to a readable label NON-DESTRUCTIVELY at READ time —
+    the stored snapshot keeps the raw ids (``QaMemoryDepositor`` anchors off them,
+    and a re-index can change the graph, so resolving at read stays current):
+
+    * an AST node → its ``file#Symbol`` ``entity_key``;
+    * an abstract entity → ``name (type)``;
+    * an unresolved id (stale graph) → ``unknown (<hash[:8]>)``.
+
+    File / page / colon-schemed refs pass through untouched. ONE graph pass
+    resolves every ``graph:`` ref (entity misses fall back to a by-id lookup), so
+    a snapshot read costs at most a single ``query_graph`` scan.
+    """
+
+    @classmethod
+    def resolve_refs(cls, store: WikiStoreBase, slug: str, refs: list[str]) -> list[str]:
+        """Map each provenance ref to its display label (order-preserving)."""
+        out = [str(r) for r in refs]
+        if not any(r.startswith("graph:") for r in out):
+            return out
+        from mewbo_graph.wiki.structure_provider import (  # noqa: PLC0415
+            entity_key_for_node,
+        )
+
+        key_by_node = {n.node_id: entity_key_for_node(n) for n in store.query_graph(slug)}
+        return [cls._resolve_one(store, slug, r, key_by_node) for r in out]
+
+    @staticmethod
+    def _resolve_one(
+        store: WikiStoreBase, slug: str, ref: str, key_by_node: dict[str, str]
+    ) -> str:
+        """Resolve one ``graph:<node_id>`` ref; non-graph refs pass through."""
+        if not ref.startswith("graph:"):
+            return ref
+        node_id = ref[len("graph:"):]
+        key = key_by_node.get(node_id)
+        if key:
+            return f"graph:{key}"
+        entity = store.get_entity(slug, node_id)
+        if entity is not None:
+            label = f"{entity.name} ({entity.type})" if entity.type else entity.name
+            return f"graph:{label}"
+        return f"graph:unknown ({node_id[:8]})"
+
+
+__all__ = ["AccessedSourceResolver", "QaFinalizer", "QaMemoryDepositor"]

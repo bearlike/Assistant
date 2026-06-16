@@ -1,0 +1,77 @@
+# Externalized prompt files — template_file pointers into mewbo_core/prompts/.
+#
+# These are the standalone, system.txt-sized prompts that stay their own files
+# (the registry indirects to them rather than inlining). Consumed by the
+# get_system_prompt() / render_jinja_prompt() shims and referenced by id from
+# the loop (e.g. file.plan_hypervisor). template_file is resolved relative to
+# mewbo_core/prompts/. A static entry (no `variables`) is returned VERBATIM.
+
+file.system:
+  purpose: Root agent base system prompt.
+  template_file: system.txt
+
+file.action-planner:
+  purpose: Planning base prompt (default of get_system_prompt()).
+  template_file: action-planner.txt
+
+file.plan_hypervisor:
+  purpose: Plan-mode root hypervisor automata prompt.
+  template_file: plan_hypervisor.txt
+
+file.homeassistant-get-state:
+  purpose: Home Assistant get-state conversation prompt.
+  template_file: homeassistant-get-state.txt
+
+file.homeassistant-set-state:
+  purpose: Home Assistant set-state conversation prompt; lists known entities.
+  template_file: homeassistant-set-state.txt
+  variables: [ALL_ENTITIES]
+
+# Per-tool guidance injected via ToolSpec.prompt_path. Static; inventoried here
+# so every engine prompt has one schema'd home.
+file.tools.aider-edit-blocks:
+  purpose: Tool guidance — Aider search/replace edit blocks.
+  template_file: tools/aider-edit-blocks.txt
+
+file.tools.aider-list-dir:
+  purpose: Tool guidance — Aider list-dir.
+  template_file: tools/aider-list-dir.txt
+
+file.tools.aider-shell:
+  purpose: Tool guidance — Aider shell.
+  template_file: tools/aider-shell.txt
+
+file.tools.file-edit:
+  purpose: Tool guidance — file edit.
+  template_file: tools/file-edit.txt
+  # Tool-variant-paired prompt (Gitea #113, Phase A — item 4). This guidance is
+  # for the `structured_patch` exact-string edit tool, which the model→tool-
+  # variant map (`model_variants.yaml`) hands to the structured-patch-preferring
+  # family (gpt-4/gpt-5/o3/o4/codex). This override PAIRS with that map by the
+  # shared model-prefix key: `match: "gpt-"` is the same prefix semantics, so a
+  # model given the structured_patch variant also gets its matching prompt nudge,
+  # no code change. BEHAVIOURAL discipline only — exact-string editing hygiene,
+  # NOT a tool-call serialization instruction (that stays a normalization concern
+  # at the LiteLLM/adapter seam). `file.tools.file-edit` is a static template_file
+  # entry, so this append text is static too (no Jinja vars).
+  overrides:
+    - kind: model
+      match: "gpt-"
+      mode: append
+      template: |-
+
+        Structured-patch discipline (your edit tool replaces an exact string):
+        - Match the existing text byte-for-byte, including whitespace and indentation.
+        - Include enough surrounding context in old_string to make the match unique.
+
+file.tools.home-assistant:
+  purpose: Tool guidance — Home Assistant.
+  template_file: tools/home-assistant.txt
+
+file.tools.lsp:
+  purpose: Tool guidance — LSP.
+  template_file: tools/lsp.txt
+
+file.tools.read-file:
+  purpose: Tool guidance — read file.
+  template_file: tools/read-file.txt

@@ -27,6 +27,7 @@ from mewbo_core.tool_registry import (
     ToolRegistry,
     ToolSpec,
     _default_registry,
+    filter_specs,
     is_always_load,
     is_deferred,
 )
@@ -564,3 +565,241 @@ class TestEndToEndRebind:
         assert "mcp_linear_get_issue" in names
         assert "read_file" in names
         assert TOOL_SEARCH_TOOL_ID in names
+
+    def test_scoped_sub_agent_keeps_tool_search(self):
+        """A scoped run (non-empty ``allowed_tools`` that omits tool_search)
+        must STILL get tool_search bound and reach its deferred MCP tool.
+
+        This is the #131 Phase 0 correctness property: ``filter_specs``
+        exempts ``always_load`` specs from the allowlist gate. Without the
+        exemption a strict sub-agent gets its MCP tools deferred (stripped)
+        AND loses the only means to fetch them — zero MCP tools reachable.
+        """
+        reg = self._registry_with_real_tool_search()
+        # The caller scopes to the MCP tool only — note tool_search is NOT
+        # listed, exactly as a sub-agent allowlist would omit a built-in.
+        scoped = filter_specs(reg.list_specs(), allowed=["mcp_linear_get_issue"])
+
+        responses = [
+            _aimsg(tool_call=(TOOL_SEARCH_TOOL_ID, {"query": "select:mcp_linear_get_issue"}, "c1")),
+            _aimsg(tool_call=("mcp_linear_get_issue", {"id": "ABC"}, "c2")),
+            _aimsg(text="Done — issue ABC fetched."),
+        ]
+
+        def _config_lookup(*keys, default=None):
+            if keys == ("agent", "tool_search", "mode"):
+                return "on"
+            if keys == ("agent", "default_denied_tools"):
+                return []
+            if keys == ("agent", "llm_call_timeout"):
+                return 60.0
+            if keys == ("agent", "llm_call_retries"):
+                return 1
+            return default
+
+        with (
+            patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("mewbo_core.tool_use_loop.get_config_value", side_effect=_config_lookup),
+            patch("mewbo_core.tool_registry.get_config_value", side_effect=_config_lookup),
+        ):
+            bound_models: list[MagicMock] = []
+
+            def _bind_tools(schemas):
+                m = MagicMock()
+                m._bound_schemas = schemas
+                m.ainvoke = AsyncMock(side_effect=responses)
+                bound_models.append(m)
+                return m
+
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.side_effect = _bind_tools
+
+            loop = ToolUseLoop(
+                agent_context=_agent_context(),
+                tool_registry=reg,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_hook_manager(),
+            )
+            asyncio.run(loop.run("fetch issue ABC", tool_specs=scoped))
+
+        assert len(bound_models) >= 2
+        # tool_search survived the allowlist that omitted it; the deferred MCP
+        # tool is stripped from the initial bind (awaiting discovery).
+        initial_names = {s["function"]["name"] for s in bound_models[0]._bound_schemas}
+        assert TOOL_SEARCH_TOOL_ID in initial_names
+        assert "mcp_linear_get_issue" not in initial_names
+        # ``read_file`` was scoped out by the allowlist (not always_load).
+        assert "read_file" not in initial_names
+        # After tool_search, the deferred MCP tool becomes bindable.
+        post_names = {s["function"]["name"] for s in bound_models[1]._bound_schemas}
+        assert "mcp_linear_get_issue" in post_names
+
+
+class TestPlanModeDeferral:
+    """Plan-mode semantics (#131 Phase 2).
+
+    Decision: deferral is ORTHOGONAL to the plan-mode tool filter. The
+    deferred ``tool_search`` tool is read-only, so it is always bindable in
+    plan mode; the model fetches an MCP schema on demand and the per-turn
+    re-bind hands it to the EXISTING plan-mode filter — which stays the sole
+    authority on MCP visibility via ``agent.plan_mode_allow_mcp``. Net: "MCP
+    visible after the first tool_search in plan mode" when MCP is permitted,
+    and a graceful no-op (the tool never binds) when it is not.
+    """
+
+    def _run(self, *, allow_mcp: bool):
+        reg = TestEndToEndRebind()._registry_with_real_tool_search()
+        responses = [
+            _aimsg(tool_call=(TOOL_SEARCH_TOOL_ID, {"query": "select:mcp_linear_get_issue"}, "c1")),
+            _aimsg(tool_call=("mcp_linear_get_issue", {"id": "ABC"}, "c2")),
+            _aimsg(text="Investigated issue ABC."),
+        ]
+
+        def _config_lookup(*keys, default=None):
+            if keys == ("agent", "tool_search", "mode"):
+                return "on"
+            if keys == ("agent", "plan_mode_allow_mcp"):
+                return allow_mcp
+            if keys == ("agent", "default_denied_tools"):
+                return []
+            if keys == ("agent", "llm_call_timeout"):
+                return 60.0
+            if keys == ("agent", "llm_call_retries"):
+                return 1
+            return default
+
+        bound_models: list[MagicMock] = []
+        with (
+            patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+            patch("mewbo_core.tool_use_loop.get_config_value", side_effect=_config_lookup),
+            patch("mewbo_core.tool_registry.get_config_value", side_effect=_config_lookup),
+        ):
+
+            def _bind_tools(schemas):
+                m = MagicMock()
+                m._bound_schemas = schemas
+                m.ainvoke = AsyncMock(side_effect=responses)
+                bound_models.append(m)
+                return m
+
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.side_effect = _bind_tools
+
+            loop = ToolUseLoop(
+                agent_context=_agent_context(),
+                tool_registry=reg,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_hook_manager(),
+            )
+            asyncio.run(loop.run("investigate ABC", tool_specs=reg.list_specs(), mode="plan"))
+        return bound_models
+
+    def test_tool_search_bindable_in_plan_mode_and_mcp_visible_after_search(self):
+        bound = self._run(allow_mcp=True)
+        assert len(bound) >= 2
+        initial = {s["function"]["name"] for s in bound[0]._bound_schemas}
+        # tool_search is read-only → bindable in plan mode; MCP deferred away.
+        assert TOOL_SEARCH_TOOL_ID in initial
+        assert "mcp_linear_get_issue" not in initial
+        assert "read_file" in initial
+        # After the search, the plan filter (allow_mcp=True) admits the MCP tool.
+        post = {s["function"]["name"] for s in bound[1]._bound_schemas}
+        assert "mcp_linear_get_issue" in post
+
+    def test_mcp_stays_filtered_in_plan_mode_when_disallowed(self):
+        bound = self._run(allow_mcp=False)
+        # tool_search remains available so the model can still discover, but
+        # the plan filter never binds the MCP tool — graceful, plan gate wins.
+        bound_names = [{s["function"]["name"] for s in m._bound_schemas} for m in bound]
+        for names in bound_names:
+            assert "mcp_linear_get_issue" not in names
+        assert any(TOOL_SEARCH_TOOL_ID in names for names in bound_names)
+
+
+class TestAutoMode:
+    """``_is_tool_search_enabled`` is the single read-point for the feature.
+
+    ``off`` never defers, ``on`` always defers, ``auto`` defers only when
+    the deferred-tool count exceeds ``agent.tool_search.auto_threshold`` —
+    so lean / zero-MCP sessions keep verbatim binding and pay nothing while
+    a many-MCP session is fixed (#131 Phase 1).
+    """
+
+    def _mcp_specs(self, n: int) -> list[ToolSpec]:
+        return [_spec(f"mcp_{i}", kind="mcp") for i in range(n)]
+
+    def _enabled(
+        self,
+        mode: str,
+        specs: list[ToolSpec] | None,
+        *,
+        threshold: int | None = None,
+    ) -> bool:
+        def _cfg(*keys, default=None):
+            if keys == ("agent", "tool_search", "mode"):
+                return mode
+            if keys == ("agent", "tool_search", "auto_threshold"):
+                return threshold if threshold is not None else default
+            return default
+
+        loop = _build_loop(_registry())
+        with patch("mewbo_core.tool_use_loop.get_config_value", side_effect=_cfg):
+            return loop._is_tool_search_enabled(specs)
+
+    def test_off_disabled_regardless_of_count(self):
+        assert self._enabled("off", self._mcp_specs(100)) is False
+
+    def test_on_enabled_regardless_of_count(self):
+        assert self._enabled("on", []) is True
+
+    def test_auto_enabled_above_threshold(self):
+        assert self._enabled("auto", self._mcp_specs(30), threshold=25) is True
+
+    def test_auto_disabled_at_or_below_threshold(self):
+        assert self._enabled("auto", self._mcp_specs(25), threshold=25) is False
+        assert self._enabled("auto", self._mcp_specs(10), threshold=25) is False
+
+    def test_auto_uses_default_threshold(self):
+        # Default threshold is 25 → 26 deferred tools trips it, 20 does not.
+        assert self._enabled("auto", self._mcp_specs(26)) is True
+        assert self._enabled("auto", self._mcp_specs(20)) is False
+
+    def test_auto_counts_only_deferred_specs(self):
+        # 30 local (non-deferred) tools must NOT trip auto deferral.
+        local = [_spec(f"local_{i}") for i in range(30)]
+        assert self._enabled("auto", local, threshold=25) is False
+
+    def test_auto_without_specs_is_conservative(self):
+        # No spec set to measure (legacy/no-arg call) → stay verbatim.
+        assert self._enabled("auto", None) is False
+
+
+class TestFilterSpecsAlwaysLoad:
+    """``filter_specs`` exempts ``always_load`` specs from the allowlist gate.
+
+    The allowlist scopes the *ordinary* tool surface; it must never strip a
+    tool the model needs to make progress (``tool_search``). An explicit
+    denylist is still authoritative — deny beats always_load (#131 Phase 0).
+    """
+
+    def test_always_load_survives_non_empty_allowlist(self):
+        specs = [
+            _spec("mcp_x", kind="mcp"),
+            _spec("read_file"),
+            _spec(TOOL_SEARCH_TOOL_ID, always_load=True),
+        ]
+        ids = {s.tool_id for s in filter_specs(specs, allowed=["mcp_x"])}
+        assert ids == {"mcp_x", TOOL_SEARCH_TOOL_ID}
+
+    def test_empty_allowlist_unaffected(self):
+        specs = [_spec("read_file"), _spec(TOOL_SEARCH_TOOL_ID, always_load=True)]
+        ids = {s.tool_id for s in filter_specs(specs, allowed=None)}
+        assert ids == {"read_file", TOOL_SEARCH_TOOL_ID}
+
+    def test_explicit_deny_still_beats_always_load(self):
+        specs = [_spec("mcp_x", kind="mcp"), _spec(TOOL_SEARCH_TOOL_ID, always_load=True)]
+        ids = {
+            s.tool_id
+            for s in filter_specs(specs, allowed=["mcp_x"], denied=[TOOL_SEARCH_TOOL_ID])
+        }
+        assert ids == {"mcp_x"}

@@ -17,7 +17,7 @@ Running Mewbo in production means hardening the default Docker Compose setup wit
 
 3. **Use TLS**. Terminate TLS at a reverse proxy such as nginx, Caddy, or Traefik. Never expose the API or console ports directly on a public interface.
 
-4. **Set `GITHUB_TOKEN` in `docker.env`**. If you mount git repositories, the `10-git-setup.sh` init script uses this token to configure `gh CLI` authentication. That lets `git fetch/push/pull` work without prompts.
+4. **Set `GITHUB_TOKEN` in `docker.env`**. If you mount git repositories, the [`10-git-setup.sh`](repo:docker/init.d/10-git-setup.sh) init script uses this token to configure `gh CLI` authentication. That lets `git fetch/push/pull` work without prompts.
 
 5. **Change MongoDB credentials**. Update `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD` in `docker.env` from their defaults. Then update `MEWBO_MONGODB_URI` to match.
 
@@ -33,7 +33,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 Edit the file to set your `server_name`, `ssl_certificate`, and `ssl_certificate_key` before enabling it.
 
-**Full nginx server block (from `docker/nginx-reverse-proxy.conf`):**
+**Full nginx server block (from [`docker/nginx-reverse-proxy.conf`](repo:docker/nginx-reverse-proxy.conf)):**
 
 ```nginx
 server {
@@ -138,7 +138,7 @@ Since both the API (`5125`) and console (`3001`) use host networking, `127.0.0.1
 
 Langfuse provides LLM-level tracing for every session. Each multi-turn session appears as one trace group, making it straightforward to see which tools were called, what the model reasoned, and where errors occurred.
 
-Add Langfuse config to `configs/app.json`:
+Add Langfuse config to [`configs/app.json`](repo:configs/app.json):
 
 ```json
 {
@@ -151,7 +151,7 @@ Add Langfuse config to `configs/app.json`:
 }
 ```
 
-For a self-hosted Langfuse instance, set `host` to your deployment URL. The `configs/app.json` file is mounted read-only into the API container; changes take effect on the next `docker compose up -d` (no rebuild needed).
+For a self-hosted Langfuse instance, set `host` to your deployment URL. The [`configs/app.json`](repo:configs/app.json) file is mounted read-only into the API container; changes take effect on the next `docker compose up -d` (no rebuild needed).
 
 ### Filtering traces by provenance
 
@@ -192,7 +192,7 @@ docker compose logs -f api
 docker compose ps
 ```
 
-For external monitoring (uptime checks, alerting), probe `GET /api/tools` with your API key. It returns a non-empty list when the API is healthy.
+For external monitoring (uptime checks, alerting), probe [`GET /api/tools`](endpoint:GET /api/tools) with your API key. It returns a non-empty list when the API is healthy.
 
 ## API Token Rotation
 
@@ -212,7 +212,7 @@ The console reads `VITE_API_KEY` from the injected `runtime-config.js` at startu
 
 ## Resource Limits
 
-Every service in `docker-compose.yml` ships with memory and CPU limits, so a runaway process cannot take down the host:
+Every service in [`docker-compose.yml`](repo:docker-compose.yml) ships with memory and CPU limits, so a runaway process cannot take down the host:
 
 | Service | Memory limit | CPU limit |
 |---------|-------------|-----------|
@@ -222,7 +222,7 @@ Every service in `docker-compose.yml` ships with memory and CPU limits, so a run
 | `console` | `256M` | `0.5` |
 | `ide-proxy` | `128M` | `0.5` |
 
-The API gets the largest envelope because it does the heavy lifting: LLM orchestration, wiki indexing, sub-agent fan-out, and Web IDE management. Raise its memory limit if you index very large repositories. Adjust any limit in `docker-compose.override.yml`:
+The API gets the largest envelope because it does the heavy lifting: LLM orchestration, wiki indexing, sub-agent fan-out, and Web IDE management. Raise its memory limit if you index very large repositories. Adjust any limit in [`docker-compose.override.yml`](repo:docker-compose.override.yml):
 
 ```yaml
 services:

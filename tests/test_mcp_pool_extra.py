@@ -507,11 +507,15 @@ class TestConnectAllTimeout:
 
         results = asyncio.run(_run())
         assert "slow-srv" in results
-        # The timeout path stores ["ERROR: <exc>"] where exc is asyncio.TimeoutError("")
         assert len(results["slow-srv"]) == 1
         assert results["slow-srv"][0].startswith("ERROR: ")
-        # Server must not be registered in the pool (timeout = failed connect)
-        assert "slow-srv" not in self.pool._servers
+        # Gitea #130: a timed-out connect is now recorded as a backoff placeholder
+        # (transient failure) so it is NOT re-dialed on every refresh — it fast-
+        # fails until the window elapses. The server stays disconnected.
+        state = self.pool._servers["slow-srv"]
+        assert state.connected is False
+        assert state.failure_reason == "timeout"
+        assert state.status == "backoff"
 
     def test_multiple_servers_connect_concurrently(self):
         """Multiple servers connect concurrently (semaphore respected)."""
@@ -533,6 +537,69 @@ class TestConnectAllTimeout:
 
         results = asyncio.run(_run())
         assert set(results.keys()) == {"s1", "s2", "s3"}
+
+
+class _DuckGroup(Exception):
+    """ExceptionGroup-like wrapper (anyio TaskGroup duck-typing)."""
+
+    def __init__(self, message: str, exceptions: list[BaseException]) -> None:
+        super().__init__(message)
+        self.exceptions = tuple(exceptions)
+
+
+class TestConnectFailureNamesRealCause:
+    """The opaque TaskGroup wrapper must never reach the log/ERROR string (#132)."""
+
+    def setup_method(self):
+        reset_mcp_pool()
+        self.pool = MCPConnectionPool()
+
+    def teardown_method(self):
+        reset_mcp_pool()
+
+    def test_connect_all_error_string_unwraps_group(self):
+        """A TaskGroup-wrapped DNS failure surfaces the real cause, not the wrapper."""
+        real = OSError("[Errno -2] failed to resolve host 'postgres'")
+        group = _DuckGroup("unhandled errors in a TaskGroup (1 sub-exception)", [real])
+
+        async def _run():
+            cfg = {"servers": {"sidestage-postgres": {"url": "http://x"}}}
+            with patch.object(self.pool, "_connect_single", side_effect=group):
+                return await self.pool.connect_all(cfg)
+
+        results = asyncio.run(_run())
+        entry = results["sidestage-postgres"][0]
+        # Consolidated onto #130's `_record_failure`: ERROR carries the coarse
+        # reason AND the unwrapped cause — never the opaque TaskGroup wrapper.
+        assert entry == "ERROR: dns: [Errno -2] failed to resolve host 'postgres'"
+        assert "sub-exception" not in entry
+
+    def test_connect_warning_binds_classified_reason(self):
+        """The WARNING names a coarse, actionable reason (dns) inline + as extra."""
+        from loguru import logger as _loguru
+
+        real = OSError("[Errno -2] failed to resolve host 'postgres'")
+        group = _DuckGroup("unhandled errors in a TaskGroup (1 sub-exception)", [real])
+        sink: list[str] = []
+        handler_id = _loguru.add(
+            lambda m: sink.append(m), level="WARNING", format="{message} reason={extra[reason]}"
+        )
+
+        async def _run():
+            cfg = {"servers": {"sidestage-postgres": {"url": "http://x"}}}
+            with patch.object(self.pool, "_connect_single", side_effect=group):
+                await self.pool.connect_all(cfg)
+
+        try:
+            asyncio.run(_run())
+        finally:
+            _loguru.remove(handler_id)
+
+        text = "".join(sink)
+        assert "[dns]" in text  # inline reason in the message
+        assert "reason=dns" in text  # structured extra field for downstream filtering
+        assert "failed to resolve host 'postgres'" in text
+        assert "sub-exception" not in text
 
 
 # ===========================================================================

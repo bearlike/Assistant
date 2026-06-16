@@ -35,6 +35,8 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from mewbo_core.prompt_registry import get_prompt_registry
+
 if TYPE_CHECKING:
     from mewbo_core.spawn_agent import AgentError
 
@@ -72,6 +74,12 @@ class AgentResult:
     artifacts: list[str] = field(default_factory=list)  # Files touched
     warnings: list[str] = field(default_factory=list)  # Non-fatal issues
     summary: str = ""  # Compressed CU for parent context
+    # Ref: Gitea #118 — honest retry provenance. Total times this task was
+    # admitted+run, incl. the first attempt (1 = never retried). Surfaced so the
+    # parent sees a workstream was transparently recovered rather than silently
+    # dropped. Additive (default 1): a no-retry spawn is byte-equivalent in
+    # behaviour to the historical single-attempt path.
+    attempts: int = 1
 
 
 @dataclass(slots=True)
@@ -95,6 +103,11 @@ class AgentHandle:
     depth: int
     model_name: str
     task_description: str
+    # The registered AgentDef name this agent was spawned as (e.g.
+    # ``scg-path-probe``) — ``None`` for an ad-hoc spawn with no ``agent_type``.
+    # Distinct from ``model_name``: the trace projection needs the LANE identity
+    # (the def), which a model name can never carry.
+    agent_type: str | None = None
     status: AgentStatus = "submitted"  # Ref: [A2A v1.0] Start as submitted
     started_at: float = field(default_factory=time.monotonic)
     stopped_at: float | None = None
@@ -119,6 +132,10 @@ class AgentHandle:
     output_tokens: int = 0
     # Signaled when agent reaches a terminal state (completed/failed/cancelled).
     done_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # Ref: Gitea #118 — bumped by the spawn bridge's bounded-retry driver each
+    # time this same task is re-admitted (1 = first/only attempt). Read by the
+    # agent-tree render + check_agents payload so a retried child is visible.
+    attempts: int = 1
 
 
 class AgentHypervisor:
@@ -173,6 +190,22 @@ class AgentHypervisor:
             return True
         except asyncio.TimeoutError:
             return False
+
+    async def try_admit(self) -> bool:
+        """Acquire a concurrency slot without waiting.
+
+        Returns ``False`` immediately when no slot is free, instead of
+        blocking up to the :meth:`admit` timeout. The batch fan-out path
+        (``spawn_agents``) uses this so an over-subscribed call marks the
+        surplus entries ``rejected`` while their siblings proceed — never a
+        per-entry 30s stall. Race-free in the single-threaded event loop: an
+        unlocked semaphore's ``acquire()`` completes synchronously (no await
+        point) between the ``locked()`` check and the acquire.
+        """
+        if self._semaphore.locked():
+            return False
+        await self._semaphore.acquire()
+        return True
 
     def release(self) -> None:
         """Release a concurrency slot after an agent completes."""
@@ -370,20 +403,36 @@ class AgentHypervisor:
             visible = [h for h in self._agents.values() if h.agent_id != exclude_agent_id]
             if not visible:
                 return ""
+            registry = get_prompt_registry()
             counts: dict[str, int] = {}
             for h in visible:
                 counts[h.status] = counts.get(h.status, 0) + 1
             status_parts = [f"{v} {k}" for k, v in sorted(counts.items())]
             budget_str = ""
             if self._session_step_budget > 0:
-                budget_str = f" | Budget: {self._total_steps}/{self._session_step_budget} steps"
-            header = f"Agents: {', '.join(status_parts)}{budget_str}"
+                budget_str = registry.render(
+                    "catalog.agent_tree.budget",
+                    total_steps=self._total_steps,
+                    session_step_budget=self._session_step_budget,
+                )
+            header = registry.render(
+                "catalog.agent_tree.header",
+                status_parts=", ".join(status_parts),
+                budget_str=budget_str,
+            )
             lines = [header]
             for h in sorted(visible, key=lambda x: (x.depth, x.agent_id)):
                 indent = "  " * h.depth
                 step_info = f"{h.steps_completed} steps"
                 if h.last_tool_id:
-                    step_info += f", last: {h.last_tool_id}"
+                    step_info += registry.render(
+                        "catalog.agent_tree.step_info_last", last_tool_id=h.last_tool_id
+                    )
+                # Ref: Gitea #118 — surface bounded-retry provenance inline so the
+                # root sees a child was re-delegated (omitted when never retried,
+                # keeping the historical single-attempt line byte-identical).
+                if h.attempts > 1:
+                    step_info += f", {h.attempts} attempts"
                 status_marker = ""
                 if h.status == "completed":
                     status_marker = " -> success"
@@ -394,14 +443,36 @@ class AgentHypervisor:
                 # Ref: [DeepMind-Delegation §4.5] Progress/result in tree view
                 extra = ""
                 if h.result and h.result.summary:
-                    extra = f" | result({h.result.status}): {h.result.summary[:120]}"
+                    extra = registry.render(
+                        "catalog.agent_tree.result",
+                        status=h.result.status,
+                        summary=h.result.summary[:120],
+                    )
                 elif h.progress_note:
-                    extra = f" | progress: {h.progress_note[:120]}"
-                compact_marker = f" | compacted x{h.compaction_count}" if h.compaction_count else ""
+                    extra = registry.render(
+                        "catalog.agent_tree.progress",
+                        progress_note=h.progress_note[:120],
+                    )
+                compact_marker = (
+                    registry.render(
+                        "catalog.agent_tree.compact", compaction_count=h.compaction_count
+                    )
+                    if h.compaction_count
+                    else ""
+                )
                 task_preview = h.task_description[:80]
                 lines.append(
-                    f"{indent}- [{h.agent_id[:8]}] {h.status}: "
-                    f'"{task_preview}" ({step_info}{status_marker}{compact_marker}{extra})'
+                    registry.render(
+                        "catalog.agent_tree.line",
+                        indent=indent,
+                        agent_id_head=h.agent_id[:8],
+                        status=h.status,
+                        task_preview=task_preview,
+                        step_info=step_info,
+                        status_marker=status_marker,
+                        compact_marker=compact_marker,
+                        extra=extra,
+                    )
                 )
             return "\n".join(lines)
 

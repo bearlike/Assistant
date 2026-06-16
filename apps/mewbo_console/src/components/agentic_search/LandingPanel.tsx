@@ -21,7 +21,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
-import { useWorkspaceGraph, useWorkspaceRuns } from "../../hooks/useAgenticSearch"
+import { useWorkspaceGraphSummary, useWorkspaceRuns } from "../../hooks/useAgenticSearch"
 import { RelativeTime } from "../wiki/relativeTime"
 import type {
   RunStatus,
@@ -31,6 +31,7 @@ import type {
 } from "../../types/agenticSearch"
 import { SearchBar } from "./SearchBar"
 import { SrcAvatar } from "./SrcAvatar"
+import { dedupePastQueries, pastQueryKey } from "./utils"
 
 interface LandingPanelProps {
   workspace: Workspace
@@ -38,6 +39,9 @@ interface LandingPanelProps {
   sources: SourceCatalogEntry[]
   tier: SearchTier
   onTierChange: (tier: SearchTier) => void
+  /** Per-run model override ("" = tier default) — session-instance-only. */
+  model: string
+  onModelChange: (model: string) => void
   /** A run submission is in flight (mutation pending). */
   submitting?: boolean
   onPickWorkspace: (workspace: Workspace) => void
@@ -71,6 +75,8 @@ export function LandingPanel({
   sources,
   tier,
   onTierChange,
+  model,
+  onModelChange,
   submitting = false,
   onPickWorkspace,
   onSubmit,
@@ -92,7 +98,9 @@ export function LandingPanel({
     gridRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
   }, [])
 
-  const examples = (workspace.past_queries ?? []).slice(0, 3)
+  // Dedupe by normalized query text before slicing so a query run 3× shows ONE
+  // chip (not three twins that hover/replay identically); first == most recent.
+  const examples = dedupePastQueries(workspace.past_queries ?? []).slice(0, 3)
 
   // "Recent" surfaces only workspaces with query history, ranked by activity.
   // Backend prepends new past_queries so length is a good recency proxy.
@@ -143,6 +151,8 @@ export function LandingPanel({
           onOpenConfig={onOpenConfig}
           tier={tier}
           onTierChange={onTierChange}
+          model={model}
+          onModelChange={onModelChange}
           submitting={submitting}
           autoFocus
         />
@@ -167,7 +177,7 @@ export function LandingPanel({
 
         {examples.length > 0 && (
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2 max-w-[640px] px-2">
-            {examples.map((e) => {
+            {examples.map((e, i) => {
               // A past-query chip REPLAYS its stored run (GET snapshot) when it
               // carries a run_id — it must NOT fire a fresh POST /runs. Only a
               // legacy entry with no run_id falls back to pre-filling a new run.
@@ -177,7 +187,7 @@ export function LandingPanel({
               const Icon = replay ? History : Search
               return (
                 <button
-                  key={e.q}
+                  key={pastQueryKey(e, i)}
                   type="button"
                   onClick={() => (e.run_id ? onOpenRun(e.run_id) : onSubmit(e.q))}
                   title={replay ? "Replay this search" : "Search this again"}
@@ -294,14 +304,22 @@ export function LandingPanel({
                   : "border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:border-[hsl(var(--primary)/0.4)] hover:bg-[hsl(var(--accent)/0.4)]"
               )}
             >
-              <div className="flex flex-col gap-1 flex-1">
-                <h4 className="text-sm font-semibold leading-tight">{w.name}</h4>
+              {/* Name > description hierarchy; the body claims the slack
+                  (`flex-1`) so the meta/action row pins to the card bottom
+                  (`mt-auto`) regardless of description length — equal-height
+                  grid rows then read as a consistent shelf. */}
+              <div className="flex flex-col gap-1 flex-1 min-w-0">
+                <h4 className="text-sm font-semibold leading-tight truncate">{w.name}</h4>
                 <p className="text-xs text-[hsl(var(--muted-foreground))] [text-wrap:pretty] line-clamp-2">
                   {w.desc}
                 </p>
               </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1 flex-wrap">
+              {/* Meta/action shelf — single line ALWAYS (`flex-nowrap`). The
+                  avatar rail shrinks/clips (`min-w-0 overflow-hidden`), the
+                  action cluster never does (`flex-none`), so the "N past" pill
+                  can't wrap to a second line at narrow grid widths. */}
+              <div className="mt-auto flex items-center justify-between gap-2 flex-nowrap">
+                <div className="flex items-center gap-1 min-w-0 overflow-hidden">
                   {w.sources.slice(0, 5).map((sid) => (
                     <SrcAvatar
                       key={sid}
@@ -310,16 +328,16 @@ export function LandingPanel({
                     />
                   ))}
                   {w.sources.length > 5 && (
-                    <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] ml-1">
+                    <span className="flex-none whitespace-nowrap text-[10px] font-mono text-[hsl(var(--muted-foreground))] ml-1">
                       +{w.sources.length - 5}
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-0.5">
+                <div className="flex items-center gap-0.5 flex-none">
                   {/* Pure actions idle hidden and reveal on hover / focus-within
                       (console hover-reveal pattern) so the resting card stays
-                      calm; the runs chip below is an info badge and stays put.
-                      Each control keeps a ≥24px (h-6 w-6) hit target. */}
+                      calm; the runs chip beside them is an info badge and stays
+                      put. Each control keeps a ≥24px (h-6 w-6) hit target. */}
                   <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100">
                     <button
                       type="button"
@@ -398,13 +416,14 @@ function HealthStat({
 }
 
 /**
- * Active-workspace health band (#82). Composes EXISTING endpoints — the
- * workspace SCG graph (`GET /workspaces/<id>/graph`, lazy via `useWorkspaceGraph`)
- * — into genuinely useful signal: mapped-source coverage, graph size
- * (nodes·edges), and memory-note count. Degrades gracefully: an unmapped /
- * SCG-disabled workspace returns an empty-schema graph (every source in
+ * Active-workspace health band (#82). Reads the workspace SCG graph's stats —
+ * mapped-source coverage, graph size (nodes·edges), and memory-note count —
+ * via the lightweight `GET /workspaces/<id>/graph/summary` projection (#139),
+ * so the landing never downloads the full node/edge graph just to render four
+ * numbers (the full graph stays lazy on the dialog). Degrades gracefully: an
+ * unmapped / SCG-disabled workspace returns empty stats (every source in
  * `stats.unmapped`), so the band reads "0/N mapped" and links to the map flow
- * rather than erroring. No new backend surface.
+ * rather than erroring.
  */
 function WorkspaceHealthBand({
   workspace,
@@ -413,9 +432,9 @@ function WorkspaceHealthBand({
   workspace: Workspace
   onOpenGraph: (workspace: Workspace) => void
 }) {
-  const graphQuery = useWorkspaceGraph(workspace.id)
-  const loading = graphQuery.isPending
-  const stats = graphQuery.data?.stats
+  const summaryQuery = useWorkspaceGraphSummary(workspace.id)
+  const loading = summaryQuery.isPending
+  const stats = summaryQuery.data?.stats
   const total = workspace.sources.length
   // `stats.unmapped` lists workspace sources with no SCG graph yet; mapped =
   // total − unmapped. Before the graph resolves, fall back to total so the
@@ -503,9 +522,12 @@ function WorkspaceRunsChip({
           // Don't let the click bubble to the card (which picks the workspace).
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
-          className="inline-flex items-center gap-1 px-1.5 h-6 rounded text-[11px] font-mono text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] transition-colors"
+          // `flex-none whitespace-nowrap` is the single-line guarantee: the
+          // "N past" pill never wraps to a second line, even at the 240px grid
+          // floor. The History glyph is `flex-none` so only the count is text.
+          className="inline-flex flex-none items-center gap-1 px-1.5 h-6 rounded whitespace-nowrap text-[11px] font-mono text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] transition-colors"
         >
-          <History className="h-3 w-3" />
+          <History className="h-3 w-3 flex-none" />
           {workspace.past_queries?.length ?? 0} past
         </button>
       </PopoverTrigger>

@@ -1,4 +1,4 @@
-import { Layers } from "lucide-react"
+import { ChevronRight, Layers, Workflow } from "lucide-react"
 import {
   Sheet,
   SheetContent,
@@ -9,7 +9,7 @@ import {
 import { cn } from "@/lib/utils"
 
 import type { TraceAgent } from "../../types/agenticSearch"
-import { agentSnapshot, runProgress } from "./utils"
+import { agentSnapshot, compactTokens, humanizeMs, runProgress } from "./utils"
 
 interface TraceDrawerProps {
   open: boolean
@@ -42,7 +42,7 @@ export function TraceDrawer({
             Agent trace
           </SheetTitle>
           <SheetDescription className="font-mono text-xs">
-            {agents.length} sub-agents · budget 8
+            {agents.length} {agents.length === 1 ? "lane" : "lanes"}
           </SheetDescription>
         </SheetHeader>
         <div className="h-0.5 w-full bg-[hsl(var(--muted))] relative">
@@ -57,7 +57,7 @@ export function TraceDrawer({
             <span className="text-[hsl(var(--code-fg))]">plan_search</span>(
             <span className="text-[hsl(var(--hl-string))]">"{query}"</span>)
             <div className="mt-1 text-[11px] text-[hsl(var(--code-fg-subtle))]">
-              spawned {agents.length} sub-agents · budget 8
+              spawned {agents.length} {agents.length === 1 ? "lane" : "lanes"}
             </div>
           </div>
           {agents.map((agent) => (
@@ -76,18 +76,38 @@ export function TraceDrawer({
 function AgentBlock({ agent }: { agent: TraceAgent }) {
   const { visibleLines: visible, done, running } = agentSnapshot(agent)
   const slotColor = `hsl(var(--agent-${agent.slot}))`
+  // A dead-ended lane (the BE's `agent_done.empty`, surfaced on the terminal
+  // line) reads as signal, not failure noise — the NO-DATA verdict is the point.
+  const deadEnd = agent.lines.some((l) => l.empty)
+  // The coordinator lane (root agent's tool activity) has no catalog source —
+  // mark it with a glyph so it reads as "the orchestrator", not a probe.
+  const isCoordinator = agent.source_id === ""
   return (
     <div
       className="border-l-2 pl-3"
       style={{ borderColor: slotColor }}
     >
       <div className="flex items-center gap-2 mb-1">
-        <span
-          className={cn("h-1.5 w-1.5 rounded-full", running && "animate-pulse")}
-          style={{ background: slotColor }}
-        />
-        <span className="font-medium text-[hsl(var(--foreground))]">{agent.name}</span>
-        <span className="text-[11px] text-[hsl(var(--code-fg-muted))]">{agent.agent_id}</span>
+        {isCoordinator ? (
+          <Workflow
+            className={cn(
+              "h-3 w-3 flex-none text-[hsl(var(--code-fg-muted))]",
+              running && "animate-pulse"
+            )}
+          />
+        ) : (
+          <span
+            className={cn("h-1.5 w-1.5 rounded-full", running && "animate-pulse")}
+            style={{ background: slotColor }}
+          />
+        )}
+        {/* The lane's kind (its role) leads; the model is a separate field. */}
+        <span className="font-medium text-[hsl(var(--foreground))]">
+          {agent.kind ?? agent.name}
+        </span>
+        {agent.model && (
+          <span className="text-[11px] text-[hsl(var(--code-fg-muted))]">{agent.model}</span>
+        )}
         <span
           className={cn(
             "ml-auto text-[11px]",
@@ -101,6 +121,30 @@ function AgentBlock({ agent }: { agent: TraceAgent }) {
           {done ? "✓" : running ? `${visible.length}/${agent.lines.length}` : "·"}
         </span>
       </div>
+      {/* Per-lane instrument strip — only the present metrics (honesty rule). */}
+      {(() => {
+        const m: string[] = []
+        if (agent.steps != null) m.push(`${agent.steps} step${agent.steps === 1 ? "" : "s"}`)
+        const dur = humanizeMs(agent.duration_ms)
+        if (dur) m.push(dur)
+        const ti = compactTokens(agent.input_tokens)
+        const to = compactTokens(agent.output_tokens)
+        if (ti || to) m.push(`${ti || "0"}→${to || "0"} tok`)
+        if (agent.results_count != null && !isCoordinator) {
+          m.push(`${agent.results_count} result${agent.results_count === 1 ? "" : "s"}`)
+          // How many this lane emitted that collapsed into another lane's card.
+          const filtered =
+            agent.returned_count != null && agent.returned_count > agent.results_count
+              ? agent.returned_count - agent.results_count
+              : 0
+          if (filtered > 0) m.push(`${filtered} filtered`)
+        }
+        return m.length > 0 ? (
+          <div className="mb-1 text-[11px] text-[hsl(var(--code-fg-subtle))] tabular-nums">
+            {m.join(" · ")}
+          </div>
+        ) : null
+      })()}
       <div className="space-y-0.5">
         {visible.map((l, i) => {
           const isLast = i === visible.length - 1 && !done
@@ -139,6 +183,23 @@ function AgentBlock({ agent }: { agent: TraceAgent }) {
           </div>
         )}
       </div>
+      {agent.result && (
+        // The probe's actual response — its `EVIDENCE (pathway: …)` / `NO DATA`
+        // block. Native `<details>` (KISS — no vendored Collapsible), collapsed
+        // by default so the race view stays scannable. Dead-ends rail in primary.
+        <details className="group/ev mt-1.5">
+          <summary className="flex items-center gap-1 cursor-pointer select-none list-none text-[11px] text-[hsl(var(--code-fg-muted))] hover:text-[hsl(var(--code-fg))]">
+            <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open/ev:rotate-90" />
+            {deadEnd ? "no data — pathway dead-ended" : "evidence returned"}
+          </summary>
+          <pre
+            className="mt-1 whitespace-pre-wrap break-words border-l-2 pl-2.5 py-1 text-[11.5px] leading-[1.5] text-[hsl(var(--code-fg))]"
+            style={{ borderColor: deadEnd ? "hsl(var(--primary))" : slotColor }}
+          >
+            {agent.result}
+          </pre>
+        </details>
+      )}
     </div>
   )
 }

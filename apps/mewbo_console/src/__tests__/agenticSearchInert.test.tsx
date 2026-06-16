@@ -27,6 +27,7 @@ vi.mock("../api/agenticSearch", async (orig) => {
     startRun: vi.fn(),
     getRun: vi.fn(),
     getWorkspaceGraph: vi.fn(),
+    getWorkspaceGraphSummary: vi.fn(),
     // streamRun must yield NOTHING so the SSE reducer stays idle (no fetch).
     streamRun: vi.fn(async function* () {
       /* no events */

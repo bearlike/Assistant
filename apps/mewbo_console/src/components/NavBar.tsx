@@ -20,6 +20,7 @@ import {
   FolderOpen,
   KeyRound,
   ListChecks,
+  PanelLeft,
   PenLine,
   Search } from
 'lucide-react';
@@ -95,6 +96,10 @@ export interface NavBarProps {
   onWikiClick?: () => void;
   langfuseUrl?: string | null;
   sessionTokenTotals?: SessionUsage | null;
+  /** Toggles the persistent task sidebar. Omitted on surfaces without one. */
+  onToggleSidebar?: () => void;
+  /** Current open state of the task sidebar (for the toggle's label). */
+  sidebarOpen?: boolean;
 }
 const GITHUB_URL = 'https://github.com/bearlike/Assistant';
 
@@ -134,7 +139,9 @@ export function NavBar({
   onTasksClick,
   onWikiClick,
   langfuseUrl,
-  sessionTokenTotals
+  sessionTokenTotals,
+  onToggleSidebar,
+  sidebarOpen = false
 }: NavBarProps) {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const isMobile = useIsMobile();
@@ -428,11 +435,28 @@ export function NavBar({
       v{appVersion}
     </span>;
 
+  // Sidebar toggle — only rendered when a sidebar exists on this surface.
+  // Collapses the inline aside on desktop / opens the drawer on mobile.
+  const SidebarToggle = () =>
+    onToggleSidebar ? (
+      <Button
+        variant="ghost"
+        size="sm"
+        iconOnly
+        onClick={onToggleSidebar}
+        aria-label={sidebarOpen ? 'Hide tasks sidebar' : 'Show tasks sidebar'}
+        title="Toggle tasks sidebar"
+        className="shrink-0">
+        <PanelLeft className="w-4 h-4" />
+      </Button>
+    ) : null;
+
   return (
     <header className="sticky top-0 z-50 w-full h-14 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--card))]/95 backdrop-blur flex items-center justify-between px-4">
       {mode === 'home' ?
       <>
           <div className="flex items-center gap-3 md:gap-4 min-w-0">
+            <SidebarToggle />
             <button
               type="button"
               onClick={onBack}
@@ -486,6 +510,7 @@ export function NavBar({
       <>
           {/* Left zone: back + title/subtitle + status. Identity only. */}
           <div className="flex items-center gap-2 md:gap-3 overflow-hidden min-w-0 flex-1">
+            <SidebarToggle />
             <Button
             variant="ghost"
             size="sm"

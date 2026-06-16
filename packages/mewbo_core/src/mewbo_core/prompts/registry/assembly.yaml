@@ -1,0 +1,64 @@
+# System-prompt assembly sections (Gitea #89, phase 1).
+#
+# VERBATIM extraction from planning.py:PromptBuilder.build — the section wrappers
+# that prefix each contextual block before they are joined with "\n\n". The YAML
+# reproduces each original literal byte-for-byte (golden tests in
+# tests/test_prompt_registry_assembly.py enforce this). Each entry is templated:
+# it declares EXACTLY the one variable the original f-string / concat interpolated.
+# render() never strips, so `|-` (no trailing newline) matches the originals,
+# which carry no trailing newline (the "\n\n" join lives at the call site).
+
+planning.section.project_instructions:
+  purpose: >-
+    Wrap the discovered project instructions block in the assembled system prompt.
+  variables: [project_instructions]
+  template: |-
+    Project instructions:
+    {{ project_instructions }}
+
+planning.section.session_summary:
+  purpose: Wrap the session summary block in the assembled system prompt.
+  variables: [summary]
+  template: |-
+    Session summary:
+    {{ summary }}
+
+planning.section.relevant_earlier_context:
+  purpose: >-
+    Wrap the selected (semantically retrieved) earlier-context event lines.
+  variables: [rendered]
+  template: |-
+    Relevant earlier context:
+    {{ rendered }}
+
+planning.section.recent_conversation:
+  purpose: Wrap the recent-conversation event lines in the assembled system prompt.
+  variables: [rendered]
+  template: |-
+    Recent conversation:
+    {{ rendered }}
+
+planning.section.available_tools:
+  purpose: >-
+    Wrap the available-tools listing (one `- tool_id: description` line per tool,
+    joined at the call site).
+  variables: [tool_lines]
+  template: |-
+    Available tools:
+    {{ tool_lines }}
+
+planning.section.tool_guidance:
+  purpose: >-
+    Wrap the per-tool guidance prompts (joined with a blank line at the call site)
+    in the assembled system prompt.
+  variables: [tool_prompts_joined]
+  template: |-
+    Tool guidance:
+    {{ tool_prompts_joined }}
+
+planning.section.component_status:
+  purpose: Wrap the formatted component-status block in the assembled system prompt.
+  variables: [status]
+  template: |-
+    Component status:
+    {{ status }}

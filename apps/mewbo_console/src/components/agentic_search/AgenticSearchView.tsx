@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AlertCircle, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import { useSearchParams } from "wouter"
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 
 import {
   toRunPayload,
+  useCancelRun,
   useCreateWorkspace,
   useRun,
   useRunStream,
@@ -18,12 +19,28 @@ import {
   useWorkspaces,
 } from "../../hooks/useAgenticSearch"
 import { useElapsedMs } from "../../hooks/useElapsed"
-import type { RunPayload, SearchTier, Workspace, WorkspaceInput } from "../../types/agenticSearch"
-import { WorkspaceGraphDialog } from "./graph/WorkspaceGraphDialog"
+import type {
+  RunPayload,
+  RunRecord,
+  SearchTier,
+  Workspace,
+  WorkspaceInput,
+} from "../../types/agenticSearch"
 import { LandingPanel } from "./LandingPanel"
-import { ResultsPanel } from "./ResultsPanel"
 import { SourcesDialog } from "./SourcesDialog"
 import { WorkspaceModal } from "./WorkspaceModal"
+
+// Run + graph surfaces are code-split so the inert landing page (the common
+// first paint) never downloads the heavy chunks they pull in: ResultsPanel →
+// AnswerCard → react-markdown/rehype-highlight, and WorkspaceGraphDialog →
+// KnowledgeGraphRenderer (cytoscape + fcose). They only mount on an active run
+// or when a user opens the graph, so deferring their import is free.
+const ResultsPanel = lazy(() =>
+  import("./ResultsPanel").then((m) => ({ default: m.ResultsPanel }))
+)
+const WorkspaceGraphDialog = lazy(() =>
+  import("./graph/WorkspaceGraphDialog").then((m) => ({ default: m.WorkspaceGraphDialog }))
+)
 
 const STORAGE_WORKSPACE = "agentic-search:workspace-id"
 const STORAGE_TIER = "agentic-search:tier"
@@ -34,6 +51,22 @@ function storedTier(): SearchTier {
   if (typeof window === "undefined") return "auto"
   const raw = window.localStorage.getItem(STORAGE_TIER)
   return TIER_VALUES.includes(raw as SearchTier) ? (raw as SearchTier) : "auto"
+}
+
+/**
+ * Resolve a snapshot-loaded run's elapsed ms. Prefers the BE's stamped
+ * `total_ms`; when that's 0/absent, falls back to the run record's own ISO
+ * timestamps (`created_at` → `completed_at`) — fields the wire already carries.
+ * Returns 0 only when neither is usable, so the status line shows "duration
+ * unknown" (silence) rather than a fabricated zero. Never invents a value.
+ */
+function snapshotDuration(totalMs: number, record: RunRecord | undefined): number {
+  if (totalMs > 0) return totalMs
+  if (!record?.created_at || !record.completed_at) return 0
+  const start = Date.parse(record.created_at)
+  const end = Date.parse(record.completed_at)
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0
+  return Math.max(0, end - start)
 }
 
 type ModalState = null | { mode: "create" } | { mode: "edit"; workspaceId: string }
@@ -48,6 +81,7 @@ export default function AgenticSearchView() {
   const sourcesQuery = useSources()
   const workspacesQuery = useWorkspaces()
   const startRunMutation = useStartRun()
+  const cancelRunMutation = useCancelRun()
   const createWorkspaceMutation = useCreateWorkspace()
   const updateWorkspaceMutation = useUpdateWorkspace()
 
@@ -60,6 +94,19 @@ export default function AgenticSearchView() {
   const [graphWorkspace, setGraphWorkspace] = useState<Workspace | null>(null)
   // Last-used tier persists like the workspace selection does.
   const [tier, setTier] = useState<SearchTier>(storedTier)
+  // Per-run model override ("" = the tier's configured model). DELIBERATELY
+  // session-instance-only — never persisted — so a custom model can be
+  // trialled for one search session without a config edit or server restart;
+  // a reload restores the configured tier→model mapping.
+  const [model, setModel] = useState("")
+  // Picking a tier selects the whole preset — budget AND model — so it CLEARS
+  // any model override; the model pill then names the new tier's preset and
+  // the user deviates from there if they want to. Without the reset, a stale
+  // override from a previous tier would silently win over the fresh pick.
+  const handleTierChange = useCallback((next: SearchTier) => {
+    setTier(next)
+    setModel("")
+  }, [])
 
   // URL IS THE SINGLE SOURCE OF TRUTH for {workspace, active run} (#80).
   // Canonical shape: `/search?ws=<workspace_id>&run=<run_id>`. Both facets are
@@ -180,7 +227,16 @@ export default function AgenticSearchView() {
     snapshotStatus === "cancelled"
   const done = streaming ? stream.done : snapshotTerminal
   const answerReady = streaming ? stream.answerReady : snapshotTerminal
-  const snapshotElapsed = run?.total_ms ?? 0
+  // Snapshot-loaded runs: prefer the BE's real `total_ms`; when it's 0/absent
+  // (older records, or before the BE stamped it) DERIVE the duration from the
+  // run record's own ISO timestamps (`created_at` → `completed_at`), which the
+  // wire already carries on `RunRecord`. No invented values — a run with no
+  // usable timestamps yields 0, which the band renders as "duration unknown"
+  // (silence), never a fabricated "0.0s".
+  const snapshotElapsed = useMemo(
+    () => snapshotDuration(run?.total_ms ?? 0, runQuery.data),
+    [run?.total_ms, runQuery.data]
+  )
   const displayElapsed = streaming ? elapsedMs : snapshotElapsed
 
   // SHARABILITY CORE (#80): a `?run=` URL shared WITHOUT `ws` (or with a
@@ -202,14 +258,22 @@ export default function AgenticSearchView() {
     selectWorkspaceParam(resolvedWorkspaceId)
   }, [runId, resolvedWorkspaceId, wsParam, selectWorkspaceParam])
 
-  const handleSubmit = (query: string) => {
+  // Submit a run at an EXPLICIT tier (the composer's current tier by default).
+  // "Go deeper" passes the next tier up; an explicit tier also overrides any
+  // stale model override so a tier escalation picks the new tier's preset.
+  const submitAtTier = (query: string, runTier: SearchTier, useModel: boolean) => {
     if (!workspace) return
     // Pre-submit guard: a workspace with no sources can't fan out — the
     // panels render the inline warning; never POST a doomed run.
     if (workspace.sources.length === 0) return
     if (startRunMutation.isPending) return
     startRunMutation.mutate(
-      { workspace_id: workspace.id, query, tier },
+      {
+        workspace_id: workspace.id,
+        query,
+        tier: runTier,
+        ...(useModel && model ? { model } : {}),
+      },
       {
         onSuccess: (res) => {
           // The run id arrives async from the POST — PUSH it (with the run's
@@ -220,6 +284,25 @@ export default function AgenticSearchView() {
       }
     )
   }
+
+  const handleSubmit = (query: string) => {
+    submitAtTier(query, tier, true)
+  }
+
+  // "Go deeper": re-run the same query one tier up the ladder. Persist the new
+  // tier (so the composer reflects it + a later plain submit stays at depth) and
+  // clear the model override — escalating picks the new tier's preset.
+  const handleDeeper = (query: string, nextTier: SearchTier) => {
+    handleTierChange(nextTier)
+    submitAtTier(query, nextTier, false)
+  }
+
+  // Cancel the in-flight run. Fire-and-forget — the live SSE stream's
+  // `cancelled` terminal frame flips the view; this just requests it.
+  const handleCancel = useCallback(() => {
+    if (!runId) return
+    cancelRunMutation.mutate(runId)
+  }, [runId, cancelRunMutation])
 
   // Opening a stored run from any surface (replay chip, runs popover,
   // results-rail). Idempotent GET-only rehydration — never a POST (#80).
@@ -336,26 +419,32 @@ export default function AgenticSearchView() {
   return (
     <>
       {run ? (
-        <ResultsPanel
-          workspace={workspace}
-          workspaces={workspaces}
-          sources={sources}
-          query={run.query}
-          run={run}
-          elapsedMs={displayElapsed}
-          done={done}
-          answerReady={answerReady}
-          isLoading={submitting || (Boolean(runId) && runQuery.isLoading && !stream.attached)}
-          submitting={submitting}
-          tier={tier}
-          onTierChange={setTier}
-          onRun={handleSubmit}
-          onOpenRun={handleOpenRun}
-          onOpenGraph={() => setGraphWorkspace(workspace)}
-          onPickWorkspace={handlePickWorkspace}
-          onOpenCreate={() => setModal({ mode: "create" })}
-          onOpenConfig={(w) => setModal({ mode: "edit", workspaceId: w.id })}
-        />
+        <Suspense fallback={<RunChunkFallback />}>
+          <ResultsPanel
+            workspace={workspace}
+            workspaces={workspaces}
+            sources={sources}
+            query={run.query}
+            run={run}
+            elapsedMs={displayElapsed}
+            done={done}
+            answerReady={answerReady}
+            isLoading={submitting || (Boolean(runId) && runQuery.isLoading && !stream.attached)}
+            submitting={submitting}
+            tier={tier}
+            onTierChange={handleTierChange}
+            model={model}
+            onModelChange={setModel}
+            onRun={handleSubmit}
+            onDeeper={handleDeeper}
+            onCancel={handleCancel}
+            onOpenRun={handleOpenRun}
+            onOpenGraph={() => setGraphWorkspace(workspace)}
+            onPickWorkspace={handlePickWorkspace}
+            onOpenCreate={() => setModal({ mode: "create" })}
+            onOpenConfig={(w) => setModal({ mode: "edit", workspaceId: w.id })}
+          />
+        </Suspense>
       ) : awaitingRun && runQuery.isError && !submitting ? (
         // The snapshot fetch failed and no live stream exists — surface it
         // instead of silently falling back to the landing page.
@@ -388,7 +477,9 @@ export default function AgenticSearchView() {
           workspaces={workspaces}
           sources={sources}
           tier={tier}
-          onTierChange={setTier}
+          onTierChange={handleTierChange}
+          model={model}
+          onModelChange={setModel}
           submitting={submitting}
           onPickWorkspace={handlePickWorkspace}
           onSubmit={handleSubmit}
@@ -422,17 +513,31 @@ export default function AgenticSearchView() {
       />
 
       {graphWorkspace && (
-        <WorkspaceGraphDialog
-          open={graphWorkspace !== null}
-          workspace={graphWorkspace}
-          onClose={() => setGraphWorkspace(null)}
-          onMapSource={() => {
-            setGraphWorkspace(null)
-            setSourcesOpen(true)
-          }}
-        />
+        <Suspense fallback={null}>
+          <WorkspaceGraphDialog
+            open={graphWorkspace !== null}
+            workspace={graphWorkspace}
+            onClose={() => setGraphWorkspace(null)}
+            onMapSource={() => {
+              setGraphWorkspace(null)
+              setSourcesOpen(true)
+            }}
+          />
+        </Suspense>
       )}
     </>
+  )
+}
+
+/** Shown only for the brief moment the lazily-imported ResultsPanel chunk is
+ *  in flight (first run of a session). Mirrors the "Starting search…" loader so
+ *  the transition reads as one continuous state, not a flash of new chrome. */
+function RunChunkFallback() {
+  return (
+    <div className="flex-1 flex items-center justify-center text-[hsl(var(--muted-foreground))] text-sm">
+      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+      Loading results…
+    </div>
   )
 }
 

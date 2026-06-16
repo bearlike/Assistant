@@ -247,6 +247,13 @@ class MapSourceJob:
             self.store.update_map_job(
                 self.job_id, status="running", started_at=utc_now_iso()
             )
+            # Skills opt-out on the map drive — the scg-mapper playbook is the
+            # ONLY trusted system-prompt extension, so the generic skill catalog
+            # must not auto-inject. Passed only when the runtime's run_sync
+            # accepts it (the shared introspecting helper in orchestrated_runner
+            # keeps signature-less test fakes working).
+            from .orchestrated_runner import _skills_opt_out  # noqa: PLC0415
+
             task_queue = self.runtime.run_sync(
                 session_id=self.session_id,
                 user_query=self.user_query,
@@ -258,6 +265,7 @@ class MapSourceJob:
                 hook_manager=self.hook_manager,
                 approval_callback=auto_approve,
                 should_cancel=cancel_event.is_set,
+                **_skills_opt_out(self.runtime),
             )
             last_error = getattr(task_queue, "last_error", None)
             if last_error:

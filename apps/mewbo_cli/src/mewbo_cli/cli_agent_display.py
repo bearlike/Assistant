@@ -30,6 +30,12 @@ from rich.text import Text
 # Braille spinner frames — cycles at 4 fps via Live refresh.
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
+# Tail of the streamed response kept in the live preview. The full response is
+# printed in the Response panel after the run; the live region is just a
+# "tokens are flowing" affordance, so a bounded tail keeps the Live renderable
+# compact and flicker-free.
+_STREAM_TAIL_LINES = 6
+
 
 @dataclass
 class AgentDisplayState:
@@ -70,6 +76,7 @@ class AgentDisplayManager:
         self._spinner = itertools.cycle(_SPINNER_FRAMES)
         self._root_tool: str | None = None
         self._root_tool_start: float = 0.0
+        self._stream_text: str = ""  # accumulated root-agent streamed tokens
 
     # ------------------------------------------------------------------
     # Agent lifecycle hooks (on_agent_start / on_agent_stop)
@@ -119,6 +126,22 @@ class AgentDisplayManager:
         return result
 
     # ------------------------------------------------------------------
+    # Streamed token deltas (agent_message_delta — Gitea #137)
+    # ------------------------------------------------------------------
+
+    def on_token_delta(self, text: str) -> None:
+        """Append a streamed root-agent text chunk to the live preview.
+
+        Fed from the session event bus (``agent_message_delta`` events for the
+        root agent) so the user sees assistant text appear as the model
+        produces it — true time-to-first-token. A no-op for empty chunks.
+        """
+        if not text:
+            return
+        with self._lock:
+            self._stream_text += text
+
+    # ------------------------------------------------------------------
     # Controls
     # ------------------------------------------------------------------
 
@@ -139,9 +162,9 @@ class AgentDisplayManager:
 
     @property
     def has_activity(self) -> bool:
-        """True if there is anything to render (agents or active tool)."""
+        """True if there is anything to render (agents, active tool, or tokens)."""
         with self._lock:
-            return bool(self._agents) or self._root_tool is not None
+            return bool(self._agents) or self._root_tool is not None or bool(self._stream_text)
 
     @property
     def agent_count(self) -> int:
@@ -162,8 +185,9 @@ class AgentDisplayManager:
             root_tool = self._root_tool
             root_tool_start = self._root_tool_start
             expanded = self._expanded
+            stream_text = self._stream_text
 
-        if not agents and not root_tool:
+        if not agents and not root_tool and not stream_text:
             return Text("")
 
         lines: list[Text] = []
@@ -194,23 +218,55 @@ class AgentDisplayManager:
                 footer.append(f"  {_format_elapsed(now - root_tool_start)}", style="dim")
             lines.append(footer)
 
+        # The streamed-response preview (true TTFT) — its own panel so it reads
+        # as the assistant talking, distinct from the agent/tool tree above.
+        stream_panel = _build_stream_panel(stream_text, frame) if stream_text else None
+
         if not lines:
-            return Text("")
+            return stream_panel if stream_panel is not None else Text("")
 
         # Wrap in a panel when there is an agent tree; bare line otherwise.
         if agents:
-            return Panel(
+            tree: RenderableType = Panel(
                 Group(*lines),
                 title=":robot: Agents",
                 border_style="blue",
                 padding=(0, 1),
             )
-        return Group(*lines)
+        else:
+            tree = Group(*lines)
+
+        if stream_panel is None:
+            return tree
+        return Group(tree, stream_panel)
 
 
 # ======================================================================
 # Module-level helpers
 # ======================================================================
+
+
+def _build_stream_panel(text: str, frame: str) -> Panel:
+    """Render the streamed-response live preview (Gitea #137).
+
+    Shows the last :data:`_STREAM_TAIL_LINES` lines of the accumulated tokens
+    with a leading ellipsis when clipped — the full response prints in the
+    Response panel after the run, so this stays a compact "tokens flowing" beat.
+    """
+    lines = text.splitlines() or [text]
+    clipped = len(lines) > _STREAM_TAIL_LINES
+    tail = "\n".join(lines[-_STREAM_TAIL_LINES:])
+    body = Text()
+    if clipped:
+        body.append("…\n", style="dim")
+    body.append(tail, style="default")
+    body.append(" ▌", style="dim green")  # streaming caret
+    return Panel(
+        body,
+        title=f"{frame} :speech_balloon: Responding",
+        border_style="green",
+        padding=(0, 1),
+    )
 
 
 def _format_elapsed(seconds: float) -> str:

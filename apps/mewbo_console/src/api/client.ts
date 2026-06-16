@@ -269,6 +269,42 @@ export async function executeCommand(
   return realClient.executeCommand(sessionId, name, args);
 }
 
+/** Shape of `GET /api/files` — referenceable file/attachment names for `@`. */
+export interface ProjectFiles {
+  /** Git-indexed project files (tracked + new-but-not-gitignored). */
+  files: string[];
+  /** Names of the session's uploaded attachments. */
+  attachments: string[];
+}
+
+/**
+ * Fetch the names a chat message can reference via `@<ref>`.
+ *
+ * Pass ``session`` for an in-session composer (surfaces the session's
+ * uploaded attachments) and/or ``project`` for the home composer (before a
+ * session exists). ``q`` narrows server-side; callers usually fetch the full
+ * list once and filter client-side as the user types.
+ */
+export async function fetchProjectFiles(opts: {
+  session?: string | null;
+  project?: string | null;
+  q?: string;
+  limit?: number;
+}): Promise<ProjectFiles> {
+  const params = new URLSearchParams();
+  if (opts.session) params.set("session", opts.session);
+  if (opts.project) params.set("project", opts.project);
+  if (opts.q) params.set("q", opts.q);
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/api/files${qs ? `?${qs}` : ""}`, {
+    headers: { "X-Api-Key": API_KEY },
+  });
+  if (!res.ok) throw new Error(`files ${res.status}`);
+  const data = (await res.json()) as Partial<ProjectFiles>;
+  return { files: data.files ?? [], attachments: data.attachments ?? [] };
+}
+
 export async function listApiKeys(): Promise<ApiKeySummary[]> {
   return realClient.listApiKeys();
 }

@@ -58,6 +58,7 @@ vi.mock("../api/client", () => ({
   installPlugin: vi.fn().mockResolvedValue(undefined),
   uninstallPlugin: vi.fn().mockResolvedValue(undefined),
   fetchCommands: vi.fn().mockResolvedValue([]),
+  fetchProjectFiles: vi.fn().mockResolvedValue({ files: [], attachments: [] }),
   executeCommand: vi.fn(),
   listApiKeys: vi.fn().mockResolvedValue([]),
   createApiKey: vi.fn(),

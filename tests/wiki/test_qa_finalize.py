@@ -13,11 +13,12 @@ from types import SimpleNamespace
 import mongomock
 import pytest
 from mewbo_api.wiki.jobs import QaSessionEndHook
+from mewbo_graph.entities.types import Entity
 from mewbo_graph.plugins.wiki import emit_block as emit_block_mod
 from mewbo_graph.wiki.memory_types import MemoryFilter
-from mewbo_graph.wiki.qa import QaFinalizer, QaMemoryDepositor
+from mewbo_graph.wiki.qa import AccessedSourceResolver, QaFinalizer, QaMemoryDepositor
 from mewbo_graph.wiki.store import JsonWikiStore, MongoWikiStore
-from mewbo_graph.wiki.types import GraphNode, QaAnswer
+from mewbo_graph.wiki.types import Frontmatter, GraphNode, QaAnswer, WikiPage
 
 
 @pytest.fixture
@@ -52,6 +53,74 @@ def test_close_reconciles_blocks_curated_and_accessed(store):
     # Deterministic trail, de-duplicated, first-seen order preserved:
     assert snap.accessed_sources == ["graph:n7", "src/app.py#L1-20", "wiki:landing-page"]
     assert store.load_qa_events("a1")[-1]["type"] == "complete"
+
+
+def test_tag_page_citations_reschemes_only_real_pages(store):
+    """A bare wiki-page path in a sources block is re-schemed ``wiki:<id>`` (#70).
+
+    Without this the console's ``fileCitations`` treats the page as a source FILE
+    and the ``SourceCard`` 404s against ``/source`` (pages aren't in the clone).
+    Membership in the REAL page-id set is the authority — code files, colon /
+    line-range refs, and already-schemed refs are left untouched.
+    """
+    store.save_page("org/repo", WikiPage(
+        id="architecture-overview", title="Architecture",
+        frontmatter=Frontmatter(title="Architecture", slug="architecture-overview"),
+        body="# x", toc=[], nav=[],
+    ))
+    block = {"kind": "sources", "items": [
+        "architecture-overview",        # bare page id → wiki:
+        "pages/architecture-overview",  # ``pages/`` prefix → wiki:
+        "src/app.py#L1-9",              # file line-range → untouched
+        "src/app.py",                   # bare file (not a page) → untouched
+        "graph:n7",                     # already schemed → untouched
+        "wiki:landing-page",            # already wiki → untouched
+    ]}
+    tagged = QaFinalizer.tag_page_citations(block, store, "org/repo")
+    assert tagged["items"] == [
+        "wiki:architecture-overview",
+        "wiki:architecture-overview",
+        "src/app.py#L1-9",
+        "src/app.py",
+        "graph:n7",
+        "wiki:landing-page",
+    ]
+
+
+def test_accessed_source_resolver_humanises_graph_hashes(store):
+    """``graph:<node_id>`` provenance refs resolve to readable labels (#70).
+
+    An AST node → its ``file#Symbol`` key; an abstract entity → ``name (type)``;
+    an unresolved id (stale graph) → ``unknown (<hash[:8]>)``. File / page refs
+    pass through. Non-destructive: the snapshot keeps the raw ids.
+    """
+    store.upsert_nodes("org/repo", [GraphNode(
+        slug="org/repo", node_id="ast1", type="Function", name="verify",
+        file="src/app.py", range=(0, 9),
+    )])
+    ent = Entity(name="Session Runtime", type="subsystem")
+    store.upsert_entities("org/repo", [ent])
+
+    out = AccessedSourceResolver.resolve_refs(store, "org/repo", [
+        "graph:ast1",          # AST node → file#Symbol
+        f"graph:{ent.id}",     # abstract entity → name (type)
+        "graph:deadbeef0000",  # unresolved → unknown (hash[:8])
+        "src/app.py#L1-9",     # file ref → untouched
+        "wiki:landing-page",   # page ref → untouched
+    ])
+    assert out == [
+        "graph:src/app.py#verify",
+        "graph:Session Runtime (subsystem)",
+        "graph:unknown (deadbeef)",
+        "src/app.py#L1-9",
+        "wiki:landing-page",
+    ]
+
+
+def test_accessed_source_resolver_passthrough_without_graph_refs(store):
+    """No ``graph:`` refs ⇒ no graph scan, list returned verbatim (cheap path)."""
+    refs = ["src/app.py#L1-9", "wiki:landing-page"]
+    assert AccessedSourceResolver.resolve_refs(store, "org/repo", refs) == refs
 
 
 def test_close_is_idempotent(store):

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import os
@@ -18,6 +19,7 @@ from typing import Any
 
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
@@ -53,6 +55,7 @@ from mewbo_core.llm_resilience import (
     repair_tool_pairing,
 )
 from mewbo_core.permissions import PermissionDecision, PermissionPolicy
+from mewbo_core.prompt_registry import get_prompt_registry
 from mewbo_core.session_tools import (
     DEFAULT_SESSION_TOOL_MODES,
     SessionTool,
@@ -183,6 +186,7 @@ class ToolUseLoop:
         session_id: str | None = None,
         session_capabilities: tuple[str, ...] = (),
         extra_session_tools: list[SessionTool] | None = None,
+        enable_skills: bool = True,
     ) -> None:
         """Initialize the tool-use loop.
 
@@ -213,8 +217,19 @@ class ToolUseLoop:
             extra_session_tools: Caller-injected ``SessionTool`` instances
                 appended to ``self._session_tools`` without a plugin manifest
                 (e.g. the structured-response ``emit_result`` tool).
+            enable_skills: When ``False``, the auto-invocable ``activate_skill``
+                schema is never injected even if the registry holds skills — a
+                headless product drive (search/wiki) can opt out so it doesn't
+                burn its first step activating a host ``~/.claude`` skill it
+                never intended to expose. Default ``True`` (unchanged behavior).
         """
         self._ctx = agent_context
+        # The model whose per-model prompt overrides + tool variant are ACTIVE.
+        # Starts at the configured primary; the #54 fallback ladder promotes it
+        # to the escalated model on a sticky switch (see ``_apply_model_escalation``)
+        # so the heal becomes behavioural, not just a model swap.
+        self._active_model = agent_context.model_name
+        self._enable_skills = enable_skills
         self._tool_registry = tool_registry
         self._permission_policy = permission_policy
         self._approval_callback = approval_callback
@@ -256,6 +271,7 @@ class ToolUseLoop:
                 agent_registry=agent_registry,
                 session_tool_registry=session_tool_registry,
                 session_capabilities=session_capabilities,
+                enable_skills=enable_skills,
             )
 
         # Assemble session tools — per-agent stateful handlers that carry
@@ -363,7 +379,7 @@ class ToolUseLoop:
             # ``<available-deferred-tools>`` block. The model fetches the
             # schemas it needs through ``tool_search``; the per-turn re-bind
             # hook below grows the bound list as tools are discovered.
-            self._tool_search_enabled = self._is_tool_search_enabled()
+            self._tool_search_enabled = self._is_tool_search_enabled(tool_specs)
             self._tool_specs_full = list(tool_specs)
             self._deferred_ids = (
                 {s.tool_id for s in tool_specs if is_deferred(s)}
@@ -437,7 +453,9 @@ class ToolUseLoop:
                 if self._ctx.interrupt_step is not None and self._ctx.interrupt_step.is_set():
                     self._ctx.interrupt_step.clear()
                     messages.append(
-                        HumanMessage(content="[System: Current step interrupted by user.]")
+                        HumanMessage(
+                            content=get_prompt_registry().render("loop.interrupt_marker")
+                        )
                     )
 
                 # Drain any queued user steering messages (root agent only).
@@ -471,11 +489,7 @@ class ToolUseLoop:
                     if self._ctx.registry.budget_warning():
                         messages.append(
                             SystemMessage(
-                                content=(
-                                    "BUDGET WARNING: Session step budget nearly exhausted. "
-                                    "Summarize your current findings and return results "
-                                    "immediately."
-                                )
+                                content=get_prompt_registry().render("loop.budget_warning")
                             )
                         )
 
@@ -544,6 +558,19 @@ class ToolUseLoop:
                             },
                         )
                         raise
+                    # #54 fallback ladder: if the resilience strategy escalated
+                    # to (and pinned) a different model, re-render the system
+                    # prompt + re-derive the edit-tool variant against THAT model
+                    # so the heal is behavioural, not just a model swap (#113).
+                    tool_schemas, model = self._apply_model_escalation(
+                        _final_model,
+                        messages,
+                        context=context,
+                        plan=plan,
+                        agent_tree=agent_tree,
+                        tool_schemas=tool_schemas,
+                        model=model,
+                    )
                     _step_usage = getattr(response, "usage_metadata", None)
                     _h_ref = await self._ctx.registry.get(self._ctx.agent_id)
                     # LangChain ``UsageMetadata`` exposes provider cache and
@@ -835,8 +862,10 @@ class ToolUseLoop:
                         if result_lines:
                             messages.append(
                                 SystemMessage(
-                                    content="Completed sub-agent results:\n"
-                                    + "\n".join(result_lines),
+                                    content=get_prompt_registry().render(
+                                        "loop.agent_results_header",
+                                        joined="\n".join(result_lines),
+                                    ),
                                 )
                             )
                     still_running = await self._ctx.registry.collect_running(
@@ -846,20 +875,18 @@ class ToolUseLoop:
                         ids = ", ".join(h.agent_id[:8] for h in still_running)
                         messages.append(
                             SystemMessage(
-                                content=f"WARNING: {len(still_running)} agent(s) "
-                                f"still running ({ids}). Include their partial "
-                                "progress in your synthesis.",
+                                content=get_prompt_registry().render(
+                                    "loop.agents_still_running",
+                                    count=len(still_running),
+                                    ids=ids,
+                                ),
                             )
                         )
 
                 try:
                     messages.append(
                         SystemMessage(
-                            content=(
-                                "You MUST now provide your final answer based on "
-                                "all the information gathered so far. "
-                                "Do NOT call any more tools. Respond with text only."
-                            )
+                            content=get_prompt_registry().render("loop.final_answer_synthesis")
                         )
                     )
                     # Invoke without tool bindings to prevent further tool calls.
@@ -1026,35 +1053,72 @@ class ToolUseLoop:
         agent_tree: str = "",
     ) -> list[BaseMessage]:
         """Build the initial message list for the conversation."""
+        system_prompt = self._render_system_prompt(context, plan, agent_tree)
+        return self._messages_from_system_prompt(system_prompt, user_query, context)
+
+    def _render_system_prompt(
+        self,
+        context: ContextSnapshot | None,
+        plan: Plan | None,
+        agent_tree: str = "",
+    ) -> str:
+        """Assemble the system-prompt text for the ACTIVE model.
+
+        Extracted from ``_build_messages`` so the #54 fallback ladder can
+        re-render it against the ESCALATED model mid-run (its per-model prompt
+        overrides) without rebuilding the whole transcript — see
+        ``_apply_model_escalation``. Reads ``self._active_model`` (the escalated
+        model after a sticky switch, else the configured primary).
+        """
+        registry = get_prompt_registry()
+        model = self._active_model
         system_parts: list[str] = [get_system_prompt("system")]
 
         # Environment context.
         work_dir = self._cwd or str(Path.cwd())
-        env_lines = [
-            "# Environment",
-            f"- Working directory: {work_dir}",
-            f"- Platform: {_platform.system().lower()}",
-            f"- Date: {_date.today().isoformat()}",
-            f"- Mewbo version: {get_version()}",
-        ]
-        system_parts.append("\n".join(env_lines))
+        system_parts.append(
+            registry.render(
+                "loop.section.environment",
+                model=model,
+                work_dir=work_dir,
+                platform=_platform.system().lower(),
+                date=_date.today().isoformat(),
+                version=get_version(),
+            )
+        )
 
         # Project instructions (CLAUDE.md / AGENTS.md).
         if self._project_instructions:
-            system_parts.append(f"Project instructions:\n{self._project_instructions}")
+            system_parts.append(
+                registry.render(
+                    "loop.section.project_instructions",
+                    model=model,
+                    project_instructions=self._project_instructions,
+                )
+            )
 
         # Ref: [DeepMind-Delegation §4.5] Root agent's global eye — live agent tree
         if agent_tree:
-            system_parts.append(f"# Active agent tree\n{agent_tree}")
+            system_parts.append(
+                registry.render("loop.section.agent_tree", model=model, agent_tree=agent_tree)
+            )
 
         # Git context (injected after project instructions).
         git_ctx = get_git_context(self._cwd)
         if git_ctx:
-            system_parts.append(f"# Git Context\n{git_ctx}")
+            system_parts.append(
+                registry.render("loop.section.git_context", model=model, git_ctx=git_ctx)
+            )
 
         # Active skill instructions (from user /skill invocation).
         if self._skill_instructions:
-            system_parts.append(f"Active skill instructions:\n{self._skill_instructions}")
+            system_parts.append(
+                registry.render(
+                    "loop.section.skill_instructions",
+                    model=model,
+                    skill_instructions=self._skill_instructions,
+                )
+            )
 
         # Auto-invocable skills catalog (for LLM-driven activation).
         if self._skill_registry is not None:
@@ -1070,20 +1134,38 @@ class ToolUseLoop:
 
         # Session context.
         if context and context.summary:
-            system_parts.append(f"Session summary:\n{context.summary}")
+            system_parts.append(
+                registry.render(
+                    "loop.section.session_summary", model=model, summary=context.summary
+                )
+            )
         if context and context.recent_events:
             rendered = render_event_lines(context.recent_events)
             if rendered:
-                system_parts.append(f"Recent conversation:\n{rendered}")
+                system_parts.append(
+                    registry.render(
+                        "loop.section.recent_conversation", model=model, rendered=rendered
+                    )
+                )
 
         # Attached file contents.
         if context and context.attachment_texts:
-            system_parts.append("Attached files:\n" + "\n---\n".join(context.attachment_texts))
+            system_parts.append(
+                registry.render(
+                    "loop.section.attached_files",
+                    model=model,
+                    joined="\n---\n".join(context.attachment_texts),
+                )
+            )
 
         # Tool-specific guidance from prompt files.
         tool_guidance = self._render_tool_guidance()
         if tool_guidance:
-            system_parts.append(f"Tool guidance:\n{tool_guidance}")
+            system_parts.append(
+                registry.render(
+                    "loop.section.tool_guidance", model=model, tool_guidance=tool_guidance
+                )
+            )
 
         # Deferred-tool catalog (names only). Schemas are fetched on demand
         # by the model via the ``tool_search`` tool; the per-turn re-bind in
@@ -1098,8 +1180,9 @@ class ToolUseLoop:
                 f"{i + 1}. {s.title} — {s.description}" for i, s in enumerate(plan.steps)
             )
             system_parts.append(
-                f"Execute this plan:\n{plan_lines}\n"
-                "Follow steps in order. Adapt if results require it."
+                registry.render(
+                    "loop.section.plan_execution", model=model, plan_lines=plan_lines
+                )
             )
 
         # Depth-aware sub-agent guidance.
@@ -1113,31 +1196,40 @@ class ToolUseLoop:
             if self._ctx.depth == 0:
                 # Root hypervisor: automata prompt + plan path for review.
                 try:
-                    hyper_template = get_system_prompt("plan_hypervisor")
+                    hyper_template = registry.render("file.plan_hypervisor").strip()
                 except OSError:
                     hyper_template = ""
                 if hyper_template:
                     plan_path = plan_file_for(self._session_id)
-                    system_parts.append(f"{hyper_template}\n\nPlan file: {plan_path}")
+                    system_parts.append(
+                        hyper_template
+                        + registry.render("loop.plan_file_suffix", plan_path=plan_path)
+                    )
             else:
                 # Plan sub-agent: full plan-mode prompt with placeholders.
-                try:
-                    template = get_system_prompt("plan_mode_reminder")
-                except OSError:
-                    template = ""
-                if template:
-                    plan_path = plan_file_for(self._session_id)
-                    shell_allowlist = self._plan_mode_shell_allowlist()
-                    if shell_allowlist:
-                        bullets = "\n".join(f"    - `{entry}`" for entry in shell_allowlist)
-                    else:
-                        bullets = "    - (none — shell is disabled in plan mode)"
-                    rendered = template.replace("{plan_path}", plan_path).replace(
-                        "{shell_allowlist_bullets}", bullets
+                plan_path = plan_file_for(self._session_id)
+                shell_allowlist = self._plan_mode_shell_allowlist()
+                if shell_allowlist:
+                    bullets = "\n".join(f"    - `{entry}`" for entry in shell_allowlist)
+                else:
+                    bullets = "    - (none — shell is disabled in plan mode)"
+                system_parts.append(
+                    registry.render(
+                        "loop.plan_mode_reminder",
+                        plan_path=plan_path,
+                        shell_allowlist_bullets=bullets,
                     )
-                    system_parts.append(rendered)
+                )
 
-        system_prompt = "\n\n".join(p for p in system_parts if p)
+        return "\n\n".join(p for p in system_parts if p)
+
+    def _messages_from_system_prompt(
+        self,
+        system_prompt: str,
+        user_query: str,
+        context: ContextSnapshot | None,
+    ) -> list[BaseMessage]:
+        """Wrap the assembled system prompt + user turn into the message list."""
         # If the active context carries images for a vision-capable model,
         # build a multipart HumanMessage that interleaves the user's text
         # with ``image_url`` parts (LiteLLM/OpenAI Chat Completions format).
@@ -1170,124 +1262,38 @@ class ToolUseLoop:
         remaining = self._ctx.remaining_depth
         is_root = depth == 0
         is_leaf = not self._ctx.can_spawn
+        registry = get_prompt_registry()
+        model = self._active_model
 
         if is_root:
             # Ref: [CoA §3.2] Root = manager/hypervisor.
             # Ref: [DeepMind-Delegation §4.4] Non-blocking delegation protocol.
-            plan_mode = self._current_mode == "plan"
-            if plan_mode:
-                lines = [
-                    f"# Agent role: Root hypervisor — plan mode (depth {depth}/{max_depth})",
-                    "",
-                    "## Goal: produce an approved plan via a sub-agent",
-                    "- A plan sub-agent explores the codebase and drafts the plan file.",
-                    "- You orchestrate: spawn it, monitor progress, propose the result.",
-                    "- exit_plan_mode submits the plan for user approval.",
-                    "- The plan is complete only when the user approves it.",
-                    "- If the sub-agent fails, spawn a new one"
-                    " — you cannot write the plan yourself.",
-                ]
-            else:
-                lines = [
-                    f"# Agent role: Root hypervisor (depth {depth}/{max_depth})",
-                    "",
-                    "## Default: Direct execution",
-                    "- Handle tasks directly using your tools. Most tasks do NOT need sub-agents.",
-                    "- Simple operations (write a file, run a command, search, read)"
-                    " — do them yourself.",
-                    "- Sequential tasks (write then run then read) — do them yourself, in order.",
-                    "- Only spawn sub-agents for genuinely parallel, independent work.",
-                    "",
-                    "## When to spawn (rare)",
-                    "- Multiple independent tasks that benefit from running concurrently.",
-                    "- Each sub-task must be self-contained with clear acceptance_criteria.",
-                    "- Scope sub-agents with allowed_tools/denied_tools.",
-                ]
-            # Shared root sections: delegation protocol, safety, synthesis,
-            # system awareness, when to stop — apply in both plan and act mode.
-            lines.extend(
-                [
-                    "",
-                    "## Async delegation protocol (when you spawn)",
-                    "- spawn_agent returns immediately with {agent_id, status: 'submitted'}.",
-                    "- Continue with independent work while children execute in background.",
-                    "- React to '[Agent xxx finished: ...]' notifications between your steps.",
-                    "- Call check_agents to see tree state and collect completed results.",
-                    "- Call check_agents(wait=true) when you have no independent work left.",
-                    "- Use steer_agent to inject context or course-correct running agents.",
-                    "- Do NOT call check_agents in a loop — trust notifications. (epoll, not poll)",
-                    "",
-                    "## Safety",
-                    "- steer_agent(action='cancel') stops a stuck or misbehaving agent.",
-                    "- A background watchdog warns stalled agents automatically"
-                    " (2min+ no progress).",
-                    "",
-                    "## Synthesize",
-                    "- When all children complete, collect results via check_agents.",
-                    "- Verify results against acceptance_criteria before trusting them.",
-                    "- Check 'status' before using:"
-                    " completed=reliable, failed/cannot_solve=handle.",
-                    "",
-                    "## System awareness",
-                    "- You operate within a bounded environment with intentional guardrails.",
-                    "- CWD restrictions, permission denials, and tool scope limits"
-                    " are non-negotiable.",
-                    "- If a tool or sub-agent reports a restriction, adapt — do NOT retry blindly.",
-                    "",
-                    "## When to stop",
-                    "- If the same operation fails twice, do not retry it a third time.",
-                    "- If a sub-agent fails, do not spawn another sub-agent for the same task.",
-                    "- Report what failed, why, and what you tried — then let the user decide.",
-                ]
+            # The base template carries both openings (plan vs direct execution)
+            # plus the shared delegation/safety/synthesize/awareness/stop tail.
+            return registry.render(
+                "loop.depth.root",
+                model=model,
+                plan_mode=self._current_mode == "plan",
+                depth=depth,
+                max_depth=max_depth,
             )
-        elif is_leaf:
+        if is_leaf:
             # Ref: [DeepMind-Delegation §4.7] Liability firebreak at leaf
-            lines = [
-                f"# Agent role: Leaf executor (depth {depth}/{max_depth})",
-                "You are a delegated sub-agent with a bounded task.",
-                "",
-                "## Execution protocol",
-                "- Complete your assigned task directly using available tools.",
-                "- Do NOT attempt to delegate — you cannot spawn sub-agents.",
-                "- When done, provide a clear, structured summary of what you accomplished.",
-                "- Your text response (without tool calls) signals task completion"
-                " and ends your execution.",
-                "",
-                "## Failure handling",
-                "- If you cannot complete the task, say so explicitly with the reason.",
-                "- If a tool reports a restriction, stop and report it"
-                " — do not attempt workarounds.",
-                "- If an operation fails twice, report failure instead of retrying.",
-                "- Do NOT spin or retry endlessly — admit failure so the parent can adapt.",
-            ]
-        else:
-            # Sub-orchestrator: can delegate but has bounded scope
-            lines = [
-                f"# Agent role: Sub-orchestrator (depth {depth}/{max_depth}, "
-                f"{remaining} levels remaining)",
-                "You are a delegated sub-agent that can further delegate.",
-                "",
-                "## Execution protocol",
-                "- Focus on your assigned task scope — do not expand beyond it.",
-                "- Prefer direct tool use. Only spawn child agents for independent parallel work.",
-                "- Verify child agent results before incorporating them.",
-                "- Return a structured summary when your task is complete.",
-                "- Your text response (without tool calls) signals task completion"
-                " and ends your execution.",
-                "",
-                "## Failure handling",
-                "- If you cannot complete the task, say so explicitly with the reason.",
-                "- If a tool reports a restriction or boundary, stop and report to your parent.",
-                "- Do NOT retry failed operations or attempt workarounds for system limits.",
-            ]
-            if remaining <= 2:
-                # Ref: [DeepMind-Delegation §4.7] Approaching delegation boundary
-                lines.append(
-                    "\nDELEGATION BOUNDARY: You are deep in the agent tree. "
-                    "Prefer direct tool use over spawning."
-                )
-
-        return "\n".join(lines)
+            return registry.render(
+                "loop.depth.leaf", model=model, depth=depth, max_depth=max_depth
+            )
+        # Sub-orchestrator: can delegate but has bounded scope.
+        guidance = registry.render(
+            "loop.depth.suborchestrator",
+            model=model,
+            depth=depth,
+            max_depth=max_depth,
+            remaining=remaining,
+        )
+        if remaining <= 2:
+            # Ref: [DeepMind-Delegation §4.7] Approaching delegation boundary
+            guidance += registry.render("loop.depth.boundary", model=model)
+        return guidance
 
     # ------------------------------------------------------------------
     # Background watchdog  (Ref: [AgentCgroup §4.2])
@@ -1310,7 +1316,7 @@ class ToolUseLoop:
                 for h in stalled:
                     await self._ctx.registry.send_message(
                         h.agent_id,
-                        "STALL WARNING: No progress for 2+ minutes. Wrap up or report status.",
+                        get_prompt_registry().render("loop.stall_warning"),
                     )
                     if self._ctx.message_queue is not None:
                         self._ctx.message_queue.put_nowait(
@@ -1320,13 +1326,29 @@ class ToolUseLoop:
             pass  # Normal shutdown path.
 
     def _render_tool_guidance(self) -> str:
-        """Render tool-specific prompt guidance for local tools."""
+        """Render tool-specific prompt guidance for local tools.
+
+        Routes through the prompt registry WITH the active model so a per-model
+        override of a tool-guidance entry (e.g. the structured-patch discipline
+        nudge on ``file.tools.file-edit``, paired with the edit-tool variant via
+        the shared model prefix — #113) actually applies. ``get_system_prompt``
+        alone can't: a tool's ``prompt_path`` (``tools/file-edit``) maps to the
+        dotted registry id ``file.tools.file-edit``, so the slash form misses the
+        registry and would silently read the raw ``.txt``, dropping ``model=``.
+        Falls back to the legacy path for any prompt the registry doesn't
+        inventory. Byte-identical to the old output when no override matches.
+        """
+        registry = get_prompt_registry()
         prompts: list[str] = []
         for spec in self._tool_registry.list_specs():
             if spec.kind != "local" or not spec.prompt_path:
                 continue
             try:
-                prompt = get_system_prompt(spec.prompt_path)
+                reg_id = "file." + spec.prompt_path.replace("/", ".")
+                if registry.has(reg_id):
+                    prompt = registry.render(reg_id, model=self._active_model).strip()
+                else:
+                    prompt = get_system_prompt(spec.prompt_path)
             except OSError:
                 continue
             if prompt:
@@ -1385,8 +1407,12 @@ class ToolUseLoop:
         if override == "search_replace_block":
             return "aider_edit_block_tool"
 
-        # Derive from model identity
-        model_name: str | None = getattr(self._ctx, "model_name", None)
+        # Derive from the ACTIVE model identity (escalated model after a #54
+        # sticky switch, else the configured primary) so the tool VARIANT adapts
+        # in lockstep with the per-model prompt on escalation.
+        model_name: str | None = getattr(self, "_active_model", None) or getattr(
+            self._ctx, "model_name", None
+        )
         if model_prefers_structured_patch(model_name):
             return "file_edit_tool"
         return "aider_edit_block_tool"
@@ -1421,6 +1447,81 @@ class ToolUseLoop:
     # LLM call resilience (retry / fallback / circuit-break / budget)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _chunk_delta_text(chunk: Any) -> str:
+        """Incremental text carried by one streamed chunk (whitespace-preserving).
+
+        Unlike ``_extract_text_content`` this never strips — token deltas must
+        keep their spacing — and concatenates list-form text blocks without the
+        newline separator (a chunk is a fragment, not a finished message).
+        """
+        content = getattr(chunk, "content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        return ""
+
+    async def _acall_model(
+        self,
+        bound: Any,
+        messages: list[BaseMessage],
+        *,
+        config: dict[str, Any] | None,
+        step: int,
+    ) -> AIMessage:
+        """Invoke the model, streaming token deltas for true time-to-first-token.
+
+        Consumes ``bound.astream`` and emits one ``agent_message_delta`` event per
+        text chunk so clients render tokens as the model produces them, then
+        returns the fully-accumulated message — content, ``tool_calls`` and
+        ``usage_metadata`` are identical in shape to ``ainvoke`` (LangChain's
+        ``AIMessageChunk.__add__`` aggregates tool-call chunks and sums usage;
+        ``ChatLiteLLM._astream`` already requests ``stream_options.include_usage``
+        so the usage chunk arrives). Falls back to ``ainvoke`` when no usable
+        stream is available (a stubbed model, or any path that yields nothing) so
+        non-streaming callers are byte-for-byte unaffected. Real provider errors
+        mid-stream propagate to the resilience strategy — only the structural
+        "no usable stream" signals are swallowed here.
+        """
+        cfg = config or None
+        accumulated: AIMessageChunk | None = None
+        try:
+            async for chunk in bound.astream(messages, config=cfg):
+                accumulated = chunk if accumulated is None else accumulated + chunk
+                delta = self._chunk_delta_text(chunk)
+                if delta:
+                    self._emit_event(
+                        {
+                            "type": "agent_message_delta",
+                            "payload": {
+                                "text": delta,
+                                "agent_id": self._ctx.agent_id,
+                                "depth": self._ctx.depth,
+                                "step": step,
+                            },
+                        }
+                    )
+        except (TypeError, AttributeError, NotImplementedError):
+            # ``bound`` exposes no usable async stream (e.g. a stubbed model) —
+            # fall through to the buffered path. Provider/runtime errors are NOT
+            # caught here; they belong to the resilience strategy.
+            accumulated = None
+        if accumulated is None:
+            return await bound.ainvoke(messages, config=cfg)
+        return AIMessage(
+            content=accumulated.content,
+            tool_calls=list(getattr(accumulated, "tool_calls", []) or []),
+            additional_kwargs=getattr(accumulated, "additional_kwargs", {}) or {},
+            response_metadata=getattr(accumulated, "response_metadata", {}) or {},
+            usage_metadata=getattr(accumulated, "usage_metadata", None),
+            id=getattr(accumulated, "id", None),
+        )
+
     async def _capture_usage(self, response: AIMessage) -> None:
         """Accumulate token usage + the compaction anchor from a response."""
         usage = getattr(response, "usage_metadata", None)
@@ -1452,17 +1553,18 @@ class ToolUseLoop:
         """
 
         async def _invoke(model_name: str, is_fallback: bool) -> AIMessage:
-            # ``primary_model`` is pre-bound to the CONFIGURED primary. Key the
-            # reuse off the model NAME, not ``is_fallback``: sticky escalation
-            # reorders a pinned rescue model to idx 0 (so ``is_fallback`` is
-            # False) — reusing ``primary_model`` there would silently call the
-            # dead primary every subsequent turn and the rescue never rescues.
+            # ``primary_model`` is pre-bound to the ACTIVE model (the configured
+            # primary, or — after a #54 sticky escalation — the pinned escalated
+            # model, since ``_apply_model_escalation`` rebinds it). Key the reuse
+            # off the model NAME, not ``is_fallback``: sticky escalation reorders
+            # a pinned rescue model to idx 0 (so ``is_fallback`` is False) —
+            # reusing a stale binding there would silently call the wrong model.
             bound = (
                 primary_model
-                if not is_fallback and model_name == self._ctx.model_name
+                if not is_fallback and model_name == self._active_model
                 else build_chat_model(model_name=model_name).bind_tools(tool_schemas)
             )
-            return await bound.ainvoke(messages, config=invoke_config or None)
+            return await self._acall_model(bound, messages, config=invoke_config, step=turns)
 
         async def _compact() -> bool:
             info = await self._compact_messages(messages)
@@ -1494,6 +1596,56 @@ class ToolUseLoop:
         )
         await self._capture_usage(response)
         return response, model_name
+
+    def _apply_model_escalation(
+        self,
+        final_model: str,
+        messages: list[BaseMessage],
+        *,
+        context: ContextSnapshot | None,
+        plan: Plan | None,
+        agent_tree: str,
+        tool_schemas: list[dict[str, Any]],
+        model: Any,
+    ) -> tuple[list[dict[str, Any]], Any]:
+        """Promote the active model to a #54-escalated one and re-derive prompts.
+
+        No-op (returns the inputs unchanged) unless the resilience strategy ended
+        the turn on a DIFFERENT model than the one currently active — i.e. a
+        sticky escalation down the fallback ladder. On a real switch it:
+
+        - promotes ``self._active_model`` so every subsequent per-step render +
+          the edit-tool variant selection resolve the ESCALATED model's overrides;
+        - re-renders ``messages[0]`` (the system prompt) in place against it, so
+          the next turn carries that model's compatibility-adjusted prompt;
+        - recomputes the bound tool schemas (the edit-tool VARIANT can differ
+          per model) + rebinds, mirroring the deferred-tool re-bind path.
+
+        The transcript tail is untouched; the change takes effect next turn.
+        """
+        if not final_model or final_model == self._active_model:
+            return tool_schemas, model
+        self._active_model = final_model
+        messages[0] = SystemMessage(
+            content=self._render_system_prompt(context, plan, agent_tree)
+        )
+        discovered = self._discovered_from_messages(messages)
+        active_specs = self._select_active_specs(self._tool_specs_full, discovered=discovered)
+        tool_schemas = self._build_tool_schemas_for_mode(active_specs, self._current_mode)
+        model = self._bind_model(tool_schemas)
+        self._last_active_ids = {s.tool_id for s in active_specs}
+        self._emit_event(
+            {
+                "type": "llm_prompt_revariant",
+                "payload": {
+                    "agent_id": self._ctx.agent_id,
+                    "depth": self._ctx.depth,
+                    "model": final_model,
+                    "edit_tool": self._configured_edit_tool_id(),
+                },
+            }
+        )
+        return tool_schemas, model
 
     # ------------------------------------------------------------------
     # Mid-loop context compaction
@@ -1556,11 +1708,15 @@ class ToolUseLoop:
             resolve_compact_models,
         )
 
-        _compact_models = resolve_compact_models(self._ctx.model_name)
+        _compact_models = resolve_compact_models(self._active_model)
         _compact_model = _compact_models[0]
         _msgs = [
-            SystemMessage(content=get_compact_prompt()),
-            HumanMessage(content=f"Summarize this conversation:\n\n{summary_input}"),
+            SystemMessage(content=get_compact_prompt(model=_compact_model)),
+            HumanMessage(
+                content=get_prompt_registry().render(
+                    "loop.compaction_drive", summary_input=summary_input
+                )
+            ),
         ]
         response = None
         for _i, _candidate in enumerate(_compact_models):
@@ -1605,7 +1761,11 @@ class ToolUseLoop:
         system_msg = messages[0]
         messages.clear()
         messages.append(system_msg)
-        messages.append(SystemMessage(content=f"[Compacted context]\n{summary}"))
+        messages.append(
+            SystemMessage(
+                content=get_prompt_registry().render("loop.compacted_marker", summary=summary)
+            )
+        )
         messages.extend(kept_tail)
         # The recent-tail slice can orphan a tool_use/tool_result pair, which
         # Anthropic rejects with a 400. Rebalance before the list is replayed.
@@ -1616,14 +1776,35 @@ class ToolUseLoop:
             "model": _compact_model,
         }
 
-    def _is_tool_search_enabled(self) -> bool:
+    def _is_tool_search_enabled(self, tool_specs: list[ToolSpec] | None = None) -> bool:
         """Return True if the deferred-tool / on-demand-schema feature is on.
 
         Read fresh from config so the field can be flipped without a
         process restart. Sub-orchestrators inherit by reading the same
         ``agent.tool_search.mode`` value.
+
+        - ``off`` → never defer.
+        - ``on`` → always defer.
+        - ``auto`` → defer only when the number of deferrable specs in
+          ``tool_specs`` exceeds ``agent.tool_search.auto_threshold``, so a
+          lean / zero-MCP session keeps verbatim binding and pays nothing.
+          When called without ``tool_specs`` (no set to measure) ``auto``
+          conservatively stays off.
         """
-        return str(get_config_value("agent", "tool_search", "mode", default="off")) == "on"
+        mode = str(get_config_value("agent", "tool_search", "mode", default="off")).lower()
+        if mode == "on":
+            return True
+        if mode == "auto":
+            if not tool_specs:
+                return False
+            raw_threshold = get_config_value("agent", "tool_search", "auto_threshold", default=25)
+            try:
+                threshold = int(raw_threshold)
+            except (TypeError, ValueError):
+                threshold = 25
+            deferrable = sum(1 for s in tool_specs if is_deferred(s))
+            return deferrable > threshold
+        return False
 
     def _select_active_specs(
         self,
@@ -1707,11 +1888,7 @@ class ToolUseLoop:
             parts.append(f"<available-mcp-servers>{summary}</available-mcp-servers>")
         if other:
             parts.append(f"Other deferred tools: {', '.join(sorted(other))}.")
-        parts.append(
-            "Schemas are not loaded — call `tool_search` with keywords "
-            "(e.g. server name, action) or `select:<tool_id>` to load them "
-            "before invoking."
-        )
+        parts.append(get_prompt_registry().render("loop.section.deferred_tools"))
         return "\n".join(parts)
 
     def _build_tool_schemas_for_mode(
@@ -1744,17 +1921,17 @@ class ToolUseLoop:
         return specs_to_langchain_tools(filtered)
 
     def _bind_model(self, tool_schemas: list[dict[str, Any]]) -> Any:
-        """Build a chat model and bind tool schemas."""
-        model = build_chat_model(model_name=self._ctx.model_name)
+        """Build a chat model (for the ACTIVE model) and bind tool schemas."""
+        model = build_chat_model(model_name=self._active_model)
         plan_mode = self._current_mode == "plan"
         # In plan mode, the root (depth=0) gets agent management tools so it
         # can spawn and monitor the plan sub-agent. Non-root plan agents get
         # no agent tools — they explore and draft only.
         plan_root = plan_mode and self._ctx.depth == 0
         if (not plan_mode or plan_root) and self._spawn_agent_tool is not None:
-            from mewbo_core.spawn_agent import SPAWN_AGENT_SCHEMA
+            from mewbo_core.spawn_agent import SPAWN_AGENT_SCHEMA, SPAWN_AGENTS_SCHEMA
 
-            tool_schemas = [*tool_schemas, SPAWN_AGENT_SCHEMA]
+            tool_schemas = [*tool_schemas, SPAWN_AGENT_SCHEMA, SPAWN_AGENTS_SCHEMA]
             # Ref: [DeepMind-Delegation §4.4] Root-only management tools
             # for non-blocking agent monitoring and steering.
             if self._ctx.depth == 0:
@@ -1764,9 +1941,12 @@ class ToolUseLoop:
                 )
 
                 tool_schemas = [*tool_schemas, CHECK_AGENTS_SCHEMA, STEER_AGENT_SCHEMA]
-        # Inject activate_skill schema when auto-invocable skills exist.
+        # Inject activate_skill schema when auto-invocable skills exist — unless
+        # the drive opted out (``enable_skills=False``), so a headless product
+        # run never burns a step activating a host ``~/.claude`` skill.
         if (
-            not plan_mode
+            self._enable_skills
+            and not plan_mode
             and self._skill_registry is not None
             and self._skill_registry.list_auto_invocable(self._session_capabilities)
         ):
@@ -1799,6 +1979,13 @@ class ToolUseLoop:
         tool_id: str = tool_call.get("name") or ""
 
         action_step = self._tool_call_to_action_step(tool_call)
+
+        # A session tool that RETURNS a structured-error envelope (wiki/scg
+        # ``err_result``) is a handled failure, not a raise — captured here and
+        # applied at the common emit/return path so the step records
+        # ``success=False`` and the loop's failure nudge fires (the model still
+        # gets the envelope text). ``None`` for every normal result.
+        session_tool_error: str | None = None
 
         # MCP input coercion.
         spec = self._tool_registry.get_spec(tool_id)
@@ -1860,6 +2047,18 @@ class ToolUseLoop:
                     content=f"ERROR: {exc}",
                     success=False,
                 )
+        elif tool_id == "spawn_agents" and self._spawn_agent_tool is not None:
+            try:
+                result = await self._spawn_agent_tool.run_batch_async(action_step)
+            except Exception as exc:
+                logging.error("spawn_agents failed: {}", exc)
+                self._emit_tool_result_event(action_step, None, error=str(exc))
+                return ToolCallResult(
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content=f"ERROR: {exc}",
+                    success=False,
+                )
         elif tool_id == "check_agents" and self._spawn_agent_tool is not None:
             try:
                 result = await self._spawn_agent_tool.handle_check_agents(action_step)
@@ -1896,6 +2095,9 @@ class ToolUseLoop:
                     content=f"ERROR: {exc}",
                     success=False,
                 )
+            # A handled error envelope (returned, not raised) → reclassify as a
+            # FAILED step while keeping the envelope text as the model output.
+            session_tool_error = _session_tool_error_envelope(result)
         elif tool_id == "activate_skill" and self._skill_registry is not None:
             result = self._handle_activate_skill(action_step)
         else:
@@ -2002,6 +2204,21 @@ class ToolUseLoop:
                     norm,
                     self._cwd or "",
                 )
+
+        # A session tool's handled error envelope records as a FAILED step (so
+        # the loop's per-step failure nudge fires) while the model still receives
+        # the full envelope JSON as the tool output — error surfacing without
+        # hiding the structured detail the tool chose to return.
+        if session_tool_error is not None:
+            self._emit_tool_result_event(
+                action_step, event_str, error=session_tool_error, result_file=result_file
+            )
+            return ToolCallResult(
+                tool_call_id=tool_call_id,
+                tool_id=tool_id,
+                content=content_str,
+                success=False,
+            )
 
         self._emit_tool_result_event(action_step, event_str, result_file=result_file)
         return ToolCallResult(
@@ -2157,7 +2374,7 @@ class ToolUseLoop:
             return True
         # Root (depth=0) can use agent management tools to spawn and
         # monitor the plan sub-agent.  Non-root plan agents cannot.
-        _AGENT_MGMT_TOOLS = {"spawn_agent", "check_agents", "steer_agent"}
+        _AGENT_MGMT_TOOLS = {"spawn_agent", "spawn_agents", "check_agents", "steer_agent"}
         if tool_id in _AGENT_MGMT_TOOLS and self._ctx.depth == 0:
             return True
         spec = self._tool_registry.get_spec(tool_id)
@@ -2174,10 +2391,8 @@ class ToolUseLoop:
                 return True
             attempted = candidate or "<missing file_path>"
             plan_path = plan_file_for(self._session_id)
-            msg = (
-                f"Plan mode: edits restricted to {plan_path}. You attempted "
-                f"to write {attempted}. Write only to the plan file, then "
-                "call exit_plan_mode."
+            msg = get_prompt_registry().render(
+                "loop.plan_edit_restricted", plan_path=plan_path, attempted=attempted
             )
             mock = get_mock_speaker()
             action_step.result = mock(content=msg)
@@ -2333,6 +2548,45 @@ class ToolUseLoop:
 # ------------------------------------------------------------------
 # Standalone helpers
 # ------------------------------------------------------------------
+
+
+def _session_tool_error_envelope(content: object) -> str | None:
+    """Return the error message if *content* is a structured-error envelope.
+
+    SessionTools across the graph plugin suites (wiki ``_err_result`` / scg
+    ``err_result``) signal a HANDLED failure by RETURNING a ``MockSpeaker`` whose
+    content is ``str({"error": {"code": ..., "message": ...}})`` — a *successful*
+    return, so without this seam the loop recorded the step as ``success=True``
+    and the per-step failure-feedback nudge never fired (an embedding-429 rendered
+    as "✓ ok"). This pure structural check lets the loop reclassify such a return
+    as a FAILED tool result while STILL handing the model the envelope text — it
+    never imports the graph layer (the envelope shape is the only contract).
+
+    Returns the ``"code: message"`` summary for the event's ``error`` field, or
+    ``None`` when *content* is any normal (non-error-envelope) result.
+    """
+    text = content if isinstance(content, str) else getattr(content, "content", None)
+    if not isinstance(text, str):
+        return None
+    stripped = text.strip()
+    # Cheap reject before the (bounded) literal parse: the envelope is the repr
+    # of a one-key ``{"error": …}`` dict, so it always starts with ``{'error'``.
+    if not stripped.startswith("{'error'") and not stripped.startswith('{"error"'):
+        return None
+    try:
+        parsed = ast.literal_eval(stripped)
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    err = parsed.get("error")
+    if not isinstance(err, dict):
+        return None
+    code = str(err.get("code", "")).strip()
+    message = str(err.get("message", "")).strip()
+    if not code and not message:
+        return None
+    return f"{code}: {message}" if code and message else (code or message)
 
 
 def _append_lsp_feedback(content: str, file_path: str, cwd: str) -> str:

@@ -122,7 +122,7 @@ Define a custom server under `agent.lsp.servers`. All fields except `command` an
 
 ### Full config key reference
 
-All keys are nested under `agent.lsp` in `configs/app.json`.
+All keys are nested under `agent.lsp` in [`configs/app.json`](repo:configs/app.json).
 
 | Key | Default | Description |
 |-----|---------|-------------|

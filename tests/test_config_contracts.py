@@ -910,6 +910,9 @@ class TestNestedSubConfigDefaults:
         ac = AgentConfig.model_validate({})
         assert ac.lsp.enabled is True
 
-    def test_agent_tool_search_off_by_default(self):
+    def test_agent_tool_search_auto_by_default(self):
+        # #131: deferred-schema loading ships on as adaptive 'auto' — defers
+        # only above the threshold, so lean sessions keep verbatim binding.
         ac = AgentConfig.model_validate({})
-        assert ac.tool_search.mode == "off"
+        assert ac.tool_search.mode == "auto"
+        assert ac.tool_search.auto_threshold == 25

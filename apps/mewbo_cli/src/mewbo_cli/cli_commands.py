@@ -609,6 +609,24 @@ def _refresh_mcp_registry(context: CommandContext) -> None:
     target = get_mcp_config_path()
     if not os.path.exists(target):
         _cmd_mcp_init(context, [])
+    # Force a live re-probe (Gitea #130): drop the cached manifest so the
+    # config-hash gate can't short-circuit discovery, and reset the pool so a
+    # server that has since recovered isn't held in its backoff/quarantine
+    # state. This is the explicit "I edited/fixed my server, reconnect now" path.
+    try:
+        from mewbo_core.tool_registry import _default_manifest_cache_path
+
+        manifest_path = _default_manifest_cache_path()
+        if os.path.exists(manifest_path):
+            os.remove(manifest_path)
+    except Exception:
+        pass
+    try:
+        from mewbo_tools.integration.mcp_pool import reset_mcp_pool
+
+        reset_mcp_pool()
+    except Exception:
+        pass
     refreshed = load_registry()
     context.tool_registry._tools = {}
     context.tool_registry._instances = {}
@@ -843,6 +861,24 @@ def _render_mcp(
                 config = json.load(handle)
             servers = config.get("servers", {})
             if servers:
+                # Live pool status (Gitea #130): a server may be connecting
+                # lazily, backing off after a transient failure, or quarantined
+                # (auth/config). Surface it so a dead server is visibly distinct
+                # from a healthy one rather than silently stalling.
+                pool_status: dict[str, dict] = {}
+                try:
+                    from mewbo_tools.integration.mcp_pool import get_mcp_pool
+
+                    pool_status = get_mcp_pool().status_snapshot()
+                except Exception:
+                    pool_status = {}
+                _status_styles = {
+                    "connected": "green",
+                    "backoff": "yellow",
+                    "quarantined": "red",
+                    "failed": "red",
+                    "pending": "dim",
+                }
                 server_lines: list[Text] = []
                 for name, info in servers.items():
                     line = Text()
@@ -851,6 +887,17 @@ def _render_mcp(
                     if transport:
                         line.append(" — ", style="dim")
                         line.append(str(transport))
+                    status = pool_status.get(str(name))
+                    if status:
+                        label = str(status.get("status", ""))
+                        line.append(" • ", style="dim")
+                        line.append(label, style=_status_styles.get(label, "dim"))
+                        reason = status.get("reason")
+                        retry_in = status.get("retry_in")
+                        if retry_in:
+                            line.append(f" (retry {int(retry_in)}s)", style="dim")
+                        elif reason:
+                            line.append(f" ({reason})", style="dim")
                     server_lines.append(line)
                 console.print(
                     Panel(

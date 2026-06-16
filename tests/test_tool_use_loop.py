@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from mewbo_core.agent_context import AgentContext
 from mewbo_core.classes import ActionStep, Plan, PlanStep
 from mewbo_core.context import ContextSnapshot
@@ -21,6 +22,7 @@ from mewbo_core.tool_use_loop import (
     _CachedFileRead,
     _coerce_mcp_tool_input,
     _infer_operation,
+    _session_tool_error_envelope,
 )
 
 # ---------------------------------------------------------------------------
@@ -1564,3 +1566,396 @@ class TestDoomLoopHaltEvent:
         assert payload["agent_id"] == ctx.agent_id
         assert payload["depth"] == ctx.depth
         assert "step" in payload
+
+
+# ---------------------------------------------------------------------------
+# Lane A: SessionTool error-envelope surfacing
+#
+# Graph plugin tools (wiki/scg) signal a HANDLED failure by RETURNING an
+# ``err_result`` MockSpeaker (``str({"error": {code, message}})``), not by
+# raising. Before the seam the loop recorded that as ``success=True`` and the
+# per-step failure nudge never fired (an embedding-429 rendered as "✓ ok"). The
+# loop now reclassifies such a return as a FAILED tool result while the model
+# STILL receives the envelope JSON as the tool output.
+# ---------------------------------------------------------------------------
+
+
+class _EnvelopeSessionTool:
+    """A SessionTool whose ``handle`` returns a structured-error envelope.
+
+    Models the real scg/wiki pattern: an internal exception is CAUGHT and turned
+    into an ``err_result`` MockSpeaker returned as a successful result.
+    """
+
+    tool_id = "scg_observe"
+
+    def __init__(self, *, content: str) -> None:
+        from mewbo_core.common import MockSpeaker
+
+        self._reply = MockSpeaker(content=content)
+        self.modes = ("act", "plan")
+        self.schema = {
+            "type": "function",
+            "function": {
+                "name": "scg_observe",
+                "description": "probe",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+
+    async def handle(self, action_step):  # noqa: ANN001 — mirrors SessionTool
+        return self._reply
+
+    def should_terminate_run(self) -> bool:
+        return False
+
+    def terminal_reason(self) -> str:
+        return "completed"
+
+
+class TestSessionToolErrorEnvelope:
+    """A returned error envelope becomes a FAILED step + fires the loop nudge."""
+
+    def _run_with_envelope_tool(self, envelope_content: str):
+        """Drive one tool call to the envelope tool, then a text completion."""
+        from mewbo_core.tool_use_loop import ToolUseLoop as _Loop
+
+        events: list[dict] = []
+        nudges: list[str] = []
+
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(
+            side_effect=[
+                _tool_call_response("scg_observe", {}, "call_1"),
+                _text_response("I saw the error and adapted."),
+            ]
+        )
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        # The messages the second LLM call receives carry the failure nudge —
+        # captured below from ``fake_model.ainvoke.call_args_list``.
+        registry = _make_registry()
+        env_tool = _EnvelopeSessionTool(content=envelope_content)
+
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            loop = _Loop(
+                agent_context=_make_agent_context(
+                    event_logger=lambda e: events.append(e)
+                ),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+                session_id="sess-env-1",
+                extra_session_tools=[env_tool],
+            )
+            tq, state = asyncio.run(
+                loop.run("probe the source", tool_specs=[], context=_make_context())
+            )
+
+        # The messages list passed to the SECOND ainvoke call carries the nudge.
+        second_call_messages = fake_model.ainvoke.call_args_list[1].args[0]
+        for m in second_call_messages:
+            if isinstance(m, SystemMessage) and "failed this step" in str(m.content):
+                nudges.append(str(m.content))
+        return tq, state, events, nudges
+
+    def test_returned_envelope_records_failed_tool_result(self):
+        """The tool_result event for the envelope has ``success=False`` + error."""
+        from mewbo_graph.plugins.scg._core import err_result
+
+        envelope = err_result("internal", "embedding backend 429").content
+        tq, state, events, nudges = self._run_with_envelope_tool(envelope)
+
+        tool_results = [e for e in events if e["type"] == "tool_result"]
+        assert len(tool_results) == 1
+        payload = tool_results[0]["payload"]
+        # FAILED — not the old silent "✓ ok".
+        assert payload["success"] is False
+        assert "embedding backend 429" in payload["error"]
+        # The model STILL sees the envelope JSON as the tool output (``result``).
+        assert "embedding backend 429" in payload["result"]
+        assert "'error'" in payload["result"] or '"error"' in payload["result"]
+
+    def test_returned_envelope_fires_failure_nudge(self):
+        """The loop injects the per-step failure-feedback SystemMessage."""
+        from mewbo_graph.plugins.scg._core import err_result
+
+        envelope = err_result("internal", "embedding backend 429").content
+        _tq, _state, _events, nudges = self._run_with_envelope_tool(envelope)
+        assert nudges, "expected the '... failed this step' nudge after a failed step"
+        assert "failed this step" in nudges[0]
+
+    def test_ok_result_stays_success(self):
+        """A normal ``ok_result`` return is NOT reclassified — success stays True."""
+        from mewbo_graph.plugins.scg._core import ok_result
+
+        ok = ok_result({"ok": True, "count": 2}).content
+        _tq, _state, events, nudges = self._run_with_envelope_tool(ok)
+        payload = next(e["payload"] for e in events if e["type"] == "tool_result")
+        assert payload["success"] is True
+        assert "error" not in payload
+        assert not nudges  # no failure nudge for a healthy result
+
+    def test_envelope_helper_is_pure(self):
+        """The detector is layering-safe: structural string check, no graph import."""
+        from mewbo_core.common import MockSpeaker
+
+        assert _session_tool_error_envelope(
+            MockSpeaker(content=str({"error": {"code": "x", "message": "y"}}))
+        ) == "x: y"
+        assert _session_tool_error_envelope(MockSpeaker(content="all good")) is None
+        assert _session_tool_error_envelope(str({"results": ["error word"]})) is None
+
+
+# ---------------------------------------------------------------------------
+# Lane A: auto-skill injection opt-out (enable_skills=False)
+#
+# A headless product drive (search/wiki) can disable auto-skill injection so it
+# never burns its first step activating a host ``~/.claude`` skill the
+# Orchestrator discovered. Default True ⇒ existing behavior unchanged.
+# ---------------------------------------------------------------------------
+
+
+class TestEnableSkillsOptOut:
+    """``enable_skills=False`` suppresses the ``activate_skill`` schema."""
+
+    def _skill_registry_with_auto_skill(self):
+        from mewbo_core.skills import SkillRegistry, SkillSpec
+
+        reg = SkillRegistry()
+        spec = SkillSpec(
+            name="using-superpowers",
+            description="a host skill the drive never intended to expose",
+            source_path="/fake/skill.md",
+            source="user",
+            body="...",
+            disable_model_invocation=False,  # auto-invocable
+            user_invocable=True,
+        )
+        reg._skills[spec.name] = spec
+        return reg
+
+    def _bound_schema_names(self, *, enable_skills: bool) -> set[str]:
+        """Build a loop, call ``_bind_model``, return the bound tool function names."""
+        captured: dict[str, list] = {}
+
+        def _capture_bind_tools(schemas):
+            captured["schemas"] = schemas
+            return MagicMock()
+
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            model = MagicMock()
+            model.bind_tools.side_effect = _capture_bind_tools
+            mock_build.return_value = model
+
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=_make_registry(),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+                session_id="sess-skill-1",
+                skill_registry=self._skill_registry_with_auto_skill(),
+                enable_skills=enable_skills,
+            )
+            loop._current_mode = "act"
+            loop._bind_model([])
+
+        names = set()
+        for s in captured.get("schemas", []):
+            fn = s.get("function") if isinstance(s, dict) else None
+            if isinstance(fn, dict) and fn.get("name"):
+                names.add(fn["name"])
+        return names
+
+    def test_default_injects_activate_skill(self):
+        """Default (enable_skills=True) injects the activate_skill schema."""
+        assert "activate_skill" in self._bound_schema_names(enable_skills=True)
+
+    def test_opt_out_suppresses_activate_skill(self):
+        """enable_skills=False → NO activate_skill schema even with an auto-skill."""
+        assert "activate_skill" not in self._bound_schema_names(enable_skills=False)
+
+
+# ---------------------------------------------------------------------------
+# Batch fan-out through the loop: spawn_agents in a SINGLE turn  (Gitea #117)
+# ---------------------------------------------------------------------------
+
+
+class TestToolUseLoopBatchFanOut:
+    """A root drives spawn_agents(tasks=[…]) in one turn → concurrent children."""
+
+    def test_single_turn_spawn_agents_fans_out_three(self):
+        """One spawn_agents tool call admits ≥3 children that run concurrently.
+
+        The model emits the batch on its FIRST turn (mirroring a fast tier that
+        can't reliably emit N parallel tool-calls), then finishes in text. The
+        loop's dispatch routes it to run_batch_async; children run on the
+        existing non-blocking hypervisor path.
+        """
+        spec = _make_spec("aider_shell_tool", "Run shell")
+        registry = _make_registry(spec)
+
+        # First ainvoke (the root's turn 1) emits the batch; every later call —
+        # the root's synthesis turn AND each child's single turn — finishes in
+        # text. Only the very first call can be the parent's, since children are
+        # created only after that call dispatches.
+        call_count = {"n": 0}
+
+        async def model_side_effect(*_a, **_k):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return _tool_call_response(
+                    "spawn_agents",
+                    {"tasks": [{"task": "a"}, {"task": "b"}, {"task": "c"}]},
+                    "batch_1",
+                )
+            return _text_response("All children dispatched.")
+
+        bound = MagicMock()
+        bound.ainvoke = AsyncMock(side_effect=model_side_effect)
+
+        events: list[dict] = []
+
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(
+                    event_logger=events.append
+                ),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            tq, state = asyncio.run(
+                loop.run("fan out three", tool_specs=[spec], context=_make_context())
+            )
+
+        assert state.done is True
+
+        # The batch tool result carries the ordered agent_ids for all three.
+        batch_steps = [s for s in tq.action_steps if s.tool_id == "spawn_agents"]
+        assert len(batch_steps) == 1
+        payload = json.loads(batch_steps[0].result.content)
+        assert payload["kind"] == "agent_batch"
+        assert payload["spawned"] == 3
+        assert len([a for a in payload["agent_ids"] if a]) == 3
+
+        # Three distinct children entered the tree (overlapping start windows):
+        starts = [
+            e["payload"]["agent_id"]
+            for e in events
+            if e.get("type") == "sub_agent" and e["payload"]["action"] == "start"
+        ]
+        assert len(set(starts)) == 3
+
+
+# ---------------------------------------------------------------------------
+# Token streaming (RC1 / Gitea #137)
+# ---------------------------------------------------------------------------
+
+
+def _async_chunks(chunks):
+    """Return an ``astream``-shaped callable yielding *chunks* in order."""
+
+    async def _astream(_messages, *_args, **_kwargs):
+        for chunk in chunks:
+            yield chunk
+
+    return _astream
+
+
+class TestToolUseLoopStreaming:
+    """The loop streams real model token deltas (true TTFT), not a buffered
+    whole-message echo, and preserves the final reconstructed message."""
+
+    def test_streams_token_deltas_and_reconstructs_message(self):
+        spec = _make_spec()
+        registry = _make_registry(spec)
+        events: list[dict] = []
+
+        # A real streamed text turn: text chunks + a trailing usage-only chunk
+        # (mirrors ChatLiteLLM._astream, which appends a usage_metadata chunk).
+        chunks = [
+            AIMessageChunk(content="The "),
+            AIMessageChunk(content="answer "),
+            AIMessageChunk(content="is 42."),
+            AIMessageChunk(
+                content="",
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "total_tokens": 15,
+                },
+            ),
+        ]
+        bound = MagicMock()
+        bound.astream = _async_chunks(chunks)
+        # ainvoke must NOT be used when a usable stream exists.
+        bound.ainvoke = AsyncMock(return_value=_text_response("BUFFERED — should not appear"))
+
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(event_logger=events.append),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            tq, state = asyncio.run(
+                loop.run("What is 6*7?", tool_specs=[spec], context=_make_context())
+            )
+
+        # Final result is the accumulated stream, not the buffered ainvoke value.
+        assert state.done_reason == "completed"
+        assert "42" in (tq.task_result or "")
+        assert bound.ainvoke.call_count == 0
+
+        # Token deltas were surfaced live, in order.
+        deltas = [
+            e["payload"]["text"]
+            for e in events
+            if e.get("type") == "agent_message_delta"
+        ]
+        assert deltas == ["The ", "answer ", "is 42."]
+
+        # Token accounting survives streaming (load-bearing for #54).
+        end = [e for e in events if e.get("type") == "llm_call_end" and e["payload"].get("success")]
+        assert end and end[-1]["payload"]["output_tokens"] == 5
+
+    def test_falls_back_to_ainvoke_when_stream_unavailable(self):
+        """A bound model with no usable stream (e.g. a stubbed MagicMock whose
+        astream yields nothing) transparently falls back to ainvoke — keeping
+        every existing non-streaming test path intact."""
+        spec = _make_spec()
+        registry = _make_registry(spec)
+        events: list[dict] = []
+
+        bound = MagicMock()  # default MagicMock.astream yields an empty async iter
+        bound.ainvoke = AsyncMock(return_value=_text_response("Fallback answer 99."))
+
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(event_logger=events.append),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            tq, state = asyncio.run(
+                loop.run("ping", tool_specs=[spec], context=_make_context())
+            )
+
+        assert state.done_reason == "completed"
+        assert "99" in (tq.task_result or "")
+        assert bound.ainvoke.call_count == 1
+        assert not [e for e in events if e.get("type") == "agent_message_delta"]

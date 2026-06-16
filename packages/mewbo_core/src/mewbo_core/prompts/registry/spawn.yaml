@@ -1,0 +1,32 @@
+# Sub-agent task-assembly fragments (Gitea #89, phase 1 — VERBATIM extraction).
+#
+# Migrated from spawn_agent.py: the `acceptance_criteria` suffix appended to a
+# delegated task, and the agent-body prepend that frames a registered AgentDef's
+# (already-substituted) body ahead of the task. Both are templated fragments
+# concatenated at the call site — the registry owns only the string FORMAT, not
+# the spawn control flow. The tool JSON schemas (SPAWN_AGENT_SCHEMA,
+# CHECK_AGENTS_SCHEMA, …) stay in code by design.
+
+spawn.acceptance_criteria:
+  purpose: >-
+    Suffix appended to a sub-agent task when acceptance criteria are provided —
+    contract-first decomposition so the child knows how completion is verified.
+  variables: [acceptance_criteria]
+  token_budget: Appended only when spawn_agent carries acceptance_criteria.
+  template: |-
+    {{ "\n" }}
+    Acceptance criteria: {{ acceptance_criteria }}
+
+spawn.task_body:
+  purpose: >-
+    Frames a registered agent type's rendered system-prompt body ahead of the
+    delegated task (body → separator → task), the prepend applied when
+    spawn_agent names an agent_type.
+  variables: [body, task]
+  token_budget: Prepended once per agent_type spawn.
+  template: |-
+    {{ body }}
+
+    ---
+
+    Task: {{ task }}

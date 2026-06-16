@@ -23,35 +23,23 @@ import jsonschema
 from mewbo_core.common import MockSpeaker, get_logger
 from mewbo_core.llm import sanitize_tool_schema
 from mewbo_core.permissions import auto_approve
+from mewbo_core.prompt_registry import get_prompt_registry
 
 # Force-emit directive — injected into the structured run's system prompt via
 # the ``skill_instructions`` seam so the grounding model MUST conclude by
 # calling ``emit_result`` (and never answers in prose). This fixes the failure
 # where the model reaches natural completion without ever calling the emit tool
 # → ``payload is None``. It lives in the prompt, NOT the loop, and needs no
-# ``tool_choice`` plumbing.
-FORCE_EMIT_DIRECTIVE = (
-    "You are operating in STRUCTURED OUTPUT mode. Your ONLY way to finish this "
-    "task is to call the `emit_result` tool exactly once with arguments that "
-    "validate against its schema. Do NOT answer in prose, do NOT write a final "
-    "text message, and do NOT stop until you have called `emit_result`. Use any "
-    "grounding tools you need first, then call `emit_result` to deliver the "
-    "structured answer. A reply that does not call `emit_result` is a failure."
-)
+# ``tool_choice`` plumbing. Sourced from the central registry
+# (``structured.force_emit_directive``).
+FORCE_EMIT_DIRECTIVE = get_prompt_registry().render("structured.force_emit_directive")
 
-# Sharper re-drive directive for the sync belt-and-suspenders path: the first
-# run already finished without emitting, so this one is unambiguous and urgent.
-# It still contains FORCE_EMIT_DIRECTIVE verbatim so tests/assertions that look
-# for the base directive match either drive.
-_REDRIVE_DIRECTIVE = (
-    FORCE_EMIT_DIRECTIVE
-    + " You did not call `emit_result` last time. Do not gather any more "
-    "context — call `emit_result` NOW with your best structured answer."
-)
-_REDRIVE_QUERY = (
-    "You must finish by calling the emit_result tool. "
-    "Call emit_result now with the structured answer."
-)
+# Concise user query for the sharper belt-and-suspenders re-drive turn. The
+# matching re-drive system directive (``structured.redrive_directive``) is
+# rendered per-model at the call site (``_run_with_redrive``) so a per-model
+# override reaches it too (#113); it still contains FORCE_EMIT_DIRECTIVE verbatim
+# so tests/assertions that look for the base directive match either drive.
+_REDRIVE_QUERY = get_prompt_registry().render("structured.redrive_query")
 
 if TYPE_CHECKING:
     import threading
@@ -231,15 +219,15 @@ class EmitStructuredResponseTool:
             )
             self._terminate_run_pending = True
             return MockSpeaker(
-                content=(
-                    f"Schema validation failed {self._attempts}x — giving up. "
-                    f"Last error: {detail}"
+                content=get_prompt_registry().render(
+                    "structured.reask_giveup",
+                    attempts=self._attempts,
+                    detail=detail,
                 )
             )
         return MockSpeaker(
-            content=(
-                f"Your output did not match the schema. {detail}. Fix these fields "
-                "and call emit_result again."
+            content=get_prompt_registry().render(
+                "structured.reask_fix_fields", detail=detail
             )
         )
 
@@ -394,8 +382,12 @@ class StructuredResponder:
         self._drive(session_id, query, emit)
         if emit.payload is None and not emit.failed:
             # The model reached natural completion without calling emit_result.
-            # Re-drive once with a sharper, mandatory directive.
-            self._drive(session_id, _REDRIVE_QUERY, emit, directive=_REDRIVE_DIRECTIVE)
+            # Re-drive once with a sharper, mandatory directive — rendered for
+            # this run's model so a per-model override applies (#113).
+            redrive = get_prompt_registry().render(
+                "structured.redrive_directive", model=self.model_name
+            )
+            self._drive(session_id, _REDRIVE_QUERY, emit, directive=redrive)
 
     def _drive(
         self,
@@ -403,9 +395,13 @@ class StructuredResponder:
         query: str,
         emit: EmitStructuredResponseTool,
         *,
-        directive: str = FORCE_EMIT_DIRECTIVE,
+        directive: str | None = None,
     ) -> None:
         """Run one bounded structured session that ends in an emit call.
+
+        ``directive`` defaults to the force-emit directive rendered for this
+        run's model so a per-model override of ``structured.force_emit_directive``
+        applies (#113); the re-drive path passes the sharper directive explicitly.
 
         Graph-first (#77): ``extra_instructions`` (the graph-first discipline
         playbook) is PREPENDED to the force-emit directive — both ride the one
@@ -415,6 +411,10 @@ class StructuredResponder:
         workspace's sources. Both default to no-ops, so the wiki path is
         unchanged.
         """
+        if directive is None:
+            directive = get_prompt_registry().render(
+                "structured.force_emit_directive", model=self.model_name
+            )
         skill = directive
         if self.extra_instructions:
             skill = f"{self.extra_instructions}\n\n{directive}"

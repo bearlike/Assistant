@@ -249,8 +249,10 @@ def test_activate_skill_scopes_tools_with_allowlist() -> None:
 
     t1 = MagicMock(spec=TSpec)
     t1.tool_id = "allowed-tool"
+    t1.metadata = {}
     t2 = MagicMock(spec=TSpec)
     t2.tool_id = "denied-tool"
+    t2.metadata = {}
     spec = _make_spec(allowed_tools=["allowed-tool"])
     _, scoped = activate_skill(spec, tool_specs=[t1, t2])
     assert scoped is not None

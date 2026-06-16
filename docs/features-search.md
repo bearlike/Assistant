@@ -1,7 +1,7 @@
 # Agentic Search
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-search-01-landing.jpg" alt="The Agentic Search landing page in the Mewbo Console, with a question box scoped to a workspace, connected-source chips, and a grid of workspaces such as Engineering docs, Support intel, and Research library" style="width: 100%; max-width: 960px; height: auto;" />
+  <img src="../mewbo-search-01-landing.jpg" alt="The Agentic Search landing page in the Mewbo Console: a question box scoped to the OSS Repo Scout workspace on the Fast tier, chips showing 6 of 7 sources mapped, graph node-edge counts, and memory notes, above a grid of saved workspaces (Knowledge graph, SideStage Ops, OSS Repo Scout)" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
 
 Ask a question in plain English and Mewbo searches across everything you've connected. A coordinating agent decomposes the question, routes each part to the right sources via the Source Capability Graph, fans out probe agents to execute the retrieval, and synthesises one ranked answer with citations and a full agent trace.
@@ -20,7 +20,7 @@ Every workspace card carries an edit (pencil) button. It opens the workspace's n
 
 ### See what a workspace knows
 
-Each card also has a graph button. It opens the workspace's capability graph in a dialog, served by `GET /api/agentic_search/workspaces/<id>/graph`. The view is layered, with a toggle per layer:
+Each card also has a graph button. It opens the workspace's capability graph in a dialog, served by [GET /api/agentic_search/workspaces/{workspace_id}/graph](endpoint:GET /api/agentic_search/workspaces/{workspace_id}/graph). The view is layered, with a toggle per layer:
 
 - **Schema**: capability, entity-type, and field nodes from the workspace's mapped sources.
 - **Memory**: the learned connector notes deposited by past runs.
@@ -28,12 +28,16 @@ Each card also has a graph button. It opens the workspace's capability graph in 
 
 Sources you enabled but have not yet mapped appear as ghost nodes with a hint to map them, so a half-configured workspace is visible at a glance instead of silently smaller.
 
+<div style="display: flex; justify-content: center;">
+  <img src="../mewbo-search-03-capability-graph.jpg" alt="A workspace capability graph dialog for OSS Repo Scout showing 86 nodes and 95 edges in a force-directed view, with a node filter, a Capability/Capabilities/Memory layer legend, and a re-layout control" style="width: 100%; max-width: 960px; height: auto;" />
+</div>
+
 ---
 
 ## One question, parallel probe agents
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-search-02-results.jpg" alt="An Agentic Search results page showing a synthesised answer with an 86% confidence bar and citations, source-type filters, ranked result cards from GitHub, Slack, and Linear, and a right rail with an agent trace, related questions, and people" style="width: 100%; max-width: 960px; height: auto;" />
+  <img src="../mewbo-search-02-results.jpg" alt="An Agentic Search results page: a synthesised answer to a question about popular agentic coding tools on the Fast tier, with an 86% High confidence bar, All/Docs/Code source-type filters, ranked GitHub result cards (Aider, Codex CLI, Gemini CLI) showing stars, language, and licence, and a right rail with the agent trace and capability graph" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
 
 A single `scg-search` agent handles the full query lifecycle. It decomposes the question into sub-queries, calls `scg_route` to find the highest-ranked pathways through the Source Capability Graph, and spawns a bounded set of probe agents (each scoped to one pathway) to execute the actual retrieval in parallel. Because it runs on the same hypervisor as every other Mewbo task, the fan-out is observable, steerable, and bounded. A typical query resolves in seconds.
@@ -109,7 +113,7 @@ Adding a source triggers a five-phase map pipeline:
 1. **Connect**: resolve and authenticate the connector descriptor
 2. **Introspect**: fetch the raw schema: OpenAPI document, MCP tool list, or SQL introspection
 3. **Parse**: dispatch to the provider to emit capability nodes, entity-type nodes, field nodes, and their edges. An OpenAPI source produces one capability node per `operationId`; an MCP tool list produces one capability node per tool.
-4. **Link**: run `TypeAligner` across all sources to emit weighted `RESOLVES_TO` edges where schema types correspond (see [Cross-source type alignment](#cross-source-type-alignment) below)
+4. **Link**: run [TypeAligner](repo:packages/mewbo_graph/src/mewbo_graph/scg/entity_resolution.py) across all sources to emit weighted `RESOLVES_TO` edges where schema types correspond (see [Cross-source type alignment](#cross-source-type-alignment) below)
 5. **Finalize**: embed every node with the same LiteLLM-backed embedding model used by the Agentic Wiki; compute `CONSUMES` edges by matching capability output field names to input field names across sources
 
 The embedding step is best-effort. If no embedding backend is configured the SCG routes queries on graph structure alone.
@@ -151,7 +155,7 @@ This is what lets a query about task ownership route to both Jira and Linear wit
 
 ### Entity resolution across sources
 
-`TypeAligner` establishes probabilistic schema correspondences at map time. At query time, a second, deeper resolution step runs: `ScgAnchorResolver` implements the wiki's `StructureProvider` protocol, making every capability node and entity-type node in the SCG a participant in the same `ResolutionLadder` used by the Agentic Wiki to resolve code symbols into named concepts.
+[TypeAligner](repo:packages/mewbo_graph/src/mewbo_graph/scg/entity_resolution.py) establishes probabilistic schema correspondences at map time. At query time, a second, deeper resolution step runs: [ScgAnchorResolver](repo:packages/mewbo_graph/src/mewbo_graph/scg/memory_bridge.py) implements the wiki's [StructureProvider](repo:packages/mewbo_graph/src/mewbo_graph/wiki/structure_provider.py) protocol, making every capability node and entity-type node in the SCG a participant in the same [ResolutionLadder](repo:packages/mewbo_graph/src/mewbo_graph/entities/resolver.py) used by the Agentic Wiki to resolve code symbols into named concepts.
 
 In practice this means three things for your consumers:
 
@@ -219,6 +223,10 @@ Below it, the underlying **results** are listed in rank order (a merged PR, a Sl
 ## See how it got there
 
 Agentic Search is transparent by design. Alongside each answer:
+
+<div style="display: flex; justify-content: center;">
+  <img src="../mewbo-search-04-agent-trace.jpg" alt="An Agentic Search result with the Agent trace rail expanded, showing the scg-search coordinator and its claude-sonnet-4-6 probe agents, beside a synthesised answer and a ranked table of matching repositories" style="width: 100%; max-width: 960px; height: auto;" />
+</div>
 
 - **Agent trace**: which sources were queried and which returned a hit, so you can see the search actually ran end to end.
 - **Related questions**: the obvious next questions, one click away.

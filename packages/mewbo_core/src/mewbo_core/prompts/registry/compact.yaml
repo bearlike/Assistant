@@ -1,0 +1,138 @@
+# Context-compaction prompts (Gitea #89, phase 1 — VERBATIM extraction).
+#
+# Migrated from compact.py: COMPACT_PROMPT (base), CAVEMAN_COMPACT_PROMPT (the
+# `caveman` scenario override), and the `/compact <focus>` directive suffix.
+# The two system prompts are static (no `variables`) so they pass through
+# VERBATIM — never Jinja-parsed. Both were `"""\ ... """` constants (no leading
+# newline, exactly one trailing newline) so they use the `|` block scalar.
+
+compact.system:
+  purpose: >-
+    Compaction summarizer system prompt — produce the <analysis>/<summary>
+    structured block. The `caveman` scenario swaps in the terse variant.
+  token_budget: One-shot summarization system message; not injected every turn.
+  template: |
+    You are summarizing a conversation to fit within a context window.
+    Do NOT use any tools. Do NOT generate code. This is a summarization task only.
+
+    Produce your response in two parts:
+
+    <analysis>
+    Reason about what information is critical to preserve vs what can be safely discarded.
+    Consider: active tasks, recent errors, file context, user preferences expressed.
+    This section will be removed from the final summary.
+    </analysis>
+
+    <summary>
+    ## Primary Request
+    What the user originally asked for and the overall goal.
+
+    ## Key Technical Concepts
+    Important technical details, architecture decisions, constraints discovered.
+
+    ## Files and Code
+    Key files read or modified, with brief relevant context.
+
+    ## Errors and Fixes
+    Any errors encountered and how they were resolved.
+
+    ## Current State
+    Where the conversation left off, what is in progress.
+
+    ## Pending Tasks
+    Anything the user asked for that has not been completed yet.
+    </summary>
+  overrides:
+    # Caveman-style terse summarization. Layers linguistic compression rules
+    # (inspired by JuliusBrussee/caveman) on the same <analysis>/<summary>
+    # structure so downstream parsers are unaffected. Selected via
+    # render(scenario="caveman") when compaction.caveman_mode is set.
+    - kind: scenario
+      match: caveman
+      mode: replace
+      template: |
+        You are summarizing a conversation to fit within a context window.
+        Do NOT use any tools. Do NOT generate code. This is a summarization task only.
+
+        === TERSE MODE: ACTIVE ===
+        Write all summary prose like smart caveman. Technical substance stays exact. Only fluff dies.
+
+        Drop rules:
+        - Articles: a, an, the.
+        - Filler adverbs: just, really, basically, actually, simply, essentially, generally.
+        - Pleasantries: sure, certainly, of course, happy to, let me, I'd recommend.
+        - Hedging: perhaps, maybe, might be worth, it would be good to, I think.
+        - Redundant phrasing: "in order to" -> "to"; "make sure to" -> "ensure";
+          "the reason is because" -> "because"; "utilize" -> "use".
+        - Connective fluff: however, furthermore, additionally, moreover, in addition.
+        - Pronoun subjects when obvious: prefer imperative ("Fix auth bug.")
+          over "you should fix the auth bug".
+
+        Style rules:
+        - Fragments OK. Short synonyms. Imperative voice preferred.
+        - Pattern: [thing] [action] [reason]. [next step].
+        - One word when one word is enough.
+
+        Preserve EXACTLY (never compress these):
+        - Code blocks (fenced ``` or indented) and inline backticks.
+        - URLs, file paths, CLI commands.
+        - Library, API, class, and function names.
+        - Error strings (quote verbatim).
+        - Numeric values, dates, versions, env vars.
+        - Markdown headings (##) below — do not rename or reorder.
+        - Bullet hierarchy and list ordering.
+
+        Auto-Clarity escape: for security warnings, irreversible destructive actions,
+        or user confusion, revert to normal prose in that section. Resume terse next.
+
+        Persistence: every section stays terse. No drift. Still terse if unsure.
+        No filler creep after many bullets.
+
+        Example:
+        - Not: "The user originally asked me to help with debugging an authentication
+               middleware issue that was causing token validation to fail intermittently."
+        - Yes: "User: debug auth middleware. Token validation fails intermittently."
+
+        Produce your response in two parts:
+
+        <analysis>
+        Reason about what information is critical to preserve vs what can be safely discarded.
+        Consider: active tasks, recent errors, file context, user preferences expressed.
+        This section will be removed from the final summary.
+        </analysis>
+
+        <summary>
+        ## Primary Request
+        What user originally asked. Goal in one line.
+
+        ## Key Technical Concepts
+        Architecture decisions, constraints, technical details. Fragments OK.
+
+        ## Files and Code
+        Files read or modified. Path + one-line why.
+
+        ## Errors and Fixes
+        Errors encountered (quote verbatim). Fix applied.
+
+        ## Current State
+        Where conversation left off. What is in progress.
+
+        ## Pending Tasks
+        What user asked for that is not yet done.
+        </summary>
+
+# The /compact <focus> directive, appended to the summarizer system prompt
+# (Codex-style). Templated on the already-stripped focus value; rendered and
+# concatenated at the call site. Leading "\n\n" + no trailing newline → `|-`.
+compact.focus_suffix:
+  purpose: >-
+    Free-form focus directive appended to the compaction system prompt to bias
+    what the summary highlights without dropping critical state.
+  variables: [focus_prompt]
+  token_budget: Appended only when /compact carries a focus directive.
+  template: |2-
+
+
+    ## User Focus
+    The user invoked compaction with a focus directive. Bias the summary toward content matching this directive without dropping critical state (active tasks, recent errors, file context):
+    {{ focus_prompt }}

@@ -51,7 +51,10 @@ WATCHDOG_CMD = (
     "--abs-proxy-base-path /ide/{sid} /home/coder/project"
 )
 
-PROBE_URL = "http://127.0.0.1:5126/ide/{sid}/healthz"
+# Readiness-probe path, appended to the configurable ide-proxy base URL
+# (``WebIdeConfig.proxy_url``). The base varies with the API's network
+# topology, so it is never hardcoded here.
+PROBE_PATH = "/ide/{sid}/healthz"
 
 
 class MaxLifetimeReached(Exception):
@@ -530,14 +533,21 @@ class IdeManager:
         if cached is not None and now - cached[1] < self._PROBE_TTL_SECONDS:
             ready = cached[0]
         else:
-            ready = self._probe_ready(session_id)
+            ready = self._probe_ready(self._cfg.proxy_url, session_id)
             self._probe_cache[session_id] = (ready, now)
         return "ready" if ready else "starting"
 
     @staticmethod
-    def _probe_ready(session_id: str) -> bool:
-        """HTTP GET the ide-proxy healthz path with a 1s timeout."""
-        url = PROBE_URL.format(sid=session_id)
+    def _probe_ready(proxy_url: str, session_id: str) -> bool:
+        """HTTP GET the ide-proxy healthz path with a 1s timeout.
+
+        ``proxy_url`` is the ide-proxy base (``WebIdeConfig.proxy_url``). It
+        is threaded in rather than hardcoded because the reachable address
+        depends on the API's network topology: a host-networked API reaches
+        the proxy on loopback, while a bridge-networked one must use the
+        proxy's in-network DNS name.
+        """
+        url = proxy_url.rstrip("/") + PROBE_PATH.format(sid=session_id)
         req = urllib.request.Request(url, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=1.0) as resp:  # noqa: S310

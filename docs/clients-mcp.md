@@ -104,6 +104,8 @@ The Mewbo MCP server speaks **Streamable HTTP** at `/mcp`, and works with any HT
 claude mcp add -s user -t http mewbo https://<your-mewbo-host>/mcp -H "Authorization: Bearer <API_KEY>"
 ```
 
+![Mewbo listed as an MCP server in Claude Code's /mcp panel, showing all 19 available tools](mewbo-mcp-01-claude-code.png)
+
 ### Codex, Cursor, Windsurf, and other clients
 
 Add an entry to your client's MCP server config:

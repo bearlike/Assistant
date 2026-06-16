@@ -296,6 +296,54 @@ export function getActiveTurn(events: EventRecord[]): TurnMeta | null {
     model: turnModel,
   };
 }
+/**
+ * Live assistant text for the currently-open turn, assembled from streamed
+ * `agent_message_delta` events (Gitea #137).
+ *
+ * The engine emits one `agent_message_delta` per LLM text chunk
+ * (`{text, agent_id, depth, step}`) for true time-to-first-token, then the
+ * existing per-step `agent_message` once the step's text is final, and finally
+ * the turn-closing `assistant`/`completion` event. This coalesces the ROOT
+ * agent's (depth 0) deltas into one growing message: deltas accumulate into the
+ * in-flight block, and a final `agent_message` replaces that block with its
+ * authoritative text (so any delta/serialization drift is reconciled away).
+ *
+ * Returns "" when there is no open turn or no streamed text — so callers render
+ * a graceful no-op (the existing "Working…" beat) for non-streaming models or
+ * legacy transcripts. The turn-closing `assistant` bubble (built by
+ * {@link buildTimeline}) supersedes this entirely once the turn settles, so the
+ * final text is authoritative and never duplicated.
+ */
+export function getActiveStreamText(events: EventRecord[]): string {
+  const turn = getActiveTurn(events);
+  if (!turn) {
+    return "";
+  }
+  const finalized: string[] = []; // completed step texts (root, depth 0)
+  let buffer = ""; // in-flight delta accumulation for the current step
+  for (const event of turn.events) {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const depth = typeof payload.depth === "number" ? payload.depth : 0;
+    if (depth !== 0) {
+      continue; // only the root agent's narration belongs in the conversation
+    }
+    if (event.type === "agent_message_delta") {
+      const text = typeof payload.text === "string" ? payload.text : "";
+      buffer += text;
+    } else if (event.type === "agent_message") {
+      // The per-step message is authoritative — replace the streamed buffer
+      // (drops drift; also covers non-streaming models that emit no deltas).
+      const text = typeof payload.text === "string" ? payload.text : "";
+      if (text) {
+        finalized.push(text);
+      }
+      buffer = "";
+    }
+  }
+  const parts = buffer ? [...finalized, buffer] : finalized;
+  return parts.join("\n\n");
+}
+
 function formatDuration(start?: string, end?: string): string | undefined {
   if (!start || !end) {
     return undefined;

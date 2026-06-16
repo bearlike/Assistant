@@ -47,6 +47,7 @@ import json
 import re
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -87,6 +88,58 @@ def _edge_key(edge: ScgEdge) -> str:
     return f"{edge.source}\x1f{edge.target}\x1f{edge.kind}"
 
 
+# A query_nodes filter triple — the cache key.
+_NodeKey = tuple[str | None, str | None, str | None]
+
+
+class _NodeQueryCache:
+    """Process-local memo of ``query_nodes`` results, keyed by the filter triple.
+
+    Both ``GET /sources`` (a per-source capability lookup per configured server)
+    and ``GET /workspaces/<id>/graph`` (a ``query_nodes(source_id=…)`` per scoped
+    source) re-scan the node collection once per source on every request; on the
+    JSON backend each scan reloads and re-validates the whole ``nodes.json``.
+    Memoizing by ``(source_id, kind, name_contains)`` turns those repeat reads
+    into O(1) hits.
+
+    Correctness: every node write (:meth:`ScgStore.upsert_nodes` /
+    :meth:`ScgStore.delete_source`) calls :meth:`clear`, so a same-process read
+    never observes a stale graph. A short TTL bounds cross-worker staleness on
+    the Mongo backend — another worker's map job can't reach our :meth:`clear`,
+    so its writes self-heal within :data:`_TTL_S`, the same eventual-consistency
+    contract the console's 60s ``staleTime`` already assumes. Returned lists are
+    copied so a caller mutating the result never corrupts the cached entry.
+    """
+
+    _TTL_S = 30.0
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[_NodeKey, tuple[float, list[ScgNode]]] = {}
+
+    def get(self, key: _NodeKey) -> list[ScgNode] | None:
+        """Return a cached (copied) result for *key*, or None on miss/expiry."""
+        with self._lock:
+            hit = self._entries.get(key)
+            if hit is None:
+                return None
+            stamped, nodes = hit
+            if time.monotonic() - stamped > self._TTL_S:
+                del self._entries[key]
+                return None
+            return list(nodes)
+
+    def put(self, key: _NodeKey, nodes: list[ScgNode]) -> None:
+        """Memoize *nodes* (copied) for *key* with a fresh timestamp."""
+        with self._lock:
+            self._entries[key] = (time.monotonic(), list(nodes))
+
+    def clear(self) -> None:
+        """Drop every memoized result (called on any node-collection write)."""
+        with self._lock:
+            self._entries.clear()
+
+
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
@@ -94,6 +147,14 @@ def _edge_key(edge: ScgEdge) -> str:
 
 class ScgStore(abc.ABC):
     """Abstract base for SCG structure-persistence backends."""
+
+    def __init__(self) -> None:
+        """Initialise the shared node-query cache (drivers must ``super().__init__``)."""
+        self._node_cache = _NodeQueryCache()
+
+    def _invalidate_nodes(self) -> None:
+        """Drop cached ``query_nodes`` results after a node-collection write."""
+        self._node_cache.clear()
 
     # -- Writes -------------------------------------------------------------
 
@@ -123,7 +184,6 @@ class ScgStore(abc.ABC):
     def get_node(self, node_id: str) -> ScgNode | None:
         """Return one node by id, or None if absent."""
 
-    @abc.abstractmethod
     def query_nodes(
         self,
         *,
@@ -131,7 +191,31 @@ class ScgStore(abc.ABC):
         kind: str | None = None,
         name_contains: str | None = None,
     ) -> list[ScgNode]:
-        """Return nodes matching every supplied filter (AND-composed)."""
+        """Return nodes matching every supplied filter (AND-composed).
+
+        Memoized by the filter triple (see :class:`_NodeQueryCache`); node writes
+        invalidate the cache. Backends implement the raw scan in
+        :meth:`_query_nodes_uncached`.
+        """
+        key = (source_id, kind, name_contains)
+        cached = self._node_cache.get(key)
+        if cached is not None:
+            return cached
+        nodes = self._query_nodes_uncached(
+            source_id=source_id, kind=kind, name_contains=name_contains
+        )
+        self._node_cache.put(key, nodes)
+        return nodes
+
+    @abc.abstractmethod
+    def _query_nodes_uncached(
+        self,
+        *,
+        source_id: str | None = None,
+        kind: str | None = None,
+        name_contains: str | None = None,
+    ) -> list[ScgNode]:
+        """Scan the node collection for the filter, with no caching."""
 
     @abc.abstractmethod
     def list_edges(
@@ -203,6 +287,7 @@ class JsonScgStore(ScgStore):
 
     def __init__(self, root_dir: str | Path | None = None) -> None:
         """Initialise + create the directory tree."""
+        super().__init__()
         if root_dir is None:
             home = get_config_value("runtime", "cache_dir", default="") or ".mewbo"
             root_dir = Path(home) / "agentic_search" / "scg"
@@ -249,6 +334,7 @@ class JsonScgStore(ScgStore):
         self._upsert(
             self._NODES, [(n.node_id, n.model_dump(mode="json")) for n in nodes]
         )
+        self._invalidate_nodes()
 
     def upsert_edges(self, edges: list[ScgEdge]) -> None:
         """Upsert edges, keyed on the ``(source, target, kind)`` triple."""
@@ -285,14 +371,14 @@ class JsonScgStore(ScgStore):
             doc = self._load(self._NODES).get(node_id)
         return ScgNode.model_validate(doc) if doc is not None else None
 
-    def query_nodes(
+    def _query_nodes_uncached(
         self,
         *,
         source_id: str | None = None,
         kind: str | None = None,
         name_contains: str | None = None,
     ) -> list[ScgNode]:
-        """Return nodes matching every supplied filter (AND-composed)."""
+        """Scan ``nodes.json`` for the filter (AND-composed); no caching."""
         with self._lock:
             docs = list(self._load(self._NODES).values())
         needle = name_contains.lower() if name_contains else None
@@ -397,6 +483,7 @@ class JsonScgStore(ScgStore):
                 self._SOURCES,
                 lambda d: d.get("source_id") == source_id,
             )
+        self._invalidate_nodes()
         return removed
 
     def _delete_where(self, collection: str, predicate: _DocPredicate) -> int:
@@ -441,6 +528,7 @@ class MongoScgStore(ScgStore):
         database: str | None = None,
     ) -> None:
         """Connect + ensure unique indexes for each upsert key."""
+        super().__init__()
         if client is None:
             from pymongo import MongoClient
 
@@ -502,6 +590,7 @@ class MongoScgStore(ScgStore):
             self._col(self.NODES).replace_one(
                 {"node_id": n.node_id}, n.model_dump(mode="json"), upsert=True
             )
+        self._invalidate_nodes()
 
     def upsert_edges(self, edges: list[ScgEdge]) -> None:
         """Upsert edges, keyed on the ``(source, target, kind)`` triple."""
@@ -541,14 +630,14 @@ class MongoScgStore(ScgStore):
         doc = self._col(self.NODES).find_one({"node_id": node_id}, {"_id": 0})
         return ScgNode.model_validate(doc) if doc else None
 
-    def query_nodes(
+    def _query_nodes_uncached(
         self,
         *,
         source_id: str | None = None,
         kind: str | None = None,
         name_contains: str | None = None,
     ) -> list[ScgNode]:
-        """Return nodes matching every supplied filter (AND-composed)."""
+        """Query the nodes collection for the filter (AND-composed); no caching."""
         query: dict[str, object] = {}
         if source_id is not None:
             query["source_id"] = source_id
@@ -621,6 +710,7 @@ class MongoScgStore(ScgStore):
         removed += self._col(self.SOURCES).delete_many(
             {"source_id": source_id}
         ).deleted_count
+        self._invalidate_nodes()
         return removed
 
 

@@ -189,3 +189,111 @@ def test_entries_keeps_all_catalog_sources() -> None:
     """Every fixture source is present even with an empty SCG."""
     ids = {e.id for e in SourceCatalog.entries()}
     assert {"notion", "github", "filesystem", "web"} <= ids
+
+
+# ── Grant inversion regression (run-797097e4b1) ──────────────────────────────
+
+
+def _registry_with(specs):
+    """A registry preloaded with *specs* (tool_id, server) — the live MCP set."""
+    from mewbo_core.tool_registry import ToolRegistry, ToolSpec
+
+    registry = ToolRegistry()
+    for tool_id, server in specs:
+        registry.register(
+            ToolSpec(
+                tool_id=tool_id,
+                name=tool_id,
+                description="",
+                factory=lambda: None,  # type: ignore[arg-type, return-value]
+                enabled=True,
+                kind="mcp",
+                metadata={"server": server, "tool": tool_id},
+            )
+        )
+    return registry
+
+
+def test_mapped_capability_mints_mcp_registry_id(monkeypatch) -> None:
+    """A capability node's RAW name mints the ``mcp_<server>_<tool>`` registry id.
+
+    The GRANT-INVERSION bug: a mapped source's capability ``name`` is the RAW MCP
+    tool name (``search_repos``), so returning it made the ``filter_specs``
+    intersection DELETE every mapped tool. It now mints ``mcp_tool_id`` so the
+    grant matches the live registry id.
+    """
+    registry = _registry_with([("mcp_github_search_repos", "github")])
+    monkeypatch.setattr(catalog_mod, "load_registry", lambda cwd=None: registry)
+    store = scg_store.get_scg_store()
+    # The node carries the RAW connector tool name, NOT the registry id.
+    store.upsert_nodes([_capability("github", "search_repos")])
+    assert SourceCatalog.tools_for(["github"]) == ["mcp_github_search_repos"]
+
+
+def test_search_grant_drops_write_tools(monkeypatch) -> None:
+    """A SEARCH grant is read-only: write-capable connector verbs are dropped.
+
+    The EVIDENCE: a failed-map source bound ALL raw registry tools incl.
+    ``create_repo`` / ``delete_branch``. ``tools_for`` now filters obvious write
+    verbs while keeping every read verb.
+    """
+    registry = _registry_with(
+        [
+            ("mcp_gitea_get_file_contents", "gitea"),
+            ("mcp_gitea_list_issues", "gitea"),
+            ("mcp_gitea_search_repos", "gitea"),
+            ("mcp_gitea_create_repo", "gitea"),
+            ("mcp_gitea_delete_branch", "gitea"),
+            ("mcp_gitea_create_or_update_file", "gitea"),
+            ("mcp_gitea_fork_repo", "gitea"),
+            ("mcp_gitea_wiki_write", "gitea"),
+        ]
+    )
+    monkeypatch.setattr(catalog_mod, "load_registry", lambda cwd=None: registry)
+    monkeypatch.setattr(
+        catalog_mod, "get_merged_mcp_config",
+        lambda project=None: {"servers": {"gitea": {}}},
+    )
+    granted = SourceCatalog.tools_for(["gitea"])
+    # Read verbs kept ...
+    assert "mcp_gitea_get_file_contents" in granted
+    assert "mcp_gitea_list_issues" in granted
+    assert "mcp_gitea_search_repos" in granted
+    # ... write verbs dropped.
+    for write in (
+        "mcp_gitea_create_repo",
+        "mcp_gitea_delete_branch",
+        "mcp_gitea_create_or_update_file",
+        "mcp_gitea_fork_repo",
+        "mcp_gitea_wiki_write",
+    ):
+        assert write not in granted
+
+
+def test_failed_map_source_falls_through_but_write_filtered(monkeypatch) -> None:
+    """An unmapped (failed-map) live server grants its READ registry ids only.
+
+    It falls through to the ``source_id in live`` branch (the EVIDENCE path that
+    bound all 51 raw tools) — but the read-only filter now strips the mutators.
+    """
+    registry = _registry_with(
+        [
+            ("mcp_github_search_repositories", "github"),
+            ("mcp_github_get_file_contents", "github"),
+            ("mcp_github_create_issue", "github"),
+            ("mcp_github_push_files", "github"),
+            ("mcp_github_merge_pull_request", "github"),
+        ]
+    )
+    monkeypatch.setattr(catalog_mod, "load_registry", lambda cwd=None: registry)
+    monkeypatch.setattr(
+        catalog_mod, "get_merged_mcp_config",
+        lambda project=None: {"servers": {"github": {}}},
+    )
+    # No SCG nodes for github → falls through to the live registry ids.
+    granted = SourceCatalog.tools_for(["github"])
+    assert "mcp_github_search_repositories" in granted
+    assert "mcp_github_get_file_contents" in granted
+    assert "mcp_github_create_issue" not in granted
+    assert "mcp_github_push_files" not in granted
+    assert "mcp_github_merge_pull_request" not in granted

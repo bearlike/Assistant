@@ -22,6 +22,7 @@ from mewbo_core.components import (
 from mewbo_core.config import get_config_value, get_version
 from mewbo_core.context import ContextSnapshot, render_event_lines
 from mewbo_core.llm import build_chat_model
+from mewbo_core.prompt_registry import get_prompt_registry
 from mewbo_core.tool_registry import ToolRegistry, ToolSpec
 
 logging = get_logger(name="core.planning")
@@ -103,31 +104,57 @@ class PromptBuilder:
         project_instructions: str | None = None,
     ) -> str:
         """Build an augmented system prompt string."""
+        registry = get_prompt_registry()
         sections = [base_prompt]
         if project_instructions:
-            sections.append(f"Project instructions:\n{project_instructions}")
+            sections.append(
+                registry.render(
+                    "planning.section.project_instructions",
+                    project_instructions=project_instructions,
+                )
+            )
         if context and context.summary:
-            sections.append(f"Session summary:\n{context.summary}")
+            sections.append(
+                registry.render("planning.section.session_summary", summary=context.summary)
+            )
         if context and context.selected_events:
             rendered = render_event_lines(context.selected_events)
             if rendered:
-                sections.append("Relevant earlier context:\n" + rendered)
+                sections.append(
+                    registry.render(
+                        "planning.section.relevant_earlier_context", rendered=rendered
+                    )
+                )
         if context and context.recent_events:
             rendered = render_event_lines(context.recent_events)
             if rendered:
-                sections.append("Recent conversation:\n" + rendered)
+                sections.append(
+                    registry.render("planning.section.recent_conversation", rendered=rendered)
+                )
         if self._tool_registry is not None:
             specs = tool_specs or self._tool_registry.list_specs()
             if specs:
                 tool_lines = "\n".join(f"- {spec.tool_id}: {spec.description}" for spec in specs)
-                sections.append(f"Available tools:\n{tool_lines}")
+                sections.append(
+                    registry.render("planning.section.available_tools", tool_lines=tool_lines)
+                )
             if mode == "act":
                 if include_tool_guidance:
                     tool_prompts = self._render_tool_prompts(specs, local_only=True)
                     if tool_prompts:
-                        sections.append("Tool guidance:\n" + "\n\n".join(tool_prompts))
+                        sections.append(
+                            registry.render(
+                                "planning.section.tool_guidance",
+                                tool_prompts_joined="\n\n".join(tool_prompts),
+                            )
+                        )
         if component_status:
-            sections.append("Component status:\n" + format_component_status(component_status))
+            sections.append(
+                registry.render(
+                    "planning.section.component_status",
+                    status=format_component_status(component_status),
+                )
+            )
         return "\n\n".join(sections)
 
     @staticmethod

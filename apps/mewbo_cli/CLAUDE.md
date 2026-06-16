@@ -91,6 +91,13 @@ Key behaviors:
 
 If you add a new interactive flow, use `DialogFactory` instead of writing custom prompts.
 
+## Prompt completion
+`cli_completer.py:MewboCompleter` drives live `PromptSession` completion (wired
+in `run_cli`, `complete_while_typing=True`): `@<partial>` suggests project files
+(shared `FileCatalog`, git-index first, cached per-cwd) and `/<partial>` at the
+line start suggests CLI commands **and** user-invocable skills. It never raises
+out of `get_completions` — a failed git call just yields nothing.
+
 ## Commands overview (keep in sync)
 - `/help`: show commands.
 - `/exit` or `/quit`: exit the CLI.

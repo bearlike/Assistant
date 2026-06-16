@@ -8,6 +8,13 @@ export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancell
  *  verification rounds. Sent as `tier` on `POST /runs`; default is `auto`. */
 export type SearchTier = "fast" | "auto" | "deep"
 
+/** `GET /tiers` — each tier's resolved model preset (the model that actually
+ *  drives a run of that tier unless the request carries a `model` override). */
+export interface SearchTiersInfo {
+  default_tier: SearchTier
+  tiers: Record<SearchTier, string>
+}
+
 export interface SourceCatalogEntry {
   id: string
   name: string
@@ -85,6 +92,11 @@ export interface SearchResult {
   /** Deprecated decorative fake-reveal timer — arrival now comes from SSE. */
   finish_delay_ms?: number | null
   relevance: number
+  /**
+   * How sure the emitting agent is this hit answers the query (0..1) —
+   * present on agent-emitted cards only (scg_results entries, #102).
+   */
+  confidence?: number | null
   title: string
   url: string
   snippet: string
@@ -94,6 +106,15 @@ export interface SearchResult {
   refs?: ResultRef[]
   image?: ResultImage | null
   embed?: ResultEmbed | null
+  /**
+   * Structured per-result facts the emitting agent attached — depends on what
+   * was retrieved (e.g. GitHub repo `stars`/`forks`, an issue's `state` +
+   * `sub_issues`, a HF model's `downloads`/`likes`, a doc's `updated`). The UI
+   * renders well-known keys with an icon + compact formatting (`46.2k`,
+   * relative time) and unknown keys as `label: value` chips. Additive/optional
+   * so old payloads (and connector-era cards) render unchanged.
+   */
+  meta?: Record<string, string | number | boolean> | null
 }
 
 export interface TraceLine {
@@ -112,6 +133,30 @@ export interface TraceAgent {
   source_id: string
   slot: number // 0..7 — maps to --agent-N tokens
   lines: TraceLine[]
+  /** The probe's compressed terminal evidence block (`EVIDENCE (pathway: …)` /
+   *  `NO DATA …`) — set from `agent_done.result` so the lane can expand to show
+   *  what it actually found. Empty until terminal. */
+  result?: string
+  /** Agent kind ("coordinator" | "scg-path-probe" | …) — the lane's role; the
+   *  `name` becomes the kind on the wire, the model arrives separately. */
+  kind?: string
+  /** Model that drove this lane (e.g. `claude-sonnet-4-6`) — distinct from the
+   *  kind/name. Null/absent on connector-era lanes. */
+  model?: string | null
+  /** Tool-use steps the lane took (instrument fidelity). */
+  steps?: number | null
+  /** Wall-clock duration of the lane in ms. */
+  duration_ms?: number | null
+  /** Billed prompt / completion tokens for the lane. */
+  input_tokens?: number | null
+  output_tokens?: number | null
+  /** KEPT results this lane contributed (after cross-emitter dedup) — mirrors
+   *  `agent_done.results_count`. */
+  results_count?: number
+  /** RAW results this lane emitted before dedup — mirrors
+   *  `agent_done.returned_count`. The `returned − kept` delta is the count that
+   *  collapsed into another lane's card, surfaced as "N filtered". */
+  returned_count?: number
 }
 
 export interface AnswerBullet {
@@ -133,6 +178,21 @@ export interface RelatedPerson {
   color: number // 0..7 — maps to --agent-N
 }
 
+/**
+ * Honest run-level instrument totals (`payload.stats`). Every field is rendered
+ * only when present/non-null — the BE never fabricates, and neither does the UI
+ * (the `RunStats`/`RunStatsBlock` honesty rule). `setup_ms` vs `search_ms` split
+ * the wall clock into the coordinator's plan/spawn phase and the probe fan-out.
+ */
+export interface RunStats {
+  probes: number
+  tool_calls: number
+  input_tokens: number
+  output_tokens: number
+  setup_ms: number | null
+  search_ms: number | null
+}
+
 export interface RunPayload {
   run_id: string
   /** Backing session id (BE adds this; optional for un-migrated callers). */
@@ -142,12 +202,16 @@ export interface RunPayload {
   status?: RunStatus
   /** Echo of the requested search tier (`POST /runs` body `tier`). */
   tier?: SearchTier
+  /** Echo of the explicit per-run model override; null/absent = tier default. */
+  model?: string | null
   total_ms: number
   answer: RunAnswer
   results: SearchResult[]
   trace: TraceAgent[]
   related_questions: string[]
   related_people: RelatedPerson[]
+  /** Run-level instrument totals — additive/optional (old payloads omit it). */
+  stats?: RunStats | null
   error?: string | null
 }
 
@@ -232,6 +296,10 @@ export interface AgentStartEvent {
   source_id: string
   name: string
   slot: number
+  /** Lane kind ("coordinator" | "scg-path-probe" | …) — additive. */
+  kind?: string
+  /** Model driving the lane — additive; arrives separately from the name. */
+  model?: string | null
 }
 
 export interface AgentLineEvent {
@@ -245,6 +313,17 @@ export interface AgentDoneEvent {
   agent_id: string
   results_count: number
   empty: boolean
+  /** The probe's compressed terminal evidence block (capped server-side). */
+  result?: string
+  /** RAW results emitted before dedup (additive) — the `returned − results_count`
+   *  delta is the lane's "N filtered". */
+  returned_count?: number
+  /** Per-lane instrument totals (additive) — folded onto the TraceAgent so the
+   *  trace rail can show steps/duration/tokens beside the lane name. */
+  steps?: number | null
+  duration_ms?: number | null
+  input_tokens?: number | null
+  output_tokens?: number | null
 }
 
 export interface ResultEvent {
@@ -260,6 +339,13 @@ export interface AnswerDeltaEvent {
 export interface AnswerReadyEvent {
   type: "answer_ready"
   answer: RunAnswer
+}
+
+/** Follow-up suggestions for the right rail — a parallel structured call at
+ *  settle, emitted after `answer_ready` and before the terminal `run_done`. */
+export interface RelatedQuestionsEvent {
+  type: "related_questions"
+  questions: string[]
 }
 
 export interface RunDoneEvent {
@@ -285,6 +371,7 @@ export type SearchEvent =
   | ResultEvent
   | AnswerDeltaEvent
   | AnswerReadyEvent
+  | RelatedQuestionsEvent
   | RunDoneEvent
   | SearchErrorEvent
   | CancelledEvent

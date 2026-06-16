@@ -1,14 +1,5 @@
 """Tests for ``mewbo_api.realtime.routes``.
 
-Covers ``POST /v1/structured/fast``:
-- Auth gate: 401 when X-API-KEY is missing.
-- Input validation: 400 on missing / wrong-type query or schema.
-- Happy path: 200 with ``output`` validating against the schema + non-empty
-  ``citations`` when a fake grounding provider is injected.
-- Grounding optional: 200 with empty ``citations`` when no workspace given.
-- Synthesis failure: 422 when the synthesizer raises StructuredResponseError.
-- Status field is always ``"completed"`` on 200 responses.
-
 Covers ``POST /v1/draft/stream``:
 - Auth gate: 401 when X-API-KEY is missing.
 - Input validation: 400 on missing query.
@@ -20,9 +11,9 @@ Covers ``POST /v1/draft/stream``:
 - model override: forwarded to DraftStreamer constructor.
 
 Stub boundary:
-- ``StructuredSynthesizer.synthesize`` and ``DraftStreamer.astream`` are
-  patched at the Flask route level so we exercise the route logic (parsing,
-  auth, serialisation, SSE framing) without hitting a real LLM.
+- ``DraftStreamer.astream`` is patched at the Flask route level so we exercise
+  the route logic (parsing, auth, serialisation, SSE framing) without hitting
+  a real LLM.
 - The namespace is registered on the app in a session-scoped fixture so the
   tests run independently of whether the controller has wired it yet.
 """
@@ -40,7 +31,6 @@ from mewbo_api.realtime.recorder import (
     RealtimeSessionRecorder,
 )
 from mewbo_core.session_provenance import SessionOrigin
-from mewbo_core.structured_response import StructuredResponseError
 from mewbo_core.structured_synthesis import Citation
 
 # ---------------------------------------------------------------------------
@@ -48,25 +38,13 @@ from mewbo_core.structured_synthesis import Citation
 #
 # The realtime namespace is registered by ``backend.py`` at import time (the
 # production ``init_realtime`` wiring), so importing ``backend`` below makes
-# ``/v1/structured/fast`` + ``/v1/draft/stream`` available. We deliberately do
-# NOT re-register from the test: ``add_url_rule`` after the shared app has
-# handled its first request raises (Flask setup is frozen) — which made these
-# tests error only under full-suite ordering.
+# ``/v1/draft/stream`` available. We deliberately do NOT re-register from the
+# test: ``add_url_rule`` after the shared app has handled its first request
+# raises (Flask setup is frozen) — which made these tests error only under
+# full-suite ordering.
 # ---------------------------------------------------------------------------
 
-_SCHEMA = {
-    "type": "object",
-    "properties": {"answer": {"type": "string"}},
-    "required": ["answer"],
-    "additionalProperties": False,
-}
-
 _VALID_PAYLOAD = {"answer": "42"}
-
-_CITATIONS = [
-    Citation(id="p1", kind="page", snippet="Page snippet", score=0.9, source="page.md"),
-    Citation(id="n1", kind="node", snippet="def foo():", score=0.7, source="mod.py#foo"),
-]
 
 
 @pytest.fixture()
@@ -77,272 +55,6 @@ def auth_headers():
 @pytest.fixture()
 def client():
     return backend.app.test_client()
-
-
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
-
-
-def test_fast_requires_auth(client):
-    """POST /v1/structured/fast without API key returns 401."""
-    resp = client.post(
-        "/v1/structured/fast",
-        json={"query": "q", "schema": _SCHEMA},
-    )
-    assert resp.status_code == 401, (
-        f"Expected 401, got {resp.status_code}: {resp.get_data(as_text=True)}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Input validation
-# ---------------------------------------------------------------------------
-
-
-def test_fast_missing_query_returns_400(client, auth_headers):
-    """Missing 'query' → 400."""
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        return _VALID_PAYLOAD, []
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"schema": _SCHEMA},
-            headers=auth_headers,
-        )
-    assert resp.status_code == 400
-
-
-def test_fast_missing_schema_returns_400(client, auth_headers):
-    """Missing 'schema' → 400."""
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        return _VALID_PAYLOAD, []
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q"},
-            headers=auth_headers,
-        )
-    assert resp.status_code == 400
-
-
-def test_fast_schema_not_dict_returns_400(client, auth_headers):
-    """schema must be a JSON object, not a string."""
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        return _VALID_PAYLOAD, []
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q", "schema": "not-a-dict"},
-            headers=auth_headers,
-        )
-    assert resp.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# Happy path: with grounding
-# ---------------------------------------------------------------------------
-
-
-def test_fast_returns_output_and_citations(client, auth_headers):
-    """200 response contains output that validates the schema + non-empty citations."""
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        return _VALID_PAYLOAD, list(_CITATIONS)
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "What is the answer?", "schema": _SCHEMA, "workspace": "org/repo"},
-            headers=auth_headers,
-        )
-
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    data = resp.get_json()
-
-    # output validates the schema
-    assert "output" in data, f"'output' missing from response: {data}"
-    assert data["output"] == _VALID_PAYLOAD, f"Unexpected output: {data['output']!r}"
-
-    # citations are present and non-empty
-    assert "citations" in data, f"'citations' missing from response: {data}"
-    assert len(data["citations"]) == 2, f"Expected 2 citations, got {len(data['citations'])}"
-    first = data["citations"][0]
-    assert first["id"] == "p1"
-    assert first["kind"] == "page"
-    assert "snippet" in first
-    assert "score" in first
-    assert "source" in first
-
-    # status
-    assert data.get("status") == "completed"
-
-
-# ---------------------------------------------------------------------------
-# Happy path: no workspace → empty citations
-# ---------------------------------------------------------------------------
-
-
-def test_fast_without_workspace_returns_empty_citations(client, auth_headers):
-    """When no workspace is given, citations should be empty."""
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        assert workspace is None, "workspace should be None when not provided"
-        return _VALID_PAYLOAD, []
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q", "schema": _SCHEMA},
-            headers=auth_headers,
-        )
-
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["citations"] == []
-    assert data["status"] == "completed"
-
-
-# ---------------------------------------------------------------------------
-# Synthesis failure → 422
-# ---------------------------------------------------------------------------
-
-
-def test_fast_synthesis_failure_returns_422(client, auth_headers):
-    """StructuredResponseError from synthesize → 422 error envelope."""
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        raise StructuredResponseError("validation exhausted")
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q", "schema": _SCHEMA},
-            headers=auth_headers,
-        )
-
-    assert resp.status_code == 422
-    data = resp.get_json()
-    assert "error" in data
-    assert data["error"]["code"] == 422
-
-
-# ---------------------------------------------------------------------------
-# Unexpected exception → 500
-# ---------------------------------------------------------------------------
-
-
-def test_fast_unexpected_exception_returns_500(client, auth_headers):
-    """An unexpected exception from synthesize → 500 error envelope (not unhandled)."""
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        raise RuntimeError("unexpected boom")
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q", "schema": _SCHEMA},
-            headers=auth_headers,
-        )
-
-    assert resp.status_code == 500
-    data = resp.get_json()
-    assert "error" in data
-    assert data["error"]["code"] == 500
-
-
-# ---------------------------------------------------------------------------
-# Workspace forwarded correctly
-# ---------------------------------------------------------------------------
-
-
-def test_fast_workspace_forwarded_to_synthesize(client, auth_headers):
-    """The workspace from the request body is forwarded to synthesize."""
-    received = {}
-
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        received["workspace"] = workspace
-        return _VALID_PAYLOAD, []
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q", "schema": _SCHEMA, "workspace": "my/workspace"},
-            headers=auth_headers,
-        )
-
-    assert resp.status_code == 200
-    assert received.get("workspace") == "my/workspace"
-
-
-# ---------------------------------------------------------------------------
-# Model override (fast)
-# ---------------------------------------------------------------------------
-
-
-def test_fast_model_override_forwarded_to_synthesizer(client, auth_headers):
-    """The 'model' field is forwarded to StructuredSynthesizer(model_name=...)."""
-    captured: list[str | None] = []
-
-    class _CapturingSynth:
-        def __init__(self, *, model_name=None, grounding_provider=None, **_kw):
-            captured.append(model_name)
-
-        async def synthesize(self, query, schema, *, workspace=None, k=8):
-            return _VALID_PAYLOAD, []
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer", new=_CapturingSynth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q", "schema": _SCHEMA, "model": "openai/gpt-5.4-nano"},
-            headers=auth_headers,
-        )
-
-    assert resp.status_code == 200
-    assert captured == ["openai/gpt-5.4-nano"], f"got {captured}"
-
-
-def test_fast_model_omitted_defaults_to_none(client, auth_headers):
-    """Omitting 'model' → model_name None → configured default is used downstream."""
-    captured: list[str | None] = []
-
-    class _CapturingSynth:
-        def __init__(self, *, model_name=None, grounding_provider=None, **_kw):
-            captured.append(model_name)
-
-        async def synthesize(self, query, schema, *, workspace=None, k=8):
-            return _VALID_PAYLOAD, []
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer", new=_CapturingSynth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q", "schema": _SCHEMA},
-            headers=auth_headers,
-        )
-
-    assert resp.status_code == 200
-    assert captured == [None], f"got {captured}"
-
-
-def test_fast_non_string_model_ignored(client, auth_headers):
-    """A non-string 'model' is ignored (treated as omitted), per the draft idiom."""
-    captured: list[str | None] = []
-
-    class _CapturingSynth:
-        def __init__(self, *, model_name=None, grounding_provider=None, **_kw):
-            captured.append(model_name)
-
-        async def synthesize(self, query, schema, *, workspace=None, k=8):
-            return _VALID_PAYLOAD, []
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer", new=_CapturingSynth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q", "schema": _SCHEMA, "model": 123},
-            headers=auth_headers,
-        )
-
-    assert resp.status_code == 200
-    assert captured == [None], f"got {captured}"
 
 
 # ===========================================================================
@@ -579,11 +291,12 @@ def test_draft_stream_model_override_forwarded(client, auth_headers):
 
 
 # ===========================================================================
-# Session-backing + provenance (#78) — fast + draft mint a real session,
-# tagged with the right origin, with a single-turn transcript persisted
-# WRITE-BEHIND (after the response). We drive the real route + store path and
-# stub only the LLM seam; persistence is forced synchronous so the test can read
-# the store deterministically (the production path fires it on a daemon thread).
+# Session-backing + provenance (#78) — the synthesis mode and draft stream
+# mint a real session, tagged with the right origin, with a single-turn
+# transcript persisted WRITE-BEHIND (after the response). We drive the real
+# route + store path and stub only the LLM seam; persistence is forced
+# synchronous so the test can read the store deterministically (the production
+# path fires it on a daemon thread).
 # ===========================================================================
 
 
@@ -618,61 +331,6 @@ def _route_runtime():
 
 def _transcript(session_id: str) -> list[dict]:
     return _route_runtime().session_store.load_transcript(session_id)
-
-
-def test_fast_mints_tagged_session_with_transcript(client, auth_headers, sync_persist):
-    """A fast call mints a ``structured:fast`` session + single-turn transcript."""
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        return _VALID_PAYLOAD, list(_CITATIONS)
-
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "What is the answer?", "schema": _SCHEMA},
-            headers=auth_headers,
-        )
-
-    assert resp.status_code == 200, resp.get_data(as_text=True)
-    data = resp.get_json()
-    # Additive field: the response now carries the backing session id.
-    session_id = data.get("session_id")
-    assert session_id, f"expected an additive session_id, got: {data}"
-
-    # The session is tagged → classified as ``structured``, not the user fallback.
-    # The tag is UNIQUE per session (``structured:fast:<id>``), never the bare
-    # prefix (#87) — so two runs never collide on one tag-keyed doc.
-    tags = _route_runtime().session_store.tags_for_session(session_id)
-    assert f"{FAST_STRUCTURED_TAG}:{session_id}" in tags
-    assert FAST_STRUCTURED_TAG not in tags
-    assert SessionOrigin.classify(tags, {}) == SessionOrigin.STRUCTURED
-
-    # Single-turn transcript: user query in, structured_output out.
-    events = _transcript(session_id)
-    types = [e.get("type") for e in events]
-    assert "user" in types
-    assert "structured_output" in types
-    out = [e for e in events if e.get("type") == "structured_output"][-1]
-    assert out["payload"] == _VALID_PAYLOAD
-    # The summary classifies it for the console landing page.
-    assert _route_runtime().summarize_session(session_id)["origin"] == "structured"
-
-
-def test_fast_records_surface_from_header(client, auth_headers, sync_persist):
-    """The ``X-Mewbo-Surface`` header is recorded as the session's source_platform."""
-    async def _synth(self, query, schema, *, workspace=None, k=8):
-        return _VALID_PAYLOAD, []
-
-    headers = {**auth_headers, "X-Mewbo-Surface": "sidestage"}
-    with patch("mewbo_api.realtime.routes.StructuredSynthesizer.synthesize", new=_synth):
-        resp = client.post(
-            "/v1/structured/fast",
-            json={"query": "q", "schema": _SCHEMA},
-            headers=headers,
-        )
-
-    session_id = resp.get_json()["session_id"]
-    ctx = _route_runtime().session_store.latest_context(session_id)
-    assert ctx.get("source_platform") == "sidestage"
 
 
 def test_draft_mints_tagged_session_with_streamed_text(client, auth_headers, sync_persist):

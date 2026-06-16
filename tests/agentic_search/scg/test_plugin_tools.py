@@ -697,6 +697,9 @@ def test_plugin_manifest_registers_tools_and_agents() -> None:
         "scg_route",
         "scg_observe",
         "scg_memory",
+        # The search root's terminal result-emit step (#95) — transcript-as-
+        # transport; the api projects its tool_result into the run's results.
+        "scg_results",
         # Shared abstract-entity tools (#35) registered under scg too so search
         # can read/mint the same holistic entity graph as the wiki.
         "mint_entity",
