@@ -1202,7 +1202,11 @@ class SearchTools:
             rec_status = str(rec.get("status") or "running")
             payload = _as_dict(rec.get("payload"))
             payload.setdefault("run_id", run_id)
-            return self._shape_run(payload, rec_status, ws_name, detail)
+            shaped = self._shape_run(payload, rec_status, ws_name, detail)
+            # When the answer was calculated (None while still running) — so a
+            # caller re-fetching a run knows how fresh the answer is.
+            shaped["computed_at"] = rec.get("completed_at")
+            return shaped
 
         return await poll_or_handle(
             run_id,
@@ -1224,7 +1228,10 @@ class SearchTools:
         self._check_detail(detail)
         record = await self._load_record(run_id)
         status = str(record.get("status") or "running")
-        return self._shape_run(_as_dict(record.get("payload")), status, None, detail)
+        shaped = self._shape_run(_as_dict(record.get("payload")), status, None, detail)
+        # When the answer was calculated (None while still running).
+        shaped["computed_at"] = record.get("completed_at")
+        return shaped
 
     # -- internals: behavior over the atomic state ------------------------
 

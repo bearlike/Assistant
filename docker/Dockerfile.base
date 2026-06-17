@@ -51,17 +51,21 @@ ENV PATH=/opt/node/bin:$PATH
 # @playwright/cli (binary: ``playwright-cli``) — agent-oriented browser
 # automation, surfaced via the ``playwright-cli`` skill. We install the *full*
 # Chromium build (the default browser) so sites render with full fidelity —
-# JavaScript execution, web fonts, the real Chrome engine in new-headless mode
-# — not the stripped headless shell. ``--no-shell`` drops the redundant
-# lightweight shell binary (Playwright falls back to full Chromium for headless
-# launches when the shell is absent), keeping the image as lean as a full
-# browser allows; ``--with-deps`` pulls the Debian libraries Chromium needs.
-# Browsers land in a world-readable system path so the non-root runtime user
-# (mewbo, UID 1000) can launch them; PLAYWRIGHT_BROWSERS_PATH is an ENV so it
-# persists into derived images (Dockerfile.api) for install-time and runtime.
+# JavaScript execution, web fonts, the real Chrome engine in new-headless mode.
+# ``--with-deps`` pulls the Debian libraries Chromium needs; it shells out to
+# ``apt-get``, so the package lists (cleaned after the system-packages layer
+# above) MUST be refreshed first in this same layer. The version is PINNED:
+# ``@latest`` drifted to 0.1.14, whose negation-flag parser rejects
+# ``--no-shell`` ("Unknown option: --shell") and broke the image build — so we
+# pin and drop ``--no-shell`` (the headless shell ships alongside full Chromium;
+# a few extra MB, but a deterministic build). Browsers land in a world-readable
+# system path so the non-root runtime user (mewbo, UID 1000) can launch them;
+# PLAYWRIGHT_BROWSERS_PATH is an ENV so it persists into derived images
+# (Dockerfile.api) for install-time and runtime.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN npm install -g @playwright/cli@latest \
-    && playwright-cli install-browser --with-deps --no-shell \
+RUN apt-get update \
+    && npm install -g @playwright/cli@0.1.14 \
+    && playwright-cli install-browser --with-deps \
     && chmod -R a+rX /ms-playwright \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 

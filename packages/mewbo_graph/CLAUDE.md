@@ -75,6 +75,15 @@ plugins import **down**. Don't reintroduce the reach-ups:
   structure write already happened, the phase is purely cosmetic. This DI is
   the asymmetry vs the wiki `emit_phase`, which writes its *own* (relocated)
   store directly.
+- **`SearchLauncher`** (`scg/search_launcher.py`): the SAME inversion for the
+  self-facing `agentic_search` SessionTool. A task-spawned engine agent that
+  RUNS a search needs the full run lifecycle (its own `scg-search` session, the
+  run store) — all up-layer in the API. So the API registers a concrete
+  launcher (`RunStoreSearchLauncher`, bound to the run store + session runtime,
+  reusing `SearchRun.start`) and the tool drives through it. Async-by-handle:
+  `start()` returns an idempotent `run_id` immediately (a search runs for
+  minutes); `fetch(run_id)` reads the cited-answer snapshot + `computed_at`. No
+  launcher registered → the tool degrades to a structured "unavailable" error.
 - **`register_builtin_root`** (in `mewbo_core.plugins`): importing this package
   **pushes** its `plugins/` root to the core loader
   (`mewbo_graph.register_builtin_plugins`, fired on import). Core never imports

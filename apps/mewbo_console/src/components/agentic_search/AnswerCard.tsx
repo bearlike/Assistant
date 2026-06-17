@@ -1,4 +1,5 @@
-import { ArrowUpRight, Sparkles } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { ArrowUpRight, ChevronDown, Sparkles } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import rehypeHighlight from "rehype-highlight"
@@ -36,6 +37,58 @@ function SynthesisMarkdown({ source, cursor }: { source: string; cursor?: boolea
       </ReactMarkdown>
       {cursor && (
         <span className="inline-block animate-pulse text-[hsl(var(--primary))]">▌</span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Google-overview-style fold for the synthesis body: content reads open, but
+ * once it overflows the clip height it tucks behind a soft mask-fade with a
+ * "Show more" / "Show less" control. The toggle only appears when the body
+ * actually overflows (measured) — short answers render whole, no dead control.
+ *
+ * Reuses the design-system `.session-collapsible` / `.session-collapsible-body`
+ * mask-fade (see `index.css`), the same primitive the conversation timeline's
+ * SmartCollapse uses — one mask-fade vocabulary across the app (DRY).
+ */
+function FoldableAnswer({ children, clip = 200 }: { children: React.ReactNode; clip?: number }) {
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const [overflowing, setOverflowing] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el) return
+    const measure = () => setOverflowing(el.scrollHeight > clip + 8)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [clip])
+
+  const collapsed = overflowing && !expanded
+
+  return (
+    <div
+      className={cn("session-collapsible", collapsed && "is-collapsed")}
+      style={{ ["--clip" as string]: `${clip}px` }}
+    >
+      <div ref={bodyRef} className="session-collapsible-body">
+        {children}
+      </div>
+      {overflowing && (
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          aria-expanded={expanded}
+          className="mt-2 inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]/40 transition-colors"
+        >
+          <ChevronDown
+            className={cn("h-3.5 w-3.5 transition-transform duration-200", expanded && "rotate-180")}
+          />
+          {expanded ? "Show less" : "Show more"}
+        </button>
       )}
     </div>
   )
@@ -80,6 +133,12 @@ export function AnswerCard({
   const partial = !ready && done
   const visibleBullets = ready ? answer.bullets.length : 0
 
+  const statusLabel = ready
+    ? `${answer.sources_count} sources · ${(elapsedMs / 1000).toFixed(1)}s`
+    : partial
+    ? "partial"
+    : "synthesising…"
+
   return (
     <section
       className={cn(
@@ -88,29 +147,23 @@ export function AnswerCard({
         !ready && !done && "before:animate-pulse"
       )}
     >
-      <header className="flex items-start gap-3 mb-2.5">
-        <div className="flex items-center gap-2 flex-1">
-          <span className="inline-flex items-center justify-center h-6 w-6 rounded-md bg-[hsl(var(--primary)/0.15)] text-[hsl(var(--primary))]">
-            <Sparkles className="h-3.5 w-3.5" />
+      {/* Header — a clean summary bar, always visible */}
+      <header className="flex items-center gap-3 mb-2.5">
+        <span className="inline-flex items-center justify-center h-6 w-6 rounded-md bg-[hsl(var(--primary)/0.15)] text-[hsl(var(--primary))] flex-none">
+          <Sparkles className="h-3.5 w-3.5" />
+        </span>
+        <span className="flex items-center gap-2 flex-1 min-w-0">
+          <span className="text-sm font-semibold flex-none">Synthesis</span>
+          <span className="text-xs font-mono text-[hsl(var(--muted-foreground))] flex-none">
+            {statusLabel}
           </span>
-          <span className="text-sm font-semibold">Synthesis</span>
-          <span className="text-xs font-mono text-[hsl(var(--muted-foreground))]">
-            {ready
-              ? `${answer.sources_count} sources · ${(elapsedMs / 1000).toFixed(1)}s`
-              : partial
-              ? "partial"
-              : "synthesising…"}
-          </span>
-        </div>
-        <div className="flex items-center gap-1 text-[hsl(var(--muted-foreground))]">
-          {/* Copies the synthesized answer as Markdown (tldr + bullets).
-              Sharing the run lives in the ResultsPanel header "Copy link". */}
+        </span>
+        <span className="flex items-center flex-none text-[hsl(var(--muted-foreground))]">
           <CopyButton text={answerToMarkdown(answer)} label="Copy answer" />
-        </div>
+        </span>
       </header>
 
       {partial && answer.tldr.length > 0 ? (
-        // Terminal-without-final-answer: the partial tldr, frozen.
         <SynthesisMarkdown source={answer.tldr} />
       ) : !ready && !streaming ? (
         <div className="space-y-2">
@@ -119,45 +172,46 @@ export function AnswerCard({
           <SkeletonLine width="60%" />
         </div>
       ) : !ready && streaming ? (
-        // Typewriter: tldr tokens arriving via `answer_delta`, bullets pending.
         <SynthesisMarkdown source={answer.tldr} cursor />
       ) : (
         <>
-          <SynthesisMarkdown source={answer.tldr} />
-          <ul className="mt-3 space-y-2">
-            {answer.bullets.slice(0, visibleBullets).map((b, i) => (
-              <li key={i} className="flex items-start gap-2 text-[14px] [text-wrap:pretty]">
-                <span className="mt-2 inline-block h-1 w-1 rounded-full bg-[hsl(var(--muted-foreground))] flex-none" />
-                <span className="flex-1">
-                  {b.text}{" "}
-                  {b.cites.map((rid) => {
-                    const r = results.find((x) => x.id === rid)
-                    if (!r) return null
-                    const num = results.findIndex((x) => x.id === rid) + 1
-                    const src = sources.find((s) => s.id === r.source)
-                    return (
-                      <button
-                        key={rid}
-                        type="button"
-                        onClick={() => onCiteClick(rid)}
-                        title={r.title}
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded-full text-xs font-mono bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--primary))] transition-colors align-middle"
-                      >
-                        <SrcAvatar source={src} size={12} />
-                        <span>{num}</span>
-                      </button>
-                    )
-                  })}
-                </span>
-              </li>
-            ))}
-          </ul>
+          {/* The final answer reads open (Google-overview style): the body
+              shows in full, and only folds behind a soft "Show more" mask-fade
+              when it actually overflows the clip height. */}
+          <FoldableAnswer>
+            <SynthesisMarkdown source={answer.tldr} />
+            <ul className="mt-3 space-y-2">
+              {answer.bullets.slice(0, visibleBullets).map((b, i) => (
+                <li key={i} className="flex items-start gap-2 text-[14px] [text-wrap:pretty]">
+                  <span className="mt-2 inline-block h-1 w-1 rounded-full bg-[hsl(var(--muted-foreground))] flex-none" />
+                  <span className="flex-1">
+                    {b.text}{" "}
+                    {b.cites.map((rid) => {
+                      const r = results.find((x) => x.id === rid)
+                      if (!r) return null
+                      const num = results.findIndex((x) => x.id === rid) + 1
+                      const src = sources.find((s) => s.id === r.source)
+                      return (
+                        <button
+                          key={rid}
+                          type="button"
+                          onClick={() => onCiteClick(rid)}
+                          title={r.title}
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded-full text-xs font-mono bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--primary))] transition-colors align-middle"
+                        >
+                          <SrcAvatar source={src} size={12} />
+                          <span>{num}</span>
+                        </button>
+                      )
+                    })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </FoldableAnswer>
 
           {visibleBullets >= answer.bullets.length && (
             <footer className="flex items-center gap-3 mt-4 pt-2.5 border-t border-[hsl(var(--border))]">
-              {/* Confidence is a settle-derived heuristic (data-bearing probes /
-                  probes run). 0 means "no probe ran" → unknown, NOT zero faith;
-                  suppress the chip rather than render an unearned 0%. */}
               {answer.confidence > 0 && <ConfidenceBar confidence={answer.confidence} />}
               <button
                 type="button"

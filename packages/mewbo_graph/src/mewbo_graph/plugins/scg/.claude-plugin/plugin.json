@@ -46,6 +46,11 @@
       "class": "ScgResultsTool"
     },
     {
+      "tool_id": "agentic_search",
+      "module": "mewbo_graph.plugins.scg.search",
+      "class": "AgenticSearchTool"
+    },
+    {
       "tool_id": "mint_entity",
       "module": "mewbo_graph.plugins.wiki.mint_entity",
       "class": "MintEntityTool"

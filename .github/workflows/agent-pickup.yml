@@ -1,6 +1,8 @@
 # Agent Pickup — start a Mewbo agent session when the bot is assigned to, or
-# @mentioned on, an issue or pull request. Runs on BOTH GitHub Actions and
-# Gitea Actions (the expression/payload differences are handled inline).
+# @mentioned on, an issue or pull request. Active on Gitea Actions only; the
+# job is guarded off on GitHub Actions (github.com) so pickup never runs on the
+# public mirror (the expression/payload differences are otherwise handled
+# inline). The workflow is also disabled in the GitHub Actions UI.
 #
 # Required repository secrets:
 #   MEWBO_API_URL    — base URL of the Mewbo API (e.g. https://mewbo.example.com)
@@ -50,29 +52,35 @@ jobs:
   start-session:
     name: Start Mewbo session
     # Guard layers:
-    #  - workflow_dispatch is always allowed (manual override).
+    #  - host guard: never run on GitHub Actions (github.com); pickup is a
+    #    Gitea-only capability. This wraps every other layer so even a manual
+    #    workflow_dispatch is a no-op on the GitHub mirror.
+    #  - workflow_dispatch is always allowed (manual override) on Gitea.
     #  - assignment events: GitHub carries the just-assigned user in
     #    event.assignee; Gitea's payload has no top-level assignee, so fall
     #    back to the item's assignees list.
     #  - comment events: only when the comment mentions @AGENT_BOT_LOGIN and
     #    was not written by the bot itself (self-trigger loop guard).
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      github.server_url != 'https://github.com' &&
       (
-        vars.AGENT_BOT_LOGIN != '' &&
+        github.event_name == 'workflow_dispatch' ||
         (
+          vars.AGENT_BOT_LOGIN != '' &&
           (
-            (github.event_name == 'issues' || github.event_name == 'pull_request') &&
             (
-              github.event.assignee.login == vars.AGENT_BOT_LOGIN ||
-              contains(github.event.issue.assignees.*.login, vars.AGENT_BOT_LOGIN) ||
-              contains(github.event.pull_request.assignees.*.login, vars.AGENT_BOT_LOGIN)
+              (github.event_name == 'issues' || github.event_name == 'pull_request') &&
+              (
+                github.event.assignee.login == vars.AGENT_BOT_LOGIN ||
+                contains(github.event.issue.assignees.*.login, vars.AGENT_BOT_LOGIN) ||
+                contains(github.event.pull_request.assignees.*.login, vars.AGENT_BOT_LOGIN)
+              )
+            ) ||
+            (
+              github.event_name == 'issue_comment' &&
+              contains(github.event.comment.body, format('@{0}', vars.AGENT_BOT_LOGIN)) &&
+              github.event.comment.user.login != vars.AGENT_BOT_LOGIN
             )
-          ) ||
-          (
-            github.event_name == 'issue_comment' &&
-            contains(github.event.comment.body, format('@{0}', vars.AGENT_BOT_LOGIN)) &&
-            github.event.comment.user.login != vars.AGENT_BOT_LOGIN
           )
         )
       )

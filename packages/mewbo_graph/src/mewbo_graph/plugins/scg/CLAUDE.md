@@ -3,12 +3,27 @@
 # scg built-in plugin — SCG map + search tools
 
 Scope: `packages/mewbo_graph/src/mewbo_graph/plugins/scg/`. The
-deterministic SCG logic does **not** live here — these eight SessionTools
+deterministic SCG logic does **not** live here — these SessionTools
 (`scg_introspect_source`, `scg_build_structure`, `scg_link_entities`,
-`scg_finalize_map`, `scg_route`, `scg_observe`, `scg_memory`, `scg_results`)
-are **thin wrappers** over the SCG core, which now lives **down** in the same
-library at `mewbo_graph.scg` (same package, imported DOWN — no longer a one-way
-boundary UP into an app). `scg_results` (#95/#102) is the thinnest of all —
+`scg_finalize_map`, `scg_route`, `scg_observe`, `scg_memory`, `scg_results`,
+`agentic_search`) are **thin wrappers** over the SCG core, which now lives
+**down** in the same library at `mewbo_graph.scg` (same package, imported DOWN —
+no longer a one-way boundary UP into an app).
+
+**`agentic_search` — the high-level self-facing search verb (vs the low-level
+graph tools).** Where `scg_route`/`scg_observe` let a task agent inspect
+reachability directly, `agentic_search` runs a WHOLE `scg-search` session and
+hands back a cited answer. It is **async-by-handle**: `query` starts a run and
+returns a `run_id` + `status:"processing"` IMMEDIATELY (a search runs for
+minutes — never block the caller's loop); re-call with `run_id` to fetch the
+cited answer + `computed_at`; an identical recent query is idempotently reused.
+The tool owns NO orchestration (the no-parallel-loop invariant holds) — it drives
+the run through the down-only `mewbo_graph.scg.search_launcher.SearchLauncher`
+seam the API registers (`RunStoreSearchLauncher`, reusing `SearchRun.start` + the
+run store), degrading to a structured "unavailable" error when none is wired.
+The id is `search`-classified in core `_infer_operation` → default-allowed, so it
+surfaces to any ordinary task agent the `scg` capability grants (#84) — the same
+async run/poll shape the external MCP `search`/`get_search_run` tools expose. `scg_results` (#95/#102) is the thinnest of all —
 **transcript-as-transport**: it only VALIDATES the search-result entries
 (≤50, `extra="forbid"`, relevance/confidence 0..1) and returns `{ok, count}`;
 it writes nothing (no store, no sink — the api projects the validated

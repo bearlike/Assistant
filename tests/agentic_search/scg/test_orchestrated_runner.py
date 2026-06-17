@@ -419,22 +419,23 @@ def test_advertises_scg_capability_and_seeds_tier(store, monkeypatch):
 def test_tier_picks_the_model(store, monkeypatch):
     """The tier maps to the session model via scg.traversal.tier_models.
 
-    fast→nano / auto→sonnet / deep→frontier (config defaults); probes inherit
-    the session model, so one knob moves the whole run. An unknown tier or a
-    blank mapping degrades to None (llm.default_model) — never an error.
+    All three tiers default to openai/gpt-oss-120b (the tier still sets the
+    decomposition/probe budget; the model is now uniform); probes inherit the
+    session model, so one knob moves the whole run. An unknown tier or a blank
+    mapping degrades to None (llm.default_model) — never an error.
     """
     _enable_scg(monkeypatch)
     runtime = FakeRuntime(_ok_transcript())
     OrchestratedSearchRunner().start(
         _run(store, tier="fast"), _ws(), store=store, runtime=runtime
     )
-    assert runtime.run_sync_kwargs["model_name"] == "openai/gpt-5.4-nano"
+    assert runtime.run_sync_kwargs["model_name"] == "openai/gpt-oss-120b"
 
     runtime = FakeRuntime(_ok_transcript())
     OrchestratedSearchRunner().start(
         _run(store, tier="deep"), _ws(), store=store, runtime=runtime
     )
-    assert runtime.run_sync_kwargs["model_name"] == "openai/gpt-5.5"
+    assert runtime.run_sync_kwargs["model_name"] == "openai/gpt-oss-120b"
 
 
 def test_explicit_model_override_wins_over_tier(store, monkeypatch):

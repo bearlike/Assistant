@@ -195,9 +195,9 @@ Every search runs at one of three tiers, selectable per query. The tier is the r
 
 | Tier | Sub-query decomposition | Probe fan-out | Default model | Best for |
 |---|---|---|---|---|
-| **Fast** | 1 | 2 | `openai/gpt-5.4-nano` | Quick lookups; known-answer retrieval |
-| **Auto** (default) | 2–3 | 3 | `openai/claude-sonnet-4-6` | General multi-source questions |
-| **Deep** | 3–5 | 5 | `openai/gpt-5.5` | Exhaustive research; cross-source synthesis |
+| **Fast** | 1 | 2 | `openai/gpt-oss-120b` | Quick lookups; known-answer retrieval |
+| **Auto** (default) | 2–3 | 3 | `openai/gpt-oss-120b` | General multi-source questions |
+| **Deep** | 3–5 | 5 | `openai/gpt-oss-120b` | Exhaustive research; cross-source synthesis |
 
 The model mapping lives at `scg.traversal.tier_models` (keys `fast`, `auto`, `deep`) and is editable in Settings like any other config key. Probe agents inherit the session model, so one tier choice moves the whole run, coordinator and probes alike. A blank mapping or an unrecognised tier falls back to `llm.default_model`, never an error. Where a request offers an explicit `model` override, it wins over the tier map.
 

@@ -968,20 +968,20 @@
       "description": "Per-tier model mapping \u2014 the tier picks the brain, not just the budget.\n\nA tier maps to the LLM that drives the whole run (orchestrator session AND\nits probe sub-agents, which inherit the session model). An empty string\nfalls back to ``llm.default_model``. An explicit per-request ``model``\noverride (where the endpoint offers one) always wins over the tier map.",
       "properties": {
         "fast": {
-          "default": "openai/gpt-5.4-nano",
-          "description": "Model for `fast` tier runs (cheap, low-latency).",
+          "default": "openai/gpt-oss-120b",
+          "description": "Model for `fast` tier runs (the tier still sets the low-latency budget).",
           "title": "Fast",
           "type": "string"
         },
         "auto": {
-          "default": "openai/claude-sonnet-4-6",
-          "description": "Model for `auto` tier runs (balanced default).",
+          "default": "openai/gpt-oss-120b",
+          "description": "Model for `auto` tier runs (the tier still sets the balanced budget).",
           "title": "Auto",
           "type": "string"
         },
         "deep": {
-          "default": "openai/gpt-5.5",
-          "description": "Model for `deep` tier runs (exhaustive research).",
+          "default": "openai/gpt-oss-120b",
+          "description": "Model for `deep` tier runs (the tier still sets the exhaustive budget).",
           "title": "Deep",
           "type": "string"
         }

@@ -790,7 +790,15 @@ class JsonWikiStore(WikiStoreBase):
         return updated
 
     def list_jobs(self, slug: str | None = None) -> list[IndexingJob]:
-        """Return all jobs, optionally filtered to *slug*."""
+        """Return all jobs (sorted by ``job_id``), optionally filtered to *slug*.
+
+        ``iterdir()`` yields entries in arbitrary, platform-dependent filesystem
+        order, so the list MUST be sorted before return — every consumer
+        (restart recovery, the submission scan in ``jobs.py``, the FE list)
+        relies on a stable order, and an unsorted return surfaced as a
+        Python-version-dependent recovery flake (the first stranded job per slug
+        is the one re-driven). ``job_id`` is the deterministic key.
+        """
         jobs_root = self.root_dir / "jobs"
         if not jobs_root.exists():
             return []
@@ -803,7 +811,7 @@ class JsonWikiStore(WikiStoreBase):
                 continue
             if slug is None or job.slug == slug:
                 jobs.append(job)
-        return jobs
+        return sorted(jobs, key=lambda j: j.job_id)
 
     def append_job_event(self, job_id: str, event: dict[str, Any]) -> int:
         """Append *event* to the job event log; return the monotonic idx."""
@@ -1777,12 +1785,17 @@ class MongoWikiStore(WikiStoreBase):
         return updated
 
     def list_jobs(self, slug: str | None = None) -> list[IndexingJob]:
-        """Return all jobs, optionally filtered to *slug*."""
+        """Return all jobs (sorted by ``job_id``), optionally filtered to *slug*.
+
+        Mongo ``find()`` has no inherent order; sort by ``job_id`` so the result
+        is deterministic and matches the JSON backend — restart recovery and the
+        submission scan depend on a stable per-slug order.
+        """
         query: dict[str, Any] = {}
         if slug is not None:
             query["slug"] = slug
         jobs: list[IndexingJob] = []
-        for doc in self._col("wiki_jobs").find(query):
+        for doc in self._col("wiki_jobs").find(query).sort("job_id", 1):
             jobs.append(IndexingJob.model_validate(_clean_for_model(doc, IndexingJob)))
         return jobs
 

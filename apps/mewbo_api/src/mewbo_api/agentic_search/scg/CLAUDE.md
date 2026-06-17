@@ -28,8 +28,8 @@ projects a finished session transcript onto the run event log.
 **Tiers (Fast / Auto / Deep) are ONE budget knob over the single loop** —
 decomposition depth + probe-count fan-out (see `scg-search.md`) **and, since
 2026-06, the MODEL**: `ScgConfig.model_for_tier(run.tier)` reads
-`scg.traversal.tier_models` (defaults fast→`openai/gpt-5.4-nano`,
-auto→`openai/claude-sonnet-4-6`, deep→`openai/gpt-5.5`) into the drive's
+`scg.traversal.tier_models` (defaults fast/auto/deep all →
+`openai/gpt-oss-120b`) into the drive's
 `model_name`; probes inherit the session model, so the one knob moves the
 whole run. Blank/unknown → `llm.default_model`; an explicit request `model`
 (`POST /runs` body, riding `RunRecord.model`) wins over the tier map at the

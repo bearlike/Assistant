@@ -1747,16 +1747,16 @@ class ScgTierModelsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Tier models"})
 
     fast: str = Field(
-        "openai/gpt-5.4-nano",
-        description="Model for `fast` tier runs (cheap, low-latency).",
+        "openai/gpt-oss-120b",
+        description="Model for `fast` tier runs (the tier still sets the low-latency budget).",
     )
     auto: str = Field(
-        "openai/claude-sonnet-4-6",
-        description="Model for `auto` tier runs (balanced default).",
+        "openai/gpt-oss-120b",
+        description="Model for `auto` tier runs (the tier still sets the balanced budget).",
     )
     deep: str = Field(
-        "openai/gpt-5.5",
-        description="Model for `deep` tier runs (exhaustive research).",
+        "openai/gpt-oss-120b",
+        description="Model for `deep` tier runs (the tier still sets the exhaustive budget).",
     )
 
 

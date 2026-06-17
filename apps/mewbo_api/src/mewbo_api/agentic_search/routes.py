@@ -530,6 +530,30 @@ def init_agentic_search(
 
     init_agentic_search_graph(api, require_api_key, runtime)  # #79 workspace graph
     _register_map_phase_sink()
+    _register_search_launcher()
+
+
+def _register_search_launcher() -> None:
+    """Wire the self-facing agentic-search launcher for the ``scg`` plugin.
+
+    The ``agentic_search`` SessionTool (in ``mewbo_graph``) lets a task-spawned
+    engine agent RUN a search, but the run lifecycle (session + run store) lives
+    here, up-layer. So — exactly like :func:`_register_map_phase_sink` — the api
+    injects a concrete backend bound to this run store + the session runtime via
+    :class:`~mewbo_graph.scg.search_launcher.SearchLauncher`. No-op when SCG is
+    disabled or the graph library is absent (the tool then degrades to a
+    structured "unavailable" error).
+    """
+    if not ScgConfig.enabled():
+        return
+    try:
+        from mewbo_graph.scg.search_launcher import SearchLauncher
+
+        from .search_launcher_impl import RunStoreSearchLauncher
+    except ImportError:
+        return
+
+    SearchLauncher.register(RunStoreSearchLauncher(runtime=_runtime))
 
 
 def _register_map_phase_sink() -> None:

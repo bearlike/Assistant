@@ -9,7 +9,7 @@ name: Docs
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
     types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
@@ -63,9 +63,12 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Publish to GitHub Pages
-        if: github.server_url == 'https://github.com' && github.ref == 'refs/heads/main'
+        if: github.server_url == 'https://github.com' && github.ref_name == github.event.repository.default_branch
         run: |
-          uv run mike deploy --push --update-aliases main latest --alias-type copy
+          # Version label is derived from the branch that was pushed, so the
+          # same workflow publishes "master" on the GitHub mirror and "main"
+          # on the Gitea origin without hardcoding either name.
+          uv run mike deploy --push --update-aliases "${{ github.ref_name }}" latest --alias-type copy
           uv run mike set-default --push latest
 
       - name: Publish PR preview to GitHub Pages
