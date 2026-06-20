@@ -4,11 +4,17 @@
 if (typeof navigator !== "undefined" && navigator.modelContext) {
   const controller = new AbortController();
 
+  const siteName =
+    document.querySelector('meta[property="og:site_name"]')?.content || "docs";
+  // Slug for a valid tool identifier: lowercase, non-alphanumerics -> "_", trim edges.
+  const docsSlug =
+    siteName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") ||
+    "docs";
+
   navigator.modelContext.registerTool(
     {
-      name: "search_mewbo_docs",
-      description:
-        "Full-text search across Mewbo documentation. Returns matching page titles, URLs, and excerpts.",
+      name: `search_${docsSlug}_docs`,
+      description: `Full-text search across ${siteName} documentation. Returns matching page titles, URLs, and excerpts.`,
       inputSchema: {
         type: "object",
         properties: {

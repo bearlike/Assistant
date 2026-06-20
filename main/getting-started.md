@@ -17,9 +17,11 @@ Mewbo runs as a local CLI, a REST API + web console, or a containerised stack. P
 The CLI is the fastest way to start a local session.
 
 ```bash
-uv sync --extra cli
+uv sync
 uv run mewbo
 ```
+
+The CLI is part of the base install. No extra is needed.
 
 For a global install so `mewbo` works from anywhere:
 ```bash
@@ -46,7 +48,7 @@ uv run mewbo-api
 cd apps/mewbo_console && npm run dev
 ```
 
-The console proxies `/api/` requests to the API at `127.0.0.1:5125` by default.
+The dev console proxies `/api/` requests to the API at `127.0.0.1:5124` by default. That is the API's local port. Port 5125 is the Docker host port only (see the [Docker quick-start](#docker-quickstart)).
 
 See [Console + API](clients-web-api.md) for configuration, auth, and session management.
 
@@ -58,7 +60,7 @@ Adds the Home Assistant tool for smart-home control via the CLI or API.
 uv sync --extra ha
 ```
 
-Then set `home_assistant.enabled` and credentials in `configs/app.json`. See [Home Assistant](clients-home-assistant.md).
+Then set `home_assistant.enabled` and credentials in [`configs/app.json`](repo:configs/app.json). See [Home Assistant](clients-home-assistant.md).
 
 ### All extras (developer) {#dev-setup}
 
@@ -68,12 +70,14 @@ Installs every optional component plus test/docs tooling.
 uv sync --all-extras --all-groups
 ```
 
+The CLI and core tools ship with the base install. The optional extras are:
+
 | Extra | What it adds |
 |-------|-------------|
-| `cli` | Terminal UI, Rich approval dialogs |
-| `api` | Flask REST API, Flask-RESTX, Gunicorn |
-| `ha` | Home Assistant integration |
-| `tools` | Full MCP tools bundle |
+| `api` | REST API server (Flask, Flask-RESTX, Gunicorn), the backend for the web console |
+| `ha` | Home Assistant conversation integration |
+| `wiki` | Wiki + search graph substrate via `mewbo-graph` (tree-sitter, rank-bm25, numpy) |
+| `mcp` | Standalone MCP server wrapping the REST API |
 | `--all-extras` | All of the above |
 | `--all-groups` | Dev + test + docs groups |
 
@@ -95,8 +99,8 @@ The two files you'll edit most:
 
 | File | Purpose |
 |------|---------|
-| `configs/app.json` | Runtime settings, LLM keys, integrations |
-| `configs/mcp.json` | MCP server definitions |
+| [`configs/app.json`](repo:configs/app.json) | Runtime settings, LLM keys, integrations |
+| [`configs/mcp.json`](repo:configs/mcp.json) | MCP server definitions |
 
 To scaffold both from scratch, run `/init` from the CLI after a bare `uv sync`.
 
@@ -105,13 +109,13 @@ To scaffold both from scratch, run `/init` from the CLI after a bare `uv sync`.
 
 ## First run {#first-run}
 
-After copying and editing `configs/app.json`:
+After copying and editing [`configs/app.json`](repo:configs/app.json):
 
 ```bash
 uv run mewbo
 ```
 
-On first run, type `/init` to scaffold any missing config files. A minimal working `configs/app.json`:
+On first run, type `/init` to scaffold any missing config files. A minimal working [`configs/app.json`](repo:configs/app.json):
 
 ```json
 {
@@ -136,7 +140,7 @@ cp docker.example.env docker.env
 docker compose pull && docker compose up -d
 ```
 
-Required variables in `docker.env`:
+Required variables in [`docker.env`](repo:docker.env):
 
 | Variable | Purpose |
 |----------|---------|
@@ -178,7 +182,7 @@ Commit message format:
 <emoji> <verb>(<scope>): <message>
 ```
 
-Pre-push checks run `scripts/ci/check.sh`. This covers ruff format/check, mypy, and pytest.
+Pre-push checks run [`scripts/ci/check.sh`](repo:scripts/ci/check.sh). This covers ruff format/check, mypy, and pytest.
 
 ## Next steps {#next-steps}
 

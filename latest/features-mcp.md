@@ -7,7 +7,7 @@ Model Context Protocol (MCP) tools extend Mewbo with external tool servers. Any 
 
 ## Configuring MCP servers
 
-Define the servers you want the assistant to reach through a JSON config. The primary file is `configs/mcp.json` at the repo root (or `$MEWBO_HOME/mcp.json` for a global install).
+Define the servers you want the assistant to reach through a JSON config. The primary file is [`configs/mcp.json`](repo:configs/mcp.json) at the repo root (or `$MEWBO_HOME/mcp.json` for a global install).
 
 **Example `configs/mcp.json`:**
 
@@ -43,6 +43,32 @@ Define the servers you want the assistant to reach through a JSON config. The pr
 
 At session start, Mewbo connects to each configured MCP server, fetches its tool schema, and registers those tools in the registry. Connections are persistent. There is no per-request reconnect overhead, and a config change picks up on the next session.
 
+## Deferred tool-schema loading (tool search)
+
+Every MCP tool carries a JSON schema, and binding all of them to the model on **every** turn is expensive — a typical fleet of MCP servers can add tens of thousands of tokens of tool definitions to each request. Mewbo avoids this with **on-demand schema loading**, modelled on Claude Code's Tool Search Tool.
+
+When deferral is active, MCP tool schemas (and any tool explicitly marked deferrable) are **stripped from the initial request** and surfaced to the model by name only, grouped by server, via a compact `<available-mcp-servers>` block. The model fetches the schemas it actually needs by calling the built-in **`tool_search`** tool (`select:tool_a,tool_b` for a direct fetch, or keywords for a fuzzy search). Mewbo then re-binds those tools so they become callable. Discovery is replayed from the conversation each turn, so it survives compaction.
+
+Because the search round-trip happens **client-side** (the schemas come back as a normal tool result), this works through any LLM proxy — it does not depend on the provider forwarding tool-reference blocks.
+
+Configure it under `agent.tool_search` in `app.json`:
+
+| `mode` | Behaviour |
+|--------|-----------|
+| `auto` *(default)* | Defer only when the number of deferrable tools exceeds `auto_threshold` (default `25`). Lean or zero-MCP sessions keep verbatim binding and pay nothing; large fleets are spared the per-turn cost. |
+| `on` | Always defer MCP / deferrable tools. |
+| `off` | Never defer — every schema is bound on turn one. |
+
+```json
+{
+  "agent": {
+    "tool_search": { "mode": "auto", "auto_threshold": 25 }
+  }
+}
+```
+
+The `tool_search` tool is always available (it is exempt from `allowed_tools` scoping), so even a tightly scoped sub-agent can still reach its deferred tools. A model that cannot reliably issue a `tool_search` call simply sees no MCP tools for that turn — a graceful degradation rather than an error.
+
 ## Choosing which tools a session sees
 
 You can control which MCP tools are bound to a session:
@@ -53,7 +79,7 @@ You can control which MCP tools are bound to a session:
 
 ## Per-project MCP config
 
-Drop a `.mcp.json` file at your project root. When you start a session inside that project, its servers are merged with the global `configs/mcp.json` automatically. You can also place `.mcp.json` files deeper in the tree for sub-package–specific tools.
+Drop a `.mcp.json` file at your project root. When you start a session inside that project, its servers are merged with the global [`configs/mcp.json`](repo:configs/mcp.json) automatically. You can also place `.mcp.json` files deeper in the tree for sub-package–specific tools.
 
 **Example project `.mcp.json`:**
 

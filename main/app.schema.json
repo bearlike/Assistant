@@ -13,10 +13,18 @@
           "title": "Master Token",
           "type": "string",
           "x-protected": true
+        },
+        "allow_external_cwd": {
+          "default": false,
+          "description": "Allow callers to anchor sessions in an arbitrary host path via the `cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. Off by default; enable only for trusted external workspace managers such as Grove that manage their own worktrees.",
+          "title": "Allow External Cwd",
+          "type": "boolean"
         }
       },
-      "title": "APIConfig",
-      "type": "object"
+      "title": "API Server",
+      "type": "object",
+      "x-group": "server",
+      "x-order": 1
     },
     "AgentConfig": {
       "description": "Sub-agent hypervisor settings.",
@@ -58,27 +66,33 @@
         },
         "max_iters": {
           "default": 30,
+          "deprecated": true,
           "description": "Deprecated. The tool-use loop now runs until natural completion (model returns text without tool calls). This field is retained for API backward compatibility but is not enforced.",
           "title": "Max Iters",
           "type": "integer"
         },
         "sub_agent_max_steps": {
           "default": 10,
+          "deprecated": true,
           "description": "Deprecated. Sub-agents now run until natural completion. This field is retained for API backward compatibility but is not enforced. Safety is provided by session_step_budget, stall detection, and LLM timeouts.",
           "title": "Sub Agent Max Steps",
           "type": "integer"
         },
         "llm_call_timeout": {
-          "default": 60.0,
-          "description": "Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models. On timeout, the call is retried up to llm_call_retries times before cascading to fallback models.",
+          "default": 120.0,
+          "description": "Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models (raised from 60s \u2014 bare timeouts were the largest single failure class). On timeout, the call is retried up to llm_call_retries times before cascading to fallback models.",
           "title": "Llm Call Timeout",
           "type": "number"
         },
         "llm_call_retries": {
           "default": 2,
-          "description": "Maximum retry attempts for the primary model before cascading to fallback_models. Each fallback model gets one attempt.",
+          "description": "Maximum attempts for the primary model before cascading to fallback models (default 2 = one try + one retry). Each fallback model gets retry.fallback_retries attempts. A rescue model that wins is pinned for the rest of the run. Backoff/budget/circuit-breaker live under agent.retry.",
           "title": "Llm Call Retries",
           "type": "integer"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryConfig",
+          "description": "Automatic LLM-call retry / fallback resilience knobs."
         },
         "default_denied_tools": {
           "description": "Tool IDs denied to all sub-agents by default (e.g. spawn_agent).",
@@ -133,8 +147,10 @@
           "description": "Deferred tool loading via on-demand schema fetching."
         }
       },
-      "title": "AgentConfig",
-      "type": "object"
+      "title": "Agent",
+      "type": "object",
+      "x-group": "agent",
+      "x-order": 1
     },
     "CLIConfig": {
       "description": "Terminal CLI display and interaction settings.",
@@ -155,8 +171,10 @@
           "type": "string"
         }
       },
-      "title": "CLIConfig",
-      "type": "object"
+      "title": "CLI",
+      "type": "object",
+      "x-group": "interface",
+      "x-order": 1
     },
     "ChatConfig": {
       "description": "Legacy config section kept for backward compatibility with app.json files.",
@@ -180,8 +198,10 @@
           "type": "string"
         }
       },
-      "title": "ChatConfig",
-      "type": "object"
+      "title": "Chat",
+      "type": "object",
+      "x-group": "interface",
+      "x-order": 2
     },
     "CompactionConfig": {
       "description": "Summarization prompt selection for conversation compaction.\n\n``caveman_mode`` enables a rule-augmented prompt (inspired by the\n``JuliusBrussee/caveman`` Claude Code skill) that instructs the\nsummarizer LLM to drop articles, filler, pleasantries, and hedging\nwhile preserving code, paths, URLs, and error strings verbatim.\nReduces output tokens in the compaction summary without changing the\n``<analysis>/<summary>`` response structure downstream parsers expect.",
@@ -196,8 +216,10 @@
           "type": "boolean"
         }
       },
-      "title": "CompactionConfig",
-      "type": "object"
+      "title": "Compaction",
+      "type": "object",
+      "x-group": "models",
+      "x-order": 4
     },
     "ContextConfig": {
       "description": "Context window selection and event filtering.",
@@ -239,7 +261,36 @@
           "type": "string"
         }
       },
-      "title": "ContextConfig",
+      "title": "Context",
+      "type": "object",
+      "x-group": "models",
+      "x-order": 3
+    },
+    "FallbackConfig": {
+      "description": "Opt-in cross-model fallback policy.\n\nDisabled by default so a run never fans out to a different model \u2014 with\ndifferent cost, latency, output style and prompt-cache behaviour \u2014 without\nan explicit opt-in. When disabled, an error that is hopeless on the current\nmodel (e.g. quota exhausted) halts cleanly for one-click recovery instead.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable automatic fallback to other models when the primary is exhausted or hits a hopeless-here error. Off by default.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "models": {
+          "description": "Ordered fallback model IDs, tried after the primary is exhausted.",
+          "examples": [
+            [
+              "gpt-5.4",
+              "gemini-2.5-pro"
+            ]
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Models",
+          "type": "array"
+        }
+      },
+      "title": "Fallback",
       "type": "object"
     },
     "HomeAssistantConfig": {
@@ -268,11 +319,13 @@
           ],
           "title": "Token",
           "type": "string",
-          "x-protected": true
+          "x-secret": true
         }
       },
-      "title": "HomeAssistantConfig",
-      "type": "object"
+      "title": "Home Assistant",
+      "type": "object",
+      "x-group": "integrations",
+      "x-order": 1
     },
     "HookEntry": {
       "description": "A single hook configuration entry.",
@@ -280,6 +333,10 @@
         "type": {
           "default": "command",
           "description": "Hook type: 'command' (shell) or 'http' (POST to URL).",
+          "enum": [
+            "command",
+            "http"
+          ],
           "title": "Type",
           "type": "string"
         },
@@ -323,7 +380,7 @@
           "type": "integer"
         }
       },
-      "title": "HookEntry",
+      "title": "Hook",
       "type": "object"
     },
     "HooksConfig": {
@@ -360,10 +417,20 @@
           },
           "title": "On Session End",
           "type": "array"
+        },
+        "on_event": {
+          "description": "Hooks executed (fire-and-forget) for every event appended to a session transcript. The matcher fnmatches the event type.",
+          "items": {
+            "$ref": "#/$defs/HookEntry"
+          },
+          "title": "On Event",
+          "type": "array"
         }
       },
-      "title": "HooksConfig",
-      "type": "object"
+      "title": "Hooks",
+      "type": "object",
+      "x-group": "integrations",
+      "x-order": 3
     },
     "LLMConfig": {
       "description": "LLM provider connection and model selection.",
@@ -386,7 +453,7 @@
           ],
           "title": "Api Key",
           "type": "string",
-          "x-protected": true
+          "x-secret": true
         },
         "default_model": {
           "default": "gpt-5.2",
@@ -439,7 +506,7 @@
           "type": "array"
         },
         "fallback_models": {
-          "description": "Ordered list of fallback model IDs. On retryable LLM failure, the system tries each in order after exhausting retries on the primary model. Empty = no fallback.",
+          "description": "Legacy ordered list of fallback model IDs. Prefer 'fallback' (typed, explicit opt-in). A non-empty value here is still honored for backward compatibility (treated as fallback enabled).",
           "examples": [
             [
               "gpt-5.4",
@@ -452,6 +519,10 @@
           "title": "Fallback Models",
           "type": "array"
         },
+        "fallback": {
+          "$ref": "#/$defs/FallbackConfig",
+          "description": "Opt-in cross-model fallback policy (see FallbackConfig)."
+        },
         "proxy_model_prefix": {
           "default": "openai",
           "description": "LiteLLM provider prefix prepended to model names when api_base is set. LiteLLM strips this prefix before forwarding the model name to the proxy, so the proxy receives the model ID it advertises in /v1/models. Leave as 'openai' for LiteLLM proxy, Bifrost, and OpenRouter. Only relevant when api_base is configured.",
@@ -461,7 +532,8 @@
             "vertex_ai"
           ],
           "title": "Proxy Model Prefix",
-          "type": "string"
+          "type": "string",
+          "x-advanced": true
         },
         "reasoning_effort": {
           "default": "",
@@ -481,16 +553,19 @@
           "type": "array"
         },
         "structured_patch_models": {
-          "description": "Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Built-in defaults cover GPT-5/o3/o4/Codex/GPT-4; only set this to override or extend.",
+          "description": "Model IDs (or glob prefixes ending in '*') that prefer the structured_patch edit tool over search_replace_block. Runtime override layer ON TOP of the controllable model\u2192tool-variant map (mewbo_core/prompts/model_variants.yaml), which now holds the built-in defaults (GPT-5/o3/o4/Codex/GPT-4); only set this to override or extend without editing that file.",
           "items": {
             "type": "string"
           },
           "title": "Structured Patch Models",
-          "type": "array"
+          "type": "array",
+          "x-advanced": true
         }
       },
-      "title": "LLMConfig",
-      "type": "object"
+      "title": "Language Model",
+      "type": "object",
+      "x-group": "models",
+      "x-order": 1
     },
     "LSPConfig": {
       "additionalProperties": false,
@@ -512,7 +587,7 @@
           "type": "object"
         }
       },
-      "title": "LSPConfig",
+      "title": "LSP",
       "type": "object"
     },
     "LangfuseConfig": {
@@ -550,7 +625,7 @@
           ],
           "title": "Public Key",
           "type": "string",
-          "x-protected": true
+          "x-secret": true
         },
         "secret_key": {
           "default": "",
@@ -560,11 +635,13 @@
           ],
           "title": "Secret Key",
           "type": "string",
-          "x-protected": true
+          "x-secret": true
         }
       },
-      "title": "LangfuseConfig",
-      "type": "object"
+      "title": "Langfuse",
+      "type": "object",
+      "x-group": "integrations",
+      "x-order": 2
     },
     "MongoDBConfig": {
       "description": "MongoDB connection settings.",
@@ -588,7 +665,7 @@
           "type": "string"
         }
       },
-      "title": "MongoDBConfig",
+      "title": "MongoDB",
       "type": "object"
     },
     "PermissionsConfig": {
@@ -613,8 +690,10 @@
           "type": "string"
         }
       },
-      "title": "PermissionsConfig",
-      "type": "object"
+      "title": "Permissions",
+      "type": "object",
+      "x-group": "agent",
+      "x-order": 2
     },
     "PluginsConfig": {
       "description": "Plugin system configuration.",
@@ -634,12 +713,18 @@
           "type": "array"
         },
         "marketplaces": {
-          "description": "GitHub repos containing marketplace.json plugin indexes.",
+          "description": "Marketplace catalogs holding a marketplace.json plugin index, on any git host. Each entry is a full git URL (https/ssh/git, or scp-style git@host:owner/repo), a 'host/owner/repo' shorthand, or a bare 'owner/repo' (cloned from marketplace_default_host).",
           "items": {
             "type": "string"
           },
           "title": "Marketplaces",
           "type": "array"
+        },
+        "marketplace_default_host": {
+          "default": "github.com",
+          "description": "Default git host for bare 'owner/repo' marketplace entries. Full URLs and 'host/owner/repo' entries ignore this.",
+          "title": "Marketplace Default Host",
+          "type": "string"
         },
         "install_path": {
           "default": "",
@@ -648,8 +733,10 @@
           "type": "string"
         }
       },
-      "title": "PluginsConfig",
-      "type": "object"
+      "title": "Plugins",
+      "type": "object",
+      "x-group": "agent",
+      "x-order": 3
     },
     "ProjectConfig": {
       "description": "A project directory exposed to the REST API for session scoping.",
@@ -667,7 +754,7 @@
           "type": "string"
         }
       },
-      "title": "ProjectConfig",
+      "title": "Project",
       "type": "object"
     },
     "ReflectionConfig": {
@@ -689,7 +776,70 @@
           "type": "string"
         }
       },
-      "title": "ReflectionConfig",
+      "title": "Reflection",
+      "type": "object",
+      "x-group": "models",
+      "x-order": 5
+    },
+    "RetryConfig": {
+      "description": "Automatic LLM-call retry / fallback resilience knobs.\n\nSame-model retry hardening (full-jitter backoff, circuit breaker, retry\nbudget, wall-clock deadline, doom-loop halt) is always on; cross-model\nfallback is opt-in via ``llm.fallback``. Defaults are calibrated from\nproduction agent loops, not the tighter vendor-SDK defaults.",
+      "properties": {
+        "backoff_base": {
+          "default": 1.0,
+          "description": "Base seconds for full-jitter backoff: random(0, min(cap, base*2^(n-1))).",
+          "title": "Backoff Base",
+          "type": "number"
+        },
+        "backoff_cap": {
+          "default": 60.0,
+          "description": "Maximum backoff delay in seconds.",
+          "title": "Backoff Cap",
+          "type": "number"
+        },
+        "retry_after_cap": {
+          "default": 60.0,
+          "description": "Upper bound applied to a server Retry-After before sleeping on it.",
+          "title": "Retry After Cap",
+          "type": "number"
+        },
+        "turn_deadline": {
+          "default": 240.0,
+          "description": "Wall-clock seconds budget for one logical LLM call across all retries and fallbacks. Checked before each attempt. 0 disables.",
+          "title": "Turn Deadline",
+          "type": "number"
+        },
+        "fallback_retries": {
+          "default": 1,
+          "description": "Attempts per fallback model after the primary is exhausted.",
+          "title": "Fallback Retries",
+          "type": "integer"
+        },
+        "circuit_breaker_threshold": {
+          "default": 3,
+          "description": "Consecutive per-model failures before that model is cooled down and skipped (when an alternative exists). 0 disables.",
+          "title": "Circuit Breaker Threshold",
+          "type": "integer"
+        },
+        "circuit_breaker_cooldown": {
+          "default": 30.0,
+          "description": "Seconds a model is skipped after tripping the circuit breaker.",
+          "title": "Circuit Breaker Cooldown",
+          "type": "number"
+        },
+        "budget_capacity": {
+          "default": 24.0,
+          "description": "Token-bucket retry budget. Retries stop once the bucket drops to half capacity, so a sustained outage fails fast instead of storming.",
+          "title": "Budget Capacity",
+          "type": "number"
+        },
+        "doom_loop_threshold": {
+          "default": 3,
+          "description": "Halt cleanly when the model repeats the same tool + identical input this many times in a row (no progress). 0 disables.",
+          "title": "Doom Loop Threshold",
+          "type": "integer"
+        }
+      },
+      "title": "Retry",
       "type": "object"
     },
     "RuntimeConfig": {
@@ -787,7 +937,79 @@
           "x-protected": true
         }
       },
-      "title": "RuntimeConfig",
+      "title": "Runtime",
+      "type": "object",
+      "x-advanced": true,
+      "x-group": "server",
+      "x-order": 3
+    },
+    "ScgConfig": {
+      "additionalProperties": false,
+      "description": "Operator-facing knobs for the Source Capability Graph (agentic search).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Master switch for the SCG feature (source mapping and orchestrated agentic-search runs).",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "traversal": {
+          "$ref": "#/$defs/ScgTraversalConfig",
+          "description": "Traversal defaults (the per-run search tier)."
+        }
+      },
+      "title": "SCG",
+      "type": "object",
+      "x-group": "workspace",
+      "x-order": 3
+    },
+    "ScgTierModelsConfig": {
+      "additionalProperties": false,
+      "description": "Per-tier model mapping \u2014 the tier picks the brain, not just the budget.\n\nA tier maps to the LLM that drives the whole run (orchestrator session AND\nits probe sub-agents, which inherit the session model). An empty string\nfalls back to ``llm.default_model``. An explicit per-request ``model``\noverride (where the endpoint offers one) always wins over the tier map.",
+      "properties": {
+        "fast": {
+          "default": "openai/gpt-oss-120b",
+          "description": "Model for `fast` tier runs (the tier still sets the low-latency budget).",
+          "title": "Fast",
+          "type": "string"
+        },
+        "auto": {
+          "default": "openai/gpt-oss-120b",
+          "description": "Model for `auto` tier runs (the tier still sets the balanced budget).",
+          "title": "Auto",
+          "type": "string"
+        },
+        "deep": {
+          "default": "openai/gpt-oss-120b",
+          "description": "Model for `deep` tier runs (the tier still sets the exhaustive budget).",
+          "title": "Deep",
+          "type": "string"
+        }
+      },
+      "title": "Tier models",
+      "type": "object"
+    },
+    "ScgTraversalConfig": {
+      "additionalProperties": false,
+      "description": "Traversal defaults for SCG search (the per-run tier budget knob).",
+      "properties": {
+        "default_tier": {
+          "default": "auto",
+          "description": "Default search tier \u2014 one budget knob over decomposition depth and probe fan-out. Overridable per run.",
+          "enum": [
+            "fast",
+            "auto",
+            "deep"
+          ],
+          "title": "Default Tier",
+          "type": "string"
+        },
+        "tier_models": {
+          "$ref": "#/$defs/ScgTierModelsConfig",
+          "description": "Which LLM each search tier runs on (fast/auto/deep)."
+        }
+      },
+      "title": "Traversal",
       "type": "object"
     },
     "StorageConfig": {
@@ -808,8 +1030,11 @@
           "description": "MongoDB connection settings (used when driver is 'mongodb')."
         }
       },
-      "title": "StorageConfig",
-      "type": "object"
+      "title": "Storage",
+      "type": "object",
+      "x-advanced": true,
+      "x-group": "server",
+      "x-order": 2
     },
     "TokenBudgetConfig": {
       "description": "Token budget and auto-compaction thresholds.",
@@ -841,25 +1066,35 @@
           "type": "object"
         }
       },
-      "title": "TokenBudgetConfig",
-      "type": "object"
+      "title": "Token Budget",
+      "type": "object",
+      "x-group": "models",
+      "x-order": 2
     },
     "ToolSearchConfig": {
       "additionalProperties": false,
       "description": "Deferred tool loading via on-demand schema fetching.\n\nWhen ``mode='on'``, MCP tool schemas (and any spec with\n``metadata.deferred=True``) are stripped from the initial ``bind_tools``\ncall and surfaced to the model by name only via\n``<available-deferred-tools>``. The model fetches schemas it actually\nneeds by calling the built-in ``tool_search`` tool. Mirrors Claude\nCode's ``ToolSearchTool`` mechanism \u2014 saves substantial context tokens\non sessions with many MCP servers connected.",
       "properties": {
         "mode": {
-          "default": "off",
-          "description": "'off' (default) keeps every tool's schema in the initial bind. 'on' defers MCP tools and any spec with metadata.deferred=True; the model loads schemas on demand via tool_search.",
+          "default": "auto",
+          "description": "'off' keeps every tool's schema in the initial bind. 'on' always defers MCP tools and any spec with metadata.deferred=True; the model loads schemas on demand via tool_search. 'auto' defers only when the number of deferrable tools exceeds auto_threshold \u2014 so lean / zero-MCP sessions keep verbatim binding and pay nothing, while many-MCP sessions are spared ~240 tokens per tool every turn.",
           "enum": [
             "off",
-            "on"
+            "on",
+            "auto"
           ],
           "title": "Mode",
           "type": "string"
+        },
+        "auto_threshold": {
+          "default": 25,
+          "description": "In 'auto' mode, defer tool schemas only when more than this many deferrable tools (MCP + metadata.deferred specs) are registered. Ignored when mode is 'off' or 'on'.",
+          "minimum": 0,
+          "title": "Auto Threshold",
+          "type": "integer"
         }
       },
-      "title": "ToolSearchConfig",
+      "title": "Tool Search",
       "type": "object"
     },
     "WebIdeConfig": {
@@ -916,13 +1151,19 @@
           "title": "Network",
           "type": "string"
         },
+        "proxy_url": {
+          "default": "http://127.0.0.1:5126",
+          "description": "Base URL the API uses to reach the ide-proxy for readiness probes. The default suits a host-networked API, where the proxy is published on loopback 127.0.0.1:5126. A bridge-networked API (e.g. one joined to extra Docker networks via a compose override) cannot reach that loopback: attach it to the `network` above and point this at the proxy's in-network name, e.g. http://mewbo-ide-proxy:8080.",
+          "title": "Proxy Url",
+          "type": "string"
+        },
         "state_dir": {
           "default": "/tmp/mewbo-ide",
           "title": "State Dir",
           "type": "string"
         }
       },
-      "title": "WebIdeConfig",
+      "title": "Web IDE",
       "type": "object"
     },
     "WikiConfig": {
@@ -966,10 +1207,20 @@
         },
         "embedding": {
           "$ref": "#/$defs/WikiEmbeddingConfig"
+        },
+        "memory": {
+          "$ref": "#/$defs/WikiMemoryConfig",
+          "description": "Multiplex memory-layer knobs (atomic insights over the graph)."
+        },
+        "refresh": {
+          "$ref": "#/$defs/WikiRefreshConfig",
+          "description": "On-demand incremental-refresh thresholds."
         }
       },
-      "title": "WikiConfig",
-      "type": "object"
+      "title": "Wiki",
+      "type": "object",
+      "x-group": "workspace",
+      "x-order": 2
     },
     "WikiEmbeddingConfig": {
       "additionalProperties": false,
@@ -1008,7 +1259,142 @@
           "type": "integer"
         }
       },
-      "title": "WikiEmbeddingConfig",
+      "title": "Embedding",
+      "type": "object"
+    },
+    "WikiMemoryConfig": {
+      "additionalProperties": false,
+      "description": "Knobs for the multiplex memory layer (atomic insights over the graph).",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Master switch for the memory layer (gates wiki_submit_insight).",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "model": {
+          "default": "",
+          "description": "Chat model for condense + LLM dedup on the human/REST/MCP path. Empty \u2192 falls back to default_qa_model, then default_model.",
+          "title": "Model",
+          "type": "string"
+        },
+        "max_insight_chars": {
+          "default": 200,
+          "description": "Hard cap on a memory note's length.",
+          "title": "Max Insight Chars",
+          "type": "integer"
+        },
+        "max_anchors": {
+          "default": 8,
+          "description": "Max code anchors per note.",
+          "title": "Max Anchors",
+          "type": "integer"
+        },
+        "dedup_k": {
+          "default": 5,
+          "description": "kNN candidate window for fuzzy + LLM dedup tiers.",
+          "title": "Dedup K",
+          "type": "integer"
+        },
+        "dedup_cosine": {
+          "default": 0.6,
+          "description": "Cosine floor for the LLM dedup tier.",
+          "title": "Dedup Cosine",
+          "type": "number"
+        },
+        "fuzzy_jaccard": {
+          "default": 0.85,
+          "description": "Jaccard floor for the fuzzy dedup tier.",
+          "title": "Fuzzy Jaccard",
+          "type": "number"
+        },
+        "fusion_w_ppr": {
+          "default": 0.1,
+          "description": "Additive memory-expansion weight (GAAMA 0.1\u00b7ppr + 1.0\u00b7sim).",
+          "title": "Fusion W Ppr",
+          "type": "number"
+        },
+        "hub_degree": {
+          "default": 50,
+          "description": "Degree above which an anchor is hub-damped.",
+          "title": "Hub Degree",
+          "type": "integer"
+        },
+        "expansion_hops": {
+          "default": 1,
+          "description": "Structural hops to expand from an anchor.",
+          "title": "Expansion Hops",
+          "type": "integer"
+        }
+      },
+      "title": "Memory",
+      "type": "object"
+    },
+    "WikiRefreshConfig": {
+      "additionalProperties": false,
+      "description": "Thresholds for the on-demand incremental refresh.",
+      "properties": {
+        "default_mode": {
+          "default": "auto",
+          "description": "Default re-index strategy when none is requested.",
+          "enum": [
+            "auto",
+            "full",
+            "incremental"
+          ],
+          "title": "Default Mode",
+          "type": "string"
+        },
+        "closure_max_depth": {
+          "default": 4,
+          "description": "Reverse-dependency closure depth cap.",
+          "title": "Closure Max Depth",
+          "type": "integer"
+        },
+        "drift_keep": {
+          "default": 0.9,
+          "description": "Cosine \u2265 this keeps a memory anchor (no LLM).",
+          "title": "Drift Keep",
+          "type": "number"
+        },
+        "drift_invalidate": {
+          "default": 0.75,
+          "description": "Cosine < this invalidates a memory anchor.",
+          "title": "Drift Invalidate",
+          "type": "number"
+        },
+        "page_keep": {
+          "default": 0.05,
+          "description": "Doc staleness < this \u2192 keep.",
+          "title": "Page Keep",
+          "type": "number"
+        },
+        "page_edit": {
+          "default": 0.35,
+          "description": "Doc staleness < this \u2192 edit.",
+          "title": "Page Edit",
+          "type": "number"
+        },
+        "page_regen": {
+          "default": 0.7,
+          "description": "Doc staleness \u2265 this \u2192 regenerate + review.",
+          "title": "Page Regen",
+          "type": "number"
+        },
+        "new_page_min": {
+          "default": 5,
+          "description": "Uncovered public symbols to propose a new page.",
+          "title": "New Page Min",
+          "type": "integer"
+        },
+        "require_scope_confirm": {
+          "default": false,
+          "description": "Require a human gate on the scope preview before the act phase.",
+          "title": "Require Scope Confirm",
+          "type": "boolean"
+        }
+      },
+      "title": "Refresh",
       "type": "object"
     }
   },
@@ -1063,6 +1449,10 @@
       "$ref": "#/$defs/WikiConfig",
       "description": "Wiki subsystem defaults and embedding behavior."
     },
+    "scg": {
+      "$ref": "#/$defs/ScgConfig",
+      "description": "Source Capability Graph feature gate and search-tier default."
+    },
     "hooks": {
       "$ref": "#/$defs/HooksConfig",
       "description": "External hooks fired during the session lifecycle (command or http)."
@@ -1077,7 +1467,9 @@
       },
       "description": "Chat platform channel adapters (nextcloud-talk, slack, etc.).",
       "title": "Channels",
-      "type": "object"
+      "type": "object",
+      "x-group": "integrations",
+      "x-order": 4
     },
     "projects": {
       "additionalProperties": {
@@ -1085,7 +1477,9 @@
       },
       "description": "Named project directories exposed to the REST API for session scoping.",
       "title": "Projects",
-      "type": "object"
+      "type": "object",
+      "x-group": "workspace",
+      "x-order": 1
     }
   },
   "title": "AppConfig",

@@ -172,7 +172,7 @@ When using a proxy (`llm.api_base` is set), the proxy must advertise model capab
 
 ### Seeing cache savings
 
-Cache savings appear immediately in the per-turn chip as **cache read** tokens. Accumulated session savings are visible in the context window bar popover under **Cache reads** (with a tooltip noting the per-provider billing rate). The `/api/sessions/{id}/usage` endpoint surfaces `total_cache_read_tokens` for programmatic access.
+Cache savings appear immediately in the per-turn chip as **cache read** tokens. Accumulated session savings are visible in the context window bar popover under **Cache reads** (with a tooltip noting the per-provider billing rate). The [GET /api/sessions/{session_id}/usage](endpoint:GET /api/sessions/{session_id}/usage) endpoint surfaces `total_cache_read_tokens` for programmatic access.
 
 ---
 
@@ -185,7 +185,7 @@ Cache savings appear immediately in the per-turn chip as **cache read** tokens. 
 | `token_budget.model_context_windows` | `{}` | Per-model overrides (map of model name → token count). Use to cap below the real max or for proxy-only models. |
 | `llm.compact_models` | `["default"]` | Priority-ordered model list for compaction. |
 
-See [configuration.md](configuration.md#tokenbudgetconfig) for the full schema.
+See [configuration.md](configuration.md#token-budget) for the full schema.
 
 > [!NOTE] How it works internally
 > See [Architecture Overview → Token tracking](core-orchestration.md#token-tracking).

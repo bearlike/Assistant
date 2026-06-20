@@ -3,7 +3,7 @@
   // `config.repo_url` (mkdocs standard, products already set it), and
   // MEWBO_DOCS_PATH defaults to 'docs' (mkdocs's `docs_dir` basename).
   // MEWBO_VERSIONS_ROOT is shared with version-switcher.js for the
-  // GitHub-Pages-subpath case (e.g. /Assistant/<version>/...).
+  // GitHub-Pages-subpath case (e.g. /your-docs/<version>/...).
   const REPO          = window.MEWBO_REPO || '';
   const DOCS_PATH     = (window.MEWBO_DOCS_PATH || 'docs').replace(/^\/+|\/+$/g, '');
   const VERSIONS_ROOT = (window.MEWBO_VERSIONS_ROOT || '').replace(/^\/+|\/+$/g, '');

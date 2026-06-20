@@ -32,7 +32,7 @@ You are performing a thorough code review. Follow this checklist:
 
 | Key | Type | Required | Description |
 |---|---|---|---|
-| `name` | string | Yes | Lowercase, hyphens allowed, max 64 chars. Must match `^[a-z0-9]([a-z0-9\|-])*[a-z0-9]?$` |
+| `name` | string | Yes | Lowercase letters and digits, single hyphens only between them, max 64 characters. Must match `^[a-z0-9](?:[a-z0-9]\|-(?=[a-z0-9])){0,62}[a-z0-9]?$` |
 | `description` | string | Yes | Used for auto-invocation matching (max 1024 chars) |
 | `requires-capabilities` | string or list | No | Capability ids this skill needs; space-delimited string or YAML list. The skill is hidden from sessions that do not advertise all of them on `X-Mewbo-Capabilities`. See [Plugins & Marketplace → Capability gating](features-plugins.md#capability-gating). |
 | `allowed-tools` | string or list | No | Tool IDs the skill scopes to; space-delimited string or YAML list |
@@ -58,7 +58,7 @@ When `allowed-tools` is omitted, the skill inherits the full tool set of the cur
 
 ## Capability gating
 
-A skill can opt out of sessions that lack a required runtime by declaring `requires-capabilities` in its frontmatter. The client advertises capabilities via the `X-Mewbo-Capabilities` header; the orchestrator resolves the session capability set once, and `SkillRegistry` then filters both the auto-invocation catalog and the `/skill-name` lookup. Skills whose `requires-capabilities` is not a subset of the session capabilities are invisible: they are not surfaced to the model and cannot be invoked explicitly. The built-in `widget-builder` plugin uses this: its `st-widget-builder` skill declares `requires-capabilities: [stlite]`, so it never appears on CLI sessions that do not advertise stlite.
+A skill can opt out of sessions that lack a required runtime by declaring `requires-capabilities` in its frontmatter. The client advertises capabilities via the `X-Mewbo-Capabilities` header; the orchestrator resolves the session capability set once, and [SkillRegistry](repo:packages/mewbo_core/src/mewbo_core/skills.py) then filters both the auto-invocation catalog and the `/skill-name` lookup. Skills whose `requires-capabilities` is not a subset of the session capabilities are invisible: they are not surfaced to the model and cannot be invoked explicitly. The built-in `widget-builder` plugin uses this: its `st-widget-builder` skill declares `requires-capabilities: [stlite]`, so it never appears on CLI sessions that do not advertise stlite.
 
 ```yaml
 ---

@@ -66,6 +66,41 @@ This page is generated from inline docstrings via mkdocstrings. The sections bel
 
 ::: mewbo_tools.integration.lsp.servers
 
+## packages/mewbo_graph (knowledge-graph capability library)
+The optional substrate shared by MewboWiki and Mewbo Search. Requires the library extras (`treesitter`, `retrieval`); absent when uninstalled.
+
+### MewboWiki substrate (`mewbo_graph.wiki`)
+::: mewbo_graph.wiki.graph
+
+::: mewbo_graph.wiki.structure_provider
+
+::: mewbo_graph.wiki.embedder
+
+::: mewbo_graph.wiki.retriever
+
+::: mewbo_graph.wiki.memory
+
+::: mewbo_graph.wiki.memory_types
+
+::: mewbo_graph.wiki.store
+
+::: mewbo_graph.wiki.types
+
+### Source Capability Graph (`mewbo_graph.scg`)
+::: mewbo_graph.scg.router
+
+::: mewbo_graph.scg.parser
+
+::: mewbo_graph.scg.entity_resolution
+
+::: mewbo_graph.scg.memory_bridge
+
+::: mewbo_graph.scg.store
+
+::: mewbo_graph.scg.types
+
+::: mewbo_graph.scg.providers
+
 ## Clients (apps/)
 - API entry point: `apps/mewbo_api/src/mewbo_api/backend.py`
 - Console: `apps/mewbo_console/` (React + Vite, connects via REST API)

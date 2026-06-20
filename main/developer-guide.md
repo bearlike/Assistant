@@ -3,17 +3,30 @@
 This page summarizes the code layout, core interfaces, and the minimal steps needed to build a new client.
 
 ## Monorepo layout
-- `packages/mewbo_core/`: orchestration loop, session runtime, schemas, session storage, compaction, tool registry, plugin system (`plugins.py`), agent definition registry (`agent_registry.py`).
+- `packages/mewbo_core/`: lean orchestration SDK — orchestration loop, session runtime, schemas, session storage, compaction, tool registry, plugin system ([`plugins.py`](repo:packages/mewbo_core/src/mewbo_core/plugins.py)), agent definition registry ([`agent_registry.py`](repo:packages/mewbo_core/src/mewbo_core/agent_registry.py)).
 - `packages/mewbo_tools/`: tool implementations and integration glue.
 - `packages/mewbo_tools/src/mewbo_tools/vendor/aider`: vendored Aider utilities used by local file and shell tools.
-- `apps/mewbo_api/`: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle (`ide.py`, `ide_routes.py`).
+- `packages/mewbo_graph/` (`mewbo-graph`): the **optional** knowledge-graph capability library — the reusable substrate shared by both MewboWiki and Mewbo Search. Houses the tree-sitter code graph, the multiplex atomic-note memory engine, the embedder, the hybrid retriever, and the Source Capability Graph (SCG) reachability router, plus the bundled `wiki` and `scg` plugin suites (SessionTools + AgentDefs).
+- `apps/mewbo_api/`: Flask API that exposes the assistant over HTTP, plugin management endpoints, Web IDE lifecycle ([`ide.py`](repo:apps/mewbo_api/src/mewbo_api/ide.py), [`ide_routes.py`](repo:apps/mewbo_api/src/mewbo_api/ide_routes.py)). The wiki/search surface here is a thin product layer (HTTP routes, wire/SSE contracts, run/job lifecycle, persistence glue) over `mewbo_graph`. The full endpoint catalog, with parameters, response shapes, and request samples, is the [REST API Reference](rest-api.md).
 - `apps/mewbo_console/`: Web console for task orchestration, plugin management, and Web IDE access (React + Vite).
 - `apps/mewbo_cli/`: terminal CLI for interactive sessions.
-- `mewbo_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
+- `apps/mewbo_ha_conversation/`: Home Assistant integration that routes voice requests to the API.
+
+### Layering — the down-only dependency DAG
+
+Dependencies flow strictly **down** this DAG; a lower layer never imports a higher one:
+
+```
+mewbo-core (lean SDK)  ←  { mewbo-tools, mewbo-graph (optional) }  ←  apps (mewbo-api, mewbo-cli, mewbo-mcp)
+```
+
+- `mewbo-graph` depends only on `mewbo-core` + `pydantic`. Heavy deps are gated behind its own extras: `treesitter` (tree-sitter, tree-sitter-language-pack) and `retrieval` (rank-bm25, numpy); `full` pulls both. Embeddings ride `litellm`, so no extra client is needed.
+- **"Optional" means both layers.** A capability is exposed through PEP 621 extras *and* a graceful `try/except ImportError` at every import site, so when the extra is uninstalled the feature is simply absent — never a crash. `mewbo-api[wiki]` forwards to `mewbo-graph[treesitter,retrieval]` (the public `wiki` extra name and the Docker `WIKI_EXTRAS` toggle are unchanged); a base `mewbo-api` install boots graph-less because every graph import in the api is guarded.
+- **Placement rule.** A reusable substrate or domain engine goes in a library (core if generic and lean, else a capability library like `mewbo-graph`); a reusable engine must never live inside an app, and two apps must never import each other.
 
 ## Project instructions (`CLAUDE.md` / `AGENTS.md`)
 
-The orchestrator loads project instructions from the working directory and injects them into the system prompt. `discover_project_instructions()` in `mewbo_core.common` checks for `CLAUDE.md` first, then falls back to `AGENTS.md`.
+The orchestrator loads project instructions from the working directory and injects them into the system prompt. `discover_project_instructions()` in [`mewbo_core.common`](repo:packages/mewbo_core/src/mewbo_core/common.py) checks for `CLAUDE.md` first, then falls back to `AGENTS.md`.
 
 - Place a `CLAUDE.md` at the repo root or in any sub-package to provide context-specific guidance to the orchestration loop.
 - `AGENTS.md` is a fallback for tools that look for that filename. In this repo the `AGENTS.md` files are shims that redirect to `CLAUDE.md`.
@@ -25,19 +38,24 @@ The orchestrator loads project instructions from the working directory and injec
 - **Model routing:** Supports provider-qualified model names and a configurable API base URL. Per-role model selection (plan, tool, default) is configured in `configs/app.json`.
 
 ## Core abstractions and interfaces
-- `AbstractTool` (`mewbo_core.classes`): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
-- `ToolRunner` protocol (`mewbo_core.tool_registry`): interface for tool runners with `run(ActionStep)`.
-- `ToolSpec` / `ToolRegistry` (`mewbo_core.tool_registry`): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config. The value is either `aider_edit_block_tool` or `file_edit_tool`. When `edit_tool` is empty, `ToolUseLoop` auto-selects based on model identity via `model_prefers_structured_patch()`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
-- `PluginSystem` (`mewbo_core.plugins`): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by `agent_registry.py`), skills, hooks, and MCP tool configurations. Loaded via `load_all_plugin_components()` during session init.
-- `ActionStep`, `Plan`, `TaskQueue` (`mewbo_core.classes`): planning and tool-execution payloads.
-- `PermissionPolicy` (`mewbo_core.permissions`): allow/deny/ask rules for tool execution.
-- `HookManager` (`mewbo_core.hooks`): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports `"command"` (shell) and `"http"` (fire-and-forget POST) hook types via `HooksConfig`.
-- `ChannelAdapter` protocol (`mewbo_api.channels.base`): abstraction for chat platform integrations with four methods (`verify_request`, `parse_inbound`, `send_response`, `system_context`). All adapters share the `_process_inbound()` pipeline in `routes.py`. Current adapters: Nextcloud Talk (webhook-driven) and Email (IMAP polling with SMTP replies rendered as HTML from markdown).
-- `SessionStore` / `SessionRuntime` (`mewbo_core.session_store`, `mewbo_core.session_runtime`): transcripts and the shared runtime facade.
-- `ChatModel` protocol (`mewbo_core.llm`): interface for LLM backends via `build_chat_model`. Supports `proxy_model_prefix` for proxy routing and `model_prefers_structured_patch()` for edit tool auto-selection.
-- `LSPTool` (`mewbo_tools.integration.lsp.tool`): code intelligence via pygls language servers. Operations: `diagnostics`, `definition`, `references`, `hover`. Servers are `ServerDef` instances in `lsp/servers.py`, matched by file extension and auto-discovered on the PATH. Passive diagnostics are injected after file edits via `_append_lsp_feedback` in `ToolUseLoop`. Config: `agent.lsp.enabled` and `agent.lsp.servers` (override built-ins or add custom servers). Requires the `pygls` optional dependency; silently absent when not installed.
+- `AbstractTool` ([`mewbo_core.classes`](repo:packages/mewbo_core/src/mewbo_core/classes.py)): base class for local tools; implement `get_state` and `set_state` and return a `MockSpeaker`.
+- `ToolRunner` protocol ([`mewbo_core.tool_registry`](repo:packages/mewbo_core/src/mewbo_core/tool_registry.py)): interface for tool runners with `run(ActionStep)`.
+- `ToolSpec` / `ToolRegistry` ([`mewbo_core.tool_registry`](repo:packages/mewbo_core/src/mewbo_core/tool_registry.py)): register tools with `tool_id`, metadata, and a factory. The file edit tool is conditionally registered based on `agent.edit_tool` config. The value is either `aider_edit_block_tool` or `file_edit_tool`. When `edit_tool` is empty, `ToolUseLoop` auto-selects based on model identity via `model_prefers_structured_patch()`. The `read_file` tool is always registered as a native built-in (see [Built-in `read_file` tool](#built-in-read_file-tool) below).
+- `PluginSystem` ([`mewbo_core.plugins`](repo:packages/mewbo_core/src/mewbo_core/plugins.py)): discovers, installs, and uninstalls plugins from configured marketplaces. Plugins contribute agent definitions (parsed by [`agent_registry.py`](repo:packages/mewbo_core/src/mewbo_core/agent_registry.py)), skills, hooks, and MCP tool configurations. Loaded via `load_all_plugin_components()` during session init.
+- `register_session_capability_provider` ([`mewbo_core.capabilities`](repo:packages/mewbo_core/src/mewbo_core/capabilities.py)): down-only extension point for runtime capability grants. A library above core registers a predicate that grants extra session capabilities when a live condition holds; core unions the grants into the client-advertised set at session init via `augment_session_capabilities`, without ever importing up. Providers are best-effort: one that raises is logged and skipped. Example: `mewbo_graph` grants `scg` once the SCG is enabled and a source is mapped.
+- `ActionStep`, `Plan`, `TaskQueue` ([`mewbo_core.classes`](repo:packages/mewbo_core/src/mewbo_core/classes.py)): planning and tool-execution payloads.
+- `PermissionPolicy` ([`mewbo_core.permissions`](repo:packages/mewbo_core/src/mewbo_core/permissions.py)): allow/deny/ask rules for tool execution.
+- `HookManager` ([`mewbo_core.hooks`](repo:packages/mewbo_core/src/mewbo_core/hooks.py)): pre/post hooks, compaction transforms, and session lifecycle hooks. Supports `"command"` (shell) and `"http"` (fire-and-forget POST) hook types via `HooksConfig`.
+- `ChannelAdapter` protocol ([`mewbo_api.channels.base`](repo:apps/mewbo_api/src/mewbo_api/channels/base.py)): abstraction for chat platform integrations with four methods (`verify_request`, `parse_inbound`, `send_response`, `system_context`). All adapters share the `_process_inbound()` pipeline in [`routes.py`](repo:apps/mewbo_api/src/mewbo_api/channels/routes.py). Current adapters: Nextcloud Talk (webhook-driven) and Email (IMAP polling with SMTP replies rendered as HTML from markdown).
+- `WorkspaceGraphBinding` ([`mewbo_api.agentic_search.scg.workspace_binding`](repo:apps/mewbo_api/src/mewbo_api/agentic_search/scg/workspace_binding.py)): the single seam that turns a Mewbo Search workspace into graph access for a run. `for_workspace()` resolves three facts in one place: the capability context events (including the workspace's untrusted instructions as a quarantined event), the tool allowlist (the run's connector grant unioned with the SCG traversal verbs), and the workspace source scope as a context manager. The search runner and the graph-first structured runner both consume it. A new run type that binds a workspace should too, rather than re-assembling those facts inline.
+- `SessionStore` / `SessionRuntime` ([`mewbo_core.session_store`](repo:packages/mewbo_core/src/mewbo_core/session_store.py), [`mewbo_core.session_runtime`](repo:packages/mewbo_core/src/mewbo_core/session_runtime.py)): transcripts and the shared runtime facade.
+- `ChatModel` protocol ([`mewbo_core.llm`](repo:packages/mewbo_core/src/mewbo_core/llm.py)): interface for LLM backends via `build_chat_model`. Supports `proxy_model_prefix` for proxy routing and `model_prefers_structured_patch()` for edit tool auto-selection.
+- `LSPTool` ([`mewbo_tools.integration.lsp.tool`](repo:packages/mewbo_tools/src/mewbo_tools/integration/lsp/tool.py)): code intelligence via pygls language servers. Operations: `diagnostics`, `definition`, `references`, `hover`. Servers are `ServerDef` instances in [`lsp/servers.py`](repo:packages/mewbo_tools/src/mewbo_tools/integration/lsp/servers.py), matched by file extension and auto-discovered on the PATH. Passive diagnostics are injected after file edits via `_append_lsp_feedback` in `ToolUseLoop`. Config: `agent.lsp.enabled` and `agent.lsp.servers` (override built-ins or add custom servers). Requires the `pygls` optional dependency; silently absent when not installed.
 
 ## New client walkthrough (concrete steps)
+
+These steps embed the core engine in-process. If you would rather drive Mewbo over HTTP, every endpoint is documented in the [REST API Reference](rest-api.md).
+
 1. Load config and initialize core services:
    - `load_registry()` for tool registration.
    - `load_permission_policy()` and `approval_callback_from_config()` for approvals.
@@ -142,10 +160,10 @@ Key files in `apps/mewbo_api/src/mewbo_api/channels/`:
 
 | File | Purpose |
 |------|---------|
-| `base.py` | `ChannelAdapter` Protocol, `InboundMessage` dataclass, `ChannelRegistry`, `DeduplicationGuard` |
-| `routes.py` | Flask Blueprint, shared `_process_inbound()` pipeline, `@command` decorator registry, `init_channels()` |
-| `nextcloud_talk.py` | Nextcloud Talk adapter (webhook-driven, HMAC-SHA256, ActivityStreams 2.0, OCS Bot API) |
-| `email_adapter.py` | Email adapter (IMAP poll-driven, SMTP reply, markdown-to-HTML rendering via mistune) |
+| [`base.py`](repo:apps/mewbo_api/src/mewbo_api/channels/base.py) | `ChannelAdapter` Protocol, `InboundMessage` dataclass, `ChannelRegistry`, `DeduplicationGuard` |
+| [`routes.py`](repo:apps/mewbo_api/src/mewbo_api/channels/routes.py) | Flask Blueprint, shared `_process_inbound()` pipeline, `@command` decorator registry, `init_channels()` |
+| [`nextcloud_talk.py`](repo:apps/mewbo_api/src/mewbo_api/channels/nextcloud_talk.py) | Nextcloud Talk adapter (webhook-driven, HMAC-SHA256, ActivityStreams 2.0, OCS Bot API) |
+| [`email_adapter.py`](repo:apps/mewbo_api/src/mewbo_api/channels/email_adapter.py) | Email adapter (IMAP poll-driven, SMTP reply, markdown-to-HTML rendering via mistune) |
 
 ### Steps to add a new platform (e.g., Slack)
 
@@ -166,7 +184,7 @@ Key files in `apps/mewbo_api/src/mewbo_api/channels/`:
 
 5. **Optionally implement `requires_mention(message)`.** Return `False` to skip the mention gate for specific message types. For example, Email skips mentions for 1-to-1 but requires `@Mewbo` in multi-party threads.
 
-6. **Add platform-specific slash commands** (optional). Use the `@command` decorator in `routes.py`. Help text auto-generates from the registry.
+6. **Add platform-specific slash commands** (optional). Use the `@command` decorator in [`routes.py`](repo:apps/mewbo_api/src/mewbo_api/channels/routes.py). Help text auto-generates from the registry.
 
 ### Session mapping
 
@@ -197,9 +215,9 @@ Commands run without LLM invocation. Adding a new command is one `@command` deco
 
 The `read_file` tool (`tool_id: "read_file"`) is a native built-in for reading local files with line-based windowing and a dedup cache that prevents redundant reads from bloating the LLM's context.
 
-**Implementation:** `packages/mewbo_tools/src/mewbo_tools/integration/aider_file_tools.py` (`ReadFileTool` class)
-**Registration:** `packages/mewbo_core/src/mewbo_core/tool_registry.py`
-**Prompt:** `packages/mewbo_core/src/mewbo_core/prompts/tools/read-file.txt`
+**Implementation:** [`aider_file_tools.py`](repo:packages/mewbo_tools/src/mewbo_tools/integration/aider_file_tools.py) (`ReadFileTool` class)
+**Registration:** [`tool_registry.py`](repo:packages/mewbo_core/src/mewbo_core/tool_registry.py)
+**Prompt:** [`prompts/tools/read-file.txt`](repo:packages/mewbo_core/src/mewbo_core/prompts/tools/read-file.txt)
 
 ### Parameters
 
@@ -240,13 +258,13 @@ The `ToolUseLoop` maintains a per-run `_file_read_cache` that prevents the same 
 
 3. When the `file_edit_tool` edits a file, the cache entry for that path is invalidated. The next read then returns fresh content.
 
-**Why this matters:** In observed sessions, GPT 5.4 re-read `backend.py` 8 times across 70 steps, adding 64KB of identical content to the message array. The dedup cache reduces this to one full read plus seven 30-token stubs. That is a roughly 99% reduction in redundant context.
+**Why this matters:** In observed sessions, GPT 5.4 re-read [`backend.py`](repo:apps/mewbo_api/src/mewbo_api/backend.py) 8 times across 70 steps, adding 64KB of identical content to the message array. The dedup cache reduces this to one full read plus seven 30-token stubs. That is a roughly 99% reduction in redundant context.
 
-**Cache location:** `ToolUseLoop._file_read_cache` (`tool_use_loop.py`). The cache is per-run (created with the loop, discarded when the run ends). No cross-run persistence is needed. Compaction handles session continuity.
+**Cache location:** `ToolUseLoop._file_read_cache` ([`tool_use_loop.py`](repo:packages/mewbo_core/src/mewbo_core/tool_use_loop.py)). The cache is per-run (created with the loop, discarded when the run ends). No cross-run persistence is needed. Compaction handles session continuity.
 
 ### System prompt guidance
 
-The system prompt (`prompts/system.txt`) includes:
+The system prompt ([`prompts/system.txt`](repo:packages/mewbo_core/src/mewbo_core/prompts/system.txt)) includes:
 
 > *Tool outputs from earlier steps persist in this conversation. Reference previous results instead of re-reading files or re-running commands you have already executed.*
 

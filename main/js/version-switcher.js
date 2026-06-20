@@ -1,6 +1,6 @@
 (() => {
   // Theme injects window.MEWBO_VERSIONS_ROOT from `theme.versions_root` in
-  // mkdocs.yml when the docs are served from a subpath (e.g. `/Assistant`
+  // mkdocs.yml when the docs are served from a subpath (e.g. `/your-docs`
   // on GitHub Pages). Empty/unset = served at the domain root.
   const VERSIONS_ROOT = (window.MEWBO_VERSIONS_ROOT || '').replace(/^\/+|\/+$/g, '');
 

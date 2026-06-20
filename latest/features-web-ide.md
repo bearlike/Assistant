@@ -34,10 +34,10 @@ When `agent.web_ide.enabled` is `true`, an **Open in Web IDE** button appears on
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `POST` | `/api/sessions/{id}/ide` | Create or reconnect to the IDE container |
-| `GET` | `/api/sessions/{id}/ide` | Poll current container status |
-| `DELETE` | `/api/sessions/{id}/ide` | Stop and remove the container |
-| `POST` | `/api/sessions/{id}/ide/extend` | Extend the session TTL |
+| `POST` | [/api/sessions/{session_id}/ide](endpoint:POST /api/sessions/{session_id}/ide) | Create or reconnect to the IDE container |
+| `GET` | [/api/sessions/{session_id}/ide](endpoint:GET /api/sessions/{session_id}/ide) | Poll current container status |
+| `DELETE` | [/api/sessions/{session_id}/ide](endpoint:DELETE /api/sessions/{session_id}/ide) | Stop and remove the container |
+| `POST` | [/api/sessions/{session_id}/ide/extend](endpoint:POST /api/sessions/{session_id}/ide/extend) | Extend the session TTL |
 
 The `POST` response includes a one-time `password` field (omitted from `GET` responses). The IDE is reachable at `/ide/{session_id}/` behind the built-in nginx proxy.
 

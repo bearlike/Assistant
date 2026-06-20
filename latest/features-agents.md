@@ -97,7 +97,7 @@ When a sub-agent finishes, its result is a structured object:
 | Field | Type | Description |
 |---|---|---|
 | `content` | string | Primary output text |
-| `status` | string | `completed`, `failed`, `partial`, or `cannot_solve` |
+| `status` | string | `completed`, `failed`, or `cannot_solve` |
 | `steps_used` | integer | Number of tool steps executed |
 | `summary` | string | Compressed summary (≤ 500 chars) for the parent's context |
 | `warnings` | array | Non-fatal issues encountered |
@@ -109,7 +109,7 @@ The `summary` is designed to be short enough that the root agent can keep many c
 
 ## Configuration
 
-All keys live under `agent` in [`configs/app.json`](configuration.md#agentconfig).
+All keys live under `agent` in [`configs/app.json`](configuration.md#agent).
 
 | Key | Type | Default | Description |
 |---|---|---|---|

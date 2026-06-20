@@ -9,7 +9,7 @@
 
 <p class="ms-hero__eyebrow">Documentation</p>
 
-# An open stack for agentic work, grounded in your own knowledge.
+### An open stack for agentic work, grounded in your own knowledge.
 
 <p class="ms-hero__lede">
 Real work outgrows a single context, a single tool, a single attempt. Mewbo's hypervisor
@@ -169,6 +169,26 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 <span class="ms-card__body">Extend Mewbo with new agent types, skills, hooks, and tools using the same plugin format as Claude Code. Plugins are compatible with the official Claude plugins marketplace and activate automatically at session start. Capability gating ensures features only appear on surfaces that can support them. The bundled widget-builder is the reference example.</span>
 </a>
 
+<a class="ms-card" href="clients-mcp/">
+<span class="ms-card__title">Mewbo as an MCP server</span>
+<span class="ms-card__body">Expose Mewbo to your whole agent fleet. Claude Code, Codex, Cursor, or another Mewbo connects over MCP to start coding sessions on a fresh worktree, steer and read them back at the detail it needs, and ask grounded questions of your Agentic Wiki — authenticated with a key you issue and revoke.</span>
+</a>
+
+<a class="ms-card" href="features-structured-outputs/">
+<span class="ms-card__title">Structured Outputs</span>
+<span class="ms-card__body">Describe what you need, pass a JSON Schema, and get back a validated object. An agentic session does the research first: it can search your code and wiki, and ground itself in a connected search workspace, before it writes a single field. On a workspace with a mapped Source Capability Graph the run goes graph-first, so the answer carries provenance. Built for pipelines that need machine-readable output, not prose.</span>
+</a>
+
+<a class="ms-card" href="ci-agent-pickup/">
+<span class="ms-card__title">CI Agent Pickup</span>
+<span class="ms-card__body">Assign a bot account to an issue, or @mention it in a comment, and Mewbo picks the work up. One workflow file runs on both GitHub Actions and Gitea Actions. It hands the item to your Mewbo API, an agent session starts in the right working directory, and the final answer lands back on the issue or PR as a comment from the bot.</span>
+</a>
+
+<a class="ms-card" href="rest-api/">
+<span class="ms-card__title">REST API Reference</span>
+<span class="ms-card__body">The full HTTP surface, generated from the running API server so it never drifts from the code. Browse every endpoint with its parameters and response shapes, and copy ready-to-run request samples in curl, Python, JavaScript, and more.</span>
+</a>
+
 </div>
 
 ---
@@ -250,6 +270,8 @@ Mewbo reads the configuration you already have. Point it at a project and it pic
 <ul class="ms-card__list">
   <li><a href="features-plan-mode/">Plan mode</a>: review before execution</li>
   <li><a href="features-permissions-hooks/">Permissions and hooks</a></li>
+  <li><a href="features-policies/">Policies</a>: semantic gate-checks on tool calls</li>
+  <li><a href="features-monitors/">Monitors</a>: session-wide behavioural guardrails</li>
   <li><a href="troubleshooting/">Troubleshooting guide</a></li>
 </ul>
 </div>
@@ -295,6 +317,7 @@ A five-step journey. Each step is short, and each link lands on the page you nee
 <ul class="ms-step__links">
   <li><a href="clients-cli/">CLI</a></li>
   <li><a href="clients-web-api/">Web console and API</a></li>
+  <li><a href="clients-mcp/">MCP server</a></li>
   <li><a href="features-plan-mode/">Plan mode</a></li>
 </ul>
 </div>

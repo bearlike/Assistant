@@ -139,7 +139,7 @@ flowchart LR
 
 ### Filter implementation
 
-`packages/mewbo_core/src/mewbo_core/capabilities.py::filter_by_capabilities` is the single filter. An item whose `requires_capabilities` tuple is a subset of the session's set is included; an empty `requires_capabilities` is always included. Ordering and duplication of `session_capabilities` do not matter, as comparison uses set semantics.
+[`capabilities.py::filter_by_capabilities`](repo:packages/mewbo_core/src/mewbo_core/capabilities.py) is the single filter. An item whose `requires_capabilities` tuple is a subset of the session's set is included; an empty `requires_capabilities` is always included. Ordering and duplication of `session_capabilities` do not matter, as comparison uses set semantics.
 
 | Function | Purpose |
 |---|---|
@@ -250,6 +250,40 @@ Every tool call is represented as an `ActionStep` with a `tool_id` and an `opera
 Matching uses `fnmatch` glob patterns on both `tool_id` and `operation`. If no rule matches, the policy falls back to per-operation defaults (`get` → `allow`, `set` → `ask`), then to a catch-all `default_decision`.
 
 `permissions.approval_mode` sets a session-wide shortcut that overrides the policy file: `allow` (also `auto`, `approve`, `yes`), `deny` (also `never`, `no`), or `ask` (default).
+
+---
+
+## Policies {#policies}
+
+Policies hook into the **pre-execution gate** inside the tool-use loop: after MCP input coercion and the permission check, but before the pre-tool hook fires and before the tool itself executes. This is the single authoritative intercept point: no tool can execute without passing through it.
+
+When a resolved tool call matches an active policy's greylist, the loop:
+
+1. Captures the fully-resolved tool call.
+2. Starts an **isolated single-turn LLM invocation** with minimal context: the policy body and only the exception-structure tool are available. The checker cannot see the session's conversation history.
+3. If the checker returns nothing, the call proceeds normally. If it calls the exception tool, the call is blocked and the exception text is returned to the agent as the tool result.
+4. If `isTerminal: true` and a violation fires, the session ends immediately after the exception is delivered.
+
+Multiple policies matching the same call run concurrently. A policy violation from any one of them is sufficient to block the call; all concurrent checks must clear for execution to proceed.
+
+`PolicyRegistry` mirrors `SkillRegistry` in structure: a catalog is advertised at session start, and individual policy bodies are loaded lazily. Policy files live alongside skill files and are discovered through the same scan paths.
+
+---
+
+## Monitors {#monitors}
+
+Monitors are spawned in the `on_session_start` hook and torn down in `on_session_end`. Each monitor is a **restricted tool-use loop session** tracked by the hypervisor as a peer of regular sub-agents: it has its own `AgentHandle`, lifecycle states, and token accounting. Monitors never appear in the agent tree visible to the root agent.
+
+The monitor's tool set is hard-restricted at the tool-registry level before the session is constructed. Only `inject_message`, `interrupt_session`, and any tools listed in the monitor definition's `allowed-tools` are registered. The periodic invocation loop receives a read-only snapshot of the full agent tree at each tick as a structured `SystemMessage`.
+
+| Tool | Mechanism |
+|------|-----------|
+| `inject_message` | Routes through `AgentHypervisor.send_message()` to the target agent's queue; drained between tool steps |
+| `interrupt_session` | Sets a checked signal on the target loop's step boundary; never interrupts an in-flight tool call |
+
+Crashed monitors are automatically respawned by the hypervisor after a short backoff. A monitor that crashes repeatedly is marked `failed` and not retried for the remainder of the session.
+
+`MonitorRegistry` mirrors `PolicyRegistry` and `SkillRegistry`. Monitor definitions ship as files in the standard scan paths and are loaded at session init.
 
 ---
 
@@ -421,7 +455,7 @@ sequenceDiagram
     Console->>User: Open /ide/{id}/ in new tab
 ```
 
-The session's project directory is mounted at `/home/coder/project`. A deadline file is bind-mounted at `/mewbo/deadline`. The container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. `POST /api/sessions/{id}/ide/extend` overwrites the deadline file and updates MongoDB. `DELETE` force-removes the container, deadline file, and MongoDB document.
+The session's project directory is mounted at `/home/coder/project`. A deadline file is bind-mounted at `/mewbo/deadline`. The container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. [`POST /api/sessions/{id}/ide/extend`](endpoint:POST /api/sessions/{id}/ide/extend) overwrites the deadline file and updates MongoDB. `DELETE` force-removes the container, deadline file, and MongoDB document.
 
 ---
 
@@ -452,7 +486,7 @@ Each built-in tool returns a JSON payload tagged with `kind`:
 
 ### Edit tool selection
 
-Both edit backends share `edit_common.py` and emit `{"kind": "diff", ...}`. `AgentConfig.edit_tool` selects `"search_replace_block"` or `"structured_patch"`. When empty (default), `ToolUseLoop._configured_edit_tool_id()` auto-selects based on model identity via `llm.model_prefers_structured_patch()`. The tool schema, LLM prompt instructions, and backend implementation all switch together. They are bundled in the same `ToolSpec` registration.
+Both edit backends share [`edit_common.py`](repo:packages/mewbo_tools/src/mewbo_tools/integration/edit_common.py) and emit `{"kind": "diff", ...}`. `AgentConfig.edit_tool` selects `"search_replace_block"` or `"structured_patch"`. When empty (default), `ToolUseLoop._configured_edit_tool_id()` auto-selects based on model identity via `llm.model_prefers_structured_patch()`. The tool schema, LLM prompt instructions, and backend implementation all switch together. They are bundled in the same `ToolSpec` registration.
 
 Extend which models receive the structured-patch backend via `llm.structured_patch_models` (accepts wildcards): `["my-custom-model*", "openai/gpt-5"]`.
 
@@ -478,13 +512,13 @@ flowchart TD
 
 **Precedence.** Plugin skills do not override personal (`~/.claude/skills/`) or project-local (`.claude/skills/`) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name. Plugin hooks are format-translated and merged into the live `HooksConfig`.
 
-`PluginsConfig` lives in `config.py` and defines `registry_paths` and `marketplaces`. The CLI exposes `/plugins`; the API exposes `GET/POST /api/plugins`, `GET/POST /api/plugins/marketplace`, and `DELETE /api/plugins/<name>`; the console renders `PluginsView`.
+`PluginsConfig` lives in `config.py` and defines `registry_paths` and `marketplaces`. The CLI exposes `/plugins`; the API exposes `GET/POST /api/plugins`, `GET/POST /api/plugins/marketplace`, and [`DELETE /api/plugins/<name>`](endpoint:DELETE /api/plugins/<name>); the console renders `PluginsView`.
 
 See [Session tools](#session-tools) for plugin-contributed per-agent stateful tools.
 
 ### Built-in plugin scan path
 
-A fourth scan source sits alongside the registry-driven paths: the directory `packages/mewbo_core/src/mewbo_core/builtin_plugins/`. Any plugin checked in under this path is discovered through the **same** pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin (manifest, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`, `session_tools`) with no `installed_plugins.json` entry required.
+A fourth scan source sits alongside the registry-driven paths: the directory [`packages/mewbo_core/src/mewbo_core/builtin_plugins/`](repo:packages/mewbo_core/src/mewbo_core/builtin_plugins). Any plugin checked in under this path is discovered through the **same** pipeline as user-installed and marketplace-installed plugins. It is byte-for-byte a normal plugin (manifest, `agents/`, `skills/`, `hooks/hooks.json`, `.mcp.json`, `session_tools`) with no `installed_plugins.json` entry required.
 
 The path is resolved at runtime via `importlib.resources.files("mewbo_core") / "builtin_plugins"` so discovery works identically for editable installs (`pip install -e .`), wheels, and zipapps. The scanner iterates every immediate subdirectory that contains a `.claude-plugin/plugin.json`.
 
@@ -508,7 +542,7 @@ Plugin-owned agent bodies and skill bodies can reference three placeholders. Sub
 
 A **session tool** is a per-agent stateful tool whose lifecycle is coupled to one specific agent instance rather than the global `ToolRegistry`. The handler holds state (accumulated across calls within the agent's run), declares its own OpenAI function schema, and can signal clean loop termination independently of the model's final text response. The core `ExitPlanModeTool` is a session tool. The widget-builder's `SubmitWidgetTool` is a session tool contributed by a plugin.
 
-Session tools are defined in `packages/mewbo_core/src/mewbo_core/session_tools.py`.
+Session tools are defined in [`session_tools.py`](repo:packages/mewbo_core/src/mewbo_core/session_tools.py).
 
 ### Protocol
 
@@ -536,7 +570,7 @@ class SessionTool(Protocol):
 
 ```mermaid
 sequenceDiagram
-    participant Plugin as plugin.json
+    participant Plugin as "plugin.json"
     participant Core as Session init
     participant Reg as SessionToolRegistry
     participant Loop as ToolUseLoop
@@ -544,7 +578,7 @@ sequenceDiagram
 
     Core->>Plugin: read session_tools[] entries
     loop for each entry
-        Core->>Reg: load_entry({tool_id, module, class})
+        Core->>Reg: load_entry({tool_id, module, cls})
         Reg->>Reg: importlib.import_module + getattr<br/>register SessionToolFactory
     end
     Note over Reg: factories populated, no instances yet
@@ -580,7 +614,7 @@ Inside `ToolUseLoop`, schema injection, dispatch, and termination all iterate a 
 
 ## Channel adapters {#channel-adapters}
 
-Chat-platform adapters implement the `ChannelAdapter` protocol (`channels/base.py`):
+Chat-platform adapters implement the `ChannelAdapter` protocol ([`channels/base.py`](repo:apps/mewbo_api/src/mewbo_api/channels/base.py)):
 
 | Method / property | Purpose |
 |---|---|
@@ -589,13 +623,13 @@ Chat-platform adapters implement the `ChannelAdapter` protocol (`channels/base.p
 | `send_response` | Deliver the final answer back to the channel |
 | `system_context` | Injected into the LLM system prompt. Makes the model aware it is communicating through this adapter |
 
-`ChannelRegistry` lookup and `DeduplicationGuard` replay protection are shared. The webhook endpoint `POST /api/webhooks/<platform>` authenticates via HMAC (not API key). Poll-driven channels (e.g. Email) call `_process_inbound()` directly from their own poller instead of via the webhook route.
+`ChannelRegistry` lookup and `DeduplicationGuard` replay protection are shared. The webhook endpoint [`POST /api/webhooks/<platform>`](endpoint:POST /api/webhooks/<platform>) authenticates via HMAC (not API key). Poll-driven channels (e.g. Email) call `_process_inbound()` directly from their own poller instead of via the webhook route.
 
-The shared `_process_inbound()` pipeline in `routes.py` runs dedup → mention gate → session resolve → commands → LLM for every channel. `requires_mention(message)` is optional on the adapter for dynamic mention gating (Email uses this to skip the `@Mewbo` requirement on 1-to-1 threads).
+The shared `_process_inbound()` pipeline in [`routes.py`](repo:apps/mewbo_api/src/mewbo_api/channels/routes.py) runs dedup → mention gate → session resolve → commands → LLM for every channel. `requires_mention(message)` is optional on the adapter for dynamic mention gating (Email uses this to skip the `@Mewbo` requirement on 1-to-1 threads).
 
 Channel sessions are standard API sessions. They are created via `session_store.create_session()`, mapped via session tags (`tag_session` / `resolve_tag`), and visible in the console and Langfuse. The completion callback reads `source_platform` from the transcript context event and dispatches the final answer through the adapter.
 
-Existing adapters: Nextcloud Talk (`nextcloud_talk.py`, HMAC-SHA256, ActivityStreams 2.0, OCS Bot API) and Email (`email_adapter.py`, IMAP polling + SMTP reply, markdown-to-HTML rendering via `mistune`, Jinja2 HTML template).
+Existing adapters: Nextcloud Talk ([`nextcloud_talk.py`](repo:apps/mewbo_api/src/mewbo_api/channels/nextcloud_talk.py), HMAC-SHA256, ActivityStreams 2.0, OCS Bot API) and Email ([`email_adapter.py`](repo:apps/mewbo_api/src/mewbo_api/channels/email_adapter.py), IMAP polling + SMTP reply, markdown-to-HTML rendering via `mistune`, Jinja2 HTML template).
 
 ---
 

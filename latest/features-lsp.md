@@ -122,7 +122,7 @@ Define a custom server under `agent.lsp.servers`. All fields except `command` an
 
 ### Full config key reference
 
-All keys are nested under `agent.lsp` in `configs/app.json`.
+All keys are nested under `agent.lsp` in [`configs/app.json`](repo:configs/app.json).
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -131,13 +131,9 @@ All keys are nested under `agent.lsp` in `configs/app.json`.
 
 ## Installation
 
-The LSP tool depends on optional packages. Install them with:
+No separate install step is needed. The LSP client library (`pygls`) ships with the base install. The feature activates per language when the matching language server binary is on your `PATH` (see the table above).
 
-```bash
-uv sync --extra lsp
-```
-
-When those dependencies are absent, the LSP tool is silently disabled. There is no crash and no error on startup.
+If the client library is ever absent, the LSP tool is silently disabled. There is no crash and no error on startup.
 
 ---
 

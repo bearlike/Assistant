@@ -71,7 +71,7 @@ Mewbo has two editing backends. Both apply edits atomically and return a unified
   <img src="../mewbo-console-04-file-edit.jpg" alt="A file-edit tool card in the Mewbo console showing a unified diff with +23 additions and -2 deletions" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-The active backend for a session is chosen automatically based on the model, or you can pin it via [`agent.edit_tool`](configuration.md#agentconfig) in `configs/app.json`.
+The active backend for a session is chosen automatically based on the model, or you can pin it via [`agent.edit_tool`](configuration.md#agent) in [`configs/app.json`](repo:configs/app.json).
 
 ### search_replace_block (Aider-style)
 

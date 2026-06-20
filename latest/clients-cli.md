@@ -31,6 +31,8 @@ uv run mewbo
 | `--history-file PATH` | Override CLI history file path. |
 | `--no-color` | Disable ANSI color output. |
 | `--auto-approve` | Auto-approve tool permissions for the session. |
+| `--fallback-models LIST` | Comma-separated fallback model ids for this run (alias: `--fallback-model`). |
+| `--no-fallback` | Disable model fallback for this run. Overrides `--fallback-models` and the config ladder. |
 | `--config PATH` | Path to app config file (default: auto-discover). |
 
 ## Slash commands
@@ -46,6 +48,8 @@ uv run mewbo
 | `/compact` | Compact session transcript. | Alias for `/summarize`. |
 | `/status` | Show current session status. |  |
 | `/terminate` | Cancel the active session run. |  |
+| `/retry` | Re-run the last user query after a failed run. |  |
+| `/continue` | Resume after a failed run with a recovery prompt. |  |
 | `/tag NAME` | Tag this session. |  |
 | `/fork [TAG]` | Fork the current session. | Optional tag for the forked session. |
 | `/plan on\|off` | Toggle plan display. |  |
@@ -82,7 +86,7 @@ Inside a running session, `/fork [tag]` creates a new session branching from the
 
 ### Forking from a message
 
-In the console, every message has a "Fork from here" option that creates a new session with history up to that point. In the CLI, use `/fork` to branch from the current session state. The API equivalent is `POST /api/sessions` with `fork_from` and `fork_at_ts`.
+In the console, every message has a "Fork from here" option that creates a new session with history up to that point. In the CLI, use `/fork` to branch from the current session state. The API equivalent is [`POST /api/sessions`](endpoint:POST /api/sessions) with `fork_from` and `fork_at_ts`.
 
 ## Token usage
 
@@ -99,3 +103,26 @@ A usage summary appears below each response showing:
 - Compaction count and tokens saved
 
 See [Token Usage & Caching](features-token-usage.md) for details.
+
+## Model fallback and resilience notices
+
+When a model fails mid-run, the runtime retries it, then escalates down a fallback ladder of alternate models. The ladder comes from the `llm.fallback` config by default. Two flags control it per run:
+
+```bash
+mewbo --fallback-models gpt-5.4,gemini-2.5-pro  # override the ladder for this run
+mewbo --no-fallback                             # disable fallback entirely
+```
+
+`--fallback-model` is a singular alias for `--fallback-models`. `--no-fallback` wins when both are given.
+
+After each response, the CLI replays the run's resilience events as concise one-line notices. You see what the runtime did without digging through logs:
+
+- Retry: `↻ Retrying <model> after <error> (attempt/max, delay)`
+- Fallback: `⤳ Falling back: <from> → <to> (<reason>)`, with `[pinned for run]` when the new model is kept for the rest of the run
+- Halt: `⊘ Halted: repeated '<tool>' with no progress`, pointing at `/retry` and `/continue`
+
+Only the latest turn's notices print, so multi-turn sessions never repeat old ones. When a run ends in a recoverable state, a hint line follows: `/continue` resumes with context intact, `/retry` redoes the last step.
+
+## Trace identity
+
+Every CLI run tags its Langfuse trace with the `cli` client surface, so you can filter terminal work apart from console and API traffic.
