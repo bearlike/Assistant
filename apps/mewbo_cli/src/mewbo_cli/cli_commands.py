@@ -10,15 +10,17 @@ from urllib.request import Request, urlopen
 
 from mewbo_core.config import get_config_value, get_mcp_config_path
 from mewbo_core.token_budget import get_token_budget, read_last_input_tokens
-from mewbo_core.tool_registry import ToolRegistry, ToolSpec, load_registry
+from mewbo_core.tool_registry import ToolRegistry, ToolSpec, classify_tool_scope, load_registry
 from rich import box
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from mewbo_cli.cli_context import CommandContext
+from mewbo_cli.aider_ui import render_markdown
+from mewbo_cli.cli_context import PLAN_APPROVE_CONTINUATION, CommandContext
 from mewbo_cli.cli_dialogs import DialogFactory
+from mewbo_cli.cli_icons import ICONS
 
 
 @dataclass(frozen=True)
@@ -210,9 +212,65 @@ def _cmd_retry(context: CommandContext, args: list[str]) -> bool:
     return _run_recovery(context, "retry")
 
 
-@REGISTRY.command("/continue", "Resume after a failed run with a recovery prompt")
+def _approve_pending_plan(context: CommandContext) -> bool:
+    """Approve the pending plan and execute it in act mode (plain-fallback path).
+
+    This is the no-TTY / ``--query`` approve path reached via ``/continue`` —
+    the interactive Textual App approves through the plan-approval modal instead
+    (see ``tui/turn_engine``). Emits ``plan_approved`` (which also records the
+    plan→act mode transition) via :meth:`SessionRuntime.approve_plan`, flips the
+    local CLI mode to ``act`` so subsequent turns execute rather than re-plan,
+    then drives a follow-up act-mode run that implements the approved plan —
+    mirroring the API's ``/plan/approve`` endpoint.
+    """
+    session_id = context.state.session_id
+    pending, _revision, _plan_path = context.runtime._has_pending_plan_proposal(session_id)
+    if not pending:
+        context.console.print("No plan is awaiting approval.", style="yellow")
+        return True
+    if not context.runtime.approve_plan(session_id):
+        context.console.print(
+            "Could not approve the plan (a run may still be active).", style="yellow"
+        )
+        return True
+    context.state.mode = "act"
+    context.console.print(
+        f"{ICONS.check} Plan approved — executing in act mode...", style="green"
+    )
+    budget = int(get_config_value("agent", "session_step_budget", default=0))
+    hook_manager = context.hook_factory() if context.hook_factory is not None else None
+    task_queue = context.runtime.run_sync(
+        user_query=PLAN_APPROVE_CONTINUATION,
+        session_id=session_id,
+        model_name=context.state.model_name,
+        fallback_models=context.state.fallback_models,
+        tool_registry=context.tool_registry,
+        approval_callback=context.approval_callback,
+        hook_manager=hook_manager,
+        mode="act",
+        session_step_budget=budget,
+        source_platform="cli",
+    )
+    if task_queue.task_result:
+        context.console.print(
+            Panel(render_markdown(task_queue.task_result), title="Response", border_style="green")
+        )
+    elif getattr(task_queue, "last_error", None):
+        context.console.print(f"Execution failed: {task_queue.last_error}", style="red")
+    return True
+
+
+@REGISTRY.command("/continue", "Approve a pending plan, or resume after a failed run")
 def _cmd_continue(context: CommandContext, args: list[str]) -> bool:
     del args
+    # In the no-TTY / --query plain fallback a pending plan proposal means
+    # "continue" should APPROVE + execute it (plan→act), not re-enter recovery
+    # (#159). The interactive App approves via the plan-approval modal instead.
+    pending, _revision, _plan_path = context.runtime._has_pending_plan_proposal(
+        context.state.session_id
+    )
+    if pending:
+        return _approve_pending_plan(context)
     return _run_recovery(context, "continue")
 
 
@@ -855,11 +913,27 @@ def _render_mcp(
     all_specs: list[ToolSpec] | None = None,
 ) -> None:
     config_path = get_mcp_config_path()
+    # Tool-scope classification (Gitea #185 Phase 2): mirrors the API's
+    # `/api/tools` computation so `/mcp` shows the same builtin/project/
+    # system/plugin taxonomy Console/Aura display, via the shared
+    # `classify_tool_scope` classifier — never re-derived locally.
+    # `global_servers` = servers configured in the shared global mcp.json;
+    # `plugin_servers` = servers contributed by installed plugins. Anything
+    # else (e.g. a project-local .mcp.json) falls through to "project".
+    global_servers: set[str] = set()
+    plugin_servers: set[str] = set()
+    try:
+        from mewbo_core.plugins import load_all_plugin_components
+
+        plugin_servers = set(load_all_plugin_components().mcp_servers.keys())
+    except Exception:
+        pass
     if config_path and os.path.exists(config_path):
         try:
             with open(config_path, encoding="utf-8") as handle:
                 config = json.load(handle)
             servers = config.get("servers", {})
+            global_servers = set(servers.keys())
             if servers:
                 # Live pool status (Gitea #130): a server may be connecting
                 # lazily, backing off after a transient failure, or quarantined
@@ -923,6 +997,10 @@ def _render_mcp(
         for spec in local_specs:
             line = Text()
             line.append(spec.tool_id, style="cyan")
+            scope = classify_tool_scope(
+                spec, global_servers=global_servers, plugin_servers=plugin_servers
+            )
+            line.append(f" [{scope}]", style="dim")
             if spec.description:
                 line.append(" — ", style="dim")
                 line.append(spec.description)
@@ -949,6 +1027,10 @@ def _render_mcp(
         tool_name = spec.metadata.get("tool", "")
         line = Text()
         line.append(spec.tool_id, style="cyan")
+        scope = classify_tool_scope(
+            spec, global_servers=global_servers, plugin_servers=plugin_servers
+        )
+        line.append(f" [{scope}]", style="dim")
         if server_name or tool_name:
             line.append(" — ", style="dim")
         if server_name:

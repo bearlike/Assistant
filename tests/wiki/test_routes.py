@@ -522,7 +522,7 @@ def test_delete_project_also_deletes_credential(client):
 
 def _seed_resumable_job(store, *, job_id="rj1", slug="org/repo", status="interrupted"):
     """A job interrupted at pages: graph built + plan committed + 2/3 pages written."""
-    from mewbo_graph.wiki.types import GraphNode, IndexingJob
+    from mewbo_graph.wiki.types import IndexingJob, make_graph_node
 
     store.create_job(IndexingJob(
         jobId=job_id, slug=slug, status=status,
@@ -530,7 +530,9 @@ def _seed_resumable_job(store, *, job_id="rj1", slug="org/repo", status="interru
         model="anthropic/claude-sonnet-4-6", commitSha="deadbeef",
     ))
     store.upsert_nodes(slug, [
-        GraphNode(slug=slug, node_id="n1", type="Function", name="f", file="a.py", range=(0, 1)),
+        make_graph_node(
+            slug=slug, node_id="n1", type="Function", name="f", file="a.py", range=(0, 1)
+        ),
     ])
     store.save_job_plan(job_id, [{"id": p, "title": p} for p in ("a", "b", "c")])
     _seed_page(store, slug=slug, page_id="a")
@@ -598,3 +600,196 @@ def test_resume_index_requires_auth(client):
     job_id = _seed_resumable_job(store)
     resp = c.post(f"/v1/wiki/index/{job_id}/resume")
     assert resp.status_code == 401
+
+
+# ── Graph-only (developer mode) ─────────────────────────────────────────────────
+
+
+def _seed_graph_only_project(store, slug: str = "org/graphonly"):
+    """A finished graph-only project: graph_only=True, zero pages."""
+    from mewbo_graph.wiki.types import Project
+
+    store.create_project(Project(
+        slug=slug,
+        source="github",
+        lang="en",
+        indexed_at="2026-01-01T00:00:00Z",
+        pages=0,
+        desc="Graph-only repo",
+        graphOnly=True,
+    ))
+
+
+def test_get_page_graph_only_returns_409(client):
+    """Reading a page on a graph-only project → 409 documentation_unavailable."""
+    c, store = client
+    _seed_graph_only_project(store)
+
+    resp = c.get(
+        "/v1/wiki/projects/org%2Fgraphonly/pages/graph",
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["code"] == "documentation_unavailable"
+    assert body["retryable"] is False
+    assert "graph-only" in body["message"]
+
+
+def test_post_qa_graph_only_returns_409(client, runtime_stub):
+    """Q&A on a graph-only project → 409 at the route (never starts a session)."""
+    c, store = client
+    _seed_graph_only_project(store, slug="org/graphonly")
+
+    resp = c.post(
+        "/v1/wiki/qa",
+        json={"project": "org/graphonly", "question": "How does auth work?"},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["code"] == "documentation_unavailable"
+    assert body["retryable"] is False
+    # No QA session was ever started — the DocumentationUnavailableError never
+    # gets a chance to raise inside a SessionTool.
+    runtime_stub.start_async.assert_not_called()
+
+
+def _stub_start_returning_job(routes_mod, monkeypatch, slug: str):
+    """Replace WikiIndexingJob.start with a spy returning a real IndexingJob."""
+    from mewbo_graph.wiki.types import IndexingJob
+
+    job = IndexingJob(
+        jobId="gj1", slug=slug, status="queued",
+        scannedCount=0, totalCount=0, currentFile=None,
+    )
+    fake = MagicMock()
+    fake.start.return_value = job
+    monkeypatch.setattr(routes_mod, "WikiIndexingJob", fake, raising=True)
+    return fake
+
+
+def _patch_developer_mode(monkeypatch, *, enabled: bool):
+    """Patch get_config_value so runtime.developer_mode reads *enabled*."""
+    def _fake(*a, **k):
+        if a[:2] == ("runtime", "developer_mode"):
+            return enabled
+        return k.get("default")
+
+    monkeypatch.setattr("mewbo_core.config.get_config_value", _fake)
+
+
+def test_graph_only_ignored_when_developer_mode_off(
+    client, runtime_stub, valid_submission, monkeypatch
+):
+    """``graphOnly:true`` is forced False when runtime.developer_mode is off."""
+    import mewbo_api.wiki.routes as routes_mod
+
+    fake = _stub_start_returning_job(routes_mod, monkeypatch, valid_submission["slug"])
+    _patch_developer_mode(monkeypatch, enabled=False)
+
+    c, _ = client
+    sub = {**valid_submission, "graphOnly": True}
+    resp = c.post("/v1/wiki/index", json=sub, headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 202
+    # The submission handed to start() had graph_only forced False.
+    fake.start.assert_called_once()
+    passed = fake.start.call_args.args[0]
+    assert passed.graph_only is False
+
+
+def test_graph_only_honored_when_developer_mode_on(
+    client, runtime_stub, valid_submission, monkeypatch
+):
+    """``graphOnly:true`` survives when runtime.developer_mode is on."""
+    import mewbo_api.wiki.routes as routes_mod
+
+    fake = _stub_start_returning_job(routes_mod, monkeypatch, valid_submission["slug"])
+    _patch_developer_mode(monkeypatch, enabled=True)
+
+    c, _ = client
+    sub = {**valid_submission, "graphOnly": True}
+    resp = c.post("/v1/wiki/index", json=sub, headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 202
+    passed = fake.start.call_args.args[0]
+    assert passed.graph_only is True
+
+
+# ── POST /v1/wiki/branches ──────────────────────────────────────────────────────
+
+
+def test_post_branches_requires_auth(client):
+    """No X-Api-Key → 401."""
+    c, _ = client
+    resp = c.post("/v1/wiki/branches", json={"repoUrl": "https://github.com/org/repo"})
+    assert resp.status_code == 401
+
+
+def test_post_branches_happy_path(client, monkeypatch):
+    """Patch RemoteBranchLister → 200 + {branches, defaultBranch} (camelCase)."""
+    from mewbo_graph.plugins.wiki.branches import RemoteBranches
+
+    c, _ = client
+    fake = RemoteBranches(branches=["develop", "main"], default_branch="main")
+    monkeypatch.setattr(
+        "mewbo_graph.plugins.wiki.branches.RemoteBranchLister.list_heads",
+        lambda self: fake,
+    )
+    resp = c.post(
+        "/v1/wiki/branches",
+        json={"repoUrl": "https://github.com/org/repo"},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data == {"branches": ["develop", "main"], "defaultBranch": "main"}
+
+
+def test_post_branches_repo_access_envelope(client, monkeypatch):
+    """A BranchListError → the standard repo_access error envelope."""
+    from mewbo_graph.plugins.wiki.branches import BranchListError
+
+    c, _ = client
+
+    def _boom(self):
+        raise BranchListError("git ls-remote failed")
+
+    monkeypatch.setattr(
+        "mewbo_graph.plugins.wiki.branches.RemoteBranchLister.list_heads", _boom
+    )
+    resp = c.post(
+        "/v1/wiki/branches",
+        json={"repoUrl": "https://github.com/org/repo"},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 502  # repo_access → 502 (WIKI_CODE_STATUS)
+    data = resp.get_json()
+    assert data["code"] == "repo_access"
+
+
+def test_post_branches_resolves_durable_credential(client, monkeypatch):
+    """No body token but a slug → the durable CredentialStore token is used."""
+    from mewbo_graph.plugins.wiki.branches import RemoteBranches
+    from mewbo_graph.wiki.credentials import CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    c, store = client
+    CredentialStore.save(
+        store, "org/repo", RepoCredential(kind="token", value="ghp_durable", username=None)
+    )
+    seen: dict = {}
+
+    def _list_heads(self):
+        seen["token"] = self.token
+        return RemoteBranches(branches=["main"], default_branch="main")
+
+    monkeypatch.setattr(
+        "mewbo_graph.plugins.wiki.branches.RemoteBranchLister.list_heads", _list_heads
+    )
+    resp = c.post(
+        "/v1/wiki/branches",
+        json={"repoUrl": "https://github.com/org/repo", "slug": "org/repo"},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    assert seen["token"] == "ghp_durable"

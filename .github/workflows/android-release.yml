@@ -1,0 +1,178 @@
+#@doc
+# * This workflow builds Mewbo Aura (apps/mewbo_aura) debug + release APKs and
+#   attaches them to the Gitea/GitHub release that triggered it.
+#
+# Flavor: builds the `public` distribution flavor ONLY (assemblePublicDebug /
+# assemblePublicRelease). The `enterprise` flavor bakes the private root CA
+# and is built locally + attached to Gitea by hand (its cert is gitignored and never
+# available here) — so every CI artifact, including the GitHub mirror's, is CA-free.
+#
+# Triggered on `release: published` (or manually via workflow_dispatch with an
+# explicit tag, for re-running against an already-published release).
+#
+# Signing: passes AURA_KEYSTORE_B64 / AURA_KEYSTORE_PASSWORD / AURA_KEY_ALIAS /
+# AURA_KEY_PASSWORD through as env so a configured repo secret upgrades the
+# release APK's signature automatically — see app/build.gradle.kts. With no
+# secrets configured, the build still succeeds (debug-keystore fallback).
+
+name: Android Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach APKs to
+        required: true
+        type: string
+
+concurrency:
+  # ONE global group, not per-tag: all runs share the persistent /opt/hostedtoolcache volume, and
+  # two concurrent runs provisioning the same SDK dir raced (colliding unzip/mv → mangled repo
+  # metadata → "Failed to find package"; caught live when two tags were dispatched together).
+  # Releases are rare — full serialization is the simple correct answer.
+  group: android-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: apps/mewbo_aura
+
+jobs:
+  build:
+    name: Build + attach APKs
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      # /opt/hostedtoolcache is the runner's PERSISTENT `act-toolcache` docker volume — the only
+      # real cache on this Gitea runner: actions/cache is a no-op here (the action itself warns
+      # "only supported on GHES >= 3.5" and never restores). JDK/SDK/Gradle all live there so
+      # every run after the first skips provisioning entirely.
+      ANDROID_HOME: /opt/hostedtoolcache/android-sdk
+      GRADLE_USER_HOME: /opt/hostedtoolcache/gradle-home
+      AURA_KEYSTORE_B64: ${{ secrets.AURA_KEYSTORE_B64 }}
+      AURA_KEYSTORE_PASSWORD: ${{ secrets.AURA_KEYSTORE_PASSWORD }}
+      AURA_KEY_ALIAS: ${{ secrets.AURA_KEY_ALIAS }}
+      AURA_KEY_PASSWORD: ${{ secrets.AURA_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Build the RELEASE TAG's source, not the dispatch ref: a workflow_dispatch rerun
+          # executes this file from main but must still compile the tagged commit — without this
+          # pin, a rerun attached main-content APKs under an older tag's name (caught live on the
+          # 0.0.20-debug rerun).
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then TAG="${{ inputs.tag }}"; fi
+          test -n "$TAG" || { echo "no release tag resolved" >&2; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure jq is available
+        run: command -v jq >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq jq; }
+
+      - name: Provision Temurin JDK 21 (persistent toolcache, skipped when present)
+        # Tarball straight into the persistent toolcache — one download EVER, vs the old
+        # apt-repo dance (~60s of apt update + install on every single run).
+        run: |
+          set -euo pipefail
+          JDK_DIR=/opt/hostedtoolcache/temurin-21-jdk
+          if [ ! -x "$JDK_DIR/bin/java" ]; then
+            curl -fsSL -o /tmp/jdk.tar.gz "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse"
+            mkdir -p "$JDK_DIR"
+            tar -xzf /tmp/jdk.tar.gz -C "$JDK_DIR" --strip-components=1
+            rm /tmp/jdk.tar.gz
+          fi
+          echo "JAVA_HOME=$JDK_DIR" >> "$GITHUB_ENV"
+          echo "$JDK_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Provision Android SDK (persistent toolcache, skipped when present)
+        # The old actions/cache step was a provable no-op on this runner (the action warns
+        # "only supported on GHES >= 3.5" and never restored), so the SDK re-downloaded every
+        # run — and the `yes | sdkmanager --licenses` pipe under `set -o pipefail` died of
+        # SIGPIPE (exit 141) whenever sdkmanager closed stdin before `yes`'s next write: the
+        # timing-dependent failure that broke release builds. `(yes || true)` absorbs the
+        # SIGPIPE while pipefail still reports sdkmanager's own status.
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ANDROID_HOME/platforms/android-37.0" ] || [ ! -d "$ANDROID_HOME/build-tools/37.0.0" ]; then
+            mkdir -p "$ANDROID_HOME/cmdline-tools"
+            cd "$ANDROID_HOME/cmdline-tools"
+            rm -rf latest cmdline-tools.zip
+            # Pinned cmdline-tools build; bump this if Google retires the archive. 13114758 (v16)
+            # replaces 11076708 (v11): the old build's repository schema predates platform 37 and
+            # sdkmanager reported "Failed to find package". ALSO: the platform package id is
+            # "platforms;android-37.0" — Android 17 uses the minor-versioned SDK naming (the
+            # working host SDK's directory is platforms/android-37.0); plain "android-37" does
+            # not exist in any channel, which was the real "Failed to find package" cause.
+            curl -fsSL -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+            unzip -q cmdline-tools.zip
+            mv cmdline-tools latest
+            rm cmdline-tools.zip
+            (yes || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+          fi
+
+      - name: Build public debug + release APKs
+        # PUBLIC flavor only — the `enterprise` flavor's CA cert isn't available in CI and must
+        # never ship to GitHub. One invocation for both build types (shared configuration +
+        # parallel task graph); org.gradle.caching reuses task outputs across runs via the
+        # persistent GRADLE_USER_HOME above (wrapper dist + dependency cache + build cache all
+        # survive).
+        run: ./gradlew :app:assemblePublicDebug :app:assemblePublicRelease -Dorg.gradle.caching=true
+
+      - name: Rename artifacts
+        id: artifacts
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          DEBUG_NAME="aura-${TAG}-debug.apk"
+          RELEASE_NAME="aura-${TAG}-release.apk"
+          cp app/build/outputs/apk/public/debug/app-public-debug.apk "$DEBUG_NAME"
+          cp app/build/outputs/apk/public/release/app-public-release.apk "$RELEASE_NAME"
+          echo "debug_name=$DEBUG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APKs as release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          DEBUG_NAME: ${{ steps.artifacts.outputs.debug_name }}
+          RELEASE_NAME: ${{ steps.artifacts.outputs.release_name }}
+        run: |
+          set -euo pipefail
+          # Gitea act_runner may leave github.api_url empty; derive it the same
+          # way agent-pickup.yml does.
+          api="$API_URL"
+          if [ -z "$api" ]; then
+            if [ "$SERVER_URL" = "https://github.com" ]; then
+              api="https://api.github.com"
+            else
+              api="${SERVER_URL%/}/api/v1"
+            fi
+          fi
+
+          release_id=$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: token $GH_TOKEN" \
+            "$api/repos/$REPOSITORY/releases/tags/$TAG" | jq -r '.id // empty')
+          test -n "$release_id" || { echo "could not resolve release id for tag $TAG" >&2; exit 1; }
+
+          for pair in "$DEBUG_NAME" "$RELEASE_NAME"; do
+            curl --fail-with-body --silent --show-error \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/vnd.android.package-archive" \
+              -X POST \
+              "$api/repos/$REPOSITORY/releases/$release_id/assets?name=$pair" \
+              --data-binary "@$pair" | jq -r '"uploaded \(.name // "'"$pair"'")"'
+          done

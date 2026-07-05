@@ -110,7 +110,7 @@ class TestHostFromUrl:
     def test_returns_hostname_for_private_host(self) -> None:
         from mewbo_graph.plugins.wiki.finalize import _host_from_url
 
-        assert _host_from_url("https://git.hurricane.home/org/repo") == "git.hurricane.home"
+        assert _host_from_url("https://git.example.home/org/repo") == "git.example.home"
 
     def test_returns_none_for_unparseable_url(self) -> None:
         from mewbo_graph.plugins.wiki.finalize import _host_from_url
@@ -220,7 +220,7 @@ class TestFetchDescription:
 
         with patch.object(urllib.request, "urlopen", side_effect=OSError("network")):
             result = _fetch_description(
-                repo_url="https://git.hurricane.home/org/repo",
+                repo_url="https://git.example.home/org/repo",
                 platform="gitea",
                 token="mytoken",
                 slug="org/repo",

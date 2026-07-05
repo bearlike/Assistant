@@ -13,7 +13,7 @@ from mewbo_graph.wiki.memory_types import (
 )
 from mewbo_graph.wiki.retriever import HybridRetriever, MultiplexExpander
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import GraphEdge, GraphNode
+from mewbo_graph.wiki.types import GraphEdge, GraphNode, make_graph_node
 
 SLUG = "x/y"
 
@@ -34,7 +34,7 @@ def _prov():
 
 
 def _gn(nid: str, name: str, f: str) -> GraphNode:
-    return GraphNode(slug=SLUG, node_id=nid, type="Function", name=name, file=f, range=(0, 9))
+    return make_graph_node(slug=SLUG, node_id=nid, type="Function", name=name, file=f, range=(0, 9))
 
 
 def _seed_code(store):

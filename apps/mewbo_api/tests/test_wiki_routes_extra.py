@@ -282,6 +282,57 @@ class TestProjectGraph:
         resp = c.get("/v1/wiki/projects/org%2Frepo/graph?limit=notanumber", headers=_h())
         assert resp.status_code == 200  # bad limit silently treated as None
 
+    def test_graph_hierarchy_param_synthesizes_folder_scaffold(self, client) -> None:
+        """``?hierarchy=1`` adds Folder nodes + parentId + folderCount; default off."""
+        from mewbo_graph.wiki.types import GraphEdge, make_graph_node
+
+        c, store, _ = client
+        _seed_project(store, slug="org/repo")
+        store.upsert_nodes(
+            "org/repo",
+            [
+                make_graph_node(
+                    slug="org/repo",
+                    node_id="f1",
+                    type="File",
+                    name="apps/api/routes.py",
+                    file="apps/api/routes.py",
+                    range=(0, 10),
+                ),
+                make_graph_node(
+                    slug="org/repo",
+                    node_id="c1",
+                    type="Class",
+                    name="Router",
+                    file="apps/api/routes.py",
+                    range=(0, 10),
+                ),
+            ],
+        )
+        store.upsert_edges(
+            "org/repo",
+            [GraphEdge(slug="org/repo", source="f1", target="c1", type="CONTAINS")],
+        )
+
+        # Default mode: no hierarchy fields (byte-identical legacy wire).
+        plain = c.get("/v1/wiki/projects/org%2Frepo/graph", headers=_h()).get_json()
+        assert "folderCount" not in plain["stats"]
+        assert all("parentId" not in n["data"] for n in plain["nodes"])
+
+        # Hierarchy mode: Folder scaffold + per-node parentId + folderCount.
+        resp = c.get(
+            "/v1/wiki/projects/org%2Frepo/graph?hierarchy=1", headers=_h()
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        folders = {n["data"]["id"] for n in data["nodes"] if n["data"]["kind"] == "Folder"}
+        assert folders == {"folder:apps", "folder:apps/api"}
+        assert data["stats"]["folderCount"] == 2
+        by_id = {n["data"]["id"]: n["data"] for n in data["nodes"]}
+        assert by_id["f1"]["parentId"] == "folder:apps/api"
+        assert by_id["f1"]["folderPath"] == "apps/api/routes.py"
+        assert by_id["c1"]["parentId"] == "f1"
+
 
 # ---------------------------------------------------------------------------
 # /v1/wiki/jobs/active

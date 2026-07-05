@@ -10,7 +10,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { CitationRef, fileCitations } from "@/components/wiki/citations";
+import {
+  CitationRef,
+  citationDomId,
+  fileCitations,
+  parseCitations,
+} from "@/components/wiki/citations";
 
 describe("CitationRef.parse", () => {
   it("parses a path#L<a>-<b> range into 1-based start/end", () => {
@@ -90,5 +95,71 @@ describe("fileCitations (card set)", () => {
       "",                // empty → dropped
     ]);
     expect(cards.map((c) => c.path)).toEqual(["README.md", "src/app.ts"]);
+  });
+});
+
+describe("parseCitations (discriminated card set)", () => {
+  it("classifies file / wiki page / graph refs by kind", () => {
+    const cards = parseCitations([
+      "src/app.ts#L1-9",
+      "wiki:core-orchestration",
+      "graph:hypervisor.py::AgentHypervisor",
+    ]);
+    expect(cards.map((c) => c.kind)).toEqual(["file", "page", "graph"]);
+    const [file, page, graph] = cards;
+    expect(file).toMatchObject({
+      kind: "file",
+      path: "src/app.ts",
+      startLine: 1,
+      endLine: 9,
+    });
+    expect(page).toMatchObject({ kind: "page", pageId: "core-orchestration" });
+    expect(graph).toMatchObject({
+      kind: "graph",
+      nodeId: "hypervisor.py::AgentHypervisor",
+    });
+  });
+
+  it("keeps the page/graph refs that fileCitations silently drops", () => {
+    expect(fileCitations(["wiki:home", "graph:x"])).toHaveLength(0);
+    expect(parseCitations(["wiki:home", "graph:x"]).map((c) => c.kind)).toEqual([
+      "page",
+      "graph",
+    ]);
+  });
+
+  it("reads a title-bearing wiki ref and a labelled graph ref", () => {
+    const [page, graph] = parseCitations([
+      "wiki:home|Home Page",
+      "graph:pkg/mod.py::Thing|Thing (class)",
+    ]);
+    expect(page).toMatchObject({
+      kind: "page",
+      pageId: "home",
+      title: "Home Page",
+    });
+    expect(graph).toMatchObject({
+      kind: "graph",
+      nodeId: "pkg/mod.py::Thing",
+      label: "Thing (class)",
+    });
+  });
+
+  it("dedups by identity and drops empties, keeping first-seen order", () => {
+    const cards = parseCitations([
+      "src/app.ts#L1-9",
+      "",
+      "src/app.ts#L1-9", // dup → dropped
+      "wiki:home",
+      "wiki:home", // dup → dropped
+    ]);
+    expect(cards.map((c) => c.kind)).toEqual(["file", "page"]);
+  });
+
+  it("gives a file card the same DOM id as its inline src: chip", () => {
+    const [file] = parseCitations(["README.md#L68-71"]);
+    expect(citationDomId(file)).toBe(
+      CitationRef.domId(CitationRef.parse("README.md#L68-71")),
+    );
   });
 });

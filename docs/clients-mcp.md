@@ -2,6 +2,8 @@
 
 Mewbo can run as an **MCP server**, so any MCP-compatible AI agent or IDE can put your Mewbo deployment to work. Claude Code, Codex, Cursor, Windsurf, or even another Mewbo can spin up a coding session on a fresh worktree, follow it up and steer it, read back exactly what happened at the level of detail it needs, ask grounded questions of your Agentic Wiki, run searches across connected sources, and get schema-validated structured answers. One assistant becomes a tool the rest of your agent fleet can call.
 
+![Mewbo listed as an MCP server in Claude Code's /mcp panel, showing all 19 available tools](assets/img/mewbo-mcp-01-claude-code.png)
+
 > [!INFO] One key, issued and revoked by you
 > Any MCP client you hand a key to can create and drive sessions, read their history, and query the wiki. Keys are minted from the console and revocable at any time. The MCP surface is curated, but an issued key is full-power. Read [Authentication](#authentication-required) before you hand one out.
 
@@ -63,9 +65,9 @@ The same key authenticates both the REST API and the MCP server. It is one ident
 | **`list_wiki_projects`** | List the repositories indexed in the [Agentic Wiki](features-wiki.md). |
 | **`read_wiki_structure`** | Get a project's knowledge-graph structure. |
 | **`read_wiki_page`** | Fetch a single wiki page. |
-| **`ask_wiki`** | Ask a natural-language question about an indexed project and get a cited answer. |
+| **`ask_wiki`** | Ask a natural-language question about an indexed project and get a cited answer. See [Question Answering](features-wiki-qa.md). |
 | **`get_wiki_answer`** | Resume or replay a wiki Q&A answer by its `answer_id`. Use this when `ask_wiki` returns `status: "running"`. Pass back the `answer_id` to fetch the completed answer once it settles. |
-| **`submit_insight`** | Teach the wiki a durable fact about the codebase. The server condenses it into one or more atomic notes, anchors each to the code it's about, de-duplicates against what's already stored, and safely merges. The [code memory graph](features-wiki.md#grounded-by-a-code-memory-graph) compounds as your agents work. |
+| **`submit_insight`** | Teach the wiki a durable fact about the codebase. The server condenses it into one or more atomic notes, anchors each to the code it's about, de-duplicates against what's already stored, and safely merges. The [code memory graph](features-wiki-graph.md#grounded-by-a-code-memory-graph) compounds as your agents work. |
 
 ### Search: workspace queries
 
@@ -79,7 +81,7 @@ The same key authenticates both the REST API and the MCP server. It is one ident
 
 | Tool | Description |
 |---|---|
-| **`structured_query`** | Run a schema-constrained synthesis: describe what you want in plain English, pass a JSON Schema, and get back a validated object matching that schema. Optionally ground the session in a search workspace or enable specific tool integrations. When the workspace has a mapped Source Capability Graph, the run inherits graph-first grounding: it routes through the graph, probes each pathway, and the result carries provenance. Returns `{run_id, status, output}`. If the run takes longer than the bounded wait, resume with `get_structured_run`. See [Structured Outputs](features-structured-outputs.md) for the full feature. |
+| **`structured_query`** | Run a schema-constrained synthesis: describe what you want in plain English, pass a JSON Schema, and get back a validated object matching that schema. Optionally ground the session in a search workspace or enable specific tool integrations. When the workspace has a mapped Source Capability Graph, the run inherits graph-first grounding: it routes through the graph, probes each pathway, and the result carries provenance. Returns `{run_id, status, output}`. If the run takes longer than the bounded wait, resume with `get_structured_run`. See [Structured Outputs](api/structured-outputs.md) for the full feature. |
 | **`get_structured_run`** | Fetch a structured query run by `run_id`. Use it to resume a running query or replay a past result. |
 
 ### Discovery
@@ -103,8 +105,6 @@ The Mewbo MCP server speaks **Streamable HTTP** at `/mcp`, and works with any HT
 ```bash
 claude mcp add -s user -t http mewbo https://<your-mewbo-host>/mcp -H "Authorization: Bearer <API_KEY>"
 ```
-
-![Mewbo listed as an MCP server in Claude Code's /mcp panel, showing all 19 available tools](mewbo-mcp-01-claude-code.png)
 
 ### Codex, Cursor, Windsurf, and other clients
 
@@ -149,7 +149,7 @@ Mewbo sits at both ends of the protocol. Do not confuse the two:
 ## Related resources
 
 - [External Tools (MCP)](features-mcp.md): Mewbo consuming MCP servers (the inverse of this page).
-- [Web Console + API](clients-web-api.md): the REST surface the MCP server wraps.
+- [REST API](api/index.md): the REST surface the MCP server wraps.
 - [Agentic Wiki](features-wiki.md): what `ask_wiki` and `read_wiki_*` query.
 - [Model Context Protocol](https://modelcontextprotocol.io): the open standard.
 - [Connecting remote MCP servers to Claude](https://support.anthropic.com/en/articles/11175166-about-custom-integrations-using-remote-mcp) · [OpenAI's guide to remote MCP](https://platform.openai.com/docs/guides/tools-remote-mcp).

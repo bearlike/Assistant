@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
 from mewbo_graph.plugins.wiki._ctx import resolve_runtime
+from mewbo_graph.wiki.qa_access import QaAccessRecord
 
 if TYPE_CHECKING:
     from mewbo_core.classes import ActionStep
@@ -80,7 +81,17 @@ class WikiQueryGraphTool(WikiSessionTool):
             # sees in source / page references.
             nodes = [n for n in nodes if fnmatch.fnmatch(n.file or "", args.file_glob)]
         nodes = nodes[:args.limit]
-        self._record_qa_access(ctx, [f"graph:{n.node_id}" for n in nodes])
+        # Navigation, not grounding: record ONLY the queried entry point (the
+        # ``neighbors_of`` seed) — never the whole result set (that ~50-per-call
+        # dump is the access-trail sprawl). A plain type/name/glob filter has no
+        # single entry node, so it records nothing.
+        if args.neighbors_of:
+            self._record_qa_access(
+                ctx,
+                [QaAccessRecord.touch(
+                    f"graph:{args.neighbors_of}", tool=self.tool_id, op="nav"
+                )],
+            )
         return MockSpeaker(content=str({
             "count": len(nodes),
             "nodes": [n.model_dump() for n in nodes],

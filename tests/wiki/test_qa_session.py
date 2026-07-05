@@ -117,15 +117,38 @@ def test_qa_start_creates_record_and_emits_meta_event(store, runtime):
     runtime.start_async.assert_called_once()
     kw = runtime.start_async.call_args.kwargs
     # The root is a HYPERVISOR: it fans out retrieval probes (spawn_agent /
-    # check_agents) and emits the fused answer (wiki_emit_block). It has NO
+    # check_agents) and emits the fused answer (wiki_emit_answer). It has NO
     # direct retrieval tools — those belong to the wiki-qa-probe sub-agents.
     assert "spawn_agent" in kw["allowed_tools"]
     assert "check_agents" in kw["allowed_tools"]
-    assert "wiki_emit_block" in kw["allowed_tools"]
+    assert "wiki_emit_answer" in kw["allowed_tools"]
     assert "wiki_query_graph" not in kw["allowed_tools"]
     assert "wiki_search_pages" not in kw["allowed_tools"]
     assert kw["model_name"] == "anthropic/claude-sonnet-4-6"
     assert kw["user_query"] == "What is the auth flow?"
+
+
+def test_qa_start_is_self_approving(store, runtime):
+    """The read-only QA run is self-approving — auto_approve + strict visible scope (#172).
+
+    The capability gate surfaces the wiki/scg SessionTools onto the root + probes
+    regardless of strict scope, so a restrictive approval callback could only turn a
+    capability-surfaced read-only call (e.g. agentic_search) into an unanswerable
+    approval park. Approving uniformly — as every other headless drive does — keeps
+    the fan-out unblocked.
+    """
+    from mewbo_core.permissions import auto_approve
+
+    WikiQaSession.start(
+        slug="org/repo",
+        question="Q",
+        from_page_id="",
+        model="anthropic/claude-sonnet-4-6",
+        runtime=runtime,
+    )
+    kw = runtime.start_async.call_args.kwargs
+    assert kw["approval_callback"] is auto_approve
+    assert kw["strict_tool_scope"] is True
 
 
 def test_qa_start_playbook_contains_agent_instructions(store, runtime):
@@ -141,7 +164,7 @@ def test_qa_start_playbook_contains_agent_instructions(store, runtime):
     # wiki-qa.md body must drive the probe fan-out + emit the fused answer.
     assert "spawn_agent" in kw["skill_instructions"]
     assert "wiki-qa-probe" in kw["skill_instructions"]
-    assert "wiki_emit_block" in kw["skill_instructions"]
+    assert "wiki_emit_answer" in kw["skill_instructions"]
 
 
 def test_qa_meta_appears_before_first_tool_call(store, runtime):
@@ -490,3 +513,35 @@ def test_get_qa_snapshot_returns_answer(client):
     assert data["answerId"] == "ans-snap-001"
     assert "summarySources" in data
     assert "blocks" in data
+
+
+def test_get_qa_snapshot_resolves_summary_graph_refs(client):
+    """GET humanises ``graph:<id>`` refs in BOTH panels — cited (summary) + accessed (#172).
+
+    ``summary_sources`` now folds in the file/graph evidence off the accessed trail, so
+    its graph refs need the same read-time resolution the accessed trail already gets
+    (``graph:<node_id>`` → ``graph:file#Symbol``). Page + file refs pass through.
+    """
+    from mewbo_graph.wiki.types import make_graph_node
+
+    c, store = client
+    store.upsert_nodes("org/repo", [make_graph_node(
+        slug="org/repo", node_id="ast1", type="Function", name="verify",
+        file="src/app.py", range=(0, 9),
+    )])
+    store.save_qa(QaAnswer(
+        answerId="ans-sum-graph",
+        fromPageId="",
+        slug="org/repo",
+        summarySources=["wiki:overview", "graph:ast1", "src/app.py#L1-9"],
+        accessedSources=["graph:ast1"],
+        model="m",
+        blocks=[],
+    ))
+    resp = c.get("/v1/wiki/qa/ans-sum-graph", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["summarySources"] == [
+        "wiki:overview", "graph:src/app.py#verify", "src/app.py#L1-9",
+    ]
+    assert data["accessedSources"] == ["graph:src/app.py#verify"]

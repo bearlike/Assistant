@@ -25,12 +25,12 @@ def _store(tmp_path: Path) -> JsonWikiStore:
 
 def _seed_graph(store: JsonWikiStore, slug: str) -> None:
     """Persist one code-graph node so finalize's empty-graph guard passes."""
-    from mewbo_graph.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import make_graph_node
 
     store.upsert_nodes(
         slug,
         [
-            GraphNode(
+            make_graph_node(
                 slug=slug, node_id=f"{slug}:n1", type="File",
                 name="a.py", file="a.py", range=(0, 0),
             )
@@ -266,7 +266,7 @@ def test_finalize_uses_submission_platform_and_repo_url(tmp_path: Path) -> None:
     # URL-detection alone cannot map to gitea — the wizard's explicit choice
     # MUST win.
     store.save_job_submission("job-fin7", {
-        "repoUrl": "https://git.hurricane.home/bearlike/Grove",
+        "repoUrl": "https://git.example.home/bearlike/Grove",
         "slug": "bearlike/Grove",
         "platform": "gitea",
         "language": "en",
@@ -291,7 +291,7 @@ def test_finalize_uses_submission_platform_and_repo_url(tmp_path: Path) -> None:
     assert project.source == "gitea"
     assert project.desc == "A grove of git worktrees."
     assert project.landing_page_id == "home"
-    assert project.repo_url == "https://git.hurricane.home/bearlike/Grove"
+    assert project.repo_url == "https://git.example.home/bearlike/Grove"
 
 
 def test_finalize_fetch_description_short_circuits_without_repo_url(tmp_path: Path) -> None:

@@ -191,6 +191,7 @@ class Orchestrator:
         invocation_id: str | None = None,
         extra_session_tools: list[SessionTool] | None = None,
         enable_skills: bool = True,
+        attachments: list[dict] | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration for a session."""
         if session_id is None:
@@ -208,7 +209,7 @@ class Orchestrator:
         # ``capabilities`` facet. ``derive`` stays a pure transform of
         # (tags, context, surface); we only enrich the context it reads.
         derive_context = dict(self._session_store.latest_context(session_id))
-        effective_caps = self._session_capabilities(session_id)
+        effective_caps = self._session_capabilities(session_id, allowed_tools=allowed_tools)
         if effective_caps:
             derive_context["client_capabilities"] = list(effective_caps)
         provenance = TraceProvenance.derive(
@@ -241,6 +242,7 @@ class Orchestrator:
                     interrupt_step=interrupt_step,
                     extra_session_tools=extra_session_tools,
                     enable_skills=enable_skills,
+                    attachments=attachments,
                 )
 
     def _run_with_session_context(
@@ -260,6 +262,7 @@ class Orchestrator:
         interrupt_step: threading.Event | None = None,
         extra_session_tools: list[SessionTool] | None = None,
         enable_skills: bool = True,
+        attachments: list[dict] | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
         """Run orchestration with Langfuse session context set."""
         state = OrchestrationState(goal=user_query, session_id=session_id)
@@ -272,8 +275,16 @@ class Orchestrator:
         self._hook_manager.run_on_session_start(session_id)
         error_msg: str | None = None
         try:
+            user_payload: dict[str, object] = {"text": user_query}
+            if attachments:
+                # Additive duplicate of the sibling ``context`` event's
+                # attachments (see ``context._iter_attachments``) — keeps the
+                # exact AttachmentDescriptor dicts so a client can render
+                # attachment cards above the user turn, live and on replay,
+                # without joining across events.
+                user_payload["attachments"] = attachments
             self._session_store.append_event(
-                session_id, {"type": "user", "payload": {"text": user_query}}
+                session_id, {"type": "user", "payload": user_payload}
             )
             if self._should_update_summary(user_query):
                 state.summary = self._update_summary_with_memory(
@@ -370,8 +381,10 @@ class Orchestrator:
 
             # Resolve session capabilities once so every downstream lookup
             # (slash-command skill activation, sub-agent catalog, activate_skill
-            # tool dispatch) sees the same client-advertised set.
-            session_caps = self._session_capabilities(session_id)
+            # tool dispatch) sees the same client-advertised set. Threading
+            # allowed_tools derives any product-tool selection into a
+            # request-scoped grant too (#182) — see _session_capabilities.
+            session_caps = self._session_capabilities(session_id, allowed_tools=allowed_tools)
 
             # Skill invocation detection and hot-reload.
             self._skill_registry.maybe_reload()
@@ -478,7 +491,11 @@ class Orchestrator:
                 "done_reason": state.done_reason,
                 "task_result": task_queue.task_result,
             }
-            if task_queue.last_error:
+            # ``task_queue.last_error`` is a STICKY diagnostic — a mid-run tool
+            # failure the model recovered from still leaves it set. Only
+            # surface it on a non-successful completion; a "completed" run
+            # that recovered must not carry stale error residue.
+            if task_queue.last_error and state.done_reason != "completed":
                 completion_payload["error"] = task_queue.last_error
                 completion_payload["last_error"] = task_queue.last_error
             self._session_store.append_event(
@@ -530,19 +547,33 @@ class Orchestrator:
     # Session helpers (kept from original)
     # ------------------------------------------------------------------
 
-    def _session_capabilities(self, session_id: str) -> tuple[str, ...]:
+    def _session_capabilities(
+        self, session_id: str, *, allowed_tools: list[str] | None = None
+    ) -> tuple[str, ...]:
         """Return the capability tuple in effect for *session_id*.
 
         Reads ``client_capabilities`` from the most recently appended
         ``context`` event (set by the API from the ``X-Mewbo-Capabilities``
-        header), then unions in any RUNTIME grants registered by a capability
-        library above core (``augment_session_capabilities``) — so a capability
-        gated on a live predicate (e.g. ``scg`` once the SCG is enabled AND a
-        source is mapped) surfaces to an ORDINARY session without the client
-        advertising it. The augmentation is the single read-point every
-        downstream gate funnels through (sub-agent catalog, skill activation,
-        the ``scg_*`` plugin tool scope), so the grant happens in exactly one
-        seam. Returns an empty tuple on any error or when nothing applies.
+        header). Unions in capabilities DERIVED from *allowed_tools*
+        (Gitea #182) — REQUEST-SCOPED, never persisted: when the caller names
+        a product ``SessionTool``'s id (e.g. ``wiki_search_pages``) in this
+        request's allowlist, ``SessionToolRegistry.capabilities_for`` looks up
+        the tool's plugin-manifest ``requires_capabilities`` and unions it in
+        for THIS call only. This closes the #84 asymmetry: selecting a
+        product tool via the SAME ``context.mcp_tools`` field that already
+        gates ``SessionToolRegistry.build_for``'s allowlist now *also* unlocks
+        its AgentDef family on the capability-only catalog gate
+        (``filter_by_capabilities``). Because the derivation is fresh per
+        request rather than written to a context event, omitting the tool on
+        a later turn naturally revokes it — unlike the sticky, additive-only
+        header path, which this leaves untouched (the two unions
+        harmlessly on top of each other). Finally unions in any RUNTIME
+        grants registered by a capability library above core
+        (``augment_session_capabilities``) — so a capability gated on a live
+        predicate (e.g. ``scg`` once the SCG is enabled AND a source is
+        mapped) surfaces to an ORDINARY session without the client
+        advertising it. Returns an empty tuple on any error or when nothing
+        applies.
         """
         from mewbo_core.capabilities import (
             augment_session_capabilities,
@@ -552,7 +583,7 @@ class Orchestrator:
         try:
             events = self._session_store.load_transcript(session_id)
         except Exception:
-            return augment_session_capabilities(())
+            events = []
         advertised: object = None
         for event in events:
             if event.get("type") != "context":
@@ -560,7 +591,9 @@ class Orchestrator:
             payload = event.get("payload")
             if isinstance(payload, dict) and "client_capabilities" in payload:
                 advertised = payload["client_capabilities"]
-        return augment_session_capabilities(parse_capabilities(advertised))
+        derived = self._session_tool_registry.capabilities_for(allowed_tools or [])
+        base = set(parse_capabilities(advertised)) | set(derived)
+        return augment_session_capabilities(tuple(sorted(base)))
 
     def _maybe_generate_title(self, session_id: str) -> None:
         """Kick off title generation in a daemon thread (non-blocking).

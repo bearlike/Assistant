@@ -32,7 +32,7 @@ _MERGED = {
     "servers": {
         "gitea": {
             "transport": "streamable_http",
-            "url": "http://mcp.hurricane.home/mcp/Gitea-Hurricane",
+            "url": "http://mcp.example.com/mcp/Gitea-Hurricane",
             "headers": {"Authorization": "Bearer sk-cloud-SECRET"},
         },
         "sidestage-postgres": {
@@ -42,7 +42,7 @@ _MERGED = {
         },
         "internet-search": {
             "transport": "streamable_http",
-            "url": "http://mcp.hurricane.home/mcp/Internet-Search",
+            "url": "http://mcp.example.com/mcp/Internet-Search",
             "headers": {"Authorization": "Bearer sk-cloud-SECRET"},
         },
     }

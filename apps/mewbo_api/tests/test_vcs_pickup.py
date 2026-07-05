@@ -256,6 +256,7 @@ def test_issue_pickup_starts_async_run(
     assert "@mewbo-ai please fix" in prompt
     assert "@alice" in prompt
     assert "never commit directly to the default branch" in prompt
+    assert "Closes #7" in prompt
     assert "commit and push to this branch" not in prompt
 
 
@@ -298,6 +299,7 @@ def test_issue_pickup_uses_worktree_context(
     prompt = call["user_query"]
     assert "mewbo/issue-7" in prompt
     assert "isolated worktree" in prompt
+    assert "Closes #7" in prompt
     assert "never commit directly to the default branch" not in prompt
 
 

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Design-v2 spec §3.1 surfaceCanvas — kept as a plain XML resource (not read from
+         ui/theme/Color.kt) because android:windowBackground must resolve before any Compose
+         content exists. -->
+    <color name="aura_surface_canvas">#FF000000</color>
+</resources>

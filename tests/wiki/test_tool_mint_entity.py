@@ -16,7 +16,7 @@ from mewbo_core.classes import ActionStep
 from mewbo_graph.entities.types import EntityEmbedding
 from mewbo_graph.plugins.wiki import mint_entity as mod
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import GraphNode
+from mewbo_graph.wiki.types import make_graph_node
 
 SLUG = "org/repo"
 
@@ -243,7 +243,7 @@ def test_mint_entity_anchors_write_ast_anchors_edge(tmp_path, monkeypatch):
     store.upsert_nodes(
         SLUG,
         [
-            GraphNode(
+            make_graph_node(
                 slug=SLUG,
                 node_id="n_authsvc",
                 type="Class",

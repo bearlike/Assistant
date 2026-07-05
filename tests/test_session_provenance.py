@@ -1,7 +1,7 @@
 """Tests for session provenance classification."""
 
 import pytest
-from mewbo_core.session_provenance import SessionOrigin, TraceProvenance
+from mewbo_core.session_provenance import SessionOrigin, TraceProvenance, is_mobile_surface
 from mewbo_core.session_runtime import SessionRuntime
 from mewbo_core.session_store import SessionStore
 
@@ -20,6 +20,10 @@ from mewbo_core.session_store import SessionStore
         (["structured:run"], {}, SessionOrigin.STRUCTURED),
         (["structured:fast"], {}, SessionOrigin.STRUCTURED),
         (["draft:stream"], {}, SessionOrigin.DRAFT),
+        # Mobile-created sessions (Aura et al.) — tag wins, context is fallback.
+        (["mobile:android"], {}, SessionOrigin.MOBILE),
+        ([], {"client": "aura-android"}, SessionOrigin.MOBILE),
+        ([], {"source_platform": "android"}, SessionOrigin.MOBILE),
         # Context fallback when no tag is present.
         ([], {"client_capabilities": ["wiki"]}, SessionOrigin.WIKI),
         ([], {"client_capabilities": ["scg"]}, SessionOrigin.SEARCH),
@@ -34,6 +38,23 @@ from mewbo_core.session_store import SessionStore
 def test_classify(tags, context, expected):
     """classify maps tags + context to the right coarse origin."""
     assert SessionOrigin.classify(tags, context) == expected
+
+
+@pytest.mark.parametrize(
+    ("surface", "expected"),
+    [
+        (None, False),
+        ("android", True),
+        ("ios", True),
+        ("aura-android", True),
+        ("AURA-Foo", True),
+        ("slack", False),
+        (123, False),
+    ],
+)
+def test_is_mobile_surface(surface, expected):
+    """is_mobile_surface matches known platforms + any Aura-prefixed surface."""
+    assert is_mobile_surface(surface) is expected
 
 
 def test_tags_for_session_round_trip(tmp_path):
@@ -118,6 +139,11 @@ def test_summarize_session_surfaces_capabilities_and_workspace(tmp_path):
         (["structured:fast"], {"structured_workspace": "ws"}, "api", "structured",
          "structured_fast", {"workspace": "ws"}),
         (["draft:stream"], {}, "console", "draft", "draft_stream", {}),
+        # Mobile-tagged session (#, aura): tag drives product + sub-kind session_type.
+        (["mobile:android"], {}, "android", "mobile", "mobile_android", {}),
+        # Untagged mobile context (existing Aura sessions) still resolves to the
+        # mobile product via the ``_ORIGIN_PRODUCT`` fallback (no session-type refinement).
+        ([], {"client": "aura-android"}, "aura-android", "mobile", "chat", {}),
     ],
 )
 def test_derive_product_and_type(tags, context, surface, product, session_type, expect_meta):
@@ -133,6 +159,14 @@ def test_derive_product_and_type(tags, context, surface, product, session_type, 
     assert f"session_type:{session_type}" in prov.tags
     assert f"surface:{surface}" in prov.tags
     assert f"origin:{prov.origin.value}" in prov.tags
+
+
+def test_derive_mobile_origin_and_product():
+    """A mobile tag resolves MOBILE origin end-to-end (classify + product + facet)."""
+    prov = TraceProvenance.derive(tags=["mobile:android"], context={}, surface="android")
+    assert prov.origin == SessionOrigin.MOBILE
+    assert prov.product == "mobile"
+    assert "origin:mobile" in prov.tags
 
 
 def test_derive_channel_unpacks_platform_and_ids():
@@ -172,6 +206,27 @@ def test_derive_vcs_pickup_and_managed_worktree():
     # ``managed:<uuid>`` is a worktree, never a project chip.
     assert prov.metadata["worktree"] == "deadbeef"
     assert not any(tag.startswith("project:") for tag in prov.tags)
+
+
+def test_derive_transcript_sink_facet():
+    """A ``transcript_sink`` context key becomes a low-cardinality filter chip (#171)."""
+    prov = TraceProvenance.derive(
+        tags=[],
+        context={"transcript_sink": "synced"},
+        surface="cli",
+    )
+    # surface stays 'cli'; the sink is a SEPARATE local-vs-synced facet.
+    assert prov.surface == "cli"
+    assert prov.metadata["transcript_sink"] == "synced"
+    assert "transcript_sink:synced" in prov.tags
+    assert "surface:cli" in prov.tags
+
+
+def test_derive_without_transcript_sink_omits_facet():
+    """A purely-local CLI session carries no sink facet (absence == local-only)."""
+    prov = TraceProvenance.derive(tags=[], context={}, surface="cli")
+    assert "transcript_sink" not in prov.metadata
+    assert not any(tag.startswith("transcript_sink:") for tag in prov.tags)
 
 
 def test_derive_named_project_and_capabilities():

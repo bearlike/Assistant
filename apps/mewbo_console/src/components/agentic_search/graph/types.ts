@@ -3,9 +3,9 @@
 // Mirrors the API ``GET /api/agentic_search/workspaces/<id>/graph`` payload,
 // which wraps ``mewbo_graph.scg.graph_view.ScgGraphView.to_wire()`` (#76) and
 // normalizes schema-edge endpoints to node ids + appends unmapped ghost nodes.
-// The shape parallels the wiki ``KnowledgeGraph`` so it feeds the SAME
-// ``KnowledgeGraphRenderer`` engine — only the kind/edge/layer vocabulary
-// differs (the search SCG vs the wiki code graph).
+// The shape parallels the wiki ``KnowledgeGraph`` so it feeds the SAME shared
+// 3D ``Graph3DView`` engine — only the kind/edge/layer vocabulary differs (the
+// search SCG vs the wiki code graph).
 //
 // All unions are CLOSED so every ``Record<Kind, …>`` map in the config + screen
 // is exhaustive and ``tsc`` flags a missing arm (the console convention).

@@ -19,16 +19,16 @@ class TestFromRemoteUrl:
         assert ri == RepoIdentity(host="github.com", owner="bearlike", repo="Assistant")
 
     def test_https_url_without_suffix(self):
-        ri = RepoIdentity.from_remote_url("https://git.hurricane.home/kk/Assistant")
-        assert ri == RepoIdentity(host="git.hurricane.home", owner="kk", repo="Assistant")
+        ri = RepoIdentity.from_remote_url("https://git.example.com/kk/Assistant")
+        assert ri == RepoIdentity(host="git.example.com", owner="kk", repo="Assistant")
 
     def test_scp_git_url(self):
         ri = RepoIdentity.from_remote_url("git@github.com:bearlike/Assistant.git")
         assert ri == RepoIdentity(host="github.com", owner="bearlike", repo="Assistant")
 
     def test_ssh_scheme_url(self):
-        ri = RepoIdentity.from_remote_url("ssh://git@git.hurricane.home:2222/kk/Assistant.git")
-        assert ri == RepoIdentity(host="git.hurricane.home", owner="kk", repo="Assistant")
+        ri = RepoIdentity.from_remote_url("ssh://git@git.example.com:2222/kk/Assistant.git")
+        assert ri == RepoIdentity(host="git.example.com", owner="kk", repo="Assistant")
 
     def test_host_is_lowercased(self):
         ri = RepoIdentity.from_remote_url("https://GitHub.COM/Bearlike/Assistant.git")
@@ -94,7 +94,7 @@ class TestForPath:
             captured["path"] = path
             return [
                 "https://github.com/bearlike/Assistant.git",
-                "git@git.hurricane.home:kk/Assistant.git",
+                "git@git.example.com:kk/Assistant.git",
             ]
 
         monkeypatch.setattr(RepoIdentity, "_read_remote_urls", staticmethod(fake_remotes))
@@ -102,7 +102,7 @@ class TestForPath:
         assert captured["path"] == "/some/repo"
         canon = {i.canonical() for i in identities}
         assert "github.com/bearlike/Assistant" in canon
-        assert "git.hurricane.home/kk/Assistant" in canon
+        assert "git.example.com/kk/Assistant" in canon
 
     def test_dedupes_identical_remotes(self, monkeypatch):
         monkeypatch.setattr(
@@ -131,13 +131,13 @@ class TestForPath:
             staticmethod(
                 lambda path: [
                     "https://github.com/bearlike/Assistant.git",
-                    "git@git.hurricane.home:kk/Assistant.git",
+                    "git@git.example.com:kk/Assistant.git",
                 ]
             ),
         )
         aliases = RepoIdentity.aliases_for_path("/some/repo")
         assert "github.com/bearlike/Assistant" in aliases
-        assert "git.hurricane.home/kk/Assistant" in aliases
+        assert "git.example.com/kk/Assistant" in aliases
         assert "bearlike/Assistant" in aliases
         assert "kk/Assistant" in aliases
         assert "Assistant" in aliases

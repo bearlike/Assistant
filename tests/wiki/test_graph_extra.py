@@ -20,9 +20,9 @@ from unittest.mock import patch
 
 import pytest
 from mewbo_graph.entities.types import Entity, EntityRelation
-from mewbo_graph.wiki.graph import GraphParseResult, KnowledgeGraphView
+from mewbo_graph.wiki.graph import GraphIndex, GraphParseResult, KnowledgeGraphView
 from mewbo_graph.wiki.memory_types import MemoryEdge, MemoryNode, MemoryProvenance
-from mewbo_graph.wiki.types import GraphEdge, GraphNode
+from mewbo_graph.wiki.types import GraphEdge, GraphNode, make_graph_node
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ SLUG = "org/repo"
 
 
 def _gn(nid: str, name: str, typ: str = "Function", f: str = "a.py") -> GraphNode:
-    return GraphNode(
+    return make_graph_node(
         slug=SLUG,
         node_id=nid,
         type=typ,
@@ -355,7 +355,7 @@ def test_to_wire_edge_shape() -> None:
 
 def test_to_wire_node_docstring_none_becomes_empty_string() -> None:
     """A node with docstring=None serialises as an empty string in the wire shape."""
-    node = GraphNode(
+    node = make_graph_node(
         slug=SLUG,
         node_id="nx",
         type="File",
@@ -709,3 +709,135 @@ def test_all_three_layers_in_one_payload() -> None:
     # Two cross ANCHORS edges: entity→ast and memory→ast.
     cross = [e for e in wire["edges"] if e["data"]["layer"] == "cross"]
     assert len(cross) == 2
+
+
+# ── Hierarchy wire mode (folder scaffold + parentId) ─────────────────────────
+
+
+def test_default_mode_wire_omits_hierarchy_fields() -> None:
+    """Without ``hierarchy=True`` the wire is byte-identical to legacy:
+
+    no ``parentId``/``folderPath`` on nodes, no ``folderCount`` in stats, no
+    Folder nodes. This is the SCG / Agentic Search reuse-path invariant.
+    """
+    nodes = [_gn("f1", "a/b.py", typ="File", f="a/b.py")]
+    store = _FakeStore(nodes, [])
+
+    wire = KnowledgeGraphView.for_slug(store, SLUG).to_wire()  # hierarchy off
+
+    for n in wire["nodes"]:
+        assert "parentId" not in n["data"]
+        assert "folderPath" not in n["data"]
+    assert "folderCount" not in wire["stats"]
+    assert not [n for n in wire["nodes"] if n["data"]["kind"] == "Folder"]
+
+
+def test_hierarchy_mode_synthesizes_folder_nodes_and_count() -> None:
+    nodes = [
+        _gn("f1", "apps/api/routes.py", typ="File", f="apps/api/routes.py"),
+        _gn("f2", "apps/cli/main.py", typ="File", f="apps/cli/main.py"),
+    ]
+    store = _FakeStore(nodes, [])
+
+    wire = KnowledgeGraphView.for_slug(store, SLUG, hierarchy=True).to_wire()
+
+    folders = {
+        n["data"]["id"] for n in wire["nodes"] if n["data"]["kind"] == "Folder"
+    }
+    assert folders == {"folder:apps", "folder:apps/api", "folder:apps/cli"}
+    assert wire["stats"]["folderCount"] == 3
+    # Folder node carries layer ast + folderPath + basename label.
+    api = next(n for n in wire["nodes"] if n["data"]["id"] == "folder:apps/api")
+    assert api["data"]["layer"] == "ast"
+    assert api["data"]["label"] == "api"
+    assert api["data"]["folderPath"] == "apps/api"
+    assert api["data"]["parentId"] == "folder:apps"
+
+
+def test_hierarchy_mode_stamps_parent_and_folderpath_on_every_node() -> None:
+    # File f1 in apps/api CONTAINS class c1 → c1.parentId == f1.
+    nodes = [
+        _gn("f1", "apps/api/routes.py", typ="File", f="apps/api/routes.py"),
+        _gn("c1", "Router", typ="Class", f="apps/api/routes.py"),
+    ]
+    edges = [_ge("f1", "c1", "CONTAINS")]
+    store = _FakeStore(nodes, edges)
+
+    wire = KnowledgeGraphView.for_slug(store, SLUG, hierarchy=True).to_wire()
+    by_id = {n["data"]["id"]: n["data"] for n in wire["nodes"]}
+
+    # Every node has BOTH keys present in hierarchy mode.
+    for data in by_id.values():
+        assert "parentId" in data
+        assert "folderPath" in data
+
+    assert by_id["f1"]["parentId"] == "folder:apps/api"
+    assert by_id["f1"]["folderPath"] == "apps/api/routes.py"
+    assert by_id["c1"]["parentId"] == "f1"  # symbol → its container file
+    assert by_id["c1"]["folderPath"] is None  # symbols carry no folderPath
+
+
+def test_hierarchy_mode_emits_folder_contains_edges() -> None:
+    nodes = [_gn("f1", "apps/api/routes.py", typ="File", f="apps/api/routes.py")]
+    store = _FakeStore(nodes, [])
+
+    wire = KnowledgeGraphView.for_slug(store, SLUG, hierarchy=True).to_wire()
+    edge_pairs = {(e["data"]["source"], e["data"]["target"]) for e in wire["edges"]}
+
+    assert ("folder:apps", "folder:apps/api") in edge_pairs
+    assert ("folder:apps/api", "f1") in edge_pairs
+    folder_edges = [
+        e
+        for e in wire["edges"]
+        if e["data"]["source"].startswith("folder:")
+    ]
+    assert all(e["data"]["kind"] == "CONTAINS" for e in folder_edges)
+
+
+# ── GraphIndex: cached-Query node-name mispairing regression ──────────────────
+
+
+def test_query_captures_do_not_mispair_node_names(tmp_path) -> None:
+    """Every node's ``name`` must match the def at its own byte ``range``.
+
+    ``QueryCursor.captures()`` returns each capture name's nodes in tree-traversal
+    order, NOT grouped per match — so once classes contain methods (the nesting
+    shifts traversal order) the parallel ``zip(<kind>.def, <kind>.name)`` lists
+    desynchronise and names land on the wrong range (methods mispair on the very
+    first parse; classes mispair once the compiled Query is reused). Pairing
+    captures within each match (``QueryCursor.matches()``) is the only correct
+    fix. This asserts name↔range integrity across a reuse, for classes AND
+    methods."""
+    pytest.importorskip("tree_sitter")
+
+    idx = GraphIndex()
+    src = (
+        "class Base:\n    def alpha(self):\n        pass\n    def beta(self):\n        pass\n\n"
+        "class Item:\n    def gamma(self):\n        pass\n\n"
+        "class Thing(Base):\n    def delta(self):\n        pass\n"
+    )
+    warmup = tmp_path / "warmup.py"
+    warmup.write_text("class Warm:\n    def w(self):\n        pass\n", encoding="utf-8")
+    target = tmp_path / "target.py"
+    target.write_text(src, encoding="utf-8")
+
+    # Parse a prior file first so the compiled Query is REUSED on the target.
+    idx.parse_file(SLUG, warmup, repo_root=tmp_path)
+    result = idx.parse_file(SLUG, target, repo_root=tmp_path)
+
+    src_bytes = src.encode()
+    classes = [n for n in result.nodes if n.type == "Class"]
+    methods = [n for n in result.nodes if n.type == "Method"]
+    assert {n.name for n in classes} == {"Base", "Item", "Thing"}
+    assert {n.name for n in methods} == {"alpha", "beta", "gamma", "delta"}
+    # Each Class/Method node's NAME must match the def actually at its range.
+    for n in classes:
+        head = src_bytes[n.range[0] : n.range[0] + 18].decode()
+        assert head.startswith(f"class {n.name}"), (
+            f"Class node {n.name!r} mispaired onto range starting {head!r}"
+        )
+    for n in methods:
+        head = src_bytes[n.range[0] : n.range[0] + 18].decode().lstrip()
+        assert head.startswith(f"def {n.name}"), (
+            f"Method node {n.name!r} mispaired onto range starting {head!r}"
+        )

@@ -17,7 +17,7 @@ API_KEY = "test-key-123"
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
 
-def _seed_project(store, slug: str = "git.hurricane.home/bearlike/Assistant"):
+def _seed_project(store, slug: str = "git.example.com/bearlike/Assistant"):
     from mewbo_graph.wiki.types import IndexingJob, Project
 
     proj = Project(
@@ -107,8 +107,8 @@ def client(wiki_app):
     return flask_app.test_client(), store
 
 
-SLUG = "git.hurricane.home/bearlike/Assistant"
-SLUG_ENC = "git.hurricane.home%2Fbearlike%2FAssistant"
+SLUG = "git.example.com/bearlike/Assistant"
+SLUG_ENC = "git.example.com%2Fbearlike%2FAssistant"
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────

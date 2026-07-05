@@ -11,6 +11,7 @@ const ORIGIN_META: Record<SessionOrigin, { label: string; color: string }> = {
   channel: { label: 'Channel', color: 'emerald' },
   structured: { label: 'Structured', color: 'violet' },
   draft: { label: 'Draft', color: 'teal' },
+  mobile: { label: 'Mobile', color: 'amber' },
 };
 
 // Channel sessions name their platform instead of the generic "Channel".

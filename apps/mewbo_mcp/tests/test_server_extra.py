@@ -458,3 +458,54 @@ def test_tool_envelope_marks_5xx_retryable(server):
     result = _run_tool(server, "list_sessions", {}, routes)
     assert result["error"]["code"] == 503
     assert result["error"]["retryable"] is True
+
+
+# ---------------------------------------------------------------------------
+# Graph-only (developer-mode) project — docs unavailable, graph still explorable
+# ---------------------------------------------------------------------------
+
+
+def test_graph_only_doc_read_surfaces_documentation_unavailable(server):
+    """A doc-content tool on a graph-only project returns a CLEAN non-retryable
+    envelope, never a raw exception.
+
+    The backend (``wiki/errors.py:documentation_unavailable_response``) maps a
+    graph-only ``get_page`` to HTTP 409 with the stable wire body
+    ``{code, message, retryable:false}``. That 409 must reach the MCP caller as
+    ``{error:{code:409, reason, retryable:false}}`` — the ``message`` is lifted
+    by ``rest._error_detail`` and 409 (a 4xx) is non-retryable.
+    """
+    routes = {
+        "GET /v1/wiki/projects/devmode/pages/intro": (
+            409,
+            {
+                "code": "documentation_unavailable",
+                "message": (
+                    "No documentation for 'devmode': indexed in graph-only "
+                    "(developer) mode."
+                ),
+                "retryable": False,
+            },
+        )
+    }
+    result = _run_tool(
+        server, "read_wiki_page", {"project": "devmode", "page_id": "intro"}, routes
+    )
+    assert result["error"]["code"] == 409
+    assert "graph-only" in result["error"]["reason"]
+    assert result["error"]["retryable"] is False
+
+
+def test_graph_only_structure_read_still_works(server):
+    """A graph-EXPLORATION tool is unaffected by graph-only mode.
+
+    ``read_wiki_structure`` reads ``/graph`` (``KnowledgeGraphView``), which never
+    funnels through the doc-content seam — so a graph-only project (populated AST
+    graph, zero docs) is fully explorable. No ``documentation_unavailable`` here.
+    """
+    graph = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": [{"source": "a", "target": "b"}]}
+    routes = {"GET /v1/wiki/projects/devmode/graph": (200, graph)}
+    result = _run_tool(server, "read_wiki_structure", {"project": "devmode"}, routes)
+    assert "error" not in result
+    assert result["stats"]["nodeCount"] == 2
+    assert result["stats"]["edgeCount"] == 1

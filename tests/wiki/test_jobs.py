@@ -134,8 +134,8 @@ def test_start_persists_token_credential_by_slug(store, runtime):
     from mewbo_graph.wiki.credentials import CredentialStore
 
     sub = WizardSubmission(
-        repoUrl="https://git.hurricane.home/org/repo",
-        slug="git.hurricane.home/org/repo",
+        repoUrl="https://git.example.com/org/repo",
+        slug="git.example.com/org/repo",
         platform="gitea",
         token="ghp_durable",
         depth="comprehensive", language="en",
@@ -143,7 +143,7 @@ def test_start_persists_token_credential_by_slug(store, runtime):
         filterMode="exclude", dirs=[], files=[],
     )
     WikiIndexingJob.start(sub, runtime=runtime, hook_manager=None)
-    cred = CredentialStore.load(store, "git.hurricane.home/org/repo")
+    cred = CredentialStore.load(store, "git.example.com/org/repo")
     assert cred is not None
     assert cred.kind == "token"
     assert cred.value == "ghp_durable"
@@ -163,7 +163,7 @@ def test_refresh_restores_persisted_credential(store, runtime):
     from mewbo_graph.wiki.tokens import CloneTokenCache
     from mewbo_graph.wiki.types import Project, RepoCredential
 
-    slug = "git.hurricane.home/org/repo"
+    slug = "git.example.com/org/repo"
     store.create_project(Project(
         slug=slug, source="gitea", lang="Python",
         indexedAt="2026-06-07T00:00:00Z", pages=1, desc="x",
@@ -194,7 +194,7 @@ def test_refresh_swaps_retired_model_for_default(store, runtime, monkeypatch):
     import mewbo_core.config as core_cfg
     from mewbo_graph.wiki.types import Project
 
-    slug = "git.hurricane.home/bearlike/SideStage"
+    slug = "git.example.com/bearlike/SideStage"
     store.create_project(Project(
         slug=slug, source="gitea", lang="Python",
         indexedAt="2026-06-07T00:00:00Z", pages=1, desc="x",
@@ -290,3 +290,26 @@ def test_indexing_session_end_hook_no_ops_on_non_wiki_session(tmp_path) -> None:
     hook = WikiIndexingSessionEndHook(runtime)
     # No exception, no side effect.
     hook("sess-unknown", error=None)
+
+
+# ── ref threading into the rendered indexer query ──────────────────────────────
+
+
+def test_render_user_query_omits_ref_when_none(submission) -> None:
+    """No ref → no ``ref:`` line (byte-identical to prior default-branch queries)."""
+    from mewbo_api.wiki.jobs import _render_user_query
+
+    rendered = _render_user_query(submission)
+    assert "ref:" not in rendered
+
+
+def test_render_user_query_includes_ref_when_set(submission) -> None:
+    """A chosen ref renders a single ``ref:`` line after the slug."""
+    from mewbo_api.wiki.jobs import _render_user_query
+
+    sub = submission.model_copy(update={"ref": "develop"})
+    rendered = _render_user_query(sub)
+    assert "  ref: develop\n" in rendered
+    # Placed between repoUrl/slug and platform so the block reads logically.
+    assert rendered.index("ref: develop") < rendered.index("platform:")
+    assert rendered.index("slug:") < rendered.index("ref: develop")

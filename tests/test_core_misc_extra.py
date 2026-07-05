@@ -117,11 +117,12 @@ def test_parse_skill_file_missing_description(tmp_path: Path) -> None:
 
 
 def test_parse_skill_file_invalid_name_chars(tmp_path: Path) -> None:
-    """Name with uppercase chars fails regex → None."""
+    """A non-conforming name (uppercase) is slugified, not dropped."""
     p = tmp_path / "SKILL.md"
     p.write_text("---\nname: MySkill\ndescription: Test\n---\nbody")
     result = _parse_skill_file(p, source="personal")
-    assert result is None
+    assert result is not None
+    assert result.name == "myskill"
 
 
 def test_parse_skill_file_allowed_tools_list(tmp_path: Path) -> None:

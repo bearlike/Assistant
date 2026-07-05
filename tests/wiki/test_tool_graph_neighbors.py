@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import GraphEdge, GraphNode, IndexingJob, QaAnswer
+from mewbo_graph.wiki.types import GraphEdge, GraphNode, IndexingJob, QaAnswer, make_graph_node
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -53,7 +53,9 @@ def _qa(answer_id: str = "ans-gn", slug: str = SLUG) -> QaAnswer:
 
 
 def _node(node_id: str, name: str, ntype: str = "Function", file: str = "a.py") -> GraphNode:
-    return GraphNode(slug=SLUG, node_id=node_id, type=ntype, name=name, file=file, range=(0, 100))
+    return make_graph_node(
+        slug=SLUG, node_id=node_id, type=ntype, name=name, file=file, range=(0, 100)
+    )
 
 
 def _edge(source: str, target: str, etype: str = "CALLS") -> GraphEdge:
@@ -116,6 +118,44 @@ def test_graph_neighbors_1hop_any_direction(tmp_path: Path) -> None:
     assert "cls1" in node_ids  # cls1 CONTAINS f1 (incoming)
     # f3 is 2 hops away — must NOT appear with hops=1
     assert "f3" not in node_ids
+
+
+# ── Access-trail recording (#168) — BFS navigation is not grounding ──────────
+
+
+def test_graph_neighbors_records_only_seed_not_traversal(tmp_path: Path) -> None:
+    """A BFS records ONLY the entry node, not every hop (#168 — nav isn't grounding)."""
+    from mewbo_graph.plugins.wiki import _base as base_mod
+    from mewbo_graph.plugins.wiki.graph_neighbors import (
+        WikiGraphNeighbors,
+        WikiGraphNeighborsTool,
+    )
+
+    store = _store(tmp_path)
+    store.save_qa(_qa(answer_id="ansN", slug=SLUG))
+    store.attach_qa_session("ansN", "sess-gnN")
+    # A hub with 40 neighbours — an unbounded record would flood the trail.
+    nodes = [_node("hub", "hub")]
+    edges = []
+    for i in range(40):
+        nodes.append(_node(f"m{i}", f"m{i}"))
+        edges.append(_edge("hub", f"m{i}", "CALLS"))
+    store.upsert_nodes(SLUG, nodes)
+    store.upsert_edges(SLUG, edges)
+
+    runtime = _fake_runtime(store)
+    tool = WikiGraphNeighborsTool(session_id="sess-gnN")
+    step = _make_action_step({"node_id": "hub", "limit": 50})
+    with patch.object(WikiGraphNeighbors, "_resolve_runtime", return_value=runtime), \
+         patch.object(base_mod, "resolve_runtime", return_value=runtime):
+        asyncio.run(tool.handle(step))
+
+    access = [e for e in store.load_qa_events("ansN") if e["type"] == "access"]
+    assert len(access) == 1
+    recs = access[0]["records"]
+    assert len(recs) == 1  # the seed, NOT the 40 traversed neighbours
+    assert recs[0]["ref"] == "graph:hub"
+    assert recs[0]["op"] == "nav"
 
 
 # ── Test 2: out direction only ──────────────────────────────────────────────
@@ -303,7 +343,7 @@ def test_graph_neighbors_wire_shape(tmp_path: Path) -> None:
     store.upsert_nodes(
         SLUG,
         [
-            GraphNode(
+            make_graph_node(
                 slug=SLUG,
                 node_id="n1",
                 type="Function",

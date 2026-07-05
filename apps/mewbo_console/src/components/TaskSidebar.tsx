@@ -24,7 +24,7 @@ interface TaskSidebarProps {
 }
 
 /**
- * Persistent left task panel (LibreChat / ChatGPT / Claude-mobile style).
+ * Persistent left task panel (familiar chat-app task-list pattern).
  * Self-contained: it shares the landing page's session/project queries via the
  * TanStack cache (no duplicate fetch), reuses the origin badge + project label,
  * honours the same default origin filter, and navigates with wouter. The

@@ -24,6 +24,7 @@ import {
   getSourceExcerpt,
   getWikiDefaults,
   listActiveJobs,
+  listBranches,
   listLanguages,
   listPlatforms,
   listProjects,
@@ -64,13 +65,21 @@ export function useWikiProjects() {
  * cap the node set (degree-ranked truncation on the BE) — omit it to
  * load the full graph. The BE reports ``stats.totalNodes`` and
  * ``stats.truncated`` so the consumer can surface "showing N of M" when
- * a cap kicks in.
+ * a cap kicks in. Pass ``hierarchy`` to fetch the directory-scaffold
+ * payload (``Folder`` supernodes) the 3D galaxy collapses on.
+ *
+ * Backward compatible: the second arg still accepts a bare ``limit``
+ * number (legacy call sites), or an options object for ``hierarchy``.
  */
-export function useKnowledgeGraph(slug: string | null, limit?: number) {
+export function useKnowledgeGraph(
+  slug: string | null,
+  options: number | { limit?: number; hierarchy?: boolean } = {},
+) {
+  const opts = typeof options === "number" ? { limit: options } : options;
+  const { limit, hierarchy } = opts;
   return useQuery({
-    queryKey: ["wiki", "graph", slug ?? null, limit ?? null],
-    queryFn: () =>
-      getKnowledgeGraph(slug as string, limit != null ? { limit } : {}),
+    queryKey: ["wiki", "graph", slug ?? null, limit ?? null, hierarchy ?? false],
+    queryFn: () => getKnowledgeGraph(slug as string, { limit, hierarchy }),
     enabled: slug != null,
     staleTime: 5 * 60_000,
   });
@@ -225,6 +234,24 @@ export function useCancelIndexing() {
 export function useSubmitWizard() {
   return useMutation({
     mutationFn: (input: WizardSubmission) => submitWizard(input),
+  });
+}
+
+/**
+ * List the repo's remote branches for the wizard branch picker. Enabled only
+ * once the URL looks like a git URL (so a half-typed value doesn't hit the
+ * endpoint); ``retry: false`` keeps a bad URL/token from hammering it. The
+ * token-presence flag (never the raw token) keys the cache so adding a token
+ * to a private repo re-fetches.
+ */
+export function useBranches(input: { repoUrl: string; token?: string; slug?: string }) {
+  const enabled = /:\/\/|git@/.test(input.repoUrl.trim());
+  return useQuery({
+    queryKey: ["wiki", "branches", input.repoUrl, Boolean(input.token)],
+    queryFn: () => listBranches(input),
+    enabled,
+    retry: false,
+    staleTime: 5 * 60_000,
   });
 }
 

@@ -116,14 +116,24 @@ class WikiIndexingJob:
         sub_dict.pop("token", None)
         store.save_job_submission(job_id, sub_dict)
 
-        # Build user query that carries the submission contract.
-        user_query = _render_user_query(submission)
-
-        # Stash the token for wiki_clone_repo to read — keeps it out of the
-        # LLM transcript while still letting the tool authenticate the clone.
+        # Stash the token for the clone (agent tool OR the deterministic indexer)
+        # to read — keeps it out of the LLM transcript / event log while still
+        # letting the clone authenticate.
         if submission.token:
             CloneTokenCache.store(job_id, submission.token)
 
+        # Developer mode: a DETERMINISTIC, zero-LLM index (clone→scan→graph→
+        # finalize, no enrich/plan/pages). No Mewbo session, no agent — drive
+        # GraphOnlyIndexer on a daemon thread (mirrors start_async's async-by-
+        # handle shape; the SSE/snapshot surfaces carry progress). ``graph_only``
+        # is already forced False by the route when developer_mode is off, so
+        # honouring it here is safe.
+        if submission.graph_only:
+            _start_graph_only_index(store=store, job_id=job_id, submission=submission)
+            return job
+
+        # Build user query that carries the submission contract.
+        user_query = _render_user_query(submission)
         _start_indexer_session(
             store=store,
             runtime=runtime,
@@ -271,42 +281,32 @@ class WikiIndexingJob:
 # WikiQaSession
 # ---------------------------------------------------------------------------
 
-# Tools the wiki-qa HYPERVISOR (root) is allowed to call. Mirrors the
-# wiki-qa.md frontmatter. The root does NOT retrieve directly — graph
-# traversal, search, and file reads happen in the ``wiki-qa-probe`` sub-agents
-# it fans out. (The old flat tool set let the root read one page and stop,
-# never touching the graph or embeddings the wiki built; the probe fan-out is
-# the fix.) ``spawn_agent``/``check_agents`` are injected for any depth-0 root
-# regardless of strict scope — listed here for clarity (mirrors INDEXER_TOOLS)
-# and so the approval callback admits them.
+# Tools the wiki-qa HYPERVISOR (root) is allowed to call — its VISIBLE stateless
+# surface under ``strict_tool_scope``. Mirrors the wiki-qa.md frontmatter. The root
+# does NOT retrieve directly — graph traversal, search, and file reads happen in the
+# ``wiki-qa-probe`` sub-agents it fans out. (The old flat tool set let the root read
+# one page and stop, never touching the graph or embeddings the wiki built; the probe
+# fan-out is the fix.) ``spawn_agent``/``check_agents``/``steer_agent`` are injected
+# for any depth-0 root regardless of strict scope.
+#
+# The QA run is read-only and EXECUTION is self-approving (``approval_callback=
+# auto_approve`` below) — there is deliberately no hand-maintained admit-list. The
+# wiki + scg SessionTools are surfaced onto the root AND its probes by the capability
+# GATE (``SessionToolRegistry.build_for``: any factory whose ``requires-capabilities``
+# ⊆ the session caps — ``wiki`` advertised here, ``scg`` runtime-granted once a source
+# is mapped), which bypasses ``strict_tool_scope`` entirely. A restrictive callback
+# could therefore never actually narrow that surface — it only turned a
+# capability-surfaced read-only call (e.g. ``agentic_search``) into an unanswerable
+# ASK/park in an automated flow (#172). Approving uniformly matches every other
+# headless drive and keeps the read-only fan-out unblocked; the probe prompt is what
+# steers retrieval to the graph/source, not a permission gate.
 QA_TOOLS: list[str] = [
     "wiki_list_pages",       # cheap orientation only — titles, not content
-    "wiki_emit_block",       # the answer renders ONLY through these
+    "wiki_emit_answer",      # the ONE atomic call that delivers the whole answer
     "wiki_submit_insight",   # QA→memory flywheel (deposit a durable fact)
     "spawn_agent",           # fan out wiki-qa-probe retrieval probes
     "check_agents",          # collect probe findings
 ]
-
-# The retrieval/traversal surface a ``wiki-qa-probe`` child may call. The probe's
-# tool VISIBILITY comes from its own AgentDef (wiki-qa-probe.md ``tools:``), but
-# the approval_callback is shared parent→child, so each of these must be admitted
-# here too or the probe's calls fall through ASK → DENY and the probe is useless.
-QA_PROBE_TOOLS: list[str] = [
-    "wiki_search_pages",
-    "wiki_read_page",
-    "wiki_query_graph",
-    "wiki_graph_neighbors",
-    "wiki_code_search",
-    "wiki_read_file",
-    "wiki_grep",
-    "wiki_list_files",
-]
-
-# Everything the QA run (root + its probes) is allowed to EXECUTE. ``steer_agent``
-# is injected for the depth-0 root so it can cancel a stuck probe.
-QA_APPROVED_TOOLS: frozenset[str] = frozenset(
-    {*QA_TOOLS, *QA_PROBE_TOOLS, "steer_agent"}
-)
 
 # Hard cost backstop on the QA fan-out (#62). Probe count is prompt-guided
 # (wiki-qa.md: "deploy as many as the question needs"), but an unbounded root
@@ -316,6 +316,22 @@ QA_APPROVED_TOOLS: frozenset[str] = frozenset(
 # happy path is ~13 steps, so 50 leaves wide headroom for a legitimately broad
 # question while killing the 100+-step runaway.
 QA_SESSION_STEP_BUDGET: int = 50
+
+# Step headroom for the one-shot no-emit nudge re-drive (QaSessionEndHook):
+# delivering an already-composed answer is ONE wiki_emit_answer call, so the
+# nudge run needs only a few steps. Added ON TOP of the session budget so the
+# re-drive isn't stillborn when the first run already spent its allowance.
+QA_NUDGE_STEP_BUDGET: int = 8
+
+# The corrective follow-up for a run that ended without emitting (the model
+# narrated its emit call as text, or answered only in its reply). Domain-state
+# triggered — see QaSessionEndHook._nudge_if_silent.
+_QA_NUDGE: str = (
+    "Your answer was NOT delivered: no wiki_emit_answer tool call was made, and "
+    "reply text is discarded — the user has seen nothing. Deliver the complete "
+    "answer NOW by CALLING the wiki_emit_answer tool once, with the full blocks "
+    "array ending in the sources block. Never write the call out as text."
+)
 
 
 class WikiQaSession:
@@ -366,24 +382,20 @@ class WikiQaSession:
         })
 
         playbook = _load_qa_playbook()
-        # Strict tool scope + auto-approval for the closed wiki-qa surface.
-        # Strict scope keeps the root LLM's *visible* tools to ``QA_TOOLS`` (no
-        # auto-added shell/edit/activate_skill thrash). The approval callback
-        # governs EXECUTION for the root AND its probe children (it is inherited
-        # parent→child), so it admits the broader ``QA_APPROVED_TOOLS`` — the
-        # root's tools plus every read-only tool a wiki-qa-probe may call.
-        # Without it, ``wiki_emit_block`` (root) and every probe retrieval call
-        # fall through ASK → DENY and nothing renders.
-        def _approve_qa_tool(step: Any) -> bool:
-            return getattr(step, "tool_id", None) in QA_APPROVED_TOOLS
-
+        # Strict tool scope narrows the root's *visible* STATELESS tools to
+        # ``QA_TOOLS`` (no shell/edit/activate_skill thrash). Execution is
+        # self-approving via ``auto_approve``: the wiki-qa run is entirely
+        # read-only, and the capability gate surfaces the wiki/scg SessionTools
+        # onto the root + probes regardless of strict scope — so a restrictive
+        # callback only produced unanswerable approval parks, never real scoping
+        # (#172). ``auto_approve`` is the posture every other headless drive uses.
         runtime.start_async(
             session_id=session_id,
             user_query=question,
             model_name=model,
             allowed_tools=QA_TOOLS,
             strict_tool_scope=True,
-            approval_callback=_approve_qa_tool,
+            approval_callback=auto_approve,
             skill_instructions=playbook,
             hook_manager=hook_manager,
             session_step_budget=QA_SESSION_STEP_BUDGET,
@@ -485,21 +497,32 @@ class QaSessionEndHook:
     """Finalize a wiki-QA answer when its backing session ends.
 
     The QA counterpart to indexing's ``wiki_finalize`` tool: the hypervisor's
-    terminal ``wiki_emit_block`` already closes the happy path (snapshot reconcile +
-    ``complete``), but a run that *halts before* the sources block leaves the answer
-    open. This atomic adapter (DI'd runtime) is registered on
+    terminal ``wiki_emit_answer`` already closes the happy path (snapshot reconcile +
+    ``complete``), but a run that *ends without* that call leaves the answer open.
+    This atomic adapter (DI'd runtime + hook manager) is registered on
     ``HookManager.on_session_end`` and is the net for that: it also stamps the one
     piece of provenance that needs the transport layer — the distinct ``models_used``
     that ran across the hypervisor + its probes, read from the session transcript
     (the down-layer ``QaFinalizer`` owns everything derivable from the QA log).
 
+    A no-error run that emitted NOTHING gets exactly ONE corrective re-drive first
+    (see :meth:`_nudge_if_silent`) — the observed failure mode is a model composing
+    the full answer but narrating the emit call as plain text, which the loop ends
+    silently. The guard is domain state (zero ``block_open`` events), never text
+    sniffing; a still-empty nudged run closes as an honest ``error``.
+
     Fires for EVERY session end; a non-QA session (``find_qa_by_session`` → ``None``)
     is a cheap no-op. ``error`` is non-None when the run halted → honest terminal state.
     """
 
-    def __init__(self, runtime: Any) -> None:
-        """Inject the runtime (wiki store + transcript reader)."""
+    def __init__(self, runtime: Any, hook_manager: Any = None) -> None:
+        """Inject the runtime (wiki store + transcript reader) + the hook manager.
+
+        ``hook_manager`` is re-attached to the nudge re-drive so the nudged run's
+        end re-enters this net (and the marker event bounds it to one pass).
+        """
         self._runtime = runtime
+        self._hook_manager = hook_manager
 
     def __call__(self, session_id: str, error: str | None) -> None:
         """The ``on_session_end`` callback — never raises (a failing hook must not block)."""
@@ -510,6 +533,8 @@ class QaSessionEndHook:
             answer_id = store.find_qa_by_session(session_id)
             if not answer_id:
                 return
+            if self._nudge_if_silent(store, answer_id, session_id, error):
+                return  # one corrective re-drive in flight; its end re-enters here
             QaFinalizer.enrich(store, answer_id, models=self._models_used(session_id))
             QaFinalizer.close(store, answer_id, error)
             # Post-QA memory flywheel: distill the finalized answer into a refined
@@ -524,6 +549,37 @@ class QaSessionEndHook:
                 QaMemoryDepositor.deposit(store, snap, question=None)
         except Exception:  # pragma: no cover — a session-end hook never blocks
             logging.warning("wiki QA session-end finalize failed", exc_info=True)
+
+    def _nudge_if_silent(
+        self, store: Any, answer_id: str, session_id: str, error: str | None
+    ) -> bool:
+        """One bounded re-drive when a no-error run ended without emitting.
+
+        Returns True when the nudge was dispatched (the caller must NOT close).
+        The ``nudge`` marker event bounds this to exactly one retry; error,
+        cancelled, already-emitted, and already-nudged runs all fall through.
+        """
+        if error is not None:
+            return False
+        events = store.load_qa_events(answer_id)
+        skip = ("block_open", "nudge", "complete", "cancelled", "error")
+        if any(ev.get("type") in skip for ev in events):
+            return False
+        store.append_qa_event(answer_id, {"type": "nudge"})
+        snap = store.get_qa(answer_id)
+        logging.info("wiki QA %s ended silent — one corrective re-drive", answer_id)
+        self._runtime.start_async(
+            session_id=session_id,
+            user_query=_QA_NUDGE,
+            model_name=snap.model if snap else None,
+            allowed_tools=QA_TOOLS,
+            strict_tool_scope=True,
+            approval_callback=auto_approve,
+            skill_instructions=_load_qa_playbook(),
+            hook_manager=self._hook_manager,
+            session_step_budget=QA_SESSION_STEP_BUDGET + QA_NUDGE_STEP_BUDGET,
+        )
+        return True
 
     def _models_used(self, session_id: str) -> list[str]:
         """Distinct models from the session transcript (root + every probe), in first-seen order."""
@@ -595,6 +651,35 @@ def _start_indexer_session(
     return session_id
 
 
+def _start_graph_only_index(
+    *,
+    store: WikiStoreBase,
+    job_id: str,
+    submission: WizardSubmission,
+) -> None:
+    """Drive a deterministic (zero-LLM) graph-only index on a daemon thread.
+
+    The developer-mode counterpart to ``_start_indexer_session``: no Mewbo
+    session, no ``wiki-indexer`` playbook. Builds the job ctx via the down-only
+    seam and runs :class:`GraphOnlyIndexer` off the request path so the route
+    returns immediately (async-by-handle, like ``start_async``). The indexer
+    emits the same phase/log/complete events the agent path does, so the SSE
+    stream + landing card render progress identically.
+    """
+    import threading  # noqa: PLC0415
+
+    from mewbo_graph.plugins.wiki.graph_only import (  # noqa: PLC0415
+        GraphOnlyIndexer,
+        build_graph_only_ctx,
+    )
+
+    ctx = build_graph_only_ctx(job_id=job_id, slug=submission.slug, store=store)
+    indexer = GraphOnlyIndexer(ctx, submission)
+    threading.Thread(
+        target=indexer.run, name=f"graph-only-index-{job_id}", daemon=True
+    ).start()
+
+
 def _load_indexer_playbook() -> str:
     """Read the wiki-indexer.md AgentDef body. Falls back to empty string if missing."""
     agent_md = _WIKI_AGENTS_DIR / "wiki-indexer.md"
@@ -635,7 +720,7 @@ def _render_resume_query(store: WikiStoreBase, job: IndexingJob, plan: Any) -> s
         else ""
     )
     return (
-        "RESUME an interrupted DeepWiki-style index of this repository.\n\n"
+        "RESUME an interrupted auto-generated index of this repository.\n\n"
         "SUBMISSION:\n"
         f"  repoUrl: {repo_url}\n"
         f"  slug: {job.slug}\n"
@@ -661,12 +746,16 @@ def _render_user_query(submission: WizardSubmission) -> str:
         if submission.token
         else "  auth: <none — public repo>\n"
     )
+    # Only render the ref line when a branch/tag/sha was chosen; an omitted ref
+    # keeps the query byte-identical to the default-branch behaviour.
+    ref_note = f"  ref: {submission.ref}\n" if submission.ref else ""
     return (
-        "Index this repository as a DeepWiki-style site.\n\n"
+        "Index this repository as an auto-generated documentation site.\n\n"
         "SUBMISSION:\n"
         f"  repoUrl: {submission.repo_url}\n"
         f"  slug: {submission.slug}\n"
-        f"  platform: {submission.platform}\n"
+        + ref_note
+        + f"  platform: {submission.platform}\n"
         f"  depth: {submission.depth}\n"
         f"  language: {submission.language}\n"
         f"  model: {submission.model}\n"

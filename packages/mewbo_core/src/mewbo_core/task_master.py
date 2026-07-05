@@ -106,6 +106,7 @@ def orchestrate_session(
     invocation_id: str | None = None,
     extra_session_tools: list[SessionTool] | None = None,
     enable_skills: bool = True,
+    attachments: list[dict] | None = None,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
     """Run the orchestration loop."""
     return Orchestrator(
@@ -136,6 +137,7 @@ def orchestrate_session(
         invocation_id=invocation_id,
         extra_session_tools=extra_session_tools,
         enable_skills=enable_skills,
+        attachments=attachments,
     )
 
 

@@ -232,7 +232,7 @@ export function SearchBar({
   const hasContent =
     filtered.length > 0 || (!!value.trim() && filtered.length === 0) || otherWorkspaces.length > 0
 
-  // Suggestions dropdown — a Google-suggest-style extension of the composer
+  // Suggestions dropdown — a search-suggest-style extension of the composer
   // surface. It anchors tight to the bar (mt-1, same border-strong + radius
   // family + elev-3) and pans out from beneath it via the `.composer-suggest`
   // origin-top entrance (index.css, reduced-motion safe). One typographic

@@ -13,12 +13,14 @@ from types import SimpleNamespace
 import mongomock
 import pytest
 from mewbo_api.wiki.jobs import QaSessionEndHook
+from mewbo_core.permissions import auto_approve
 from mewbo_graph.entities.types import Entity
-from mewbo_graph.plugins.wiki import emit_block as emit_block_mod
+from mewbo_graph.plugins.wiki import emit_answer as emit_answer_mod
 from mewbo_graph.wiki.memory_types import MemoryFilter
 from mewbo_graph.wiki.qa import AccessedSourceResolver, QaFinalizer, QaMemoryDepositor
+from mewbo_graph.wiki.qa_access import ACCESS_TOPN, QaAccessRecord
 from mewbo_graph.wiki.store import JsonWikiStore, MongoWikiStore
-from mewbo_graph.wiki.types import Frontmatter, GraphNode, QaAnswer, WikiPage
+from mewbo_graph.wiki.types import Frontmatter, QaAnswer, WikiPage, make_graph_node
 
 
 @pytest.fixture
@@ -43,13 +45,15 @@ def store(tmp_path):
 
 
 def test_close_reconciles_blocks_curated_and_accessed(store):
-    """close() folds blocks + curated sources + the deterministic accessed trail."""
+    """close() folds blocks + cited sources (pages + file/graph) + the accessed trail."""
     assert store.get_qa("a1").blocks == []  # precondition: empty snapshot
     assert QaFinalizer.close(store, "a1") is True
 
     snap = store.get_qa("a1")
     assert [b.root.kind for b in snap.blocks] == ["p", "sources"]
-    assert snap.summary_sources == ["wiki:landing-page"]  # curated — wiki pages only
+    # Cited sources = the curated page FIRST, then the file/graph evidence folded off
+    # the accessed trail (#172) — the answer's real files/symbols, not just pages.
+    assert snap.summary_sources == ["wiki:landing-page", "graph:n7", "src/app.py#L1-20"]
     # Deterministic trail, de-duplicated, first-seen order preserved:
     assert snap.accessed_sources == ["graph:n7", "src/app.py#L1-20", "wiki:landing-page"]
     assert store.load_qa_events("a1")[-1]["type"] == "complete"
@@ -87,6 +91,102 @@ def test_tag_page_citations_reschemes_only_real_pages(store):
     ]
 
 
+def test_tag_page_citations_matches_title_form_refs(store):
+    """A page cited by its human TITLE re-schemes to ``wiki:<id>`` (#167/#169).
+
+    The QA model frequently cites a page by its title ("Agent X Search
+    Subsystem") rather than its slug id ("agent-x-search-subsystem"); the bare
+    title then reads as a file path and ``GET /source`` 404s. Matching the
+    slugified title against the page authority fixes it, while a slug-form ref
+    still works, a code ``path#L..`` ref stays untouched, and an unrelated phrase
+    passes through.
+    """
+    store.save_page("org/repo", WikiPage(
+        id="agent-x-search-subsystem", title="Agent X Search Subsystem",
+        frontmatter=Frontmatter(title="Agent X Search Subsystem",
+                                slug="agent-x-search-subsystem"),
+        body="# x", toc=[], nav=[],
+    ))
+    block = {"kind": "sources", "items": [
+        "agent x search subsystem",     # title form (lowercased) → wiki:<id>
+        "Agent X Search Subsystem",     # title form (original casing) → wiki:<id>
+        "agent-x-search-subsystem",     # slug-id form still works
+        "src/app.py#L1-9",              # code line-range → untouched
+        "some unrelated phrase",        # not a page → untouched
+    ]}
+    tagged = QaFinalizer.tag_page_citations(block, store, "org/repo")
+    assert tagged["items"] == [
+        "wiki:agent-x-search-subsystem",
+        "wiki:agent-x-search-subsystem",
+        "wiki:agent-x-search-subsystem",
+        "src/app.py#L1-9",
+        "some unrelated phrase",
+    ]
+
+
+def test_accessed_trail_is_bounded_and_score_ordered():
+    """The fold caps the trail to top-N, scores-first, so graph-nav bulk can't flood.
+
+    Regression for #168: probes record ~dozens of unranked graph-navigation seeds
+    plus a few ranked search hits. The folded ``accessed_sources`` trail must be a
+    tight, score-ordered top-N — the high-signal scored hits FIRST (descending),
+    the unscored navigation seeds AFTER, and the bulk capped out — not the full
+    unranked navigation set recorded as if it were grounding.
+    """
+    events: list[dict] = []
+    # 30 graph-navigation seeds — the sprawl the old fold flooded with (unscored).
+    for i in range(30):
+        events.append(
+            {"type": "access", "records": [{"ref": f"graph:nav{i}", "op": "nav"}]}
+        )
+    # A handful of ranked search hits (the only true grounding).
+    events.append({"type": "access", "records": [
+        {"ref": "graph:hitA", "score": 0.9, "rank": 1, "op": "search"},
+        {"ref": "graph:hitB", "score": 0.6, "rank": 2, "op": "search"},
+        {"ref": "graph:hitC", "score": 0.3, "rank": 3, "op": "search"},
+    ]})
+
+    out = QaFinalizer._accessed_from_events(events)
+
+    # Bounded: 33 distinct refs collapse to the configured top-N.
+    assert len(out) == ACCESS_TOPN
+    # Scored hits lead, in descending score order.
+    assert out[:3] == ["graph:hitA", "graph:hitB", "graph:hitC"]
+    # The graph-nav bulk no longer floods — only the cap-remainder survives.
+    assert sum(1 for r in out if r.startswith("graph:nav")) == ACCESS_TOPN - 3
+
+
+def test_accessed_trail_dedupes_by_ref_keeping_best_score():
+    """A ref seen as both an unscored touch and a scored hit keeps the scored sighting."""
+    events = [
+        {"type": "access", "records": [{"ref": "graph:x", "op": "nav"}]},
+        {"type": "access",
+         "records": [{"ref": "graph:x", "score": 0.8, "rank": 1, "op": "search"}]},
+        {"type": "access", "records": [{"ref": "src/a.py", "op": "read"}]},
+    ]
+    out = QaFinalizer._accessed_from_events(events)
+    # graph:x deduped to ONE entry, promoted ahead of the unscored read by its score.
+    assert out == ["graph:x", "src/a.py"]
+
+
+def test_accessed_trail_folds_legacy_refs_events():
+    """A stored legacy ``access`` event (bare ``refs`` strings) still folds (back-compat)."""
+    events = [
+        {"type": "access", "refs": ["graph:n1", "src/a.py#L1-9"]},
+        {"type": "access", "refs": ["graph:n1", "wiki:lp"]},
+    ]
+    out = QaFinalizer._accessed_from_events(events)
+    assert out == ["graph:n1", "src/a.py#L1-9", "wiki:lp"]
+
+
+def test_from_ranked_hits_drops_below_score_floor():
+    """``from_ranked_hits`` keeps only hits at/above ratio x top score, carrying rank."""
+    ranked = [("a", 1.0), ("b", 0.6), ("c", 0.4), ("d", 0.1)]
+    recs = QaAccessRecord.from_ranked_hits(ranked, tool="wiki_code_search", ratio=0.5)
+    assert [(r.ref, r.rank) for r in recs] == [("a", 1), ("b", 2)]  # floor 0.5 drops c, d
+    assert recs[0].score == 1.0 and recs[1].score == 0.6
+
+
 def test_accessed_source_resolver_humanises_graph_hashes(store):
     """``graph:<node_id>`` provenance refs resolve to readable labels (#70).
 
@@ -94,7 +194,7 @@ def test_accessed_source_resolver_humanises_graph_hashes(store):
     an unresolved id (stale graph) → ``unknown (<hash[:8]>)``. File / page refs
     pass through. Non-destructive: the snapshot keeps the raw ids.
     """
-    store.upsert_nodes("org/repo", [GraphNode(
+    store.upsert_nodes("org/repo", [make_graph_node(
         slug="org/repo", node_id="ast1", type="Function", name="verify",
         file="src/app.py", range=(0, 9),
     )])
@@ -148,31 +248,79 @@ def test_enrich_stamps_models_even_after_close(store):
 
 
 def test_summary_sources_prefers_explicit_summary_ready(store):
-    """An explicit summary_ready wins over derivation from the sources block."""
+    """An explicit summary_ready wins for the curated PAGE half of the cited sources."""
     store.append_qa_event("a1", {"type": "summary_ready",
                                   "sources": ["wiki:overview", "wiki:auth"]})
     QaFinalizer.close(store, "a1")
-    assert store.get_qa("a1").summary_sources == ["wiki:overview", "wiki:auth"]
+    # summary_ready pages lead; the file/graph trail (#172) still folds in after them.
+    assert store.get_qa("a1").summary_sources == [
+        "wiki:overview", "wiki:auth", "graph:n7", "src/app.py#L1-20",
+    ]
+
+
+def test_summary_sources_fold_file_graph_from_accessed_trail(store):
+    """Cited sources represent file/graph evidence, not just pages (#172).
+
+    Files are the most-read source but the LLM's curated block is ~100% page-slugs,
+    so provenance used to collapse to pages. The finalizer now folds the non-page
+    refs off the deterministic accessed trail (already bounded + score-ranked by
+    ``qa_access``) into ``summary_sources`` — curated pages first, then the files +
+    graph symbols the answer actually grounded on, deduped; a ``wiki:`` trail ref is
+    NOT re-added (the curated half already owns pages).
+    """
+    QaFinalizer.close(store, "a1")
+    summary = store.get_qa("a1").summary_sources
+    assert summary[0] == "wiki:landing-page"        # curated page leads
+    assert "src/app.py#L1-20" in summary            # a real source file — was dropped before
+    assert "graph:n7" in summary                    # a grounded graph symbol
+    assert summary.count("wiki:landing-page") == 1  # trail's page ref not re-added
+
+
+def test_summary_sources_reschemes_bare_page_ids_and_titles(store):
+    """``summary_sources`` re-schemes bare page refs (slug id OR title) (#169).
+
+    The first ``wiki_search_pages`` call records a ``summary_ready`` event whose
+    ``sources`` are BARE page ids (``h.id``), not ``wiki:``-schemed; surfaced raw
+    the FE treats each as a file path and the cited panel 404s. The same
+    title→slug normalization the emit seam uses must apply here so a page cited
+    by id OR title resolves to ``wiki:<id>`` in the cited-sources panel.
+    """
+    for pid, title in [("overview", "Project Overview"), ("auth-flow", "Auth Flow")]:
+        store.save_page("org/repo", WikiPage(
+            id=pid, title=title,
+            frontmatter=Frontmatter(title=title, slug=pid), body="# x", toc=[], nav=[],
+        ))
+    # Mirrors search_pages.py: bare id "overview" + a title-form ref "Auth Flow".
+    store.append_qa_event("a1", {"type": "summary_ready",
+                                  "sources": ["overview", "Auth Flow"]})
+    QaFinalizer.close(store, "a1")
+    # Re-schemed pages lead; the file/graph trail (#172) folds in after them.
+    assert store.get_qa("a1").summary_sources == [
+        "wiki:overview", "wiki:auth-flow", "graph:n7", "src/app.py#L1-20",
+    ]
 
 
 def test_terminal_sources_block_closes_via_emit(store, monkeypatch):
-    """Emitting the sources block IS the accept state: it closes + requests terminate."""
+    """The one atomic ``wiki_emit_answer`` call IS the accept state: closes + requests terminate."""
     monkeypatch.setattr(
-        emit_block_mod, "_resolve_runtime", lambda: SimpleNamespace(wiki_store=store)
+        emit_answer_mod, "_resolve_runtime", lambda: SimpleNamespace(wiki_store=store)
     )
     store.save_qa(QaAnswer(answerId="a2", fromPageId="", summarySources=[],
                            model="m", blocks=[], slug="org/repo"))
     store.attach_qa_session("a2", "sess-2")
 
-    tool = emit_block_mod.WikiEmitBlockTool("sess-2")
+    tool = emit_answer_mod.WikiEmitAnswerTool("sess-2")
     step = SimpleNamespace(
-        tool_input={"index": 0, "block": {"kind": "sources", "items": ["wiki:x"]}}
+        tool_input={"blocks": [
+            {"kind": "p", "text": "The answer."},
+            {"kind": "sources", "items": ["wiki:x"]},
+        ]}
     )
     asyncio.run(tool.handle(step))
 
     assert tool.should_terminate_run() is True  # the loop stops cleanly here
     assert store.load_qa_events("a2")[-1]["type"] == "complete"
-    assert [b.root.kind for b in store.get_qa("a2").blocks] == ["sources"]
+    assert [b.root.kind for b in store.get_qa("a2").blocks] == ["p", "sources"]
 
 
 def test_session_end_hook_finalizes_and_stamps_models(store):
@@ -260,7 +408,7 @@ SLUG = "org/repo"
 
 
 def _gn(nid, typ, name, f):
-    return GraphNode(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
+    return make_graph_node(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
 
 
 @pytest.fixture
@@ -385,3 +533,89 @@ def test_session_end_hook_deposits_qa_memory(deposit_store):
     notes = deposit_store.query_memory(SLUG)
     assert len(notes) == 1
     assert notes[0].provenance.source == "qa"
+
+
+# ── No-emit failure honesty + the one-shot nudge rescue (gpt-oss-120b class) ──
+
+
+def _empty_answer_store(tmp_path, answer_id="e1", session_id="sess-e"):
+    """An answer whose run retrieved plenty but NEVER emitted a block."""
+    s = JsonWikiStore(root_dir=tmp_path / "wiki-empty")
+    s.save_qa(QaAnswer(answerId=answer_id, fromPageId="lp", summarySources=[],
+                       model="gpt-oss-120b", blocks=[], slug="org/repo"))
+    s.attach_qa_session(answer_id, session_id)
+    s.append_qa_event(answer_id, {"type": "meta", "answerId": answer_id})
+    s.append_qa_event(answer_id, {"type": "access", "refs": ["graph:n1", "src/a.py#L1-9"]})
+    return s
+
+
+def test_close_no_blocks_no_error_is_error(tmp_path):
+    """A run that never emitted is a FAILURE — never an empty 'complete' (#answer 7d2c0ea0)."""
+    s = _empty_answer_store(tmp_path)
+    assert QaFinalizer.close(s, "e1") is True
+
+    snap = s.get_qa("e1")
+    assert snap.status == "error"
+    last = s.load_qa_events("e1")[-1]
+    assert last["type"] == "error"
+    assert "wiki_emit_answer" in last["error"]["message"]
+
+
+def _nudge_runtime(store, transcript=()):
+    """Fake runtime recording start_async re-drives (the nudge seam)."""
+    calls = []
+    runtime = SimpleNamespace(
+        wiki_store=store,
+        load_events=lambda sid: list(transcript),
+        start_async=lambda **kw: calls.append(kw),
+    )
+    return runtime, calls
+
+
+def test_session_end_hook_nudges_once_on_empty_answer(tmp_path):
+    """No-error, zero-block end → ONE corrective re-drive; still empty → honest error."""
+    s = _empty_answer_store(tmp_path)
+    runtime, calls = _nudge_runtime(s)
+    hook = QaSessionEndHook(runtime, hook_manager="hm")
+
+    hook("sess-e", None)  # first end: rescue, don't close
+    assert len(calls) == 1
+    drive = calls[0]
+    assert drive["session_id"] == "sess-e"
+    assert "wiki_emit_answer" in drive["user_query"]
+    assert drive["approval_callback"] is auto_approve
+    assert drive["strict_tool_scope"] is True
+    assert drive["hook_manager"] == "hm"
+    events = s.load_qa_events("e1")
+    assert any(ev.get("type") == "nudge" for ev in events)
+    assert not any(ev.get("type") in ("complete", "error") for ev in events)
+
+    hook("sess-e", None)  # nudged run also emitted nothing: close honestly, no loop
+    assert len(calls) == 1  # no second re-drive — bounded to one
+    assert s.get_qa("e1").status == "error"
+
+
+def test_session_end_hook_never_nudges_blocks_error_or_cancelled(tmp_path):
+    """The rescue only fires for the silent-empty case — never on blocks/error/cancel."""
+    # (a) blocks present → normal complete, no re-drive
+    s1 = _empty_answer_store(tmp_path, answer_id="b1", session_id="sess-b")
+    s1.append_qa_event("b1", {"type": "block_open", "index": 0,
+                              "block": {"kind": "p", "text": "x"}})
+    r1, c1 = _nudge_runtime(s1)
+    QaSessionEndHook(r1)("sess-b", None)
+    assert c1 == [] and s1.get_qa("b1").status == "complete"
+
+    # (b) session error → honest error close, no re-drive
+    s2 = _empty_answer_store(tmp_path, answer_id="x1", session_id="sess-x")
+    r2, c2 = _nudge_runtime(s2)
+    QaSessionEndHook(r2)("sess-x", "model exploded")
+    assert c2 == [] and s2.get_qa("x1").status == "error"
+
+    # (c) already cancelled → close() no-ops, no re-drive
+    s3 = _empty_answer_store(tmp_path, answer_id="c1", session_id="sess-c")
+    s3.append_qa_event("c1", {"type": "cancelled"})
+    r3, c3 = _nudge_runtime(s3)
+    QaSessionEndHook(r3)("sess-c", None)
+    assert c3 == []
+    assert not any(e.get("type") in ("complete", "error")
+                   for e in s3.load_qa_events("c1") if e.get("type") != "cancelled")

@@ -3,7 +3,7 @@
  * citation strings that flow through both the answer prose (inline ``src:``
  * links / chips) and the right-panel source cards.
  *
- * Grammar handled (DeepWiki-compatible):
+ * Grammar handled:
  *   - ``path``                     → a whole-file citation
  *   - ``path#L<start>-<end>``      → a line-range citation
  *   - ``path#L<n>``                → a single-line citation
@@ -35,6 +35,27 @@ export interface Citation {
 /** A valid DOM-id character set so ``getElementById`` round-trips cleanly. */
 function toDomToken(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/**
+ * Stable DOM id for a file source (path + optional line range), shared by the
+ * legacy {@link CitationRef.domId} and the discriminated {@link citationDomId}
+ * so a card and its inline ``src:`` chip always resolve to the same node.
+ */
+function fileDomId(path: string, startLine: number | null, endLine: number | null): string {
+  const range = startLine != null
+    ? `#L${startLine}${endLine != null && endLine !== startLine ? `-${endLine}` : ""}`
+    : "";
+  return `src-${toDomToken(`${path}${range}`)}`;
+}
+
+/** Short ``path:line`` (or ``path:a–b``) label for a file source. */
+function fileLabel(path: string, startLine: number | null, endLine: number | null): string {
+  if (startLine == null) return path;
+  const range = endLine != null && endLine !== startLine
+    ? `${startLine}–${endLine}`
+    : `${startLine}`;
+  return `${path}:${range}`;
 }
 
 export class CitationRef {
@@ -134,20 +155,13 @@ export class CitationRef {
    * prop threading. Whole-file refs collapse onto the same card id.
    */
   static domId(c: Citation): string {
-    const range = c.startLine != null
-      ? `#L${c.startLine}${c.endLine != null && c.endLine !== c.startLine ? `-${c.endLine}` : ""}`
-      : "";
-    return `src-${toDomToken(`${c.path}${range}`)}`;
+    return fileDomId(c.path, c.startLine, c.endLine);
   }
 
   /** Short ``path:line`` label for chips / card headers (no scheme prefix). */
   static label(c: Citation): string {
     if (c.scheme) return c.path;
-    if (c.startLine == null) return c.path;
-    const range = c.endLine != null && c.endLine !== c.startLine
-      ? `${c.startLine}–${c.endLine}`
-      : `${c.startLine}`;
-    return `${c.path}:${range}`;
+    return fileLabel(c.path, c.startLine, c.endLine);
   }
 
   /** Dedup key — two citations to the same path+range collapse into one card. */
@@ -187,4 +201,109 @@ export function fileCitations(raws: Iterable<string>): Citation[] {
     out.push(c);
   }
   return out;
+}
+
+/**
+ * A citation classified by how its card should render. Unlike the flat
+ * {@link Citation} (which collapses every kind onto a file path), this keeps
+ * the three distinct shapes the answer can cite:
+ *
+ *   - ``file``  — a repo file excerpt (lazily fetched + line-highlighted).
+ *   - ``page``  — a documentation page, fetched once by id (title + excerpt).
+ *   - ``graph`` — a code-graph node, rendered as a resolved label (no fetch).
+ *
+ * An optional ``|<display>`` suffix on the raw ref carries a human label
+ * (``wiki:home|Home Page`` / ``graph:mod.py::Thing|Thing (class)``) — file
+ * paths never contain ``|`` so the delimiter is unambiguous.
+ */
+export type ParsedCitation =
+  | { kind: "file"; raw: string; path: string; startLine: number | null; endLine: number | null }
+  | { kind: "page"; raw: string; pageId: string; title?: string }
+  | { kind: "graph"; raw: string; nodeId: string; label?: string };
+
+/** Split an optional trailing ``|<display>`` label off a raw ref. */
+function splitDisplay(ref: string): { head: string; display?: string } {
+  const i = ref.indexOf("|");
+  if (i === -1) return { head: ref };
+  const display = ref.slice(i + 1).trim();
+  return { head: ref.slice(0, i), display: display || undefined };
+}
+
+/** Compact a graph node id to its trailing symbol (``mod.py::Thing`` → ``Thing``). */
+function compactNodeLabel(nodeId: string): string {
+  const sym = nodeId.split(/::|#/).pop();
+  return sym && sym.length ? sym : nodeId;
+}
+
+/** Parse one raw ref into its discriminated shape. */
+function parseOneCitation(ref: string): ParsedCitation {
+  const { head, display } = splitDisplay(ref);
+  const c = CitationRef.parse(head);
+  if (c.scheme === "wiki") {
+    return { kind: "page", raw: ref, pageId: c.path, title: display };
+  }
+  if (c.scheme === "graph") {
+    return { kind: "graph", raw: ref, nodeId: c.path, label: display };
+  }
+  return { kind: "file", raw: ref, path: c.path, startLine: c.startLine, endLine: c.endLine };
+}
+
+/**
+ * Parse a list of raw citation strings into the unique, kind-tagged card set
+ * (first-seen order, dups + empties dropped). Superset of {@link fileCitations}
+ * — it KEEPS the ``wiki:`` page and ``graph:`` node refs that the answer made,
+ * instead of silently discarding them.
+ */
+export function parseCitations(raws: Iterable<string>): ParsedCitation[] {
+  const seen = new Set<string>();
+  const out: ParsedCitation[] = [];
+  for (const raw of raws) {
+    if (!raw) continue;
+    const c = parseOneCitation(raw);
+    const k = citationDomId(c);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(c);
+  }
+  return out;
+}
+
+/**
+ * Coerce a legacy flat {@link Citation} OR a {@link ParsedCitation} into the
+ * discriminated form, so {@link SourceCard} renders either without its callers
+ * (e.g. the not-yet-migrated QAScreen, which still feeds flat file citations)
+ * having to change.
+ */
+export function asParsedCitation(c: Citation | ParsedCitation): ParsedCitation {
+  if ("kind" in c) return c;
+  if (c.scheme === "wiki") return { kind: "page", raw: c.raw, pageId: c.path };
+  if (c.scheme === "graph") return { kind: "graph", raw: c.raw, nodeId: c.path };
+  return { kind: "file", raw: c.raw, path: c.path, startLine: c.startLine, endLine: c.endLine };
+}
+
+/**
+ * Stable DOM id + dedup key for a parsed citation. File ids match
+ * {@link CitationRef.domId} so an inline ``src:`` chip still scrolls to its card.
+ */
+export function citationDomId(c: ParsedCitation): string {
+  switch (c.kind) {
+    case "file":
+      return fileDomId(c.path, c.startLine, c.endLine);
+    case "page":
+      return `src-${toDomToken(`wiki:${c.pageId}`)}`;
+    case "graph":
+      return `src-${toDomToken(`graph:${c.nodeId}`)}`;
+  }
+}
+
+/** Header label for a parsed citation card (title/label fall back to the id). */
+export function citationLabel(c: ParsedCitation): string {
+  switch (c.kind) {
+    case "file":
+      return fileLabel(c.path, c.startLine, c.endLine);
+    case "page":
+      return c.title ?? c.pageId;
+    case "graph":
+      return c.label ?? compactNodeLabel(c.nodeId);
+  }
 }

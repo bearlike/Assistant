@@ -179,8 +179,8 @@ def _import_factory(module_path: str, class_name: str) -> Callable[[], ToolRunne
 def is_always_load(spec: ToolSpec) -> bool:
     """Return True if the tool's full schema must always be in the bound list.
 
-    Marked via ``metadata.always_load=True``. Mirrors Claude Code's
-    ``alwaysLoad`` opt-out — used by tools that the model needs immediately
+    Marked via ``metadata.always_load=True``. An opt-out from deferral —
+    used by tools that the model needs immediately
     (the search tool itself, or any tool whose absence would block the
     model from making progress).
     """
@@ -191,8 +191,8 @@ def is_deferred(spec: ToolSpec) -> bool:
     """Return True if the tool's schema should be omitted from the initial bind.
 
     Deferred tools surface as names only via ``<available-deferred-tools>`` —
-    the model fetches their schemas on demand via ``tool_search``. Mirrors
-    Claude Code's ``isDeferredTool``: ``always_load`` wins, the search tool
+    the model fetches their schemas on demand via ``tool_search``. The
+    deferral rule: ``always_load`` wins, the search tool
     itself never defers, all MCP tools defer, and other tools opt-in via
     ``metadata.deferred=True``.
     """
@@ -203,6 +203,37 @@ def is_deferred(spec: ToolSpec) -> bool:
     if spec.kind == "mcp":
         return True
     return bool(spec.metadata.get("deferred"))
+
+
+def classify_tool_scope(
+    spec: ToolSpec, *, global_servers: set[str], plugin_servers: set[str]
+) -> str:
+    """Classify a tool spec into its deployment scope.
+
+    The four real scope categories:
+
+    - ``builtin`` — a core built-in Python tool (``spec.kind != "mcp"``),
+      not an MCP server at all.
+    - ``system`` — an MCP tool whose server is configured in the shared,
+      deployed-instance ``mcp.json`` (``global_servers``).
+    - ``plugin`` — an MCP tool contributed by an installed plugin
+      (``plugin_servers``).
+    - ``project`` — an MCP tool whose server is configured only in the
+      current project's local MCP config (neither of the above).
+
+    A genuine ``user`` tier — a personal ``~/.mewbo`` config distinct from
+    the deployed ``$MEWBO_HOME`` system instance — is deliberately NOT
+    implemented: no current infra distinguishes the two in a way worth
+    surfacing yet.
+    """
+    if spec.kind != "mcp":
+        return "builtin"
+    server = spec.metadata.get("server", "")
+    if server in plugin_servers:
+        return "plugin"
+    if server in global_servers:
+        return "system"
+    return "project"
 
 
 _TOOL_SEARCH_SCHEMA: dict[str, object] = {
@@ -1168,6 +1199,7 @@ __all__ = [
     "ToolRegistry",
     "ToolRegistryCache",
     "ToolSpec",
+    "classify_tool_scope",
     "filter_specs",
     "get_or_build_registry",
     "is_always_load",

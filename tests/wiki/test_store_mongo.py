@@ -310,15 +310,15 @@ def test_factory_returns_mongo_when_configured(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_upsert_and_query_nodes_mongo() -> None:
-    from mewbo_graph.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import make_graph_node
 
     store = _store()
     nodes = [
-        GraphNode(slug="x/y", node_id="n1", type="File", name="a.py",
+        make_graph_node(slug="x/y", node_id="n1", type="File", name="a.py",
                   file="a.py", range=(0, 100), docstring=None),
-        GraphNode(slug="x/y", node_id="n2", type="Function", name="foo",
+        make_graph_node(slug="x/y", node_id="n2", type="Function", name="foo",
                   file="a.py", range=(10, 50), docstring="Does foo"),
-        GraphNode(slug="x/y", node_id="n3", type="Class", name="Bar",
+        make_graph_node(slug="x/y", node_id="n3", type="Class", name="Bar",
                   file="b.py", range=(0, 80), docstring=None),
     ]
     store.upsert_nodes("x/y", nodes)
@@ -339,13 +339,13 @@ def test_upsert_and_query_nodes_mongo() -> None:
 
 
 def test_upsert_nodes_overwrites_existing_mongo() -> None:
-    from mewbo_graph.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import make_graph_node
 
     store = _store()
-    n = GraphNode(slug="x/y", node_id="n1", type="File", name="a.py",
+    n = make_graph_node(slug="x/y", node_id="n1", type="File", name="a.py",
                   file="a.py", range=(0, 100), docstring="v1")
     store.upsert_nodes("x/y", [n])
-    n2 = GraphNode(slug="x/y", node_id="n1", type="File", name="a.py",
+    n2 = make_graph_node(slug="x/y", node_id="n1", type="File", name="a.py",
                    file="a.py", range=(0, 100), docstring="v2")
     store.upsert_nodes("x/y", [n2])
     result = store.query_graph("x/y")
@@ -354,14 +354,16 @@ def test_upsert_nodes_overwrites_existing_mongo() -> None:
 
 
 def test_upsert_and_neighbors_via_edges_mongo() -> None:
-    from mewbo_graph.wiki.types import GraphEdge, GraphNode
+    from mewbo_graph.wiki.types import GraphEdge, make_graph_node
 
     store = _store()
     store.upsert_nodes("x/y", [
-        GraphNode(slug="x/y", node_id="n1", type="File", name="a.py", file="a.py", range=(0, 50)),
-        GraphNode(slug="x/y", node_id="n2", type="Function", name="foo", file="a.py",
+        make_graph_node(
+            slug="x/y", node_id="n1", type="File", name="a.py", file="a.py", range=(0, 50)
+        ),
+        make_graph_node(slug="x/y", node_id="n2", type="Function", name="foo", file="a.py",
                   range=(10, 40)),
-        GraphNode(slug="x/y", node_id="n3", type="Function", name="bar", file="a.py",
+        make_graph_node(slug="x/y", node_id="n3", type="Function", name="bar", file="a.py",
                   range=(40, 50)),
     ])
     store.upsert_edges("x/y", [
@@ -397,12 +399,12 @@ def test_vector_search_empty_pool_returns_empty_mongo() -> None:
 
 
 def test_graph_isolated_by_slug_mongo() -> None:
-    from mewbo_graph.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import make_graph_node
 
     store = _store()
-    store.upsert_nodes("a/b", [GraphNode(slug="a/b", node_id="x", type="File",
+    store.upsert_nodes("a/b", [make_graph_node(slug="a/b", node_id="x", type="File",
                                          name="a", file="a", range=(0, 1))])
-    store.upsert_nodes("c/d", [GraphNode(slug="c/d", node_id="x", type="File",
+    store.upsert_nodes("c/d", [make_graph_node(slug="c/d", node_id="x", type="File",
                                          name="c", file="c", range=(0, 1))])
     assert len(store.query_graph("a/b")) == 1
     assert store.query_graph("a/b")[0].name == "a"

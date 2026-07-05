@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import queue
 import threading
 import time
 from pathlib import Path
@@ -37,7 +38,7 @@ from mewbo_core.agent_context import AgentContext
 from mewbo_core.classes import ActionStep
 from mewbo_core.context import ContextSnapshot
 from mewbo_core.hooks import HookManager
-from mewbo_core.hypervisor import AgentHypervisor
+from mewbo_core.hypervisor import AgentHandle, AgentHypervisor
 from mewbo_core.llm_resilience import DoomLoopGuard, repair_tool_pairing
 from mewbo_core.permissions import PermissionDecision, PermissionPolicy
 from mewbo_core.token_budget import TokenBudget
@@ -719,6 +720,51 @@ class TestSafeExecute:
         assert fast_r.success is True
         assert slow_r.success is False
         assert "timed out" in slow_r.content
+
+    def test_active_tool_id_stamped_then_cleared(self):
+        """The handle's active_tool_id names the tool actually executing.
+
+        Ref: the watchdog misattribution bug — ``last_tool_id`` (set by
+        ``update_step``) only updates on completion, so it still names the
+        PREVIOUS tool while a call is in flight. ``active_tool_id`` is
+        stamped at dispatch start (before the potentially-long-running
+        ``arun``) and must be visible to a concurrent reader mid-flight, then
+        cleared back to ``None`` once the call resolves.
+        """
+        spec = _make_spec("slow_tool")
+        registry = _make_registry(spec)
+        seen: dict[str, str | None] = {}
+
+        async def run():
+            ctx = _make_agent_context()
+            handle = AgentHandle(
+                agent_id=ctx.agent_id,
+                parent_id=ctx.parent_id,
+                depth=ctx.depth,
+                model_name=ctx.model_name,
+                task_description="test",
+                status="running",
+            )
+            await ctx.registry.register(handle)
+            loop = _make_loop(registry, agent_context=ctx)
+
+            async def _slow(_step):
+                mid_flight = await ctx.registry.get(ctx.agent_id)
+                seen["mid_flight"] = mid_flight.active_tool_id if mid_flight else None
+                return MagicMock(content="done")
+
+            mock_tool = MagicMock()
+            mock_tool.arun = _slow
+            with patch.object(registry, "get", return_value=mock_tool):
+                tc = {"name": "slow_tool", "args": {}, "id": "tc1"}
+                await loop._safe_execute(tc, [spec])
+
+            after = await ctx.registry.get(ctx.agent_id)
+            seen["after"] = after.active_tool_id if after else "MISSING"
+
+        asyncio.run(run())
+        assert seen["mid_flight"] == "slow_tool"
+        assert seen["after"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1472,3 +1518,162 @@ class TestCancellationMidLoop:
             tq, state = asyncio.run(loop.run("do work", tool_specs=[spec], context=_make_context()))
 
         assert state.done_reason == "canceled"
+
+
+# ---------------------------------------------------------------------------
+# _watchdog — stall attribution + root self-stall
+# ---------------------------------------------------------------------------
+
+
+async def _run_watchdog_once(loop: ToolUseLoop) -> None:
+    """Drive ``loop._watchdog()`` through exactly one detection pass.
+
+    ``asyncio.sleep`` is faked so the first call yields control (a real
+    zero-length sleep, letting any pending callbacks run) and the second
+    raises ``CancelledError`` — the watchdog's own shutdown path — so the
+    coroutine returns after precisely one ``stalled_agents`` check instead of
+    looping forever or racing a wall-clock timeout.
+    """
+    real_sleep = asyncio.sleep
+    calls = 0
+
+    async def _fast_sleep(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise asyncio.CancelledError
+        await real_sleep(0)
+
+    with patch("mewbo_core.tool_use_loop.asyncio.sleep", new=_fast_sleep):
+        await loop._watchdog()
+
+
+class TestWatchdogStallAttribution:
+    """Verify the watchdog names the in-flight tool, not the last completed one."""
+
+    def test_uses_active_tool_id_not_last_tool_id(self):
+        """A child stalled mid-call is reported by its IN-FLIGHT tool.
+
+        ``last_tool_id`` is deliberately set to a DIFFERENT, already-finished
+        tool — if the watchdog message names it instead of ``active_tool_id``
+        that reproduces the original misattribution bug.
+        """
+
+        async def run():
+            ctx = _make_agent_context()
+            loop = _make_loop(agent_context=ctx)
+            child_q: queue.Queue[str] = queue.Queue()
+            child = AgentHandle(
+                agent_id="child0001",
+                parent_id=ctx.agent_id,
+                depth=1,
+                model_name="test-model",
+                task_description="child task",
+                status="running",
+                last_step_at=time.monotonic() - 200,
+                last_tool_id="file_edit_tool",  # last COMPLETED tool — must NOT appear
+                active_tool_id="aider_shell_tool",  # tool actually in flight
+                message_queue=child_q,
+            )
+            await ctx.registry.register(child)
+            await _run_watchdog_once(loop)
+            return ctx, child_q
+
+        ctx, child_q = asyncio.run(run())
+
+        diagnostics = []
+        while not ctx.message_queue.empty():
+            diagnostics.append(ctx.message_queue.get_nowait())
+        assert diagnostics, "expected at least one watchdog diagnostic for the stalled child"
+        assert any("aider_shell_tool" in m for m in diagnostics)
+        assert not any("file_edit_tool" in m for m in diagnostics)
+
+        # The existing sub-agent liveness feature (send_message) is untouched.
+        assert not child_q.empty()
+        assert "STALL WARNING" in child_q.get_nowait()
+
+    def test_no_active_tool_reports_neutral_message(self):
+        """No in-flight tool known -> neutral wording, never a stale tool name."""
+
+        async def run():
+            ctx = _make_agent_context()
+            loop = _make_loop(agent_context=ctx)
+            child = AgentHandle(
+                agent_id="child0002",
+                parent_id=ctx.agent_id,
+                depth=1,
+                model_name="test-model",
+                task_description="child task",
+                status="running",
+                last_step_at=time.monotonic() - 200,
+                last_tool_id="read_file",
+                active_tool_id=None,
+                message_queue=queue.Queue(),
+            )
+            await ctx.registry.register(child)
+            await _run_watchdog_once(loop)
+            return ctx
+
+        ctx = asyncio.run(run())
+
+        diagnostics = []
+        while not ctx.message_queue.empty():
+            diagnostics.append(ctx.message_queue.get_nowait())
+        assert diagnostics
+        assert not any("read_file" in m for m in diagnostics)
+        assert any("no tool activity" in m for m in diagnostics)
+
+
+class TestWatchdogRootSelfStall:
+    """Root's own stall must never enqueue a post-hoc diagnostic into itself."""
+
+    def test_root_self_stall_skips_queue_child_stall_still_enqueued(self):
+        async def run():
+            ctx = _make_agent_context()
+            loop = _make_loop(agent_context=ctx)
+
+            # Root's own handle, registered the way ToolUseLoop.run() does —
+            # no message_queue (matches production: the root handle is
+            # created without one; run() reuses whatever registers first).
+            root_handle = AgentHandle(
+                agent_id=ctx.agent_id,
+                parent_id=None,
+                depth=0,
+                model_name="test-model",
+                task_description="root task",
+                status="running",
+                last_step_at=time.monotonic() - 200,
+                last_tool_id="file_edit_tool",
+                active_tool_id="aider_shell_tool",
+            )
+            await ctx.registry.register(root_handle)
+
+            child_q: queue.Queue[str] = queue.Queue()
+            child = AgentHandle(
+                agent_id="child0003",
+                parent_id=ctx.agent_id,
+                depth=1,
+                model_name="test-model",
+                task_description="child task",
+                status="running",
+                last_step_at=time.monotonic() - 200,
+                last_tool_id="read_file",
+                active_tool_id="web_search",
+                message_queue=child_q,
+            )
+            await ctx.registry.register(child)
+
+            await _run_watchdog_once(loop)
+            return ctx
+
+        ctx = asyncio.run(run())
+
+        diagnostics = []
+        while not ctx.message_queue.empty():
+            diagnostics.append(ctx.message_queue.get_nowait())
+        # Only the CHILD's stall produced a diagnostic — never the root's own
+        # (it can only be drained after the very call it's blocked on
+        # resolves, i.e. always post-hoc).
+        assert diagnostics
+        assert all(ctx.agent_id[:8] not in m for m in diagnostics)
+        assert any("web_search" in m for m in diagnostics)

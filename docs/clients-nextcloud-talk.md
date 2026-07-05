@@ -1,7 +1,7 @@
 # Nextcloud Talk
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-nctalk-01.png" alt="Mewbo replying to an @Mewbo mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../assets/img/mewbo-nctalk-01.png" alt="Mewbo replying to an @Mewbo mention inside a Nextcloud Talk conversation" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 The Nextcloud Talk integration allows users to interact with Mewbo directly from any Nextcloud Talk conversation. Mention the bot and it responds, creating a standard Mewbo session visible in the web console and Langfuse traces.

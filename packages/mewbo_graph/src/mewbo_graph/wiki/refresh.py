@@ -166,6 +166,7 @@ class GraphDeltaIndexer:
         post_sig: dict[str, frozenset[tuple[str, str, str]]] = {}
         for f in set(modified) | set(added):
             result = self._parser.parse_file(slug, repo_root / f, repo_root=repo_root)
+            self._validate(slug, f, result)
             self._store.upsert_nodes(slug, result.nodes)
             self._store.upsert_edges(slug, result.edges)
             post_keys[f] = {entity_key_for_node(n) for n in result.nodes}
@@ -206,6 +207,32 @@ class GraphDeltaIndexer:
         )
 
     # -- helpers -------------------------------------------------------------
+
+    @staticmethod
+    def _validate(slug: str, file: str, result: GraphParseResult) -> None:
+        """Validate one file's parse result via ``CodeGraph`` before it's upserted.
+
+        Mirrors ``build_graph_core``'s ingest-time gate (schema v2, Gitea
+        #188) — the FIRST full index was validated there, but a steady-state
+        refresh went straight from ``parse_file`` to ``upsert_nodes``/
+        ``upsert_edges`` with no gate at all (this review finding). A
+        PER-FILE result validates standalone exactly like the full-repo case
+        does: its own CONTAINS edges are in-batch (both endpoints present in
+        ``result.nodes``), and cross-file IMPORTS/CALLS/EXTENDS/REFERENCES
+        edges carry ``target_name`` (a synthetic external target) —
+        ``CodeGraph`` exempts those from referential integrity on BOTH ends,
+        the same tolerance the full-repo validation already relies on.
+        """
+        from pydantic import ValidationError
+
+        from mewbo_graph.wiki.types import CodeGraph
+
+        try:
+            CodeGraph(nodes=result.nodes, edges=result.edges)
+        except ValidationError as exc:
+            raise ValueError(
+                f"graph schema validation failed for {slug} @ {file}: {exc}"
+            ) from exc
 
     def _keys_by_file(self, slug: str, files: set[str]) -> dict[str, set[EntityKey]]:
         out: dict[str, set[EntityKey]] = {f: set() for f in files}

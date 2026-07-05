@@ -1,6 +1,6 @@
 {
   "name": "wiki",
-  "description": "DeepWiki-style auto-generated documentation backend.",
+  "description": "AI-generated documentation backend for code repositories.",
   "version": "0.1.0",
   "author": "Mewbo",
   "requires-capabilities": ["wiki"],
@@ -86,9 +86,9 @@
       "class": "WikiListFilesTool"
     },
     {
-      "tool_id": "wiki_emit_block",
-      "module": "mewbo_graph.plugins.wiki.emit_block",
-      "class": "WikiEmitBlockTool"
+      "tool_id": "wiki_emit_answer",
+      "module": "mewbo_graph.plugins.wiki.emit_answer",
+      "class": "WikiEmitAnswerTool"
     },
     {
       "tool_id": "wiki_submit_insight",

@@ -1121,6 +1121,43 @@ def test_render_mcp_no_mcp_tools(tmp_path):
     assert "No MCP tools configured" in ctx.console.export_text()
 
 
+def test_render_mcp_shows_tool_scope(tmp_path):
+    """Each row is labeled with its classify_tool_scope() result (Gitea #185)."""
+    ctx = _make_context(tmp_path)
+    config_path = tmp_path / "mcp.json"
+    config_path.write_text(json.dumps({"servers": {"sys_srv": {"transport": "stdio"}}}))
+    set_mcp_config_path(config_path)
+
+    ctx.tool_registry.register(
+        ToolSpec(
+            tool_id="mcp_system_tool",
+            name="System Tool",
+            description="s",
+            factory=lambda: None,
+            kind="mcp",
+            metadata={"server": "sys_srv", "tool": "t"},
+        )
+    )
+    ctx.tool_registry.register(
+        ToolSpec(
+            tool_id="mcp_project_tool",
+            name="Project Tool",
+            description="p",
+            factory=lambda: None,
+            kind="mcp",
+            metadata={"server": "proj_srv", "tool": "t"},
+        )
+    )
+    _render_mcp(ctx.console, ctx.tool_registry)
+    output = ctx.console.export_text()
+    # dummy_tool (a non-mcp spec, from _make_context) is always "builtin".
+    assert "[builtin]" in output
+    # sys_srv is configured in the global mcp.json -> "system".
+    assert "[system]" in output
+    # proj_srv is configured nowhere global/plugin -> "project".
+    assert "[project]" in output
+
+
 # ---------------------------------------------------------------------------
 # /models — non-textual fallback path via _handle_model_wizard
 # ---------------------------------------------------------------------------

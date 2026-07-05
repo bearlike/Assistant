@@ -12,7 +12,7 @@ describe("validateMarketplaceEntry", () => {
     it.each([
       "https://github.com/anthropics/claude-plugins-official.git",
       "http://example.com/owner/repo",
-      "ssh://git@git.hurricane.home/bearlike/Assistant.git",
+      "ssh://git@git.example.com/bearlike/Assistant.git",
       "git://github.com/owner/repo.git",
       // Scheme matching is case-insensitive (mirrors `re.IGNORECASE`).
       "HTTPS://github.com/owner/repo",
@@ -25,7 +25,7 @@ describe("validateMarketplaceEntry", () => {
     it.each([
       "git@github.com:owner/repo",
       "git@github.com:owner/repo.git",
-      "git@git.hurricane.home:bearlike/Assistant.git",
+      "git@git.example.com:bearlike/Assistant.git",
     ])("accepts %s", (entry) => {
       expect(validateMarketplaceEntry(entry)).toBeNull();
     });
@@ -33,8 +33,8 @@ describe("validateMarketplaceEntry", () => {
 
   describe("host/owner/repo (host has a dot or port)", () => {
     it.each([
-      "git.hurricane.home/bearlike/Assistant",
-      "git.hurricane.home/bearlike/Assistant.git",
+      "git.example.com/bearlike/Assistant",
+      "git.example.com/bearlike/Assistant.git",
       "gitea.example.com/team/plugins",
       "localhost:3000/owner/repo",
     ])("accepts %s", (entry) => {

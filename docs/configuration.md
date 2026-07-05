@@ -21,6 +21,7 @@ Runtime environment settings.
 | `log_style` | string | `""` | Log output style for the core engine (empty for default). |
 | `cli_log_style` | string | `dark` | Rich console log theme for the CLI (dark or light). |
 | `preflight_enabled` | boolean | `false` | Run connectivity checks for LLM, Langfuse, and Home Assistant on startup. |
+| `developer_mode` | boolean | `false` | Enable developer mode. Unlocks graph-only (no-LLM) repository onboarding so contributors can inspect AST graph construction without documentation generation. Read by the API, console, and CLI. |
 | `cache_dir` | string | `""` | Directory for tool caches. Defaults to $MEWBO_HOME/cache. ⚠️ |
 | `session_dir` | string | `""` | Directory for session transcripts. Defaults to $MEWBO_HOME/sessions. ⚠️ |
 | `config_dir` | string | `""` | Root configuration directory. Defaults to $MEWBO_HOME. ⚠️ |
@@ -91,11 +92,11 @@ Top-level key: `compaction`
 
 Summarization prompt selection for conversation compaction.
 
-``caveman_mode`` enables a rule-augmented prompt (inspired by the
-``JuliusBrussee/caveman`` Claude Code skill) that instructs the
-summarizer LLM to drop articles, filler, pleasantries, and hedging
-while preserving code, paths, URLs, and error strings verbatim.
-Reduces output tokens in the compaction summary without changing the
+``caveman_mode`` enables a rule-augmented "caveman" prompt that
+instructs the summarizer LLM to drop articles, filler, pleasantries,
+and hedging while preserving code, paths, URLs, and error strings
+verbatim. Reduces output tokens in the compaction summary without
+changing the
 ``<analysis>/<summary>`` response structure downstream parsers expect.
 
 | Key | Type | Default | Description |
@@ -159,6 +160,7 @@ Terminal CLI display and interaction settings.
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `disable_textual` | boolean | `false` | Disable the Textual TUI and fall back to plain Rich output. |
+| `remote` | CLI Remote |  | Opt-in remote session sync + product tools (CLI-only). |
 | `approval_style` | string | `inline` | Tool-approval UI style: 'inline' (plain prompt), 'textual' (TUI dialog), or 'aider' (diff-style). |
 
 ## Chat
@@ -196,13 +198,13 @@ Sub-agent hypervisor settings.
 | `max_concurrent` | integer | `20` | Maximum number of sub-agents allowed to run concurrently. |
 | `default_sub_model` | string | `""` | Default LLM model for sub-agents. Falls back to the root agent's model when empty. |
 | `allowed_models` | list[string] |  | Allowlist of model names sub-agents may use. Empty means all models are allowed. |
-| `llm_call_timeout` | number | `120.0` | Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models (raised from 60s — bare timeouts were the largest single failure class). On timeout, the call is retried up to llm_call_retries times before cascading to fallback models. |
+| `llm_call_timeout` | number | `120.0` | Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models (raised from 60s because bare timeouts were the largest single failure class). On timeout, the call is retried up to llm_call_retries times before cascading to fallback models. |
 | `llm_call_retries` | integer | `2` | Maximum attempts for the primary model before cascading to fallback models (default 2 = one try + one retry). Each fallback model gets retry.fallback_retries attempts. A rescue model that wins is pinned for the rest of the run. Backoff/budget/circuit-breaker live under agent.retry. |
 | `retry` | Retry |  | Automatic LLM-call retry / fallback resilience knobs. |
 | `default_denied_tools` | list[string] |  | Tool IDs denied to all sub-agents by default (e.g. spawn_agent). |
 | `edit_tool` | string | `""` | File editing mechanism override: 'search_replace_block' (Aider-style SEARCH/REPLACE blocks) or 'structured_patch' (per-file exact string replacement). Leave empty (default) to auto-select based on the active model via llm.structured_patch_models. |
 | `plan_mode_shell_allowlist` | list[string] |  | Shell command prefixes allowed during plan mode. Each entry matches a command at a word boundary (e.g. 'git log' matches 'git log --oneline' but not 'git logger'). Commands containing pipes, redirects, variable expansion, command substitution, or chaining (&#124;, >, <, &, ;, $, backtick) are always rejected. Set to an empty list to disable shell in plan mode entirely. |
-| `plan_mode_allow_mcp` | boolean | `true` | Allow ALL user-enabled MCP tools (tools with kind='mcp') during plan mode. Matches Claude Code's permissive default and trusts the user's mcp.json configuration. Set to false to block MCP tools in plan mode regardless of their read-only status. |
+| `plan_mode_allow_mcp` | boolean | `true` | Allow ALL user-enabled MCP tools (tools with kind='mcp') during plan mode. Uses a permissive default and trusts the user's mcp.json configuration. Set to false to block MCP tools in plan mode regardless of their read-only status. |
 | `web_ide` | Web IDE | `null` | Optional 'Open in Web IDE' feature config (code-server containers). |
 | `lsp` | LSP |  |  |
 | `tool_search` | Tool Search |  | Deferred tool loading via on-demand schema fetching. |

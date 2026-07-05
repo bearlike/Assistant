@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Debug-only additions, merged into the debug variant's manifest alongside
+         app/src/main/AndroidManifest.xml; never shipped in release:
+         - verification host activities for the design-v2 liveness gallery and chat preview
+         Network Security Config now lives per distribution flavor (system-only in src/main,
+         enterprise CA in src/enterprise) — it must NOT be redeclared in this build-type source set,
+         since a build-type NSC would shadow the flavor override for enterpriseDebug. -->
+    <application>
+        <activity
+            android:name=".ui.aurora.LivenessShowcaseActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Aura" />
+        <activity
+            android:name=".ui.chat.ChatPreviewActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Aura" />
+        <activity
+            android:name=".ui.overlay.AssistOverlayPreviewActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Aura" />
+    </application>
+
+</manifest>

@@ -275,6 +275,47 @@ class TestResolveConfigPath:
         assert result == home / "app.json"
         assert result.exists()
 
+    def test_walk_up_finds_configs_from_nested_subdir(self, monkeypatch, tmp_path):
+        # Project root carries configs/ and a .git marker (bounds the ascent);
+        # CWD is several levels below it.
+        (tmp_path / ".git").mkdir()
+        configs_dir = tmp_path / "configs"
+        configs_dir.mkdir()
+        (configs_dir / "app.json").write_text("{}", encoding="utf-8")
+        nested = tmp_path / "a" / "b" / "c"
+        nested.mkdir(parents=True)
+        monkeypatch.chdir(nested)
+        monkeypatch.setenv("MEWBO_HOME", str(tmp_path / "home"))
+        result = config_module._resolve_config_path("app.json")
+        assert result.resolve() == (configs_dir / "app.json").resolve()
+
+    def test_nearest_configs_wins_over_ancestor(self, monkeypatch, tmp_path):
+        # An ancestor and a nearer directory both have configs/ — the nearer
+        # one (closest to CWD walking up) wins.
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "configs").mkdir()
+        (tmp_path / "configs" / "app.json").write_text('{"root": true}', encoding="utf-8")
+        nearer = tmp_path / "sub"
+        (nearer / "configs").mkdir(parents=True)
+        (nearer / "configs" / "app.json").write_text('{"sub": true}', encoding="utf-8")
+        monkeypatch.chdir(nearer)
+        result = config_module._resolve_config_path("app.json")
+        assert result.resolve() == (nearer / "configs" / "app.json").resolve()
+
+    def test_walk_up_stops_at_git_root_then_falls_back_to_home(self, monkeypatch, tmp_path):
+        # configs/ lives ABOVE the git root, so the bounded ascent must not
+        # reach it and we fall back to MEWBO_HOME instead.
+        (tmp_path / "configs").mkdir()
+        (tmp_path / "configs" / "app.json").write_text("{}", encoding="utf-8")
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        nested = repo / "x" / "y"
+        nested.mkdir(parents=True)
+        monkeypatch.chdir(nested)
+        monkeypatch.setenv("MEWBO_HOME", str(tmp_path / "home"))
+        result = config_module._resolve_config_path("app.json")
+        assert result == tmp_path / "home" / "app.json"
+
 
 class TestRuntimeConfigDefaults:
     """RuntimeConfig resolves empty defaults to MEWBO_HOME paths."""

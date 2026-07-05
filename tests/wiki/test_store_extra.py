@@ -164,7 +164,7 @@ def test_base_raises_not_implemented(method: str, args: tuple) -> None:
         def list_projects(self): ...  # type: ignore[override]
         def delete_project(self, s): ...  # type: ignore[override]
         def save_page(self, s, p): ...  # type: ignore[override]
-        def get_page(self, s, pid): ...  # type: ignore[override]
+        def _get_page_raw(self, s, pid): ...  # type: ignore[override]
         def list_pages(self, s): ...  # type: ignore[override]
         def delete_page(self, s, pid): ...  # type: ignore[override]
         def create_job(self, j): ...  # type: ignore[override]

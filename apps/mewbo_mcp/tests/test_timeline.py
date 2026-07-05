@@ -15,8 +15,8 @@ from __future__ import annotations
 from mewbo_mcp.timeline import build_timeline, compute_turn_token_usage
 
 
-def _user(text: str, ts: str = "t0") -> dict:
-    return {"type": "user", "ts": ts, "payload": {"text": text}}
+def _user(text: str, ts: str = "t0", **payload) -> dict:
+    return {"type": "user", "ts": ts, "payload": {"text": text, **payload}}
 
 
 def _assistant(text: str, ts: str = "t9") -> dict:
@@ -125,6 +125,39 @@ def test_multiple_turns_indexed_sequentially():
     turns = build_timeline(events)
     assert [t.index for t in turns] == [1, 2, 3]
     assert [t.user_text for t in turns] == ["q1", "q2", "q3"]
+
+
+def test_user_attachments_project_onto_the_turn():
+    """A user event's ``attachments`` list is carried onto its Turn."""
+    descriptor = {
+        "id": "a1",
+        "filename": "spec.pdf",
+        "content_type": "application/pdf",
+        "size_bytes": 2048,
+        "stored_name": "a1_spec.pdf",
+        "uploaded_at": "2026-07-03T00:00:00+00:00",
+        "parsed": True,
+    }
+    events = [_user("see attached", attachments=[descriptor]), _assistant("ok")]
+    turns = build_timeline(events)
+    assert turns[0].attachments == [descriptor]
+
+
+def test_user_without_attachments_stays_empty():
+    """A turn opened by a plain user event (no attachments key) is clean."""
+    events = [_user("hi"), _assistant("hello")]
+    turns = build_timeline(events)
+    assert turns[0].attachments == []
+
+
+def test_user_malformed_attachments_coerced_to_empty():
+    """A non-list/non-dict ``attachments`` value degrades to ``[]``, never raises."""
+    events = [_user("hi", attachments="not-a-list"), _assistant("hello")]
+    turns = build_timeline(events)
+    assert turns[0].attachments == []
+    events2 = [_user("hi", attachments=["not-a-dict", 42]), _assistant("hello")]
+    turns2 = build_timeline(events2)
+    assert turns2[0].attachments == []
 
 
 def test_context_event_sets_turn_model():

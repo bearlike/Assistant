@@ -1,7 +1,7 @@
 # Email
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-email-01.jpg" alt="Mewbo email thread in Gmail" style="width: 100%; max-width: 520px; height: auto;" />
+  <img src="../assets/img/mewbo-email-01.jpg" alt="Mewbo email thread in Gmail" style="width: 100%; max-width: 520px; height: auto;" />
 </div>
 
 Mewbo can be reached via email. Send a message to the configured mailbox and the agent replies with a styled HTML email. Thread replies continue the same session.

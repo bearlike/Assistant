@@ -26,6 +26,15 @@ export type {
 
 export type ProjectSource = "config" | "managed";
 
+/**
+ * Where an MCP tool's registration originates. "builtin" = core Mewbo tools,
+ * "system" = MCP servers configured at the system/config level, "project" =
+ * MCP servers scoped to the active project's `.mcp.json`, "plugin" = tools
+ * contributed by an installed plugin. Optional/nullable-safe: older or
+ * cached ``ToolSummary`` payloads may predate this field.
+ */
+export type ToolScope = "builtin" | "project" | "system" | "plugin";
+
 export type ToolSummary = {
   tool_id: string;
   name: string;
@@ -34,7 +43,7 @@ export type ToolSummary = {
   description?: string;
   disabled_reason?: string;
   server?: string;
-  scope?: string;
+  scope?: ToolScope;
 };
 
 export type SkillSummary = {

@@ -14,7 +14,7 @@ import {
   SessionUsage,
   ShareRecord
 } from '../types';
-import { AgentSummary, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, RecoverResponse, SkillSummary, ToolSummary } from './contracts';
+import { AgentSummary, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, RecoverResponse, SkillSummary, ToolScope, ToolSummary } from './contracts';
 import { createRealClient } from './realClient';
 import { readRuntimeConfig } from '../runtimeConfig';
 
@@ -317,4 +317,4 @@ export async function revokeApiKey(id: string): Promise<ApiKeyRevoked> {
   return realClient.revokeApiKey(id);
 }
 
-export type { AgentSummary, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, MarketplacePlugin, PluginSummary, ProjectSummary, RecoverResponse, SkillSummary, ToolSummary };
+export type { AgentSummary, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, MarketplacePlugin, PluginSummary, ProjectSummary, RecoverResponse, SkillSummary, ToolScope, ToolSummary };

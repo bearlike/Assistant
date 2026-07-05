@@ -213,10 +213,10 @@ def test_slug_colliding_ids_do_not_overwrite_each_other(store):
 def test_doc_total_excludes_git_ast_file_nodes(store):
     # If the same slug was ever git-indexed, plain File nodes exist. The catalog
     # doc count must exclude them (count only ``catalog/``-prefixed nodes).
-    from mewbo_graph.wiki.types import GraphNode
+    from mewbo_graph.wiki.types import make_graph_node
 
     store.upsert_nodes("acme/catalog", [
-        GraphNode(slug="acme/catalog", node_id="ast1", type="File", name="main.py",
+        make_graph_node(slug="acme/catalog", node_id="ast1", type="File", name="main.py",
                   file="src/main.py", range=(0, 10), docstring=None),
     ])
     report = CatalogIngestor(store=store, embedder=_FakeEmbedder()).ingest("acme/catalog", _docs())

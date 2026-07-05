@@ -7,9 +7,10 @@ import { InputBar } from "./InputBar";
 import { useSessionEvents } from "../hooks/useSessionEvents";
 import { useSessionUsage } from "../hooks/useSessionUsage";
 import { useSessionQuery } from "../hooks/useSessionQuery";
+import { useThroughput } from "../hooks/useThroughput";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { SessionContext, SessionSummary, SessionUsage, TurnMeta } from "../types";
-import { buildTimeline, getActiveStreamText, getActiveTurn, turnHasWidget } from "../utils/timeline";
+import { SessionSummary, SessionUsage, TurnMeta } from "../types";
+import { buildTimeline, getActiveStreamText, getActiveTurn, getLastContext, turnHasWidget } from "../utils/timeline";
 import { mergeDiffFiles } from "../utils/diff";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { extractSummaryTesting } from "../utils/logs";
@@ -88,28 +89,28 @@ export function SessionDetailView({
     }
     return null;
   }, [selectedTurnId, liveTurn, timeline]);
-  // Derive effective session context from live events. Context events are
-  // emitted before each query and on plan approval, so they carry the most
-  // recent model, mode, project, etc. Merging them keeps InputBar in sync
-  // without waiting for a full session-list refresh.
-  const effectiveContext = useMemo(() => {
-    let ctx: SessionContext | undefined = session.context;
-    for (const ev of events) {
-      if (ev.type === "context") {
-        ctx = { ...ctx, ...(ev.payload as Partial<SessionContext>) };
-      }
-    }
-    return ctx;
-  }, [events, session.context]);
+  // Derive effective session context from live events. This is the SINGLE
+  // most-recent context event's payload, verbatim — never merged across
+  // events. See `getLastContext` for why (mirrors the backend's
+  // `_load_last_context`, Gitea #185).
+  const effectiveContext = useMemo(
+    () => getLastContext(events, session.context),
+    [events, session.context],
+  );
   const summaryData = useMemo(() => extractSummaryTesting(events), [events]);
+  // Live throughput + phase classification (Gitea #174), differenced from the
+  // in-flight turn's streamed output over the poll clock. This is the single
+  // source of the run's phase label + tok/s rate that RunTelemetry renders.
+  const throughput = useThroughput(events, running);
   // Derive a compact run status for the composer's running-state strip.
-  // - phase: last user-visible action (tool name or sub_agent step), defaults to "Running".
+  // - phase: what the run is doing right now (streaming / reasoning / running
+  //   tool / stalled), from `useThroughput`; defaults to "Sending…"/"Running".
   // - agents: count of sub_agents currently in `start` state (no matching `stop`).
   // - tokens: live root-window fill (sessionUsage.root_last_input_tokens) when present.
-  // - elapsedMs: time since the last `user` event in this run (resets per turn).
+  // - tokPerSec: live output throughput while streaming.
+  // - lastUserTs: time of the last `user` event in this run (resets per turn).
   const runStatus: RunStatus | undefined = useMemo(() => {
     if (!running && !submitting) return undefined;
-    let phase: string | undefined;
     let lastUserTs: string | undefined;
     const liveAgents = new Set<string>();
     for (const ev of events) {
@@ -121,22 +122,16 @@ export function SessionDetailView({
         if (!id) continue;
         if (p.action === "start") liveAgents.add(id);
         else if (p.action === "stop") liveAgents.delete(id);
-      } else if (ev.type === "tool_call") {
-        const p = (ev.payload ?? {}) as Record<string, unknown>;
-        const tool = typeof p.tool_id === "string" ? p.tool_id : undefined;
-        if (tool) phase = tool;
-      } else if (ev.type === "assistant" || ev.type === "completion") {
-        // Round trip done — clear the per-tool phase but keep token/elapsed scope.
-        phase = undefined;
       }
     }
     return {
-      phase: phase ?? (submitting ? "Sending…" : "Running"),
+      phase: throughput.phase ?? (submitting ? "Sending…" : "Running"),
       agents: liveAgents.size,
       tokens: sessionUsage?.root_last_input_tokens,
+      tokPerSec: throughput.tokPerSec,
       lastUserTs,
     };
-  }, [events, running, submitting, sessionUsage]);
+  }, [events, running, submitting, sessionUsage, throughput.phase, throughput.tokPerSec]);
   const errorMessage = eventsError || queryError;
   const errorTitle = eventsError ? "Polling error" : "Request error";
   const autoOpenedRef = useRef<string | null>(null);
@@ -147,13 +142,24 @@ export function SessionDetailView({
     setActiveTab("logs");
     autoOpenedRef.current = null;
   }, [session.session_id]);
-  // Auto-open the latest completed trace when a session first loads.
-  // Fires once per session (guarded by autoOpenedRef). Skipped on mobile
-  // where the workspace would obscure the conversation, and skipped when
-  // the latest turn rendered a widget so the widget keeps the spotlight.
+  // Auto-open the trace when a session first loads. Fires once per session
+  // (guarded by autoOpenedRef). Skipped on mobile where the workspace would
+  // obscure the conversation, and skipped when the latest turn rendered a
+  // widget so the widget keeps the spotlight.
+  //
+  // While a run is live, prefer the in-flight turn so the trace panel fills
+  // with live logs without a click (Gitea #174) — the once-per-session guard
+  // keeps it from re-opening after the user deliberately closes it.
   useEffect(() => {
     if (isMobile) return;
     if (autoOpenedRef.current === session.session_id) return;
+    if (running && liveTurn) {
+      autoOpenedRef.current = session.session_id;
+      setSelectedTurnId(liveTurn.id);
+      setActiveTab("logs");
+      setIsWorkspaceOpen(true);
+      return;
+    }
     if (timeline.length === 0) return;
     for (let i = timeline.length - 1; i >= 0; i--) {
       const turn = timeline[i].turn;
@@ -165,7 +171,7 @@ export function SessionDetailView({
         return;
       }
     }
-  }, [timeline, session.session_id, isMobile]);
+  }, [timeline, session.session_id, isMobile, running, liveTurn]);
   useEffect(() => {
     if (!onTitleUpdate) return;
     for (let i = events.length - 1; i >= 0; i--) {

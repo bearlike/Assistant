@@ -10,8 +10,26 @@ name: Docs
 on:
   push:
     branches: [main, master]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "configs/**"
+      - "apps/mewbo_api/**"
+      - "packages/mewbo_core/src/mewbo_core/config.py"
+      - "scripts/ci/generate_openapi_spec.py"
+      - "scripts/ci/generate_config_schema.py"
+      - ".github/workflows/docs.yml"
   pull_request:
     types: [opened, synchronize, reopened, closed]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "configs/**"
+      - "apps/mewbo_api/**"
+      - "packages/mewbo_core/src/mewbo_core/config.py"
+      - "scripts/ci/generate_openapi_spec.py"
+      - "scripts/ci/generate_config_schema.py"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
@@ -27,17 +45,20 @@ env:
 
 jobs:
   deploy:
+    name: Build & deploy docs
     if: >-
       github.event.action != 'closed' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -95,6 +116,7 @@ jobs:
             "https://${DOCS_HOST}/${slug}/"
 
   cleanup:
+    name: Remove internal-host PR preview
     # Remove a PR preview from the internal docs host when the PR closes.
     # (GitHub Pages / mike PR cleanup lives in docs-cleanup.yml.)
     if: >-

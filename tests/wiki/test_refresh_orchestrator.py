@@ -11,7 +11,7 @@ from mewbo_graph.wiki.memory_types import (
 )
 from mewbo_graph.wiki.refresh import GraphDeltaIndexer, RefreshOrchestrator
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import Frontmatter, GraphEdge, GraphNode, SourceRef, WikiPage
+from mewbo_graph.wiki.types import Frontmatter, GraphEdge, SourceRef, WikiPage, make_graph_node
 
 from .conftest import FakeParser
 
@@ -24,7 +24,7 @@ def store(tmp_path):
 
 
 def _node(nid, typ, name, f):
-    return GraphNode(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
+    return make_graph_node(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
 
 
 def _page(page_id, sources):

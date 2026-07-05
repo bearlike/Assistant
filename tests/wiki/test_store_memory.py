@@ -17,7 +17,7 @@ from mewbo_graph.wiki.memory_types import (
     MemoryNode,
     MemoryProvenance,
 )
-from mewbo_graph.wiki.types import GraphEdge, GraphNode
+from mewbo_graph.wiki.types import GraphEdge, GraphNode, make_graph_node
 
 SLUG = "org/repo"
 
@@ -244,7 +244,7 @@ def test_file_manifest_crud(store) -> None:
 
 
 def _gn(nid: str, typ: str, name: str, f: str, rng: tuple[int, int]) -> GraphNode:
-    return GraphNode(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=rng)
+    return make_graph_node(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=rng)
 
 
 def _seed_graph(store) -> None:

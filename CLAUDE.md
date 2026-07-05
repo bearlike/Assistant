@@ -12,7 +12,7 @@ When you own a Gitea ticket end-to-end, work it in this order:
 
 ## MANDATORY: Hydrate before touching files
 
-At the start of every conversation and every non-trivial task, call `ask_question` on `bearlike/Assistant`. Try DeepWiki (`mcp__deepwiki__Deepwiki-OSS-ask_question`) first; fall back to Devin Wiki (`mcp__devin__Devin-Wiki-Personal-ask_question`). Use `read_wiki_structure` → `read_wiki_contents` for deeper exploration. Only read local files after hydration. Include this directive in subagent prompts.
+At the start of every conversation and every non-trivial task, ask a configured code-wiki MCP tool a question about `bearlike/Assistant` — try the primary configured one first, falling back to a secondary if one is configured. Use `read_wiki_structure` → `read_wiki_contents` for deeper exploration. Only read local files after hydration. Include this directive in subagent prompts.
 
 > Wikis lag the repo (miss `mewbo_graph`/#25, cite removed `mewbo_chat`). Use them for intuition; verify structure against local source.
 
@@ -75,23 +75,24 @@ Read the deepest file that applies before editing. Every child carries `> ↑ pa
 | Agentic Search — Console side | `apps/mewbo_console/src/components/agentic_search/CLAUDE.md` |
 | MCP server: tools exposing Mewbo to agents | `apps/mewbo_mcp/CLAUDE.md` |
 | CLI (Rich/Textual display, agent panel) | `apps/mewbo_cli/CLAUDE.md` |
+| Aura Android client (Compose, orb overlay, redroid dev loop) | `apps/mewbo_aura/CLAUDE.md` |
 | Home Assistant conversation agent | `apps/mewbo_ha_conversation/CLAUDE.md` |
 | Test patterns + fixtures | `tests/CLAUDE.md` |
 | Docs site: code-ref badges, Scalar, authoring | `docs/CLAUDE.md` |
 
 ## MCP tools — when to use each
 
-- **DeepWiki / Devin Wiki** (`ask_question`, `read_wiki_structure`, `read_wiki_contents`) — primary context source. DeepWiki first, Devin fallback. Handles up to 10 repos at once.
-- **Devin session tools** (`devin_session_create`, `devin_session_interact`, etc.) — delegate long-running tasks, manage knowledge notes, schedule automated work. Session IDs need `devin-` prefix when reused.
-- **Langfuse** (`mcp__langfuse__*`) — observability. Path: `get_error_count(age)` → `fetch_sessions` → `fetch_traces` → `fetch_trace(id, include_observations=true)` → `fetch_observation(id)`. Trace names: `mewbo-tool-use`, `mewbo-task-master`, `mewbo-context`. `age` in minutes (max 10080). Use `output_mode="full_json_file"` for large payloads.
+- **Code-wiki MCP tools** (`ask_question`, `read_wiki_structure`, `read_wiki_contents`) — primary context source. Try the primary configured wiki tool first, fall back to a secondary if configured. Handles up to 10 repos at once.
+- **Remote coding-agent session tools** (`*_session_create`, `*_session_interact`, etc.) — delegate long-running tasks, manage knowledge notes, schedule automated work. Session IDs need a provider-specific prefix when reused.
+- **Langfuse** (`mcp__langfuse__*`) — observability. Path: `get_error_count(age)` → `fetch_sessions` → `fetch_traces` → `fetch_trace(id, include_observations=true)` → `fetch_observation(id)`. Filter by `sessionId` == Mewbo session_id. `mewbo-tool-use` arrives as a trace TAG (trace name is `step:N`); `mewbo-task-master`/`mewbo-context` are `user_id` values, not trace names. `age` in minutes (max 10080). Use `output_mode="full_json_file"` for large payloads.
 - **SearXNG** (`searxng_web_search`) + `web_url_read` — current events, docs, errors outside codebase.
 - **Context7** (`resolve_library_id` → `query_docs`) — library/framework API docs.
 
-Fire MCP calls in parallel. DeepWiki = "how should it work"; Langfuse = "how did it actually work."
+Fire MCP calls in parallel. The code-wiki tool = "how should it work"; Langfuse = "how did it actually work."
 
 ## Debugging sessions
 
-See `apps/mewbo_api/CLAUDE.md` → "Debugging session errors" for the full trace methodology. Quick orientation: MongoDB `db.events.find({session_id}).sort({ts:1})` (port 27018) is authoritative; Langfuse for LLM conversation chain.
+See `apps/mewbo_api/CLAUDE.md` → "Debugging session errors" for the full trace methodology. Quick orientation: MongoDB `db.events.find({session_id}).sort({ts:1})` (port 27018) is authoritative; Langfuse for LLM conversation chain. Per-agent attribution lives in Mongo `llm_call_start`/`llm_call_end` events (`agent_id`/`depth`/`step`); token counts live ONLY in Langfuse — Mongo llm_call events and `/usage` currently report zeros, and Langfuse's span tree orphans parents under concurrent sub-agents, so join the two by session, not by span. Cost/cache-hit truth is the LiteLLM proxy's Postgres spend log (`litellm-postgres`, `LiteLLM_SpendLogs.metadata->usage_object` → `cache_creation/read_input_tokens`); Langfuse mis-costs at full list price for any model string lacking a Langfuse Model Definition, and its `cache_hit` column tracks the Redis response cache, not Anthropic prompt caching.
 
 ## Running, testing, linting
 
@@ -101,4 +102,4 @@ See `apps/mewbo_api/CLAUDE.md` → "Debugging session errors" for the full trace
 - Config chain: `CWD/configs/` → `$MEWBO_HOME/` → `~/.mewbo/`. Override with `--config`. Run `/init` to scaffold.
 - Lint: `ruff check .` (auto-fix: `ruff check --fix .`). Types: `mypy`. Helpers: `make lint`, `make lint-fix`, `make typecheck`, `make precommit-install`.
 - **Never blind `ruff --fix`** — always re-run `ruff check .` after any autofix (strips intentional `noqa`).
-- **Browser automation / Playwright**: use the warm Chrome on the homelab Selenium Grid — connect via Playwright `connectOverCDP`. See `/home/kk/Agents/homelab/docs/selenium-cdp-guide.md`.
+- **Browser automation / Playwright**: if a remote Selenium/Chrome grid is configured for this environment, connect to its warm Chrome via Playwright `connectOverCDP` instead of launching a local browser — check your local ops docs (outside this repo) for the grid's connection details before falling back to a locally-launched browser.

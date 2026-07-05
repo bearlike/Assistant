@@ -67,6 +67,7 @@ from mewbo_core.tool_registry import (
     is_deferred,
 )
 from mewbo_core.types import Event, RecoveryHaltPayload
+from mewbo_core.update_todos import UpdateTodosTool
 
 logging = get_logger(name="core.tool_use_loop")
 
@@ -75,11 +76,11 @@ logging = get_logger(name="core.tool_use_loop")
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
-# Matches Claude Code's ``NO_CONTENT_MESSAGE`` (src/constants/messages.ts).
+# Sentinel emitted when the model returns no content.
 # Empty-string assistant content replayed in history causes extended-thinking
 # models (e.g. ``claude-opus-4-6``) to hallucinate framework-style placeholder
-# text. Following Claude Code's ``ensureNonEmptyAssistantContent``
-# (src/utils/messages.ts), substitute a neutral text block instead of ``""``.
+# text. To keep assistant turns non-empty, substitute a neutral text block
+# instead of ``""``.
 # The placeholder is filtered out of ``agent_message`` events so it never
 # reaches the UI.
 _NO_CONTENT_PLACEHOLDER = "(no content)"
@@ -288,6 +289,17 @@ class ToolUseLoop:
                 ExitPlanModeTool(
                     session_id=session_id,
                     event_logger=agent_context.event_logger,
+                )
+            )
+            # Authoritative live todos (act mode): terminal-free, re-emits the
+            # FULL statused list as ONE ``todos`` event on each call. Attached
+            # inline (not via the plugin factory) so it can carry the root
+            # ``agent_id`` the event stamps for per-agent attribution.
+            self._session_tools.append(
+                UpdateTodosTool(
+                    session_id=session_id,
+                    event_logger=agent_context.event_logger,
+                    agent_id=agent_context.agent_id,
                 )
             )
         if session_tool_registry is not None and session_id is not None:
@@ -622,9 +634,8 @@ class ToolUseLoop:
                             for block in raw
                             if not (isinstance(block, dict) and block.get("type") == "thinking")
                         ]
-                        # Claude Code's ``ensureNonEmptyAssistantContent``
-                        # (src/utils/messages.ts:4933): never leave
-                        # empty-string content. Empty assistant turns in
+                        # Never leave empty-string assistant content.
+                        # Empty assistant turns in
                         # history cause extended-thinking models to
                         # hallucinate framework-style placeholders.
                         if not sanitized:
@@ -1017,6 +1028,13 @@ class ToolUseLoop:
         """
         tool_name = tool_call.get("name", "")
         timeout = self._get_tool_timeout(tool_name)
+        # Ref: [AgentCgroup §4.2] Stamp the in-flight tool BEFORE awaiting it so
+        # the watchdog can attribute a stall to the tool actually running, not
+        # the last one that completed (``update_step`` only fires after this
+        # call returns). Cleared in ``finally`` — including on a concurrent
+        # batch, where a sibling's clear can race this one; that only degrades
+        # attribution to "unknown", never to a wrong tool name.
+        await self._ctx.registry.mark_tool_start(self._ctx.agent_id, tool_name)
         try:
             return await asyncio.wait_for(
                 self._execute_tool_call(tool_call, tool_specs),
@@ -1040,6 +1058,8 @@ class ToolUseLoop:
                 content=f"ERROR: {exc}",
                 success=False,
             )
+        finally:
+            await self._ctx.registry.mark_tool_start(self._ctx.agent_id, None)
 
     # ------------------------------------------------------------------
     # Message construction
@@ -1309,18 +1329,37 @@ class ToolUseLoop:
         Ref: [DeepMind-Delegation §4.4] Internal trigger: delegatee
         unresponsive → diagnose → intervene.
         """
+        stall_threshold = 120.0
         try:
             while True:
                 await asyncio.sleep(30)
-                stalled = await self._ctx.registry.stalled_agents(threshold=120.0)
+                stalled = await self._ctx.registry.stalled_agents(threshold=stall_threshold)
                 for h in stalled:
                     await self._ctx.registry.send_message(
                         h.agent_id,
                         get_prompt_registry().render("loop.stall_warning"),
                     )
+                    # Root self-stall: this loop IS the one synchronously
+                    # awaiting the stalled tool call, so a line queued here can
+                    # only be drained AFTER that call resolves — stale and
+                    # misleading by the time it arrives. Never enqueue it for
+                    # self; the send_message warning above still reaches
+                    # genuinely separate sub-agents (their own message_queue is
+                    # drained mid-run by their own loop, not this one).
+                    if h.agent_id == self._ctx.agent_id:
+                        continue
                     if self._ctx.message_queue is not None:
+                        # active_tool_id is the tool actually IN FLIGHT at
+                        # detection time; last_tool_id (only updated on
+                        # completion) would name the wrong, already-finished
+                        # tool for a call still running.
+                        detail = (
+                            f"stalled on {h.active_tool_id}"
+                            if h.active_tool_id
+                            else f"stalled — no tool activity for over {stall_threshold:.0f}s"
+                        )
                         self._ctx.message_queue.put_nowait(
-                            f"[Watchdog: Agent {h.agent_id[:8]} stalled on {h.last_tool_id}]",
+                            f"[Watchdog: Agent {h.agent_id[:8]} {detail}]",
                         )
         except asyncio.CancelledError:
             pass  # Normal shutdown path.
@@ -1433,8 +1472,8 @@ class ToolUseLoop:
     def _plan_mode_allow_mcp(self) -> bool:
         """Return True when MCP tools are permitted in plan mode.
 
-        Read from ``agent.plan_mode_allow_mcp``. Defaults to True (matches
-        Claude Code's permissive behaviour for user-configured MCP servers).
+        Read from ``agent.plan_mode_allow_mcp``. Defaults to True (a
+        permissive default for user-configured MCP servers).
         """
         raw = get_config_value("agent", "plan_mode_allow_mcp", default=True)
         if isinstance(raw, bool):
@@ -2449,8 +2488,8 @@ class ToolUseLoop:
                 }
             )
             return False
-        # User-enabled MCP tools: blanket allow under the config flag. Matches
-        # Claude Code's permissive behaviour and trusts the user's mcp.json.
+        # User-enabled MCP tools: blanket allow under the config flag. A
+        # permissive default that trusts the user's mcp.json.
         if self._plan_mode_allow_mcp() and spec is not None and spec.kind == "mcp":
             return True
         # Everything else (agent tools for non-root, shell when allowlist
@@ -2538,8 +2577,8 @@ class ToolUseLoop:
         else:
             text = (str(content) if content else "").strip()
         # Drop the internal "(no content)" placeholder so it never surfaces
-        # in ``agent_message`` events. Matches Claude Code's display filter
-        # (src/utils/messages.ts:717).
+        # in ``agent_message`` events — internal-only events are filtered
+        # from agent_message display.
         if text == _NO_CONTENT_PLACEHOLDER:
             return ""
         return text

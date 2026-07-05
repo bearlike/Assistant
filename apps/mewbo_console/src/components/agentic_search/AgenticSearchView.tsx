@@ -33,8 +33,8 @@ import { WorkspaceModal } from "./WorkspaceModal"
 // Run + graph surfaces are code-split so the inert landing page (the common
 // first paint) never downloads the heavy chunks they pull in: ResultsPanel →
 // AnswerCard → react-markdown/rehype-highlight, and WorkspaceGraphDialog →
-// KnowledgeGraphRenderer (cytoscape + fcose). They only mount on an active run
-// or when a user opens the graph, so deferring their import is free.
+// Graph3DView (react-force-graph-3d + three.js). They only mount on an active
+// run or when a user opens the graph, so deferring their import is free.
 const ResultsPanel = lazy(() =>
   import("./ResultsPanel").then((m) => ({ default: m.ResultsPanel }))
 )

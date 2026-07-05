@@ -24,6 +24,7 @@ from mewbo_graph.plugins.wiki._ctx import (
     resolve_job_ctx,
     resolve_qa_ctx,
 )
+from mewbo_graph.wiki.qa_access import QaAccessRecord
 
 if TYPE_CHECKING:
     from mewbo_core.classes import ActionStep
@@ -246,8 +247,11 @@ class WikiGraphNeighborsTool(WikiSessionTool):
         if isinstance(args, MockSpeaker):
             return args
         result = view.traverse(args)
+        # A BFS is navigation, not grounding: record ONLY the entry node, never
+        # every traversed hop (that ≤50-node walk is the access-trail sprawl).
         self._record_qa_access(
-            self._qa_ctx(), [f"graph:{n['node_id']}" for n in result.get("nodes", [])]
+            self._qa_ctx(),
+            [QaAccessRecord.touch(f"graph:{args.node_id}", tool=self.tool_id, op="nav")],
         )
         return MockSpeaker(content=str(result))
 

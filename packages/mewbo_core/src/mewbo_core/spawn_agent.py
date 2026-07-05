@@ -3,7 +3,7 @@
 
 ``SpawnAgentTool`` creates a child ``ToolUseLoop`` instance, registers it
 in the ``AgentHypervisor``, runs it to completion, and returns the result.
-Tool scoping follows Claude Code's "filter before binding" pattern: denied
+Tool scoping follows the "filter before binding" pattern: denied
 tools are removed from the child's ``bind_tools()`` list so the child LLM
 never sees them.
 """
@@ -699,7 +699,7 @@ class SpawnAgentTool:
             self._hook_manager.run_on_agent_start(handle)
             self._emit_event(child_ctx, "start", task_desc, handle=handle)
 
-            # 5. Filter tool specs (Claude Code "filter before binding" pattern).
+            # 5. Filter tool specs (the "filter before binding" pattern).
             child_specs = self._filter_tool_specs(args)
 
             # 6. Resolve child tool scope + opt-in bounded-retry policy (#118).
@@ -894,7 +894,7 @@ class SpawnAgentTool:
         return self._agent_context.model_name
 
     # ------------------------------------------------------------------
-    # Tool spec filtering (Claude Code "filter before binding" pattern)
+    # Tool spec filtering (the "filter before binding" pattern)
     # ------------------------------------------------------------------
 
     def _filter_tool_specs(self, args: dict[str, Any]) -> list[ToolSpec]:

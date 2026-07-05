@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
 from mewbo_graph.plugins.wiki._ctx import resolve_runtime
+from mewbo_graph.wiki.qa_access import QaAccessRecord
 
 if TYPE_CHECKING:
     from mewbo_core.classes import ActionStep
@@ -71,8 +72,11 @@ class WikiReadPageTool(WikiSessionTool):
         if page is None:
             return _err_result("not_found", f"page '{args.page_id}' not found in slug '{ctx.slug}'")
 
-        # 4. Return full WikiPage dump.
-        self._record_qa_access(ctx, [f"wiki:{args.page_id}"])
+        # 4. Return full WikiPage dump. A page read is an unscored grounding
+        #    confirmation (it sorts after the scored search hits on the trail).
+        self._record_qa_access(
+            ctx, [QaAccessRecord.touch(f"wiki:{args.page_id}", tool=self.tool_id, op="read")]
+        )
         return MockSpeaker(content=str(page.model_dump(by_alias=True)))
 
 

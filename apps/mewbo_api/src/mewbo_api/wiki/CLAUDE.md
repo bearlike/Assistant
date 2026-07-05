@@ -9,12 +9,12 @@ they drive — tree-sitter code graph, multiplex memory engine, embedder,
 retriever, store, and the wiki domain/wire models — was extracted to
 `mewbo_graph.wiki` (Gitea #25); see `packages/mewbo_graph/CLAUDE.md` for the
 library-level + layering decisions. This file captures the non-obvious
-engineering decisions behind the DeepWiki-style indexing + Q&A pipeline.
+engineering decisions behind the auto-generated wiki indexing + Q&A pipeline.
 Everything that can be read straight from the code is left out.
 
 ## What MewboWiki is
 
-A DeepWiki-style auto-generated wiki for code repositories. Pipeline is
+An auto-generated wiki for code repositories. Pipeline is
 a fixed seven-phase state machine running inside a normal Mewbo session
 (not a separate service): an agent owns the run, the wiki built-in
 tools persist state, and SSE streams progress to the FE.
@@ -87,6 +87,38 @@ parent agent finishes scan but has no child it can hand the rest off to.
 If you ever rename a wiki capability or add a new one, update both
 `jobs.py` (capability advertisement) and `agent_registry.py` (gate).
 
+## Developer mode — graph-only onboarding (zero-LLM, sessionless)
+
+`runtime.developer_mode` unlocks AST-only onboarding (no docs, no LLM) — the
+engine is `GraphOnlyIndexer` down in `mewbo_graph` (see its CLAUDE.md). The
+API/glue decisions, all non-obvious:
+
+- **The dev-mode gate is at the `post_index` ROUTE only.** It forces
+  `submission.graph_only=False` unless the flag is on. Mode is STICKY thereafter:
+  the submission sidecar round-trips `graph_only` (`model_dump(by_alias=True,
+  exclude_none=True)` keeps booleans), so `refresh()`/recovery PRESERVE graph-only
+  — do NOT re-gate at `start()` (that flips a project's mode mid-life).
+- **Graph-only jobs are SESSIONLESS.** `WikiIndexingJob._start_graph_only_index`
+  drives `GraphOnlyIndexer.run` on a daemon thread with `session_id=""` (no agent,
+  no `wiki` capability advertisement). Three consequences fall out of that:
+  - **QA must short-circuit BEFORE the session.** `post_qa` returns
+    `documentation_unavailable_response(slug)` when `project.graph_only` — because
+    the store's raise fires INSIDE a probe's `wiki_read_page` SessionTool, where
+    the route-level `@app.errorhandler(DocumentationUnavailableError)` 409 net
+    never runs.
+  - **Recovery must never reach the agent path.** `WikiIndexingSessionEndHook`
+    can't match a sessionless job, so `WikiResume.resume` branches on the sticky
+    `submission.graph_only` and re-drives `_start_graph_only_index` (idempotent
+    from-scratch — graph-only builds no `ResumePlan`). BOTH auto-`JobRecovery` and
+    manual `/resume` funnel through `WikiResume.resume`, so one branch covers both.
+  - **Cancel is cooperative.** `GraphOnlyIndexer` re-reads job status at each phase
+    boundary and bails before `_finalize` (the ONLY `complete`/Project writer), so
+    a cancel is never clobbered by a late terminal write.
+- **409 mapping:** `DocumentationUnavailableError` → `documentation_unavailable`
+  (HTTP 409, `retryable:false`) via `WIKI_CODE_STATUS` + the errorhandler. MCP
+  maps the 4xx to a non-retryable structured envelope for free; graph-exploration
+  tools (`read_wiki_structure` → `/graph`) are unaffected.
+
 ## Non-git catalog ingestion
 
 `CatalogIngestor` (`mewbo_graph.wiki.catalog`) — direct write (no agent/tree-sitter):
@@ -108,11 +140,18 @@ validation against the PUBLIC `project` name.
 `QA_TERMINAL_STATUSES = {complete, cancelled, error}`) is the terminal flag a
 NON-streaming consumer needs (the MCP `ask_wiki` poll over `GET /v1/wiki/qa/<id>`
 — the SSE stream already had its `complete` event). It is set at each accept
-state: the terminal `sources` block (`emit_block._finalize_snapshot` →
-`status="complete"`) and `WikiQaSession.cancel` (`status="cancelled"`). Set it
+state: the terminal `wiki_emit_answer` call (`QaFinalizer.close` →
+`status="complete"`, or `"error"` on a zero-block close) and
+`WikiQaSession.cancel` (`status="cancelled"`). Set it
 through `store.save_qa(answer)` so both store backends round-trip it onto the
 snapshot. Any NEW QA terminal path MUST set the status too, or a snapshot poller
 waits out its timeout.
+
+That same snapshot is the **idempotent-replay source for the console `?answer=<id>`
+URL (#165)**: a completed answer is fully reconstructable from `GET /v1/wiki/qa/<id>`
+(blocks + cited + accessed + models), so a refresh/share replays it with zero LLM —
+the FE deep-links the id instead of re-POSTing `/v1/wiki/qa`. No BE change was needed;
+the persistence already existed (see console `CLAUDE.md` → "Idempotent Q&A URL").
 
 ## SSE plumbing — proxy buffer + resume
 
@@ -193,6 +232,26 @@ Onboard (`jobs.start`) saves the credential BEFORE stripping the token; refresh
 (`jobs.refresh`) restores it onto the reconstructed submission (THE line that
 fixes token-less re-index); finalize keeps `CloneTokenCache.forget` but NEVER
 deletes the persisted credential (re-index needs it); project-delete drops it.
+
+## Branch picker — `POST /v1/wiki/branches` + ref threading
+
+The wizard's generation step lets the user pick a branch. `post_branches`
+resolves the remote's heads via the down-layer `RemoteBranchLister`
+(`git ls-remote --symref`, host-agnostic — see `mewbo_graph/CLAUDE.md`) and
+returns `{branches, defaultBranch}`. Credential resolution is the SAME chain as
+clone but **jobless**: there is no `job_id` yet at onboarding, so there is no warm
+`CloneTokenCache` tier — body `token` → durable `CredentialStore.load(slug)`
+(token → URL inject, ssh_key → key file), nothing else. `BranchListRequest`/the
+`{branches, defaultBranch}` reply are api-side transport models (never persisted),
+not `mewbo_graph` domain types. `ls-remote` failure → the standard `repo_access`
+envelope (no new error code).
+
+The chosen branch is `WizardSubmission.ref`. `_render_user_query` emits a `ref:`
+line ONLY when set — an omitted ref keeps the rendered query byte-identical to the
+default-branch behaviour (so the golden render tests don't churn) — and the
+`wiki-indexer` playbook passes it to `wiki_clone_repo`. The RESUME path is
+unchanged: it pins the recorded `commit_sha` as the clone ref (a resume re-clones
+the exact indexed commit, NOT the chosen branch's latest HEAD).
 
 ## Restart durability is checkpoint-aware resume (Gitea #54, Part B)
 
@@ -322,30 +381,68 @@ best-first beam over typed edges → consensus → early-stop) is instrumented *
 probe prompt**, not a deterministic engine — the orchestrator IS the prober. Durable
 decisions:
 
-- **Root has NO retrieval tools by design** (`QA_TOOLS` = list_pages/emit/insight +
-  spawn/check). That's what FORCES delegation; giving the root the retrieval surface is
-  exactly how it regressed to read-one-page-and-stop. The probe leaf
-  (`wiki-qa-probe.md`) owns the read-only retrieval surface.
-- **`approval_callback` is inherited parent→child**, so `_approve_qa_tool` must admit
-  `QA_APPROVED_TOOLS` = root tools ∪ the probe's retrieval tools ∪ `steer_agent`. Admit
-  only the root set and every probe call falls ASK→DENY — the fan-out silently does
-  nothing. This is the non-obvious gotcha.
-- **The terminal `sources` block IS the accept state** (the `EmitStructuredResponseTool`
-  pattern): `wiki_emit_block` of a `sources` block drives `QaFinalizer.close` (reconcile
-  snapshot + `complete`) and sets `should_terminate_run()`. So completion is a clean
-  LLM-native submission, not a hook reconstruction. `QaSessionEndHook` (on_session_end)
-  is the NET for a run that halts before the sources block (+ stamps `models_used`).
+- **Root has NO retrieval tools *in its allowlist* by design** (`QA_TOOLS` =
+  list_pages/emit/insight + spawn/check). That's what FORCES delegation via the PROMPT;
+  handing the root the retrieval surface is exactly how it regressed to
+  read-one-page-and-stop. The probe leaf (`wiki-qa-probe.md`) owns retrieval. CAVEAT
+  (#172): the capability GATE (`SessionToolRegistry.build_for`) surfaces the FULL wiki +
+  scg SessionTools onto the root AND probes anyway — the wiki manifest is
+  `requires-capabilities: [wiki]` and QA advertises `wiki` (+ runtime-granted `scg` once a
+  source is mapped) — so `strict_tool_scope` narrows only the *stateless* surface, never
+  the capability-gated SessionTools. The invariant is upheld by the PROMPT (delegate +
+  graph-first), not the allowlist.
+- **Greedy graph-first is the intended QA behavior (#172).** The root spawns the FEWEST
+  probes that cover the question (default 1–2) and emits as soon as the findings answer —
+  no confirmatory/marginal probes (that tail was the p90=54-tool blow-up). Probes go
+  GRAPH + REAL SOURCE first (`wiki_query_graph`/`wiki_graph_neighbors`/`wiki_read_file`),
+  demoting generated pages (`wiki_read_page`/`wiki_search_pages`) and semantic
+  `wiki_code_search` (embeddings may be BM25-degraded — graph nav always works) to
+  last-resort orientation. Prompt-only; the #70/#170 anti-under-answering guards survive —
+  the structure floor is now scoped to architectural/how-does-X questions, so a narrow
+  lookup answers concisely instead of padding.
+- **The QA run is read-only + self-approving (`approval_callback=auto_approve`, #172).**
+  Deliberately NO hand-maintained admit-list. A restrictive callback could not narrow the
+  capability-gated surface above (it bypasses `strict_tool_scope`) — it only turned a
+  capability-surfaced read-only call (e.g. `agentic_search`, which is GET-classified so it
+  even auto-executes) into an unanswerable ASK/park in the headless flow (the
+  `awaiting_approval` stall). `auto_approve` is the posture every other headless drive uses;
+  the probe prompt — not a permission gate — steers retrieval. (Fully CLOSING the surface
+  would need `build_for` to honor strict scope: a separate core seam, out of scope here.)
+- **ONE atomic `wiki_emit_answer` call IS the accept state** (the `EmitStructuredResponseTool`
+  pattern): the model delivers the WHOLE answer as a single `{blocks: [...]}` call — every
+  block schema-validated (positional errors ride the tool feedback loop), exactly one
+  `sources` block required LAST — and the tool fans the array into the per-block
+  `block_open`/`block_close` QA events server-side (SSE stream + console untouched), drives
+  `QaFinalizer.close`, and sets `should_terminate_run()`. **Contract-shape lesson:** the old
+  per-block `wiki_emit_block × N` choreography fought how models compose (whole answer in one
+  pass) — a weaker model narrated the call sequence as plain TEXT at the fuse step and
+  delivered nothing. Align the contract to the composition grain instead of stacking prompt
+  guards. `QaSessionEndHook` (on_session_end) is the NET: a no-error run with ZERO blocks gets
+  exactly ONE corrective re-drive (`nudge` marker event bounds it; the guard is domain state —
+  zero `block_open` events — never text-format sniffing), and a still-empty close is an honest
+  `error`, never an empty `complete` (`QaFinalizer.close`).
 - **`QaFinalizer` lives DOWN in `mewbo_graph.wiki.qa`** (with `QaAnswer` + the store),
   so both the terminal emit (same layer) and the API net (imports down) call it. It
   rebuilds `blocks` + `summary_sources` from the append-only log — previously NOTHING
   did, so a reloaded/shared answer came back empty (`blocks=[]`) and the SSE stream only
   ended by idle-timeout.
 - **Two kinds of citation, captured deterministically.** `summary_sources` = the LLM's
-  curated sources block. `accessed_sources` = the full trail of every graph node / file
-  / page a probe TOUCHED — each retrieval tool records a compact `access` event
-  (`WikiSessionTool._record_qa_access`); the finalizer folds + de-dups them. `models_used`
-  is the only provenance needing the transport layer (the transcript's `llm_call` model),
-  so `QaSessionEndHook` reads it and `QaFinalizer.enrich` stamps it post-close.
+  curated sources block. `accessed_sources` = the retrieval trail — but it is **bounded +
+  score-ranked**, not "every node a probe touched" (#165). Each retrieval tool records a
+  structured `QaAccessRecord {ref, score, rank, tool, op, ok}` (`mewbo_graph.wiki.qa_access`)
+  via `WikiSessionTool._record_qa_access`: graph-NAVIGATION tools (`wiki_query_graph` /
+  `wiki_graph_neighbors`) record only their seed (navigation ≠ grounding), the ranked search
+  tools record only hits clearing a score floor (`…_SCORE_RATIO`, default 0.5× the top hit),
+  and `QaFinalizer._accessed_from_events` folds → dedupe-by-ref (best score) → score-desc →
+  top-N cap (`MEWBO_WIKI_QA_ACCESS_TOPN`, default 12). This killed the ~200-source sprawl
+  (171 raw `graph:` nodes in a real run) the old unranked dump produced; `HybridRetriever`
+  stays the one ranking engine. **Cited sources now REPRESENT file/graph, not just pages
+  (#172):** files were the most-read source yet `summary_sources` was ~100% page-slugs, so
+  `QaFinalizer._summary_sources` folds the non-page refs off that bounded/ranked trail into
+  the cited set — curated pages first, then the files/symbols the answer grounded on
+  (`wiki:` trail refs skipped; the curated half owns pages). `GET /qa/<id>` resolves
+  `graph:` refs for BOTH panels via `AccessedSourceResolver`. `models_used` rides
+  `QaSessionEndHook` / `QaFinalizer.enrich`.
 
 ## Q&A answer depth + cited-sources viewer
 
@@ -354,16 +451,21 @@ truncates; it passes blocks straight from the event log. Two recurring-regressio
 guards live in the prompts (`mewbo_graph/.../agents/wiki-qa.md`,
 `wiki-qa-probe.md`):
 
-- **Structured-output floor.** `wiki-qa.md` MANDATES minimum structure (a lead
-  `p` direct answer + ≥1 `h2` facet section + ≥2 supporting `p`, then the
-  `sources` block) for non-trivial questions; only a yes/no or single-value
-  lookup may be one paragraph. Without an explicit floor the model reads "quick +
-  authoritative" as "be brief" and emits one paragraph + `sources` — the
-  DeepWiki-parity regression. "Quick" means LATENCY (don't spawn marginal extra
-  probes), never answer brevity. The probe contract was un-capped (the old
-  "2–5 terse claims" starved the fused answer). Only emit kinds in the
-  `types.py` block union (`p/h2/h3/hr/ul/accordion/sources/table/diagram` — NO
-  `ol`; express ordered lists as markdown prefixes inside a `ul`/`p`).
+- **Structured-output floor — scoped to architectural Qs (#172).** `wiki-qa.md`
+  MANDATES minimum structure (a lead `p` direct answer + ≥1 `h2` facet section +
+  ≥2 supporting `p`, then the `sources` block) for an **architectural / "how does
+  X work" / relationship** question — the ones that span components. A narrow
+  question (yes/no, single-value or single-fact lookup, "where/what is X", a
+  definition) answers concisely in the lead `p` + `sources` and is NOT padded into
+  sections. Without the floor the model reads "quick + authoritative" as "be brief"
+  and one-paragraphs an architectural answer — the reference-parity regression
+  (#70/#170); scoping it (rather than dropping it) keeps that guard for the
+  questions that need it while letting greedy narrow answers stay tight. "Quick"
+  means LATENCY (fewest probes, emit as soon as covered), never answer brevity. The
+  probe contract stays un-capped (the old "2–5 terse claims" starved the fused
+  answer). Only emit kinds in the `types.py` block union
+  (`p/h2/h3/hr/ul/accordion/sources/table/diagram` — NO `ol`; express ordered lists
+  as markdown prefixes inside a `ul`/`p`).
 - **Inline citations = `src:` links.** The prompt emits
   `[path:line](src:path#L<a>-<b>)`; probes MUST pass `start_line`/`end_line` to
   `wiki_read_file` so the citation carries a precise range (a bare path can't open
@@ -371,14 +473,18 @@ guards live in the prompts (`mewbo_graph/.../agents/wiki-qa.md`,
 
 **Two #70 citation/provenance fixes — both at a single deterministic seam:**
 
-- **Page citations are re-schemed at the EMIT seam.** The QA agent sometimes
-  cites a wiki PAGE as a bare path; the console's `fileCitations` then treats it
-  as a source FILE and the `SourceCard` 404s `/source` (pages live in the page
-  store, not the clone). `wiki_emit_block` runs the `sources` block through
-  `QaFinalizer.tag_page_citations` (`mewbo_graph.wiki.qa`) BEFORE it lands on the
-  log — a bare ref whose id ∈ the real page set becomes `wiki:<page-id>`. One seam
-  fixes the LIVE stream AND the reconciled snapshot together; the FE already drops
-  `wiki:` from the file cards. File / `path#L…` / `graph:` refs pass through.
+- **Page citations are re-schemed at the EMIT seam (by id OR title — #165).** The QA
+  agent cites a wiki PAGE the console would otherwise treat as a source FILE and 404 on
+  `/source` (pages live in the page store, not the clone). `wiki_emit_answer` runs the
+  `sources` block (and the `summary_ready` page ids) through
+  `QaFinalizer.tag_page_citations` (`mewbo_graph.wiki.qa`): a bare ref becomes
+  `wiki:<page-id>` when its slugified form matches a page id **OR a slugified page TITLE**
+  — the model frequently emits the human title ("Agent X Search Subsystem"), not the slug
+  ("agent-x-search-subsystem"), which was the residual "file not found". Match reuses the
+  core `_slugify` as a symmetric normalizer; the scheme guard is anchored to the closed
+  `wiki|graph|src|entity` set so a colon-bearing title still matches. One seam fixes LIVE
+  stream + snapshot together. The FE now RENDERS the `wiki:` card (single-page fetch) rather
+  than dropping it — see console `CLAUDE.md`. File / `path#L…` / `graph:` refs pass through.
 - **Retrieve-details hashes are resolved at READ.** `accessed_sources` records
   graph nodes as `graph:<node_id>` (content-addressed sha1 — opaque in the panel).
   `GET /v1/wiki/qa/<id>` humanises them via `AccessedSourceResolver.resolve_refs`

@@ -80,7 +80,7 @@
         },
         "llm_call_timeout": {
           "default": 120.0,
-          "description": "Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models (raised from 60s \u2014 bare timeouts were the largest single failure class). On timeout, the call is retried up to llm_call_retries times before cascading to fallback models.",
+          "description": "Ceiling in seconds for a single model.ainvoke() call. Covers extended-thinking models (raised from 60s because bare timeouts were the largest single failure class). On timeout, the call is retried up to llm_call_retries times before cascading to fallback models.",
           "title": "Llm Call Timeout",
           "type": "number"
         },
@@ -123,7 +123,7 @@
         },
         "plan_mode_allow_mcp": {
           "default": true,
-          "description": "Allow ALL user-enabled MCP tools (tools with kind='mcp') during plan mode. Matches Claude Code's permissive default and trusts the user's mcp.json configuration. Set to false to block MCP tools in plan mode regardless of their read-only status.",
+          "description": "Allow ALL user-enabled MCP tools (tools with kind='mcp') during plan mode. Uses a permissive default and trusts the user's mcp.json configuration. Set to false to block MCP tools in plan mode regardless of their read-only status.",
           "title": "Plan Mode Allow Mcp",
           "type": "boolean"
         },
@@ -160,6 +160,10 @@
           "description": "Disable the Textual TUI and fall back to plain Rich output.",
           "title": "Disable Textual",
           "type": "boolean"
+        },
+        "remote": {
+          "$ref": "#/$defs/CliRemoteConfig",
+          "description": "Opt-in remote session sync + product tools (CLI-only)."
         },
         "approval_style": {
           "default": "inline",
@@ -203,8 +207,32 @@
       "x-group": "interface",
       "x-order": 2
     },
+    "CliRemoteConfig": {
+      "additionalProperties": false,
+      "description": "Opt-in remote endpoint for the terminal CLI \u2014 CLI-scoped ONLY.\n\nEvery other surface ignores this block. When ``base_url`` is set the CLI is\nstill a strictly-local engine (the run loop + authoritative JSONL transcript\nstay on this host), but it additionally (a) mirrors each session event to the\nremote REST API fire-and-forget for cross-device visibility and (b)\nauto-registers the Mewbo MCP server so the product tools\n(``ask_wiki``/``search``/``structured_query`` + wiki-graph reads) appear in\nthe CLI registry and execute remotely (compute offload). Empty \u21d2 fully local.",
+      "properties": {
+        "base_url": {
+          "default": "",
+          "description": "Base URL of the remote Mewbo deployment \u2014 a reverse-proxy root that serves the REST API under ``/api`` and the Mewbo MCP server under ``/mcp``. Empty (default) \u21d2 the CLI is fully local.",
+          "examples": [
+            "https://mewbo.example.com"
+          ],
+          "title": "Base Url",
+          "type": "string"
+        },
+        "token": {
+          "default": "",
+          "description": "API token presented to the remote deployment: sent as ``X-API-Key`` to the REST API for transcript sync and as a ``Bearer`` token to the Mewbo MCP server (which forwards it to the REST API). ``${ENV_VAR}`` references are expanded by the CLI at use time.",
+          "title": "Token",
+          "type": "string",
+          "x-secret": true
+        }
+      },
+      "title": "CLI Remote",
+      "type": "object"
+    },
     "CompactionConfig": {
-      "description": "Summarization prompt selection for conversation compaction.\n\n``caveman_mode`` enables a rule-augmented prompt (inspired by the\n``JuliusBrussee/caveman`` Claude Code skill) that instructs the\nsummarizer LLM to drop articles, filler, pleasantries, and hedging\nwhile preserving code, paths, URLs, and error strings verbatim.\nReduces output tokens in the compaction summary without changing the\n``<analysis>/<summary>`` response structure downstream parsers expect.",
+      "description": "Summarization prompt selection for conversation compaction.\n\n``caveman_mode`` enables a rule-augmented \"caveman\" prompt that\ninstructs the summarizer LLM to drop articles, filler, pleasantries,\nand hedging while preserving code, paths, URLs, and error strings\nverbatim. Reduces output tokens in the compaction summary without\nchanging the\n``<analysis>/<summary>`` response structure downstream parsers expect.",
       "properties": {
         "caveman_mode": {
           "default": false,
@@ -885,6 +913,12 @@
           "default": false,
           "description": "Run connectivity checks for LLM, Langfuse, and Home Assistant on startup.",
           "title": "Preflight Enabled",
+          "type": "boolean"
+        },
+        "developer_mode": {
+          "default": false,
+          "description": "Enable developer mode. Unlocks graph-only (no-LLM) repository onboarding so contributors can inspect AST graph construction without documentation generation. Read by the API, console, and CLI.",
+          "title": "Developer Mode",
           "type": "boolean"
         },
         "cache_dir": {

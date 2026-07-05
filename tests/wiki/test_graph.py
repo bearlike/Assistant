@@ -88,6 +88,99 @@ def test_stable_node_id_deterministic(graph):
     assert ids1 == ids2
 
 
+# ── capture-pairing regression (names must bind to their OWN def) ───────────────
+#
+# ``QueryCursor.captures()`` groups matches per capture NAME, but the per-name
+# lists are NOT guaranteed to be mutually index-aligned — their order varies
+# run-to-run. ``_extract`` used to ``zip(captures["class.def"], captures
+# ["class.name"])``, which silently attached a node's name to the WRONG def's
+# byte range whenever the two lists came back in different orders (corrupting the
+# graph + any downstream resolver that matches on name). The fix orders each list
+# by start byte before zipping; this test forces the worst-case misalignment
+# (defs descending, names ascending) so it fails deterministically without it.
+
+_PAIR_SRC = b"""\
+class Base:
+    def run(self):
+        return 1
+
+
+class Mid:
+    def step(self):
+        return 2
+
+
+class Alpha(Base):
+    def run(self):
+        return 3
+
+
+class Beta(Mid):
+    def go(self):
+        return 4
+"""
+
+
+def _misaligned_python_captures(source: bytes) -> dict:
+    """Real python captures with each def/name pair forced into OPPOSITE orders.
+
+    Deterministically reproduces the nondeterministic real-world misalignment:
+    every ``*.def`` (and ``superclass.name``) list is reversed relative to its
+    partner, so an order-naive ``zip`` mispairs every node.
+    """
+    import tree_sitter_language_pack as tlp
+    from tree_sitter import Parser, Query, QueryCursor
+
+    lang = tlp.get_language("python")
+    scm = (
+        Path(__file__).parents[2]
+        / "packages/mewbo_graph/src/mewbo_graph/wiki/graph_queries/python.scm"
+    ).read_text(encoding="utf-8")
+    caps = QueryCursor(Query(lang, scm)).captures(Parser(lang).parse(source).root_node)
+    asc = lambda nodes: sorted(nodes, key=lambda n: n.start_byte)  # noqa: E731
+    desc = lambda nodes: sorted(nodes, key=lambda n: -n.start_byte)  # noqa: E731
+    for def_key, name_key in (
+        ("class.def", "class.name"),
+        ("function.def", "function.name"),
+        ("method.def", "method.name"),
+    ):
+        if def_key in caps:
+            caps[def_key] = desc(caps[def_key])
+            caps[name_key] = asc(caps[name_key])
+    if "superclass.name" in caps:
+        caps["superclass.name"] = desc(caps["superclass.name"])
+        caps["subclass.name"] = asc(caps["subclass.name"])
+    return caps
+
+
+def test_extract_binds_names_to_own_def_under_misaligned_captures():
+    pytest.importorskip("tree_sitter_language_pack")
+    from mewbo_graph.wiki.graph import _extract, _stable_id
+
+    caps = _misaligned_python_captures(_PAIR_SRC)
+    result = _extract("s/r", "m.py", _PAIR_SRC, caps)
+
+    # Every Class/Method/Function node's NAME must match the source at its range.
+    classes = {n.name: n for n in result.nodes if n.type == "Class"}
+    assert set(classes) == {"Base", "Mid", "Alpha", "Beta"}
+    callables = [n for n in result.nodes if n.type in ("Class", "Method", "Function")]
+    for n in callables:
+        head = _PAIR_SRC[n.range[0] : n.range[1]]
+        kw = b"class " if n.type == "Class" else b"def "
+        assert head.startswith(kw + n.name.encode()), (
+            f"{n.type} {n.name!r} bound to wrong range: {head[:20]!r}"
+        )
+
+    # EXTENDS must pair the right subclass with the right superclass.
+    extends = {
+        e.source: e.target_name for e in result.edges if e.type == "EXTENDS"
+    }
+    alpha = _stable_id("s/r", "Class", "Alpha", "m.py", _PAIR_SRC.index(b"Alpha"))
+    beta = _stable_id("s/r", "Class", "Beta", "m.py", _PAIR_SRC.index(b"Beta"))
+    assert extends.get(alpha) == "Base"
+    assert extends.get(beta) == "Mid"
+
+
 # ── multi-language tests ───────────────────────────────────────────────────────
 
 

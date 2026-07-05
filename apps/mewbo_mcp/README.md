@@ -1,6 +1,6 @@
 # Mewbo MCP Server
 
-Standalone [MCP](https://modelcontextprotocol.io) server that wraps the Mewbo REST API as a set of tools, so external agents (Claude, Devin, etc.) can create and control Mewbo sessions, read session history at tiered detail levels, query the Agentic Wiki, and run Mewbo Search across saved multi-source workspaces.
+Standalone [MCP](https://modelcontextprotocol.io) server that wraps the Mewbo REST API as a set of tools, so external agents (Claude Code and other MCP-compatible coding agents) can create and control Mewbo sessions, read session history at tiered detail levels, query the Agentic Wiki, and run Mewbo Search across saved multi-source workspaces.
 
 - No components are explicitly tested for safety or security. Use with caution in production.
 - For full deployment setup, see `docs/getting-started.md`.

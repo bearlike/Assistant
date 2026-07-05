@@ -44,6 +44,17 @@ logging = get_logger(name="core.skills")
 _NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,62}[a-z0-9]?$")
 _MAX_DESCRIPTION_LEN = 1024
 _SHELL_PATTERN = re.compile(r"!\`([^`]+)\`")
+
+
+def _slugify_skill_name(name: str) -> str:
+    """Normalize a human skill name to the lowercase-hyphen contract.
+
+    ``Bug Fix`` → ``bug-fix``, ``Code_Review`` → ``code-review``. Returns ``""``
+    when nothing usable remains, so the caller can still reject a genuinely
+    empty/garbage name rather than fabricate one.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug[:64].strip("-")
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
@@ -139,12 +150,19 @@ def _parse_skill_file(
 
     name = name.strip()
     if not _NAME_RE.match(name):
-        logging.warning(
-            "Invalid skill name '{}' in {} (must be lowercase, hyphens, max 64 chars)",
-            name,
-            path,
-        )
-        return None
+        # A human-friendly frontmatter name (e.g. ``Bug Fix``) is normalized to
+        # the lowercase-hyphen contract rather than dropping the whole skill.
+        slug = _slugify_skill_name(name)
+        if slug and _NAME_RE.match(slug):
+            logging.debug("Normalized skill name '{}' → '{}' in {}", name, slug, path)
+            name = slug
+        else:
+            logging.warning(
+                "Invalid skill name '{}' in {} (must be lowercase, hyphens, max 64 chars)",
+                name,
+                path,
+            )
+            return None
 
     description = description.strip()[:_MAX_DESCRIPTION_LEN]
 
@@ -197,6 +215,10 @@ def discover_skills(cwd: str | None = None) -> list[SkillSpec]:
     1. Personal: ``~/.claude/skills/*/SKILL.md``
     2. Project:  ``<cwd>/.claude/skills/*/SKILL.md``
     3. Subtree:  ``<cwd>/**/.claude/skills/*/SKILL.md`` (max depth 5, no override)
+
+    The subtree walk stays inside the current project: it never descends into a
+    nested repo (a subdir with its own ``.git``), so sibling/unrelated projects
+    under a shared parent (e.g. ``~/Projects``) don't leak their skills in.
     """
     skills: dict[str, SkillSpec] = {}
 
@@ -248,11 +270,18 @@ def _discover_subtree_skills(
     for dirpath, dirnames, _filenames in os.walk(root):
         rel = Path(dirpath).relative_to(root)
         depth = len(rel.parts)
-        # Prune non-project dirs (must happen before any continue)
+        # Prune non-project dirs (must happen before any continue). Also stop at
+        # NESTED PROJECT BOUNDARIES: a child carrying its own ``.git`` is a
+        # separate repo/submodule, so descending into it would harvest an
+        # unrelated project's skills (cross-project leakage — e.g. sibling repos
+        # under a shared parent like ``~/Projects``). Skill discovery is scoped
+        # to the current project tree + personal/global skills only.
         dirnames[:] = [
             d
             for d in dirnames
-            if not d.startswith(".") and d not in ("node_modules", "__pycache__", ".venv", "venv")
+            if not d.startswith(".")
+            and d not in ("node_modules", "__pycache__", ".venv", "venv")
+            and not (Path(dirpath) / d / ".git").exists()
         ]
         if depth > max_depth:
             dirnames.clear()

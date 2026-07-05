@@ -24,16 +24,21 @@ dependencies = [
 #
 # Pins track the API the code actually uses, not just "something installable":
 #   * tree-sitter >=0.25 — graph.py uses ``QueryCursor`` (0.25+).
-#   * tree-sitter-language-pack >=1.8,<2 — the 1.x line is a Rust-native rewrite
-#     that fetches parsers at runtime and exposes ``cache_dir()``/``download()``
-#     (graph.py:_load_ts_language depends on both). The old ``>=0.3`` floor was
-#     unbounded: a rebuild silently jumped 0.x (bundled parser wheels, no
-#     network) to 1.x (runtime GitHub download), which is what introduced the
-#     "Download error: ... 504" indexing failure. Cap below 2.0 so the next
-#     major can't repeat that behavioural break without an explicit bump.
+#   * tree-sitter-language-pack >=1.12,<2 — the wheel does NOT bundle grammars;
+#     ``get_language()`` fetches the requested parser over the network on first
+#     use and caches it under ``~/.cache/tree-sitter-language-pack/v<ver>/libs``
+#     (verified empirically — do not re-assume "bundled"). That first-use
+#     download is a landmine for air-gapped/offline deploys, so production
+#     images pre-warm the cache at build time via
+#     ``python -m mewbo_graph.wiki.prefetch`` (see that module). ``get_language``
+#     is still the library's supported API — never go back to the manual
+#     ``cache_dir()``/``download()``/ctypes loading path (that broke once
+#     ``download()`` became a no-op in 1.10.x, failing with "cannot open shared
+#     object file"). Cap below 2.0 so the next major can't change the fetch/cache
+#     contract without an explicit bump + re-verify.
 treesitter = [
   "tree-sitter>=0.25",
-  "tree-sitter-language-pack>=1.8,<2",
+  "tree-sitter-language-pack>=1.12,<2",
 ]
 # Hybrid dense+sparse retrieval. Embeddings ride litellm (already a
 # mewbo-core dependency) against the LiteLLM proxy — no extra embedding
@@ -43,6 +48,13 @@ retrieval = [
   "numpy>=1.26",
   "rapidfuzz>=3.0",
 ]
+# Faithful per-language symbol resolution (wiki/resolve) — replaces the
+# name-match heuristic with exact, Pyright-backed links. It has NO Python
+# dependency: scip-python + scip are external CLI binaries (Node + Go), so the
+# feature is gated on binary availability (`ScipPythonResolver.is_available()`),
+# the import-guard's runtime analogue. The extra exists as the forward home for
+# any future pure-Python SCIP parser that would let us drop the `scip` binary.
+resolve = []
 # Everything the wiki + search products need at full strength.
 full = [
   "mewbo-graph[treesitter,retrieval]",

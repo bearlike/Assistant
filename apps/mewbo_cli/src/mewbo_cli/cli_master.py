@@ -5,12 +5,8 @@
 import argparse
 import json
 import os
-import queue
 import sys
-import threading
-from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -20,15 +16,11 @@ from prompt_toolkit.history import FileHistory
 from rich import box
 from rich.columns import Columns
 from rich.console import Console, Group, RenderableType
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.rule import Rule
 from rich.status import Status
 from rich.syntax import Syntax
 from rich.text import Text
-
-from mewbo_cli.cli_keys import KeyListener
 
 
 def _verbosity_to_level(verbosity: int) -> str:
@@ -90,6 +82,7 @@ from mewbo_core.config import (
 )
 from mewbo_core.hooks import HookManager
 from mewbo_core.permissions import auto_approve
+from mewbo_core.session_event_bus import get_session_event_bus
 from mewbo_core.session_runtime import SessionRuntime
 from mewbo_core.session_store import SessionStoreBase, create_session_store
 from mewbo_core.task_master import generate_action_plan
@@ -109,11 +102,42 @@ from mewbo_cli.aider_ui import (
     render_markdown,
     render_shell_payload,
 )
-from mewbo_cli.cli_agent_display import AgentDisplayManager
 from mewbo_cli.cli_commands import get_registry
 from mewbo_cli.cli_completer import MewboCompleter
 from mewbo_cli.cli_context import CliState, CommandContext
-from mewbo_cli.cli_dialogs import _confirm_rich_panel
+from mewbo_cli.cli_dialogs import _confirm_rich_panel, _textual_enabled
+from mewbo_cli.cli_notices import (
+    maybe_print_recovery_hint,
+    print_resilience_events,
+    print_usage_footer,
+)
+from mewbo_cli.cli_remote import (
+    RemoteTranscriptSync,
+    expand_env,
+    mewbo_mcp_server_config,
+    sink_facet,
+    sink_label,
+)
+from mewbo_cli.cli_theme import DEFAULT_PALETTE, Palette
+from mewbo_cli.tui.agent_transcript_hub import AgentTranscriptHub
+from mewbo_cli.tui.app import MewboApp
+from mewbo_cli.tui.fleet_bridge import make_fleet_hook_factory
+from mewbo_cli.tui.permission_service import (
+    PermissionRuleStore,
+    install_permission_service,
+)
+from mewbo_cli.tui.seams import (
+    InputGateway,
+    MessageRendererRegistry,
+    PermissionGateway,
+    SidebarSlotRegistry,
+)
+from mewbo_cli.tui.transcript_render import register_transcript_renderers
+from mewbo_cli.tui.turn_engine import TurnEngine
+from mewbo_cli.tui.widgets.header import HeaderContext, HeaderView
+from mewbo_cli.tui.widgets.orchestration_cards import register_orchestration_cards
+from mewbo_cli.tui.widgets.permission_modal import PermissionModal
+from mewbo_cli.tui.widgets.plan_modal import PlanApprovalModal
 
 logging = get_logger(name="mewbo.cli")
 
@@ -177,192 +201,10 @@ def _resolve_query_mode(query: str, state: CliState) -> str:
     return state.mode if state.mode in {"plan", "act"} else "act"
 
 
-@dataclass(frozen=True)
-class HeaderContext:
-    """Structured data needed to render the CLI header."""
-
-    title: str
-    version: str
-    status_label: str
-    status_color: str
-    model: str
-    session_id: str
-    base_url: str
-    langfuse_enabled: bool
-    langfuse_reason: str | None
-    builtin_enabled: int
-    builtin_disabled: int
-    external_enabled: int
-    external_disabled: int
-    skill_count: int = 0
-
-
-def _truncate_middle(text: str, max_len: int) -> str:
-    if max_len <= 0:
-        return ""
-    if len(text) <= max_len:
-        return text
-    if max_len <= 3:
-        return text[:max_len]
-    keep = max_len - 3
-    head = max(1, keep // 2)
-    tail = keep - head
-    return f"{text[:head]}...{text[-tail:]}"
-
-
-def _short_model(model: str, max_len: int = 28) -> str:
-    return _truncate_middle(model, max_len)
-
-
-def _short_url(base_url: str, max_len: int = 36) -> str:
-    return _truncate_middle(base_url, max_len)
-
-
-def _format_model(model: str, max_len: int) -> Text:
-    shortened = _short_model(model, max_len)
-    if "/" not in shortened:
-        return Text(shortened, style="bright_white")
-    provider, name = shortened.split("/", 1)
-    text = Text()
-    text.append(provider, style="cyan")
-    text.append("/", style="dim")
-    text.append(name, style="bright_white")
-    return text
-
-
-def _resolve_cli_version() -> str:
-    return get_version()
-
-
-def _brand_line(ctx: HeaderContext, width: int) -> Text:
-    title = f"■ {ctx.title} v{ctx.version}"
-    status = f"o {ctx.status_label}"
-    spacing = max(1, width - len(title) - len(status))
-    line = Text()
-    line.append(title, style="bold bright_cyan")
-    line.append(" " * spacing)
-    line.append(status, style=f"bold {ctx.status_color}")
-    return line
-
-
-def _kv_line(label: str, value: Text | str, label_width: int) -> Text:
-    line = Text()
-    line.append(label.ljust(label_width), style="dim")
-    line.append(" ")
-    if isinstance(value, Text):
-        line.append_text(value)
-    else:
-        line.append(value)
-    return line
-
-
-def _langfuse_value(ctx: HeaderContext) -> Text:
-    status = Text()
-    status.append("o ", style="green" if ctx.langfuse_enabled else "red")
-    status.append("on" if ctx.langfuse_enabled else "off", style="dim")
-    return status
-
-
-def _tools_value(ctx: HeaderContext) -> Text:
-    text = Text()
-    label_builtin = "built-in"
-    label_external = "external"
-
-    text.append(f"{label_builtin} ", style="dim")
-    text.append("o", style="green")
-    text.append(f" {ctx.builtin_enabled}", style="dim")
-    text.append(" (", style="dim")
-    text.append("o", style="red")
-    text.append(f" {ctx.builtin_disabled}", style="dim")
-    text.append(") ", style="dim")
-
-    text.append("• ", style="dim")
-    text.append(f"{label_external} ", style="dim")
-    text.append("o", style="green")
-    text.append(f" {ctx.external_enabled}", style="dim")
-    text.append(" (", style="dim")
-    text.append("o", style="red")
-    text.append(f" {ctx.external_disabled}", style="dim")
-    text.append(")", style="dim")
-    return text
-
-
-HEADER_STYLE = "on #0e0e0e"
-
-
-def _render_header_wide(console: Console, ctx: HeaderContext) -> None:
-    console.print()
-    console.print(Rule(style="dim"), style=HEADER_STYLE)
-    console.print(_brand_line(ctx, console.width), style=HEADER_STYLE)
-
-    skills_text = Text()
-    style = "dim" if ctx.skill_count else "red dim"
-    skills_text.append(f"{ctx.skill_count} available", style=style)
-    fields: list[tuple[str, Text | str]] = [
-        ("model", _format_model(ctx.model, 40)),
-        ("session", ctx.session_id or "(not set)"),
-        ("base", _short_url(ctx.base_url, 60) if ctx.base_url else "(not set)"),
-        ("langfuse", _langfuse_value(ctx)),
-        ("tools", _tools_value(ctx)),
-        ("skills", skills_text),
-    ]
-    label_width = max(len(label) for label, _ in fields)
-    for label, value in fields:
-        console.print(_kv_line(label, value, label_width), style=HEADER_STYLE)
-    console.print(Rule(style="dim"), style=HEADER_STYLE)
-    console.print()
-
-
-def _render_header_normal(console: Console, ctx: HeaderContext) -> None:
-    console.print()
-    console.print(Rule(style="dim"), style=HEADER_STYLE)
-    console.print(_brand_line(ctx, console.width), style=HEADER_STYLE)
-
-    fields: list[tuple[str, Text | str]] = [
-        ("model", _format_model(ctx.model, 34)),
-        ("session", ctx.session_id or "(not set)"),
-        ("langfuse", _langfuse_value(ctx)),
-        ("tools", _tools_value(ctx)),
-    ]
-    if ctx.base_url and console.width >= 85:
-        fields.append(("base", _short_url(ctx.base_url, 40)))
-    label_width = max(len(label) for label, _ in fields)
-    for label, value in fields:
-        console.print(_kv_line(label, value, label_width), style=HEADER_STYLE)
-    console.print(Rule(style="dim"), style=HEADER_STYLE)
-    console.print()
-
-
-def _render_header_tiny(console: Console, ctx: HeaderContext) -> None:
-    model = _format_model(ctx.model, 22)
-    line = Text("- ", style="dim")
-    line.append(f"■ {ctx.title} v{ctx.version}", style="bold bright_cyan")
-    line.append(" ")
-    line.append("o", style=ctx.status_color)
-    line.append(f" {ctx.status_label} ", style="dim")
-    line.append_text(model)
-    console.print()
-    console.print(line, style=HEADER_STYLE)
-
-    detail = Text("  Langfuse: ", style="dim")
-    detail.append("o", style="green" if ctx.langfuse_enabled else "red")
-    detail.append(" on" if ctx.langfuse_enabled else " off", style="dim")
-    console.print(detail, style=HEADER_STYLE)
-
-    tools_line = Text("  Tools: ", style="dim")
-    tools_line.append_text(_tools_value(ctx))
-    console.print(tools_line, style=HEADER_STYLE)
-
-
-def render_header(console: Console, ctx: HeaderContext) -> None:
-    """Render the CLI header based on terminal width."""
-    width = console.width or 80
-    if width >= 100:
-        _render_header_wide(console, ctx)
-    elif width >= 70:
-        _render_header_normal(console, ctx)
-    else:
-        _render_header_tiny(console, ctx)
+# Header rendering (HeaderContext + the responsive HeaderView) moved to
+# ``mewbo_cli.tui.widgets.header`` so the App and the plain fallback share one
+# renderer; the three width-variant free functions were collapsed into
+# ``HeaderView.render(width)``.
 
 
 def run_cli(args: argparse.Namespace) -> int:
@@ -378,6 +220,22 @@ def run_cli(args: argparse.Namespace) -> int:
     if args.config:
         set_app_config_path(args.config)
     config = get_config()
+    # CLI local-first remote seam (#171): the engine still runs locally; when a
+    # remote base URL is opted into via ``cli.remote`` the CLI additionally
+    # mirrors its transcript to the remote API AND auto-registers the Mewbo MCP
+    # server so the product tools appear + execute remotely. Env-expand so the
+    # token can be a ``${VAR}`` reference; ``enabled`` keys off the resolved base.
+    remote_base = expand_env(config.cli.remote.base_url).strip()
+    remote_token = expand_env(config.cli.remote.token).strip()
+    remote_enabled = bool(remote_base)
+    if remote_enabled and not remote_token:
+        logging.warning(
+            "cli.remote.base_url is set but cli.remote.token is empty; "
+            "remote sync + product tools will fail authentication."
+        )
+    remote_extra_servers = (
+        {"mewbo": mewbo_mcp_server_config(remote_base, remote_token)} if remote_enabled else None
+    )
     if getattr(args, "log_file", None):
         from mewbo_core.common import set_cli_log_file
 
@@ -429,7 +287,25 @@ def run_cli(args: argparse.Namespace) -> int:
         fallback_models=fallback_models,
         auto_approve_all=args.auto_approve,
     )
-    tool_registry = load_registry()
+    if remote_enabled:
+        # Register the transcript mirror ONCE on the shared SessionEventBus — the
+        # CLI's ``on_event`` choke-point (the append hot path). It follows session
+        # switches via the live ``state.session_id`` provider; local JSONL stays
+        # authoritative. Every CLI surface (App / plain REPL / --query) rides this.
+        get_session_event_bus().register_observer(
+            RemoteTranscriptSync(
+                remote_base, remote_token, session_id_provider=lambda: state.session_id
+            )
+        )
+        # Provenance facet (#171): tag the synced session ``transcript_sink:synced``
+        # via the EXISTING TraceProvenance context seam so console/wiki/search can
+        # filter it apart from a purely-local CLI session (which carries no facet).
+        runtime.append_context_event(session_id, {"transcript_sink": sink_facet(enabled=True)})
+    tool_registry = (
+        load_registry(extra_mcp_servers=remote_extra_servers)
+        if remote_extra_servers
+        else load_registry()
+    )
     registry = get_registry()
 
     from mewbo_core.plugins import load_all_plugin_components
@@ -464,7 +340,7 @@ def run_cli(args: argparse.Namespace) -> int:
             external_disabled += len(missing_servers)
     except Exception:
         pass
-    version = _resolve_cli_version()
+    version = get_version()
     header_ctx = HeaderContext(
         title="Mewbo",
         version=version,
@@ -480,21 +356,456 @@ def run_cli(args: argparse.Namespace) -> int:
         external_enabled=external_enabled,
         external_disabled=external_disabled,
         skill_count=len(skill_registry.list_all()),
+        transcript_sink=sink_label(enabled=remote_enabled, base_url=remote_base),
     )
-    render_header(console, header_ctx)
-    _maybe_warn_missing_configs(console, tool_registry, config)
-    console.print("Mewbo CLI ready")
-    console.print(f"Session: {state.session_id}")
-    console.print("Type /help for commands.", style=f"dim {HEADER_STYLE}")
-    console.print()
-
+    # Single --query runs and non-interactive contexts (no TTY or
+    # MEWBO_DISABLE_TEXTUAL=1) bypass the Textual App for CI/pipes; an
+    # interactive TTY gets the full ``MewboApp``.
     if args.query:
+        _print_plain_header(console, header_ctx)
+        _maybe_warn_missing_configs(console, tool_registry, config)
         return _run_single_query(console, store, runtime, state, tool_registry, args.query, args)
 
-    history_path = _ensure_history_path(args.history_file)
-    completer = ThreadedCompleter(
-        MewboCompleter(registry.list_commands(), skill_registry)
+    if not _textual_enabled():
+        _print_plain_header(console, header_ctx)
+        _maybe_warn_missing_configs(console, tool_registry, config)
+        console.print("Mewbo CLI ready")
+        console.print(f"Session: {state.session_id}")
+        console.print("Type /help for commands.", style="dim")
+        console.print()
+        return _run_plain_repl(
+            console, store, runtime, state, tool_registry, registry, skill_registry, args
+        )
+
+    return _run_app(
+        header_ctx=header_ctx,
+        store=store,
+        runtime=runtime,
+        state=state,
+        tool_registry=tool_registry,
+        command_registry=registry,
+        skill_registry=skill_registry,
+        config=config,
+        args=args,
     )
+
+
+def _print_plain_header(console: Console, header_ctx: HeaderContext) -> None:
+    """Render the header for the non-interactive (plain) surface."""
+    console.print(HeaderView(header_ctx).render(console.width or 80))
+
+
+def _redirect_app_logs_to_file(args: argparse.Namespace) -> str | None:
+    """Silence the console log sink for the Textual App run, routing detail to a file.
+
+    The Textual ``MewboApp`` owns the alternate screen; any loguru stderr sink
+    still active during ``app.run()`` interleaves with Textual's own rendering
+    and visibly corrupts the composer/footer (most acute under ``-vv``, where
+    TRACE lines stream onto the raw alt-screen). Reuse the ``--log-file``
+    plumbing (``set_cli_log_file``) to send all log detail to a file off-screen
+    and drop the console sink — so ``-vv`` still raises *captured* detail, never
+    onto the screen.
+
+    No-op when ``--log-file`` was already passed (``run_cli`` redirected to that
+    file and quieted the console up front). The plain-REPL / ``--query`` /
+    no-TTY paths never reach here, so they keep their console logging.
+
+    Returns the file path logs were routed to, or ``None`` when already redirected.
+    """
+    if getattr(args, "log_file", None):
+        return None
+    from mewbo_core.common import set_cli_log_file
+    from mewbo_core.config import resolve_mewbo_home
+
+    return set_cli_log_file(
+        str(resolve_mewbo_home() / "cli.log"),
+        overwrite=True,
+        quiet_console=True,
+    )
+
+
+class _TranscriptHubSink:
+    """RootSink (#161): drive the live ``TranscriptView`` from the hub.
+
+    Resolves the mounted App lazily through ``app_ref`` (the App exists only
+    post-mount, like the fleet hooks) and marshals every render onto the UI
+    thread via ``call_from_thread``. The transcript is read off the App through
+    the same ``getattr`` pattern the FleetBridge uses for the agent panel. A
+    missing App/transcript makes every method a safe no-op (plain fallback).
+    """
+
+    def __init__(self, app_provider: Callable[[], Any]) -> None:
+        """Bind the lazy App provider; track which stream slots are open."""
+        self._app_provider = app_provider
+        self._begun: set[str] = set()
+
+    def _resolve(self) -> tuple[Any, Any]:
+        app = self._app_provider()
+        return app, (getattr(app, "_transcript", None) if app is not None else None)
+
+    def stream_delta(self, stream_id: str, delta: str) -> None:
+        """Open the slot on first delta, then append (stable-prefix streaming)."""
+        app, tv = self._resolve()
+        if tv is None:
+            return
+        if stream_id not in self._begun:
+            self._begun.add(stream_id)
+            app.call_from_thread(tv.begin_stream, stream_id)
+        app.call_from_thread(tv.append_stream, stream_id, delta)
+
+    def stream_end(self, stream_id: str) -> None:
+        """Finalise a streaming slot."""
+        app, tv = self._resolve()
+        self._begun.discard(stream_id)
+        if tv is not None:
+            app.call_from_thread(tv.end_stream, stream_id)
+
+    def upsert_tool(self, card_id: str, item: Any) -> None:
+        """Mount-or-update the mutable tool card in place."""
+        app, tv = self._resolve()
+        if tv is not None:
+            app.call_from_thread(tv.upsert_tool, card_id, item)
+
+    def spawn(self, item: Any) -> None:
+        """Append a sub-agent spawn marker."""
+        app, tv = self._resolve()
+        if tv is not None:
+            app.call_from_thread(tv.write_item, item)
+
+    def set_status(self, label: str) -> None:
+        """Update the foot activity label to reflect the live step."""
+        app, tv = self._resolve()
+        if tv is not None:
+            app.call_from_thread(tv.set_activity_label, label)
+
+
+def _run_app(
+    *,
+    header_ctx: HeaderContext,
+    store: SessionStoreBase,
+    runtime: SessionRuntime,
+    state: CliState,
+    tool_registry: ToolRegistry,
+    command_registry: Any,
+    skill_registry: Any,
+    config: AppConfig,
+    args: argparse.Namespace,
+) -> int:
+    """Launch the Textual ``MewboApp`` with the four seams wired up.
+
+    The seams are created here and injected; ``TurnEngine`` (built via the
+    factory once the App can supply its thread-safe emit callbacks) drives the
+    runtime. The permission seam carries the ``/automatic`` + ``--auto-approve``
+    auto-approve predicate; the modal decision lands with #154.
+    """
+    # The App owns the alt-screen — silence the console log sink (route detail
+    # to a file) for the duration of the run so log lines can't bleed onto the
+    # composer/footer under -vv. Plain-REPL / --query / no-TTY never reach here.
+    _redirect_app_logs_to_file(args)
+    budget = int(get_config_value("agent", "session_step_budget", default=0))
+    palette = DEFAULT_PALETTE
+    messages = MessageRendererRegistry()
+    # Register the #152 transcript renderers BEFORE the App mounts so they win
+    # the App's `has`-guarded foundation defaults (and the transcript widget's
+    # own idempotent self-registration).
+    register_transcript_renderers(messages, palette=palette)
+    # Orchestration cards (#161-C) wrap the "tool" renderer to draw dedicated
+    # spawn_agent/check_agents/tool_search cards; registered AFTER so they win.
+    register_orchestration_cards(messages, palette=palette)
+    sidebar_slots = SidebarSlotRegistry()
+    permission = PermissionGateway(
+        auto_approve=lambda: bool(state.auto_approve_all or getattr(args, "auto_approve", False))
+    )
+    input_gateway = InputGateway()
+    input_gateway.set_completion_provider(
+        _build_completion_provider(command_registry, skill_registry)
+    )
+
+    # Shared holder for the mounted App, populated by the first installer. The
+    # engine's per-run fleet hooks (#161 sidebar refresh) and the sidebar queue
+    # pill both resolve the App lazily through it (the App exists post-mount).
+    app_ref: dict[str, Any] = {}
+
+    # #161 — the AgentTranscriptHub is the single, order-preserving transcript
+    # source: it subscribes ONCE to the shared SessionEventBus (every agent's
+    # events flow through it) and demuxes by agent_id, streaming the root
+    # (depth 0) live into the TranscriptView via the sink. It is ALSO the source
+    # of the authoritative live todos (the ``todos`` event, #173) and per-agent
+    # throughput. The per-run hook factory below feeds it the pre_tool_use ts.
+    transcript_hub = AgentTranscriptHub(
+        sink=_TranscriptHubSink(lambda: app_ref.get("app"))
+    )
+    get_session_event_bus().register_observer(transcript_hub.observe)
+    fleet_hook_factory = make_fleet_hook_factory(lambda: app_ref.get("app"))
+
+    def _hook_factory() -> HookManager:
+        """Per-run hooks: FleetBridge + the hub's tool-start tap + session scope.
+
+        Built fresh per run (run_sync calls it), so it is the natural place to
+        scope the hub's bus observer to the current session and append the hub's
+        ``pre_tool_use`` tap onto the same HookManager the FleetBridge uses.
+        """
+        manager = fleet_hook_factory()
+        transcript_hub.set_active_session(state.session_id)
+        manager.pre_tool_use.append(transcript_hub.tool_started)
+        return manager
+
+    def _plan_approval_resolver(plan_markdown: str, revision: int) -> str:
+        """Bridge a pending plan proposal to the modal (mirrors the perm modal).
+
+        ``push_screen_wait`` blocks the approval worker until the user chooses
+        Approve / Keep-planning / Reject. Degrades to ``"refine"`` (the safe
+        default — nothing destructive) when the App is unavailable.
+        """
+        app = app_ref.get("app")
+        if app is None:
+            return "refine"
+        try:
+            return (
+                app.call_from_thread(
+                    app.push_screen_wait,
+                    PlanApprovalModal(plan_markdown, revision, palette=palette),
+                )
+                or "refine"
+            )
+        except Exception:  # noqa: BLE001 — a modal failure must never break the turn
+            return "refine"
+
+    def _engine_factory(
+        emit: Callable[[Any], None],
+        emit_renderable: Callable[[Any], None],
+    ) -> TurnEngine:
+        return TurnEngine(
+            runtime=runtime,
+            store=store,
+            state=state,
+            tool_registry=tool_registry,
+            command_registry=command_registry,
+            skill_registry=skill_registry,
+            permission=permission,
+            hook_factory=_hook_factory,
+            emit=emit,
+            emit_renderable=emit_renderable,
+            plan_approval_resolver=_plan_approval_resolver,
+            max_iters=args.max_iters,
+            session_step_budget=budget,
+            no_color=bool(getattr(args, "no_color", False)),
+            live=True,
+        )
+
+    onboarding, notices = _onboarding_state(tool_registry, config)
+
+    # Post-mount installers — the Wave-2 input/sidebar/session children mount
+    # their widgets/keymaps here without editing app.py. Assembled here so the
+    # wiring stays in one place; each entry configures the mounted App.
+    installers = _build_installers(
+        app_ref=app_ref,
+        store=store,
+        runtime=runtime,
+        state=state,
+        tool_registry=tool_registry,
+        command_registry=command_registry,
+        skill_registry=skill_registry,
+        config=config,
+        args=args,
+        transcript_hub=transcript_hub,
+        messages=messages,
+        palette=palette,
+    )
+
+    app = MewboApp(
+        header_ctx=header_ctx,
+        messages=messages,
+        sidebar_slots=sidebar_slots,
+        permission=permission,
+        input_gateway=input_gateway,
+        engine_factory=_engine_factory,
+        onboarding=onboarding,
+        onboarding_notices=notices,
+        installers=installers,
+    )
+
+    # #154 — install the layered PermissionService (skip → allow/deny rules →
+    # session-grant → modal). The modal resolver bridges the worker thread the
+    # approval_callback runs on to the App's main loop: ``push_screen_wait``
+    # blocks the worker until the user resolves the modal (esc=deny default).
+    def _modal_resolver(step: ActionStep) -> str:
+        return app.call_from_thread(app.push_screen_wait, PermissionModal(step, palette=palette))
+
+    install_permission_service(
+        permission,
+        rule_store=PermissionRuleStore(),
+        session_id=lambda: state.session_id,
+        mode_getter=lambda: app.permission_mode,
+        modal_resolver=_modal_resolver,
+    )
+    return app.run() or 0
+
+
+def _build_installers(
+    *,
+    app_ref: dict[str, Any],
+    store: SessionStoreBase,
+    runtime: SessionRuntime,
+    state: CliState,
+    tool_registry: ToolRegistry,
+    command_registry: Any,
+    skill_registry: Any,
+    config: AppConfig,
+    args: argparse.Namespace,
+    transcript_hub: AgentTranscriptHub,
+    messages: MessageRendererRegistry,
+    palette: Palette,
+) -> list[Callable[[Any], None]]:
+    """Assemble the post-mount App installers for the Wave-2 children.
+
+    Each Wave-2 feature (#155 input, #156 sidebar/status, #157 session) appends
+    its installer here. Kept in one place so ``app.py`` stays closed. The shared
+    ``app_ref`` is populated by the first installer so the engine's fleet hooks
+    and the sidebar queue pill can resolve the mounted App lazily. The plan dock's
+    todos come from the hub's authoritative ``todos`` event (``root_todos``, #173).
+    """
+    from mewbo_cli.tui.input.palette import make_input_installer
+    from mewbo_cli.tui.session.install import (
+        cmd_keybindings,
+        cmd_resume,
+        cmd_rewind,
+        make_session_installer,
+    )
+    from mewbo_cli.tui.status.install import (
+        cmd_context,
+        make_sidebar_installer,
+        make_statusline_installer,
+    )
+    from mewbo_cli.tui.widgets.input_area import InputArea
+
+    # Register the Wave-2 slash commands on the live registry (idempotent — skip
+    # any name already present, e.g. the base /compact). app.py / cli_commands.py
+    # stay closed; the commands surface in completion + the palette automatically.
+    _register_tui_commands(
+        command_registry,
+        context=cmd_context,
+        resume=cmd_resume,
+        rewind=cmd_rewind,
+        keybindings=cmd_keybindings,
+    )
+
+    # The sidebar's queue pill reads #155's queued-message count off the mounted
+    # InputArea; bind it lazily (the App is only available post-mount).
+    def _capture_app(app: Any) -> None:
+        app_ref["app"] = app
+
+    def _queue_count() -> int:
+        app = app_ref.get("app")
+        if app is None:
+            return 0
+        try:
+            return app.query_one(InputArea).queued_count()
+        except Exception:
+            return 0
+
+    installers: list[Callable[[Any], None]] = [
+        _capture_app,
+        # #155 — sigil dispatch, tiered @ completion, palette, custom commands.
+        make_input_installer(command_registry=command_registry, skill_registry=skill_registry),
+        # #157 — session UX + global keymap (ctrl+o/ctrl+s/ctrl+l) + footer.
+        make_session_installer(store=store, runtime=runtime, state=state),
+        # #161 — faceted sidebar (Fleet · Plan · Context) + in-place drill-in.
+        # The fleet rows + drill transcript come from the hub; the plan dock's
+        # tri-state checklist reads the hub's authoritative ``todos`` event (#173).
+        make_sidebar_installer(
+            state=state,
+            hub=transcript_hub,
+            registry=messages,
+            palette=palette,
+            config=config,
+            runtime=runtime,
+            queue_count_provider=_queue_count,
+            todo_provider=transcript_hub.root_todos,
+        ),
+        # IDE-style footer status line (host · model · cwd · branch · tokens).
+        # state.model_name is only set by --model; pass the resolved display
+        # model so the line shows the real model when the flag is omitted.
+        make_statusline_installer(
+            state=state,
+            runtime=runtime,
+            hub=transcript_hub,
+            model=_resolve_display_model(state.model_name),
+        ),
+    ]
+    return installers
+
+
+def _register_tui_commands(command_registry: Any, **handlers: Any) -> None:
+    """Register the Wave-2 slash commands, skipping any name already present."""
+    existing = set(command_registry.list_commands())
+    specs = [
+        ("/context", "Show a token-attribution context breakdown", handlers["context"]),
+        ("/resume", "Open the session switcher (also ctrl+s)", handlers["resume"]),
+        ("/rewind", "Revert workspace + conversation to a checkpoint", handlers["rewind"]),
+        ("/keybindings", "Show the effective key bindings", handlers["keybindings"]),
+    ]
+    for name, help_text, handler in specs:
+        if name in existing:
+            continue
+        command_registry.command(name, help_text)(handler)
+
+
+def _build_completion_provider(
+    command_registry: Any, skill_registry: Any
+) -> Callable[[str], list[str]]:
+    """Foundation slash completion: command + user-invocable skill names (#155 extends)."""
+
+    def _complete(text: str) -> list[str]:
+        if not text.startswith("/") or " " in text:
+            return []
+        partial = text[1:]
+        names = {c.lstrip("/") for c in command_registry.list_commands()}
+        try:
+            names.update(s.name for s in skill_registry.list_user_invocable())
+        except Exception:
+            pass
+        return sorted(f"/{name}" for name in names if name.startswith(partial))
+
+    return _complete
+
+
+def _onboarding_state(tool_registry: ToolRegistry, config: AppConfig) -> tuple[bool, list[str]]:
+    """Whether to open in the onboarding state, plus the notices to show."""
+    config_path = Path(get_app_config_path())
+    mcp_path_str = get_mcp_config_path()
+    mcp_path = Path(mcp_path_str) if mcp_path_str else None
+    missing: list[str] = []
+    if not config_path.exists():
+        missing.append(str(config_path))
+    if mcp_path and not mcp_path.exists():
+        missing.append(str(mcp_path))
+    if not missing:
+        return False, []
+    return True, [
+        "Config files missing: " + ", ".join(missing),
+        "Run /config init, /mcp init, or /init to scaffold examples, then start chatting.",
+    ]
+
+
+def _run_plain_repl(
+    console: Console,
+    store: SessionStoreBase,
+    runtime: SessionRuntime,
+    state: CliState,
+    tool_registry: ToolRegistry,
+    registry: Any,
+    skill_registry: Any,
+    args: argparse.Namespace,
+) -> int:
+    """Plain prompt_toolkit REPL used when the Textual App is unavailable.
+
+    The historic interactive surface, minus the Rich ``Live`` agent display and
+    its ``KeyListener`` cbreak bridge (removed with #150): a non-``Live`` query
+    path renders results after each run.
+    """
+    history_path = _ensure_history_path(args.history_file)
+    completer = ThreadedCompleter(MewboCompleter(registry.list_commands(), skill_registry))
     session: PromptSession[str] = PromptSession(
         history=FileHistory(history_path),
         completer=completer,
@@ -616,67 +927,23 @@ def _run_query(
         tool_registry,
         auto_approve_enabled=auto_approve_enabled,
     )
-    use_live_display = console.is_terminal and not getattr(args, "no_color", False)
     budget = int(get_config_value("agent", "session_step_budget", default=0))
-
-    if use_live_display:
-        agent_display = AgentDisplayManager()
-        hook_manager = _build_cli_hook_manager(console, tool_registry, agent_display)
-
-        key_listener = KeyListener()
-        key_listener.bind("\x0f", agent_display.toggle_expand)  # Ctrl+O
-
-        # Wrap approval callback so KeyListener pauses cbreak mode
-        # while console.input() reads a line during permission prompts.
-        _original_approval = approval_callback
-
-        def _approval_with_keys(step: ActionStep) -> bool:
-            key_listener.pause()
-            try:
-                return _original_approval(step)
-            finally:
-                key_listener.resume()
-
-        with Live(
-            Text(""),
-            console=console,
-            refresh_per_second=4,
-            transient=True,
-        ) as live:
-            live.get_renderable = lambda: agent_display.render()  # type: ignore[method-assign]
-            with key_listener, _stream_tokens_to(agent_display, state.session_id):
-                task_queue = runtime.run_sync(
-                    user_query=query,
-                    model_name=state.model_name,
-                    fallback_models=state.fallback_models,
-                    max_iters=args.max_iters,
-                    initial_plan=initial_plan,
-                    session_id=state.session_id,
-                    tool_registry=tool_registry,
-                    approval_callback=_approval_with_keys,
-                    hook_manager=hook_manager,
-                    mode=mode,
-                    skill_instructions=skill_instructions,
-                    session_step_budget=budget,
-                    source_platform="cli",
-                )
-    else:
-        hook_manager = _build_cli_hook_manager(console, tool_registry)
-        task_queue = runtime.run_sync(
-            user_query=query,
-            model_name=state.model_name,
-            fallback_models=state.fallback_models,
-            max_iters=args.max_iters,
-            initial_plan=initial_plan,
-            session_id=state.session_id,
-            tool_registry=tool_registry,
-            approval_callback=approval_callback,
-            hook_manager=hook_manager,
-            mode=mode,
-            skill_instructions=skill_instructions,
-            session_step_budget=budget,
-            source_platform="cli",
-        )
+    hook_manager = _build_cli_hook_manager(console, tool_registry)
+    task_queue = runtime.run_sync(
+        user_query=query,
+        model_name=state.model_name,
+        fallback_models=state.fallback_models,
+        max_iters=args.max_iters,
+        initial_plan=initial_plan,
+        session_id=state.session_id,
+        tool_registry=tool_registry,
+        approval_callback=approval_callback,
+        hook_manager=hook_manager,
+        mode=mode,
+        skill_instructions=skill_instructions,
+        session_step_budget=budget,
+        source_platform="cli",
+    )
 
     # Handle episodic plan approval — the run terminated because the model
     # proposed a plan and is waiting for user approval/rejection.
@@ -750,185 +1017,18 @@ def _run_query(
                 border_style="bold green",
             )
         )
-        _print_usage_footer(console, store, state.session_id, state.model_name)
+        print_usage_footer(console, store, state.session_id, state.model_name)
 
     # Replay LLM resilience notices (retry / fallback / no-progress halt)
     # from the run just completed — the core emits these to the transcript
     # rather than through hooks, so the live display never showed them.
-    _halt_printed = _print_resilience_events(console, store, state.session_id)
+    _halt_printed = print_resilience_events(console, store, state.session_id)
 
     # Surface recovery hint when the run ended in a recoverable failure so
     # users can type ``/retry`` or ``/continue`` at the next prompt.
     # Pass halt_printed so we skip the generic hint when the halt line (which
     # already mentions both commands) was just shown.
-    _maybe_print_recovery_hint(console, store, state.session_id, halt_printed=_halt_printed)
-
-
-def _print_usage_footer(
-    console: Console,
-    store: SessionStoreBase,
-    session_id: str,
-    model_name: str | None,
-) -> None:
-    """Print a single-line token usage summary below the response panel.
-
-    Shows the same faceted view the console footer does: root agent
-    headroom vs. model max (the actual context-window pressure), plus a
-    sub-agent rollup and compaction count. Numbers come from the one
-    ``build_usage_numbers`` helper — no duplicate aggregation here.
-    """
-    try:
-        from mewbo_core.token_budget import build_usage_numbers
-
-        effective_model = model_name or str(
-            get_config_value("llm", "default_model", default="") or ""
-        )
-        events = store.load_transcript(session_id)
-        u = build_usage_numbers(events, effective_model)
-    except Exception:
-        return  # silent — footer is decorative
-    max_in = u["root_max_input_tokens"]
-    if max_in <= 0 and u["total_input_tokens_billed"] == 0:
-        return  # nothing meaningful yet
-    pct = int(round(u["root_utilization"] * 100))
-    line = Text()
-    line.append(f"{u['root_model']}", style="dim cyan")
-    line.append("  ", style="dim")
-    line.append(
-        f"root {_fmt_tokens(u['root_last_input_tokens'])}/{_fmt_tokens(max_in)} ({pct}%)",
-        style="dim",
-    )
-    if u["sub_peak_input_tokens"] or u["sub_output_tokens"]:
-        # Sub-agents run in isolated contexts; show combined peak pressure
-        # (sum of per-agent peaks) + summed output.
-        sub_peak = _fmt_tokens(u["sub_peak_input_tokens"])
-        sub_out = _fmt_tokens(u["sub_output_tokens"])
-        line.append("  ·  sub peak ", style="dim")
-        line.append(f"{sub_peak} / {sub_out} out", style="dim")
-    line.append("  ·  ", style="dim")
-    line.append(f"{_fmt_tokens(u['tokens_until_compact'])} until compact", style="dim")
-    if u["compaction_count"] > 0:
-        line.append(f"  ·  ⊙ {u['compaction_count']} compaction(s)", style="dim")
-    console.print(line)
-
-
-def _fmt_tokens(n: int) -> str:
-    """Format a token count: 5200 → '5.2k', 1500000 → '1.5m'."""
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}m"
-    if n >= 1_000:
-        return f"{n / 1_000:.1f}k"
-    return str(n)
-
-
-def _model_basename(model: object) -> str:
-    """Drop the provider prefix from a model id: ``openai/gpt-4`` → ``gpt-4``."""
-    return str(model).rsplit("/", 1)[-1]
-
-
-def _print_resilience_events(
-    console: Console, store: SessionStoreBase, session_id: str
-) -> bool:
-    """Surface LLM retry / fallback / no-progress-halt events from the last run.
-
-    The core emits these to the transcript (not via hooks), so we replay
-    them after the run completes. Scoped to events after the last ``user``
-    event so a multi-turn session never re-prints prior turns' notices.
-
-    Returns ``True`` if a doom-loop halt line was printed so the caller can
-    suppress a redundant generic recovery hint (which would duplicate the
-    already-visible /retry,/continue guidance in the halt line).
-    """
-    transcript = store.load_transcript(session_id)
-    last_user_ts = ""
-    for event in transcript:
-        if event.get("type") == "user":
-            last_user_ts = str(event.get("ts", ""))
-
-    halt_printed = False
-    for event in transcript:
-        if str(event.get("ts", "")) < last_user_ts:
-            continue
-        etype = event.get("type")
-        payload = event.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        line: Text | None = None
-        if etype == "llm_retry":
-            model = _model_basename(payload.get("model", "model"))
-            delay = payload.get("delay", 0) or 0
-            line = Text(
-                f"↻ Retrying {model} after {payload.get('error_type', 'error')} "
-                f"({payload.get('attempt', '?')}/{payload.get('max_attempts', '?')}, "
-                f"{float(delay):.0f}s)",
-                style="dim yellow",
-            )
-        elif etype == "llm_fallback":
-            from_model = _model_basename(payload.get("from_model", "?"))
-            to_model = _model_basename(payload.get("to_model", "?"))
-            suffix = " [pinned for run]" if payload.get("sticky") else ""
-            line = Text(
-                f"⤳ Falling back: {from_model} → {to_model} "
-                f"({payload.get('reason', 'error')}){suffix}",
-                style="dim yellow",
-            )
-        elif etype == "recovery" and payload.get("action") == "halt_no_progress":
-            line = Text(
-                f"⊘ Halted: repeated '{payload.get('tool', 'tool')}' with no "
-                "progress — /retry or /continue to recover",
-                style="dim red",
-            )
-            halt_printed = True
-        if line is not None:
-            console.print(line)
-    return halt_printed
-
-
-# Recoverable ``done_reason`` values mirror ``session_runtime.summarize_session``:
-# any non-clean terminal state that still has a prior user turn.
-_RECOVERABLE_DONE_REASONS: frozenset[str] = frozenset(
-    {"error", "max_steps_reached", "halted_no_progress", "canceled"}
-)
-
-
-def _maybe_print_recovery_hint(
-    console: Console,
-    store: SessionStoreBase,
-    session_id: str,
-    *,
-    halt_printed: bool = False,
-) -> None:
-    """Print a concise recovery hint after a recoverable terminal run.
-
-    Skipped when:
-    - The run completed cleanly (``done_reason == "completed"``).
-    - A doom-loop halt line was already printed (``halt_printed=True``) — that
-      line already mentions /retry and /continue, so a generic repeat is noise.
-    - The transcript has no user turn (nothing to retry).
-    """
-    if halt_printed:
-        return
-    transcript = store.load_transcript(session_id)
-    has_user_turn = any(e.get("type") == "user" for e in transcript)
-    if not has_user_turn:
-        return
-    for event in reversed(transcript):
-        if event.get("type") != "completion":
-            continue
-        payload = event.get("payload") or {}
-        if not isinstance(payload, dict):
-            return
-        reason = str(payload.get("done_reason") or "").lower()
-        if reason not in _RECOVERABLE_DONE_REASONS:
-            return
-        console.print(
-            Text(
-                "↩ This session can be recovered — /continue to resume with context "
-                "intact, or /retry to redo the last step.",
-                style="dim cyan",
-            )
-        )
-        return
+    maybe_print_recovery_hint(console, store, state.session_id, halt_printed=_halt_printed)
 
 
 def _maybe_warn_missing_configs(
@@ -1232,60 +1332,17 @@ def _render_tool_payload(payload: dict[str, object], style: str) -> RenderableTy
     return None
 
 
-@contextmanager
-def _stream_tokens_to(
-    agent_display: AgentDisplayManager,
-    session_id: str | None,
-) -> Iterator[None]:
-    """Pump streamed root-agent token deltas into the live agent display.
-
-    Subscribes to the in-process ``SessionEventBus`` for *session_id* and drains
-    ``agent_message_delta`` events (root agent, depth 0) on a daemon thread,
-    feeding them to ``agent_display.on_token_delta`` so the user sees assistant
-    text appear as the model produces it (true TTFT — Gitea #137). Best-effort
-    and self-contained: a missing session id or any bus error degrades to a
-    no-op, and the subscription is always torn down on exit. The CLI runs the
-    loop in-process, so the same singleton bus ``append_event`` publishes to is
-    reachable here — no separate transport.
-    """
-    if not session_id:
-        yield
-        return
-    from mewbo_core.session_event_bus import get_session_event_bus
-
-    bus = get_session_event_bus()
-    sub = bus.subscribe(session_id)
-    stop = threading.Event()
-
-    def _drain() -> None:
-        while not stop.is_set():
-            try:
-                event = sub.queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            if event.get("type") != "agent_message_delta":
-                continue
-            payload = event.get("payload") or {}
-            if payload.get("depth", 0) != 0:
-                continue  # only the root agent's tokens drive the top-level preview
-            agent_display.on_token_delta(str(payload.get("text", "")))
-
-    thread = threading.Thread(target=_drain, name="cli-token-stream", daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        bus.unsubscribe(session_id, sub)
-
-
 def _build_cli_hook_manager(
     console: Console,
     tool_registry: ToolRegistry,
-    agent_display: AgentDisplayManager | None = None,
 ) -> HookManager:
-    # When agent display is active, the live tree + integrated spinner
-    # replace the per-tool console.status() spinner.
+    """Build the plain-path hook manager: per-tool spinner + compaction notice.
+
+    The live agent tree / token streaming that used Rich ``Live`` is gone with
+    #150 — the interactive surface is now ``MewboApp`` (#152/#156 own live
+    feedback there).
+    """
+
     def _on_compact(session_id: str, **kwargs: Any) -> None:
         summary = kwargs.get("summary", "")
         tokens_before = kwargs.get("tokens_before", 0)
@@ -1324,16 +1381,7 @@ def _build_cli_hook_manager(
         else:
             console.print("[dim blue]Context compacted[/dim blue]")
 
-    if agent_display is not None:
-        return HookManager(
-            on_agent_start=[agent_display.on_start],
-            on_agent_stop=[agent_display.on_stop],
-            pre_tool_use=[agent_display.on_tool_start],
-            post_tool_use=[agent_display.on_tool_end],
-            on_compact=[_on_compact],
-        )
-
-    # Fallback: original spinner behavior (no agent tree).
+    # Per-tool console.status() spinner (the live agent tree is the App's job).
     status_holder: dict[str, Status] = {}
     specs = _tool_specs_by_id(tool_registry)
 

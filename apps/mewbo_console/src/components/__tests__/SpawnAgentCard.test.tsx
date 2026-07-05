@@ -6,16 +6,16 @@ import { SpawnAgentCard } from '../SpawnAgentCard';
 afterEach(cleanup);
 
 const PR_RESEARCH_TASK =
-  'Use the gh CLI and the Devin-AI-Wiki MCP tool to research GitHub PR #142 from bearlike/Assistant.\n\n' +
+  'Use the gh CLI and a code-wiki MCP tool to research GitHub PR #142 from bearlike/Assistant.\n\n' +
   'Run this command to get PR details:\n```\ngh pr view 142 --repo bearlike/Assistant\n```';
 
 const PR_RESEARCH_PROPS = {
   caller: '09c085c1',
   childId: '4b1148c95827',
   task: PR_RESEARCH_TASK,
-  allowedTools: ['aider_shell_tool', 'mcp___devin___ai_wiki_devin_ai_wiki_ask_question'],
+  allowedTools: ['aider_shell_tool', 'mcp___docswiki___ask_question'],
   deniedTools: [],
-  extras: [['root', '/home/kk/Projects/Assistant']] as const,
+  extras: [['root', '/home/user/Projects/Assistant']] as const,
   message: 'Agent spawned. Use check_agents to monitor progress and collect results.',
   durationMs: 12,
 };
@@ -89,7 +89,7 @@ test('extras render as key/value pairs in the rendered tab', async () => {
   await renderExpanded(PR_RESEARCH_PROPS);
   expect(screen.getByText('extra')).toBeInTheDocument();
   expect(screen.getByText('root')).toBeInTheDocument();
-  expect(screen.getByText('/home/kk/Projects/Assistant')).toBeInTheDocument();
+  expect(screen.getByText('/home/user/Projects/Assistant')).toBeInTheDocument();
 });
 
 test('Raw tab shows input and output JSON blocks', async () => {

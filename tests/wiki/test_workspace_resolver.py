@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import Embedding, GraphNode, WikiPage
+from mewbo_graph.wiki.types import Embedding, WikiPage, make_graph_node
 
 # ── Fakes ──────────────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ def _seed_workspace(wiki_store: JsonWikiStore, slug: str = "org/repo") -> None:
         toc=[], nav=[],
     ))
     wiki_store.upsert_nodes(slug, [
-        GraphNode(
+        make_graph_node(
             slug=slug, node_id="f1", type="Function", name="authenticate",
             file="auth.py", range=(0, 100), docstring="Verify token.",
         ),
@@ -246,15 +246,15 @@ def test_grounded_structured_search_without_workspace_is_ungrounded(tmp_path: Pa
     assert "wiki QA ctx not found" in str(result.content)
 
 
-def test_emit_block_refuses_grounded_structured_session(tmp_path: Path) -> None:
-    """``wiki_emit_block`` must refuse a slug-only ctx (``answer_id is None``).
+def test_emit_answer_refuses_grounded_structured_session(tmp_path: Path) -> None:
+    """``wiki_emit_answer`` must refuse a slug-only ctx (``answer_id is None``).
 
     A grounded structured-response session has a workspace slug but NO QA event
-    log; emitting answer blocks is QA-only, so the tool returns a clear error
+    log; emitting the answer is QA-only, so the tool returns a clear error
     instead of NPE-ing on ``load_qa_events``/``append_qa_event``.
     """
-    from mewbo_graph.plugins.wiki import emit_block as emit_block_mod
-    from mewbo_graph.plugins.wiki.emit_block import WikiEmitBlockTool
+    from mewbo_graph.plugins.wiki import emit_answer as emit_answer_mod
+    from mewbo_graph.plugins.wiki.emit_answer import WikiEmitAnswerTool
 
     wiki_store = _wiki_store(tmp_path)
     _seed_workspace(wiki_store, "org/repo")
@@ -262,10 +262,13 @@ def test_emit_block_refuses_grounded_structured_session(tmp_path: Path) -> None:
     sessions.append_context_event("sess-struct", {"structured_workspace": "org/repo"})
 
     runtime = _runtime(wiki_store, sessions)
-    tool = WikiEmitBlockTool(session_id="sess-struct")
-    step = MagicMock(tool_input={"index": 0, "block": {"kind": "p", "text": "hi"}})
+    tool = WikiEmitAnswerTool(session_id="sess-struct")
+    step = MagicMock(tool_input={"blocks": [
+        {"kind": "p", "text": "hi"},
+        {"kind": "sources", "items": ["wiki:x"]},
+    ]})
 
-    with patch.object(emit_block_mod, "_resolve_runtime", return_value=runtime):
+    with patch.object(emit_answer_mod, "_resolve_runtime", return_value=runtime):
         result = asyncio.run(tool.handle(step))
     body = str(result.content)
     assert "requires a registered QA answer" in body

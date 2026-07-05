@@ -13,6 +13,7 @@ EXPECTED_SECRET = {
     "langfuse.public_key",
     "langfuse.secret_key",
     "home_assistant.token",
+    "cli.remote.token",  # opt-in remote sync token (#171) — write-only
 }
 EXPECTED_PROTECTED = {
     "api.master_token",
@@ -135,6 +136,7 @@ def test_secret_status_reports_is_set_bools():
         "langfuse.public_key": False,  # empty string -> not set
         "langfuse.secret_key": True,
         "home_assistant.token": False,  # missing -> not set
+        "cli.remote.token": False,  # missing -> not set (#171)
     }
 
 

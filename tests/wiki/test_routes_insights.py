@@ -12,13 +12,13 @@ API_KEY = "test-key-123"
 @pytest.fixture()
 def store(tmp_path: Path):
     from mewbo_graph.wiki.store import JsonWikiStore
-    from mewbo_graph.wiki.types import GraphNode, Project
+    from mewbo_graph.wiki.types import Project, make_graph_node
 
     s = JsonWikiStore(root_dir=tmp_path / "wiki")
     s.create_project(
         Project(slug="org/repo", source="github", lang="Python", indexed_at="t", pages=1, desc="d")
     )
-    code = GraphNode(
+    code = make_graph_node(
         slug="org/repo", node_id="cA", type="Class", name="AuthService",
         file="auth.py", range=(0, 9),
     )

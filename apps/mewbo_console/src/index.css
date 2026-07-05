@@ -51,7 +51,7 @@
     --surface: 60 2% 12%; /* _gray-800 — recessed surfaces */
     --surface-deep: 0 0% 7%; /* _gray-860 — deepest layer */
 
-    /* ── Semantic: orchestration (from Anthropic palette + CC theme) ── */
+    /* ── Semantic: orchestration (from Anthropic palette) ── */
     --permission: 213 80% 79%; /* _blue-200 — Anthropic accent-000 */
     --plan-mode: 158 52% 49%; /* _aqua-300 — Anthropic aqua for plan context */
     --user-message-bg: 60 3% 21%; /* _gray-700 — user bubbles above card */
@@ -116,7 +116,10 @@
     --graph-function: 35 85% 58%;       /* amber — top-level function */
     --graph-method: 195 70% 55%;        /* cyan — bound method */
     --graph-interface: 320 65% 62%;     /* magenta — interface/trait */
+    --graph-object: 0 68% 64%;          /* coral — singleton object/companion (schema v2) */
+    --graph-property: 95 45% 55%;       /* olive-green — field/property/constant (schema v2) */
     --graph-edge-soft: 48 5% 57%;       /* default edge tint (matches --muted-foreground) */
+    --graph-edge-contain: 45 5% 50%;    /* faint hierarchy-backbone tie (folder→file→symbol); rendered at low alpha so it recedes under relationship edges */
     /* ── Multiplex layers (wire contract v2) ── distinct hues so the AST,
        entity and memory layers read apart at a glance. */
     --graph-external: 210 12% 55%;      /* steel-grey — resolved cross-file/import target */
@@ -232,7 +235,10 @@
     --graph-function: 28 85% 48%;
     --graph-method: 195 70% 45%;
     --graph-interface: 320 65% 50%;
+    --graph-object: 0 68% 52%;          /* coral — singleton object/companion (schema v2) */
+    --graph-property: 95 45% 40%;       /* olive-green — field/property/constant (schema v2) */
     --graph-edge-soft: 45 3% 52%;       /* default edge tint (matches --muted-foreground) */
+    --graph-edge-contain: 45 4% 62%;    /* faint hierarchy-backbone tie — lighter so it recedes on the near-white canvas */
     /* ── Multiplex layers (wire contract v2) — darker discs for the
        near-white light canvas, mirroring the dark block. */
     --graph-external: 210 14% 45%;

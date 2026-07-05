@@ -47,6 +47,7 @@ from .types import (
     PlatformId,
     Project,
     WikiPage,
+    make_graph_node,
 )
 
 if TYPE_CHECKING:
@@ -178,7 +179,7 @@ class CatalogIngestor:
     @staticmethod
     def _build_node(slug: str, doc: CatalogDocument, node_id: str) -> GraphNode:
         """Build a graph node carrying the doc text (embedding + code-search)."""
-        return GraphNode(
+        return make_graph_node(
             slug=slug,
             node_id=node_id,
             type=_CATALOG_NODE_TYPE,

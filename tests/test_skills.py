@@ -112,11 +112,24 @@ class TestDiscoverSkills:
         result = discover_skills(str(tmp_path))
         assert result == []
 
-    def test_invalid_name_skipped(self, tmp_path):
-        skills_dir = tmp_path / ".claude" / "skills" / "Bad_Name"
+    def test_human_name_normalized_not_skipped(self, tmp_path):
+        """A human-friendly frontmatter name is slugified, not dropped."""
+        skills_dir = tmp_path / ".claude" / "skills" / "bug-fix"
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text(
-            "---\nname: Bad_Name\ndescription: test\n---\nbody\n",
+            "---\nname: Bug Fix\ndescription: test\n---\nbody\n",
+            encoding="utf-8",
+        )
+        result = discover_skills(str(tmp_path))
+        assert len(result) == 1
+        assert result[0].name == "bug-fix"
+
+    def test_unsalvageable_name_skipped(self, tmp_path):
+        """A name with no alphanumerics can't be normalized — still dropped."""
+        skills_dir = tmp_path / ".claude" / "skills" / "junk"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text(
+            "---\nname: '***'\ndescription: test\n---\nbody\n",
             encoding="utf-8",
         )
         result = discover_skills(str(tmp_path))
@@ -171,6 +184,23 @@ class TestSubtreeSkillDiscovery:
         _write_skill(nm, "nm-skill", "From node_modules.")
         result = discover_skills(str(tmp_path))
         assert not any(s.name == "nm-skill" for s in result)
+
+    def test_does_not_cross_nested_project_boundary(self, tmp_path):
+        """A nested repo (its own .git) is a separate project — never harvested.
+
+        Reproduces the cross-project leak: running from a folder that holds
+        sibling repos must not slurp their skills (e.g. ``~/Projects`` pulling in
+        an unrelated sibling checkout's skills).
+        """
+        sibling = tmp_path / "sibling-repo"
+        (sibling / ".git").mkdir(parents=True)  # marks a separate project root
+        _write_skill(sibling / ".claude" / "skills", "sibling-skill", "Foreign.")
+        # A same-project nested skill (no own .git) must still be found.
+        _write_skill(tmp_path / "apps" / "api" / ".claude" / "skills", "api-lint", "Lint.")
+        result = discover_skills(str(tmp_path))
+        names = {s.name for s in result}
+        assert "sibling-skill" not in names
+        assert "api-lint" in names
 
     def test_skips_hidden_dirs(self, tmp_path):
         hidden = tmp_path / ".hidden" / ".claude" / "skills"

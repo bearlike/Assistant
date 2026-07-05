@@ -66,6 +66,8 @@ export interface RunStatus {
   agents?: number;
   /** Live root context-window fill in tokens (sessionUsage.root_last_input_tokens). */
   tokens?: number;
+  /** Live output throughput (estimated tokens/sec) while streaming (Gitea #174). */
+  tokPerSec?: number;
   /** ISO timestamp of the last user event — used to compute elapsed wall-clock. */
   lastUserTs?: string;
 }

@@ -18,16 +18,15 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const apiTarget =
     env.VITE_API_BASE_URL || env.VITE_API_BASE || "http://127.0.0.1:5124";
+  // Deployment-specific hosts (e.g. a self-hosted LAN domain) belong in
+  // VITE_ALLOWED_HOSTS, not hardcoded here — see .env.local.
   const allowedHostsEnv = env.VITE_ALLOWED_HOSTS || "";
   const allowedHosts = Array.from(
     new Set(
-      ["mewbo.hurricane.home"]
-        .concat(
-          allowedHostsEnv
-            .split(",")
-            .map((host) => host.trim())
-            .filter(Boolean)
-        )
+      allowedHostsEnv
+        .split(",")
+        .map((host) => host.trim())
+        .filter(Boolean)
     )
   );
 

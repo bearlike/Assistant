@@ -5,6 +5,16 @@ name: Docs Cleanup
 on:
   pull_request:
     types: [closed]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "configs/**"
+      - "apps/mewbo_api/**"
+      - "packages/mewbo_core/src/mewbo_core/config.py"
+      - "scripts/ci/generate_openapi_spec.py"
+      - "scripts/ci/generate_config_schema.py"
+      - ".github/workflows/docs.yml"
+      - ".github/workflows/docs-cleanup.yml"
   workflow_dispatch:
 
 permissions:
@@ -12,6 +22,7 @@ permissions:
 
 jobs:
   cleanup-pr-version:
+    name: Delete PR preview (GitHub Pages)
     if: |
       github.server_url == 'https://github.com' &&
       github.event_name == 'pull_request' &&
@@ -47,6 +58,7 @@ jobs:
           PATH=".venv/bin:$PATH" .venv/bin/mike delete --push "$VERSION" || true
 
   bulk-delete-pr-versions:
+    name: Bulk-delete PR previews (manual)
     if: github.server_url == 'https://github.com' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:

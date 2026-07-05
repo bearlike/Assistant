@@ -2,6 +2,16 @@ name: Python Tests
 
 on:
   pull_request:
+    paths:
+      - "packages/**"
+      - "apps/mewbo_api/**"
+      - "apps/mewbo_cli/**"
+      - "apps/mewbo_mcp/**"
+      - "apps/mewbo_ha_conversation/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/coverage.yml"
   workflow_dispatch:
     inputs:
       ref:

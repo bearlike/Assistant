@@ -10,9 +10,17 @@ Conventions:
 """
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 # ── Shared config ──────────────────────────────────────────────────────────────
 
@@ -44,7 +52,7 @@ class Project(BaseModel):
     desc: str
     landing_page_id: str | None = Field(default=None, alias="landingPageId")
     repo_url: str | None = Field(default=None, alias="repoUrl")
-    # DNS host the repo lives on (github.com, git.hurricane.home, …).
+    # DNS host the repo lives on (github.com, a self-hosted git.example.com, …).
     # First-class so enterprise instances need no fallback heuristics.
     host: str | None = None
     # Git snapshot the wiki was generated from. Populated by ``finalize``
@@ -58,6 +66,13 @@ class Project(BaseModel):
     # the "Maintainer Edited" badge — defaults to False so legacy projects
     # without the field correctly read as un-edited.
     maintainer_edited: bool = Field(default=False, alias="maintainerEdited")
+    # True when the project was indexed in graph-only (developer) mode: the AST
+    # code graph was built with NO documentation pages and NO LLM. Stamped at
+    # finalize by ``GraphOnlyIndexer``; drives the console's "No documentation
+    # available" empty state and makes the doc-content read seam raise
+    # ``DocumentationUnavailableError``. Defaults False so ordinary/legacy
+    # projects correctly read as documented.
+    graph_only: bool = Field(default=False, alias="graphOnly")
 
 
 # ── Platform ───────────────────────────────────────────────────────────────────
@@ -301,6 +316,16 @@ class WizardSubmission(BaseModel):
     filter_mode: FilterMode = Field(alias="filterMode")
     dirs: list[str]
     files: list[str]
+    # Request a DETERMINISTIC, zero-LLM index: clone → scan → AST graph →
+    # finalize, SKIPPING enrich/plan/pages. Produces a populated graph + zero
+    # pages (developer mode). Honoured ONLY when ``runtime.developer_mode`` is
+    # on — the index route forces it False otherwise, so an unprivileged caller
+    # can never opt into the no-docs path. Optional + defaulted so ordinary
+    # submissions are unchanged.
+    graph_only: bool = Field(default=False, alias="graphOnly")
+    # Optional branch/tag/sha to clone; null = the repo's default branch (the
+    # behaviour when omitted is unchanged).
+    ref: str | None = Field(default=None)
 
 
 # ── Catalog document ingestion (non-git StructureProvider) ──────────────────
@@ -761,21 +786,70 @@ class PagePlan(BaseModel):
     parent: str | None = None
 
 
-# ``External`` is a VIEW-only node kind (synthesized by ``KnowledgeGraphView``
-# to converge multiple cross-file references to an unresolved out-of-repo
-# symbol). It never lands in the persisted node table — the extractor only
-# emits the in-repo kinds — but it shares ``GraphNode`` so the view can reuse
-# the same serialiser, so the Literal must admit it.
+# ── Code graph (schema v2 — validated discriminated union, Gitea #187/#188) ─────
+#
+# Every node kind is a subclass of ``GraphNodeBase`` carrying a ``type`` Literal
+# discriminator (SOTA precedent: Kythe kind+subkind, SCIP two-axis, CPG endpoint
+# rules). ``subkind`` is the open per-kind refinement (e.g. Kotlin ``object`` vs
+# ``companion object``); ``attributes`` is the namespaced extension bag
+# (``<lang|tool>.<name>`` keys) so a new language adds facts WITHOUT a schema
+# change. ``External`` and ``Folder`` stay admitted as VIEW-only kinds
+# (synthesized by ``KnowledgeGraphView`` / ``FolderTree`` in the hierarchy wire
+# mode — never persisted by the extractor) so the viewer reuses one serialiser.
+# ``Object`` (Kotlin ``object``/``companion``) + ``Property`` (fields/constants)
+# are the new kinds the Kotlin/Java child (Phase 1 of #187) emits.
 GraphNodeType = Literal[
-    "File", "Module", "Class", "Function", "Method", "Interface", "External"
+    "File",
+    "Module",
+    "Class",
+    "Function",
+    "Method",
+    "Interface",
+    "Object",
+    "Property",
+    "External",
+    "Folder",
 ]
 GraphEdgeType = Literal["CONTAINS", "IMPORTS", "CALLS", "EXTENDS", "REFERENCES"]
 
+# The widest value a namespaced extension fact may carry (a JSON scalar).
+_JsonScalar = str | int | float | bool | None
 
-class GraphNode(BaseModel):
-    """Code graph node produced by tree-sitter analysis."""
+# Node value objects are immutable (see ``GraphNodeBase`` docstring), so give
+# them their own frozen config on top of the house ``_CFG``.
+_NODE_CFG = ConfigDict(extra="forbid", populate_by_name=True, frozen=True)
 
-    model_config = _CFG
+
+def _require_namespaced(v: dict[str, _JsonScalar]) -> dict[str, _JsonScalar]:
+    """Reject any attribute key not namespaced ``<lang|tool>.<name>``.
+
+    A dotless key (or one with an empty segment) is a cross-language/tool
+    collision waiting to happen, so every extension fact MUST be prefixed
+    (``kotlin.visibility``, ``scip.symbol``). Enforced identically on nodes +
+    edges — the ONE validator both axes share (DRY).
+    """
+    for key in v:
+        head, dot, tail = key.partition(".")
+        if not dot or not head or not tail:
+            raise ValueError(
+                f"attribute key {key!r} must be namespaced '<lang|tool>.<name>' "
+                "(a dot separating two non-empty segments)"
+            )
+    return v
+
+
+class GraphNodeBase(BaseModel):
+    """Shared identity + provenance for every code-graph node kind.
+
+    ``frozen`` — a node is a value object the extractor emits once and every
+    downstream layer only READS (the view stamps hierarchy onto the wire dict,
+    never the node), so immutability is free and makes nodes hashable/cacheable.
+    Per-kind subclasses narrow ``type`` to a Literal; the discriminated
+    :data:`GraphNode` union dispatches on it. Legacy persisted nodes predate
+    ``subkind``/``attributes`` — the defaults make them validate unchanged.
+    """
+
+    model_config = _NODE_CFG
 
     slug: str
     node_id: str
@@ -784,6 +858,136 @@ class GraphNode(BaseModel):
     file: str
     range: tuple[int, int]
     docstring: str | None = None
+    # Open per-kind refinement (Kythe subkind): e.g. ``companion`` for a Kotlin
+    # companion object, ``const`` for a constant Property. ``None`` = unrefined.
+    subkind: str | None = None
+    # Namespaced extension bag (``<lang|tool>.<name>`` keys) — the zero-schema-
+    # change seam for language-specific facts. Defaults empty so legacy nodes
+    # (which lack it) validate unchanged.
+    attributes: dict[str, _JsonScalar] = Field(default_factory=dict)
+
+    @field_validator("attributes")
+    @classmethod
+    def _ns_attributes(cls, v: dict[str, _JsonScalar]) -> dict[str, _JsonScalar]:
+        """Enforce namespaced attribute keys (see :func:`_require_namespaced`)."""
+        return _require_namespaced(v)
+
+
+class FileNode(GraphNodeBase):
+    """A source file — the container every in-file symbol hangs off."""
+
+    type: Literal["File"] = "File"
+
+
+class ModuleNode(GraphNodeBase):
+    """An imported module target (synthetic cross-file IMPORTS endpoint)."""
+
+    type: Literal["Module"] = "Module"
+
+
+class ClassNode(GraphNodeBase):
+    """A class / struct definition."""
+
+    type: Literal["Class"] = "Class"
+
+
+class InterfaceNode(GraphNodeBase):
+    """An interface / trait / protocol definition."""
+
+    type: Literal["Interface"] = "Interface"
+
+
+class FunctionNode(GraphNodeBase):
+    """A top-level (unbound) function."""
+
+    type: Literal["Function"] = "Function"
+
+
+class MethodNode(GraphNodeBase):
+    """A method bound to a class/struct/object."""
+
+    type: Literal["Method"] = "Method"
+
+
+class ObjectNode(GraphNodeBase):
+    """A singleton object (Kotlin ``object`` / ``companion object``; Scala later)."""
+
+    type: Literal["Object"] = "Object"
+
+
+class PropertyNode(GraphNodeBase):
+    """A field / property / constant."""
+
+    type: Literal["Property"] = "Property"
+
+
+class ExternalNode(GraphNodeBase):
+    """VIEW-only convergence node for an unresolved out-of-repo symbol."""
+
+    type: Literal["External"] = "External"
+
+
+class FolderNode(GraphNodeBase):
+    """VIEW-only directory supernode (hierarchy wire mode)."""
+
+    type: Literal["Folder"] = "Folder"
+
+
+_GraphNodeAnnotated = Annotated[
+    FileNode
+    | ModuleNode
+    | ClassNode
+    | InterfaceNode
+    | FunctionNode
+    | MethodNode
+    | ObjectNode
+    | PropertyNode
+    | ExternalNode
+    | FolderNode,
+    Field(discriminator="type"),
+]
+
+# Public alias — annotate ``list[GraphNode]`` / ``Iterable[GraphNode]`` with the
+# discriminated union so a value is always one of the per-kind classes.
+# Construct via the per-kind classes (or :func:`make_graph_node` for a dynamic
+# ``type``); validate persisted dicts via :data:`GraphNodeAdapter`.
+GraphNode = _GraphNodeAnnotated
+
+# Rehydration entrypoint — dispatches a persisted node dict/json to its per-kind
+# subclass by the ``type`` discriminator (the store's node-load seam uses this,
+# so a loaded node is the right subclass, not a lossy base). ``model_construct``
+# skips re-validation for an already-trusted persisted graph (perf).
+GraphNodeAdapter: TypeAdapter[GraphNode] = TypeAdapter(_GraphNodeAnnotated)
+
+_NODE_CLS_BY_TYPE: dict[str, type[GraphNodeBase]] = {
+    "File": FileNode,
+    "Module": ModuleNode,
+    "Class": ClassNode,
+    "Interface": InterfaceNode,
+    "Function": FunctionNode,
+    "Method": MethodNode,
+    "Object": ObjectNode,
+    "Property": PropertyNode,
+    "External": ExternalNode,
+    "Folder": FolderNode,
+}
+
+
+def make_graph_node(**data: Any) -> GraphNode:
+    """Construct the per-kind ``GraphNode`` subclass for a dynamic ``type``.
+
+    Thin factory over :data:`_NODE_CLS_BY_TYPE` for the (few) call sites whose
+    ``type`` is only known at runtime — collapsing an otherwise-repeated
+    per-kind branch (DRY). Static sites should use the per-kind class directly.
+    """
+    kind = data.get("type")
+    try:
+        cls = _NODE_CLS_BY_TYPE[kind]  # type: ignore[index]
+    except KeyError:
+        raise ValueError(f"unknown graph node type: {kind!r}") from None
+    # ``cls`` is a concrete union member, but the type checker only knows it as
+    # ``type[GraphNodeBase]`` — narrow to the union at this single seam.
+    return cast("GraphNode", cls(**data))
 
 
 class GraphEdge(BaseModel):
@@ -801,6 +1005,85 @@ class GraphEdge(BaseModel):
     # ``External`` node (a view concern — the persisted node table stays
     # real-in-repo-symbols only). ``None`` for ordinary in-repo edges.
     target_name: str | None = None
+    # Same open subkind + namespaced extension bag as the node axes (#188).
+    # Defaults keep legacy persisted edges validating unchanged.
+    subkind: str | None = None
+    attributes: dict[str, _JsonScalar] = Field(default_factory=dict)
+
+    @field_validator("attributes")
+    @classmethod
+    def _ns_attributes(cls, v: dict[str, _JsonScalar]) -> dict[str, _JsonScalar]:
+        """Enforce namespaced attribute keys (see :func:`_require_namespaced`)."""
+        return _require_namespaced(v)
+
+
+# CPG-style endpoint rule (#188): the node kinds legally allowed as the SOURCE of
+# each edge type, derived from what the tree-sitter extractor + scip resolver
+# ACTUALLY emit today, widened to the near-term container kinds (Class→Method
+# CONTAINS) and the new Kotlin Object/Property. A permissive superset — its job
+# is to reject a clearly-wrong endpoint (e.g. a CONTAINS rooted at a Function),
+# never to reject a graph the current pipeline produces. Checked only when the
+# source resolves to an in-graph node; a by-name synthetic edge (``target_name``
+# set) whose source is itself a by-name id — the tree-sitter EXTENDS convention,
+# where the subclass-name byte offset differs from the class node id — is exempt.
+_EDGE_SOURCE_KINDS: dict[str, frozenset[str]] = {
+    "CONTAINS": frozenset({"File", "Folder", "Module", "Class", "Interface", "Object"}),
+    "IMPORTS": frozenset({"File", "Module"}),
+    "CALLS": frozenset({"File", "Function", "Method"}),
+    "EXTENDS": frozenset({"Class", "Interface", "Object"}),
+    "REFERENCES": frozenset(
+        {"File", "Module", "Class", "Interface", "Function", "Method", "Object", "Property"}
+    ),
+}
+
+
+class CodeGraph(BaseModel):
+    """Whole-graph validated bundle of nodes + edges (schema v2, Gitea #188).
+
+    Assembled + validated ONCE at ingest (``build_graph_core``) before the store
+    persists the flat lists. The ``model_validator`` enforces three invariants a
+    per-node/edge check can't: (1) node-id uniqueness; (2) referential integrity
+    — a non-synthetic edge's endpoints must both resolve to a node (a synthetic
+    cross-file edge carrying ``target_name`` may point out-of-repo, and its
+    source may itself be a by-name id); (3) CPG-style per-edge-type endpoint
+    rules. An already-trusted persisted graph can skip re-validation via
+    ``model_construct``.
+    """
+
+    model_config = _CFG
+
+    schema_version: Literal["1"] = "1"
+    nodes: list[_GraphNodeAnnotated] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_graph(self) -> CodeGraph:
+        """Enforce id-uniqueness + referential integrity + endpoint rules."""
+        id_type: dict[str, str] = {}
+        for n in self.nodes:
+            if n.node_id in id_type:
+                raise ValueError(f"duplicate node_id: {n.node_id!r}")
+            id_type[n.node_id] = n.type
+        for e in self.edges:
+            synthetic = e.target_name is not None
+            if not synthetic:
+                if e.source not in id_type:
+                    raise ValueError(
+                        f"{e.type} edge source {e.source!r} does not resolve to a node"
+                    )
+                if e.target not in id_type:
+                    raise ValueError(
+                        f"{e.type} edge target {e.target!r} does not resolve to a node "
+                        "(and carries no target_name)"
+                    )
+            allowed = _EDGE_SOURCE_KINDS.get(e.type)
+            src_type = id_type.get(e.source)
+            if allowed is not None and src_type is not None and src_type not in allowed:
+                raise ValueError(
+                    f"{e.type} edge illegal source kind {src_type!r} "
+                    f"(allowed: {sorted(allowed)})"
+                )
+        return self
 
 
 class Embedding(BaseModel):

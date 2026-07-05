@@ -116,6 +116,46 @@ export class IndexedSnapshot {
     };
   }
 
+  /**
+   * Host-aware "open this file in the source repo" URL for a cited path,
+   * optionally deep-linked to a 1-based line range. Shares the same
+   * ``repoUrl`` + ``source`` platform knowledge as {@link _branchUrl} /
+   * {@link _commitUrl} so citation chips + source cards never re-derive it.
+   *
+   *   github    → ``<repo>/blob/<branch>/<path>#L<a>-L<b>``
+   *   gitea     → ``<repo>/src/branch/<branch>/<path>#L<a>-L<b>``
+   *   gitlab    → ``<repo>/-/blob/<branch>/<path>#L<a>-<b>``
+   *   bitbucket → ``<repo>/src/<branch>/<path>#lines-<a>:<b>``
+   *
+   * Returns ``null`` when we can't build a faithful link — no repoUrl/branch,
+   * an empty path, or an azure/generic-git host with no portable blob shape
+   * (we never mis-link rather than guess).
+   */
+  sourceUrl(path: string, startLine?: number | null, endLine?: number | null): string | null {
+    if (!this.repoUrl || !this.branch || !path) return null;
+    const base = IndexedSnapshot._stripTrailingSlash(this.repoUrl);
+    const ref = encodeURIComponent(this.branch);
+    const encPath = path
+      .replace(/^\/+/, "")
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/");
+    const anchor = IndexedSnapshot._lineAnchor(this.source, startLine, endLine);
+    switch (this.source) {
+      case "github":
+        return `${base}/blob/${ref}/${encPath}${anchor}`;
+      case "gitea":
+        return `${base}/src/branch/${ref}/${encPath}${anchor}`;
+      case "gitlab":
+        return `${base}/-/blob/${ref}/${encPath}${anchor}`;
+      case "bitbucket":
+        return `${base}/src/${ref}/${encPath}${anchor}`;
+      default:
+        // azure / generic git — no portable blob shape; skip rather than mis-link.
+        return null;
+    }
+  }
+
   // ── Private composition helpers ─────────────────────────────────────
 
   private _extras({ uppercase }: { uppercase: boolean }): SnapshotPill[] {
@@ -166,6 +206,25 @@ export class IndexedSnapshot {
 
   private static _stripTrailingSlash(url: string): string {
     return url.endsWith("/") ? url.slice(0, -1) : url;
+  }
+
+  /** Host-specific ``#Lstart-Lend`` line-range anchor (empty when no start). */
+  private static _lineAnchor(
+    source: PlatformId | null,
+    start?: number | null,
+    end?: number | null,
+  ): string {
+    if (start == null) return "";
+    const hi = end != null && end !== start ? end : null;
+    switch (source) {
+      case "bitbucket":
+        return hi ? `#lines-${start}:${hi}` : `#lines-${start}`;
+      case "gitlab":
+        return hi ? `#L${start}-${hi}` : `#L${start}`;
+      default:
+        // github / gitea share the double-L range form.
+        return hi ? `#L${start}-L${hi}` : `#L${start}`;
+    }
   }
 }
 

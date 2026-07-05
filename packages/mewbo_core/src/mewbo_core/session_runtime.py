@@ -417,6 +417,7 @@ class SessionRuntime:
         invocation_id: str | None = None,
         extra_session_tools: list[SessionTool] | None = None,
         enable_skills: bool = True,
+        attachments: list[dict] | None = None,
     ) -> str:
         """Start an asynchronous orchestration run for the session.
 
@@ -462,6 +463,7 @@ class SessionRuntime:
                 invocation_id=invocation_id,
                 extra_session_tools=extra_session_tools,
                 enable_skills=enable_skills,
+                attachments=attachments,
             )
 
         # Emit an instant ``run_accepted`` lifecycle marker BEFORE the background
@@ -538,6 +540,7 @@ class SessionRuntime:
         invocation_id: str | None = None,
         extra_session_tools: list[SessionTool] | None = None,
         enable_skills: bool = True,
+        attachments: list[dict] | None = None,
     ) -> TaskQueue:
         """Run an orchestration request synchronously.
 
@@ -572,6 +575,7 @@ class SessionRuntime:
             invocation_id=invocation_id,
             extra_session_tools=extra_session_tools,
             enable_skills=enable_skills,
+            attachments=attachments,
         )
 
     def cancel(self, session_id: str) -> bool:

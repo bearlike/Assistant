@@ -10,8 +10,8 @@ from mewbo_graph.wiki.types import (
     Embedding,
     Frontmatter,
     GraphEdge,
-    GraphNode,
     WikiPage,
+    make_graph_node,
 )
 
 
@@ -47,11 +47,11 @@ def _seed_pages(store):
 
 def _seed_graph(store):
     store.upsert_nodes("x/y", [
-        GraphNode(slug="x/y", node_id="f1", type="Function", name="authenticate",
+        make_graph_node(slug="x/y", node_id="f1", type="Function", name="authenticate",
                   file="auth.py", range=(0, 100), docstring="Verify a user's token."),
-        GraphNode(slug="x/y", node_id="f2", type="Function", name="store_data",
+        make_graph_node(slug="x/y", node_id="f2", type="Function", name="store_data",
                   file="storage.py", range=(0, 100), docstring="Persist a record."),
-        GraphNode(slug="x/y", node_id="c1", type="Class", name="Engine",
+        make_graph_node(slug="x/y", node_id="c1", type="Class", name="Engine",
                   file="core.py", range=(0, 100), docstring="The main loop."),
     ])
     store.upsert_embeddings("x/y", [

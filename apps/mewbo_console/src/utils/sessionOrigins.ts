@@ -13,6 +13,7 @@ export const ORIGIN_FILTERS: { origin: SessionOrigin; label: string }[] = [
   { origin: 'search', label: 'Search' },
   { origin: 'structured', label: 'Structured' },
   { origin: 'draft', label: 'Draft' },
+  { origin: 'mobile', label: 'Mobile' },
 ];
 
 export const DEFAULT_VISIBLE_ORIGINS: SessionOrigin[] = ['user', 'channel'];
