@@ -12,7 +12,7 @@ Design rules (KISS):
   git itself enforces.
 * All operations are git subprocess calls — no extra dependencies.
 * "Clean" means ``git status --porcelain`` is empty AND there are no commits
-  ahead of upstream (matches Claude Code's auto-cleanup default).
+  ahead of upstream (auto-cleanup default for worktrees with no unique commits).
 * The caller (``project_store``) decides whether to persist a record;
   this module deals with the filesystem and git only.
 """

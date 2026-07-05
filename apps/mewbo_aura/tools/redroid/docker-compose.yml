@@ -1,0 +1,66 @@
+services:
+  redroid:
+    image: redroid/redroid:13.0.0-latest
+    container_name: aura-redroid
+    privileged: true            # required: binder/ashmem access
+    restart: unless-stopped
+    volumes:
+      - ./data:/data            # persists app + system state across restarts
+    ports:
+      - "5555:5555"             # adbd
+    networks:
+      - default
+      - assistant               # line-of-sight to the deployed Mewbo API stack
+    command:
+      - androidboot.redroid_width=1440
+      - androidboot.redroid_height=3120
+      - androidboot.redroid_dpi=560   # Pixel-7-Pro-like geometry
+      # Android-side DNS = Docker's embedded resolver: resolves compose service
+      # names (http://api:5125) AND forwards LAN names via the host's resolver.
+      - androidboot.redroid_net_ndns=1
+      - androidboot.redroid_net_dns1=127.0.0.11
+
+  # GMS variant — MindTheGapps baked into the same redroid 13 base so its
+  # stock assistant app can run as an assistant-role/overlay UX reference.
+  # Opt-in (plain `docker compose up -d` never starts it):
+  #   ./build-gms-image.sh                  # one-time image bake
+  #   docker compose --profile gms up -d
+  #   adb connect localhost:5556
+  # First boot: the GMS setup wizard black-screens on redroid's software GPU —
+  # skip it once:
+  #   adb -s localhost:5556 shell settings put secure user_setup_complete 1
+  #   adb -s localhost:5556 shell settings put global device_provisioned 1
+  #   adb -s localhost:5556 shell pm disable-user --user 0 com.google.android.setupwizard
+  # MindTheGapps ships its assistant app pre-registered as the default assistant
+  # (verify: settings get secure assistant → GsaVoiceInteractionService). For
+  # account sign-in, register the GSF Android ID at google.com/android/uncertified
+  # first. redroid has no mic input → typed/visual assistant interaction only.
+  redroid-gms:
+    image: redroid/redroid:13.0.0_mindthegapps
+    container_name: aura-redroid-gms
+    profiles: ["gms"]
+    privileged: true            # required: binder/ashmem access
+    restart: unless-stopped
+    volumes:
+      - ./data-gms:/data        # separate state from the AOSP service
+    ports:
+      - "5556:5555"             # adbd (base service owns 5555)
+    networks:
+      - default
+      - assistant
+    command:
+      - androidboot.redroid_width=1440
+      - androidboot.redroid_height=3120
+      - androidboot.redroid_dpi=560   # Pixel-7-Pro-like geometry
+      - androidboot.redroid_net_ndns=1
+      - androidboot.redroid_net_dns1=127.0.0.11
+
+# Host's default Docker address pools are fully allocated; pin a free subnet.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.213.99.0/24
+  assistant:
+    external: true
+    name: assistant_default

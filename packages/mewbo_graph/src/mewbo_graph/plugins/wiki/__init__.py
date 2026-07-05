@@ -1,4 +1,4 @@
-"""Built-in ``wiki`` plugin — DeepWiki-style documentation backend.
+"""Built-in ``wiki`` plugin — auto-generated documentation backend.
 
 Tools and agents are registered via the plugin manifest at
 ``.claude-plugin/plugin.json``. The wiki plugin is opt-in via the

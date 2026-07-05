@@ -62,10 +62,31 @@ def resolve_mewbo_home() -> Path:
 
 
 def _resolve_config_path(filename: str) -> Path:
-    """Find a config file: ``CWD/configs/`` first, then ``MEWBO_HOME``."""
-    cwd_path = Path("configs") / filename
-    if cwd_path.exists():
-        return cwd_path
+    """Find a config file by walking up from CWD, then ``MEWBO_HOME``.
+
+    The first ``configs/<filename>`` found while ascending from the current
+    directory wins — so running ``mewbo`` from a subdirectory (or a parent
+    that contains the project) still loads the project's config instead of
+    silently falling back to built-in defaults. The ascent stops at the git
+    root (or the filesystem root), mirroring project-instruction discovery
+    (``common._find_git_root``). When nothing is found, fall back to
+    ``MEWBO_HOME`` exactly as before.
+    """
+    # Lazy import: common imports config at module load, so importing it at
+    # module top would be a cycle (matches the codebase's in-function imports).
+    from mewbo_core.common import _find_git_root
+
+    start = Path.cwd().resolve()
+    stop_at = _find_git_root(start) or Path(start.anchor)
+    current = start
+    while current >= stop_at:
+        candidate = current / "configs" / filename
+        if candidate.exists():
+            return candidate
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
     return resolve_mewbo_home() / filename
 
 
@@ -140,6 +161,14 @@ class RuntimeConfig(BaseModel):
         False,
         description=("Run connectivity checks for LLM, Langfuse, and Home Assistant on startup."),
     )
+    developer_mode: bool = Field(
+        False,
+        description=(
+            "Enable developer mode. Unlocks graph-only (no-LLM) repository "
+            "onboarding so contributors can inspect AST graph construction "
+            "without documentation generation. Read by the API, console, and CLI."
+        ),
+    )
     cache_dir: str = Field(
         "",
         description="Directory for tool caches. Defaults to $MEWBO_HOME/cache.",
@@ -202,6 +231,11 @@ class RuntimeConfig(BaseModel):
     @field_validator("preflight_enabled", mode="before")
     @classmethod
     def _normalize_preflight_enabled(cls, value: Any) -> bool:
+        return _coerce_bool(value, default=False)
+
+    @field_validator("developer_mode", mode="before")
+    @classmethod
+    def _normalize_developer_mode(cls, value: Any) -> bool:
         return _coerce_bool(value, default=False)
 
 
@@ -595,11 +629,11 @@ class TokenBudgetConfig(BaseModel):
 class CompactionConfig(BaseModel):
     """Summarization prompt selection for conversation compaction.
 
-    ``caveman_mode`` enables a rule-augmented prompt (inspired by the
-    ``JuliusBrussee/caveman`` Claude Code skill) that instructs the
-    summarizer LLM to drop articles, filler, pleasantries, and hedging
-    while preserving code, paths, URLs, and error strings verbatim.
-    Reduces output tokens in the compaction summary without changing the
+    ``caveman_mode`` enables a rule-augmented "caveman" prompt that
+    instructs the summarizer LLM to drop articles, filler, pleasantries,
+    and hedging while preserving code, paths, URLs, and error strings
+    verbatim. Reduces output tokens in the compaction summary without
+    changing the
     ``<analysis>/<summary>`` response structure downstream parsers expect.
     """
 
@@ -792,6 +826,50 @@ class PermissionsConfig(BaseModel):
         return "ask"
 
 
+class CliRemoteConfig(BaseModel):
+    """Opt-in remote endpoint for the terminal CLI — CLI-scoped ONLY.
+
+    Every other surface ignores this block. When ``base_url`` is set the CLI is
+    still a strictly-local engine (the run loop + authoritative JSONL transcript
+    stay on this host), but it additionally (a) mirrors each session event to the
+    remote REST API fire-and-forget for cross-device visibility and (b)
+    auto-registers the Mewbo MCP server so the product tools
+    (``ask_wiki``/``search``/``structured_query`` + wiki-graph reads) appear in
+    the CLI registry and execute remotely (compute offload). Empty ⇒ fully local.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_default=True,
+        json_schema_extra={"title": "CLI Remote"},
+    )
+
+    base_url: str = Field(
+        "",
+        description=(
+            "Base URL of the remote Mewbo deployment — a reverse-proxy root that "
+            "serves the REST API under ``/api`` and the Mewbo MCP server under "
+            "``/mcp``. Empty (default) ⇒ the CLI is fully local."
+        ),
+        examples=["https://mewbo.example.com"],
+    )
+    token: str = Field(
+        "",
+        description=(
+            "API token presented to the remote deployment: sent as ``X-API-Key`` "
+            "to the REST API for transcript sync and as a ``Bearer`` token to the "
+            "Mewbo MCP server (which forwards it to the REST API). ``${ENV_VAR}`` "
+            "references are expanded by the CLI at use time."
+        ),
+        json_schema_extra={"x-secret": True},
+    )
+
+    @property
+    def enabled(self) -> bool:
+        """True when a remote base URL is configured (sync + product tools on)."""
+        return bool(self.base_url.strip())
+
+
 class CLIConfig(BaseModel):
     """Terminal CLI display and interaction settings."""
 
@@ -803,6 +881,10 @@ class CLIConfig(BaseModel):
     disable_textual: bool = Field(
         False,
         description="Disable the Textual TUI and fall back to plain Rich output.",
+    )
+    remote: CliRemoteConfig = Field(
+        default_factory=lambda: CliRemoteConfig.model_validate({}),
+        description="Opt-in remote session sync + product tools (CLI-only).",
     )
     approval_style: str = Field(
         "inline",
@@ -1281,8 +1363,8 @@ class AgentConfig(BaseModel):
         DEFAULT_TIMEOUT,
         description=(
             "Ceiling in seconds for a single model.ainvoke() call. "
-            "Covers extended-thinking models (raised from 60s — bare timeouts "
-            "were the largest single failure class). On timeout, the call is "
+            "Covers extended-thinking models (raised from 60s because bare "
+            "timeouts were the largest single failure class). On timeout, the call is "
             "retried up to llm_call_retries times before cascading to "
             "fallback models."
         ),
@@ -1373,7 +1455,7 @@ class AgentConfig(BaseModel):
         True,
         description=(
             "Allow ALL user-enabled MCP tools (tools with kind='mcp') during "
-            "plan mode. Matches Claude Code's permissive default and trusts "
+            "plan mode. Uses a permissive default and trusts "
             "the user's mcp.json configuration. Set to false to block MCP "
             "tools in plan mode regardless of their read-only status."
         ),

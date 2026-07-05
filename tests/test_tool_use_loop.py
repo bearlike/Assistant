@@ -778,8 +778,8 @@ class TestDepthGuidance:
 
 
 # ---------------------------------------------------------------------------
-# Empty-content sanitization (Fix A — port of Claude Code's
-# ensureNonEmptyAssistantContent + NO_CONTENT_MESSAGE).
+# Empty assistant-content sanitization (Fix A — ensure non-empty assistant
+# content by inserting a placeholder ``(no content)`` block).
 # ---------------------------------------------------------------------------
 
 
@@ -789,9 +789,9 @@ class TestThinkingOnlyContentPlaceholder:
     def test_thinking_only_response_produces_placeholder(self):
         """Stripping thinking leaves empty ⇒ insert ``(no content)`` text block.
 
-        Mirrors Claude Code's ``ensureNonEmptyAssistantContent`` to stop the
-        model from hallucinating framework-style meta-text on subsequent
-        turns. The placeholder is filtered out of ``agent_message`` events.
+        Ensuring non-empty assistant content stops the model from hallucinating
+        framework-style meta-text on subsequent turns. The placeholder is
+        filtered out of ``agent_message`` events.
         """
         spec = _make_spec("shell_tool", "Run shell commands")
         registry = _make_registry(spec)
@@ -827,8 +827,8 @@ class TestThinkingOnlyContentPlaceholder:
             )
             asyncio.run(loop.run("do it", tool_specs=[spec], context=_make_context()))
 
-        # Placeholder must NOT leak out as an agent_message event (mirrors
-        # Claude Code's src/utils/messages.ts:717 display filter).
+        # Placeholder must NOT leak out as an agent_message event (the
+        # internal-event display filter drops it).
         agent_messages = [e for e in emitted_events if e["type"] == "agent_message"]
         for event in agent_messages:
             assert event["payload"]["text"] != "(no content)"

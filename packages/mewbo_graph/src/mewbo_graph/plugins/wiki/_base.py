@@ -32,6 +32,7 @@ from mewbo_graph.plugins.wiki._ctx import (
     resolve_qa_ctx,
     resolve_runtime,
 )
+from mewbo_graph.wiki.qa_access import QaAccessRecord
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -79,8 +80,8 @@ class WikiSessionTool:
     def terminal_reason(self) -> str:
         """done_reason when a wiki terminal tool stops the run.
 
-        Both wiki terminal tools (``wiki_finalize`` and the ``wiki_emit_block``
-        sources accept-state) signal a *successful* terminal state, so the base
+        Both wiki terminal tools (``wiki_finalize`` and the atomic ``wiki_emit_answer``
+        accept-state) signal a *successful* terminal state, so the base
         default is ``"completed"`` — never the exit_plan_mode approval gate. A
         terminal tool can no longer override ``should_terminate_run`` while
         lacking a ``terminal_reason`` (the #61 contract violation).
@@ -111,23 +112,31 @@ class WikiSessionTool:
         return resolve_qa_ctx(self._session_id, runtime) if runtime is not None else None
 
     @staticmethod
-    def _record_qa_access(ctx: Any, refs: list[str]) -> None:
-        """Record the graph nodes / files / pages a QA probe touched.
+    def _record_qa_access(ctx: Any, records: list[QaAccessRecord]) -> None:
+        """Record the bounded, score-ranked retrieval trail for a QA probe.
 
         The deterministic provenance trail (vs the LLM's hand-picked citations):
-        each retrieval tool reports the refs it returned and the finalizer folds
-        them into ``QaAnswer.accessed_sources``. A no-op outside a QA ctx (an
-        indexing job ctx has no ``answer_id``) and best-effort — telemetry never
-        breaks a retrieval call. Refs use the citation id grammar:
-        ``graph:<node_id>`` / ``<path>#L<a>-<b>`` (or bare ``<path>``) / ``wiki:<page_id>``.
+        each retrieval tool reports the refs it grounded against as typed
+        :class:`QaAccessRecord`s — scored search hits carry their real ``score``/
+        ``rank``; navigation seeds and file/page reads are unscored grounding
+        touches. The finalizer (:meth:`QaFinalizer._accessed_from_events`) dedupes,
+        score-orders, and caps them into ``QaAnswer.accessed_sources`` — so the
+        trail stays a tight, high-signal list instead of the full unranked
+        graph-navigation set. A no-op outside a QA ctx (an indexing job ctx has no
+        ``answer_id``) and best-effort — telemetry never breaks a retrieval call.
+        ``ref`` always uses the citation id grammar: ``graph:<node_id>`` /
+        ``<path>#L<a>-<b>`` (or bare ``<path>``) / ``wiki:<page_id>``.
         """
         answer_id = getattr(ctx, "answer_id", None)
         store = getattr(ctx, "store", None)
-        clean = [r for r in refs if r]
+        clean = [r for r in records if r and r.ref]
         if not answer_id or store is None or not clean:
             return
         try:
-            store.append_qa_event(answer_id, {"type": "access", "refs": clean})
+            store.append_qa_event(
+                answer_id,
+                {"type": "access", "records": [r.model_dump() for r in clean]},
+            )
         except Exception:  # pragma: no cover — provenance is best-effort
             pass
 

@@ -17,7 +17,7 @@ from mewbo_graph.wiki.memory import (
 )
 from mewbo_graph.wiki.store import JsonWikiStore
 from mewbo_graph.wiki.structure_provider import CodeStructureProvider
-from mewbo_graph.wiki.types import Embedding, GraphNode
+from mewbo_graph.wiki.types import Embedding, GraphNode, make_graph_node
 
 SLUG = "org/repo"
 CLOCK = "2026-06-05T12:00:00Z"
@@ -74,7 +74,7 @@ class FakeLLM:
 
 
 def _gn(nid: str, typ: str, name: str, f: str) -> GraphNode:
-    return GraphNode(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
+    return make_graph_node(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
 
 
 @pytest.fixture

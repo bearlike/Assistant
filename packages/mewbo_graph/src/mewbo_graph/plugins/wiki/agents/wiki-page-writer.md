@@ -1,6 +1,6 @@
 ---
 name: wiki-page-writer
-description: Generates a single DeepWiki page from a focused task. Reads source files, synthesizes markdown + Mermaid + tables, submits via wiki_submit_page.
+description: Generates a single wiki page from a focused task. Reads source files, synthesizes markdown + Mermaid + tables, submits via wiki_submit_page.
 model: inherit
 tools: [read_file, glob, grep, wiki_code_search, wiki_query_graph, wiki_submit_page, resolve_entity, wiki_submit_insight]
 disallowedTools: [spawn_agent, exit_plan_mode, activate_skill]

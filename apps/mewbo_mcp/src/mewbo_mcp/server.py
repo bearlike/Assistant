@@ -202,6 +202,11 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
           paged (20 per call from ``step_offset``); when more remain the result
           carries ``next_step_offset`` — pass it back to read the next page.
 
+        ``turns`` and ``full`` rows additionally carry an ``attachments`` list
+        (``{filename, content_type, size_bytes}`` each) when the turn's user
+        message had files attached; the key is omitted entirely for turns with
+        none.
+
         Pick the smallest tier that answers your question to conserve context.
         """
         async with _client(ctx) as client:

@@ -361,7 +361,7 @@ class TestResolveByAlias:
             if path == p1.path:
                 return [RepoIdentity(host="github.com", owner="bearlike", repo="Assistant")]
             if path == p2.path:
-                return [RepoIdentity(host="git.hurricane.home", owner="kk", repo="Assistant")]
+                return [RepoIdentity(host="git.example.com", owner="kk", repo="Assistant")]
             return []
 
         monkeypatch.setattr(RepoIdentity, "for_path", staticmethod(fake_for_path))

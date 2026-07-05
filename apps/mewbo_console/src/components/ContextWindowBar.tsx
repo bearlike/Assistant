@@ -10,9 +10,9 @@ import { formatTokens } from '../utils/time';
  *
  * Source of truth is `root_last_input_tokens` — the size of the most recent
  * root prompt — because that is what the model actually has in its window
- * right now (matches Claude Code's `currentUsage` and Codex's
- * `last_token_usage`). Peak across calls is shown as a secondary detail in
- * the popover for users who care about historical worst-case pressure.
+ * right now — the live context-window usage. Peak across calls is shown
+ * as a secondary detail in the popover for users who care about historical
+ * worst-case pressure.
  */
 interface Props {
   usage: SessionUsage | null | undefined;

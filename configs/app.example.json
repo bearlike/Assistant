@@ -65,7 +65,11 @@
   },
   "cli": {
     "disable_textual": false,
-    "approval_style": "inline"
+    "approval_style": "inline",
+    "remote": {
+      "base_url": "",
+      "token": ""
+    }
   },
   "chat": {
     "port": 8501,

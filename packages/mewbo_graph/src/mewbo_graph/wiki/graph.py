@@ -15,38 +15,72 @@ each class owns its own state and behaviour over that state.
 from __future__ import annotations
 
 import hashlib
-import time
-import warnings
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from mewbo_core.common import get_logger
-
-from .types import GraphEdge, GraphNode
+from .folder_tree import FolderTree
+from .types import (
+    ClassNode,
+    ExternalNode,
+    FileNode,
+    FunctionNode,
+    GraphEdge,
+    GraphNode,
+    InterfaceNode,
+    MethodNode,
+    ObjectNode,
+    PropertyNode,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from mewbo_graph.entities.types import Entity, EntityRelation
 
     from .memory_types import MemoryEdge, MemoryNode
     from .store import WikiStoreBase
 
-_log = get_logger(name="api.wiki.graph")
+
+@dataclass(frozen=True)
+class LanguageSpec:
+    """One tree-sitter-backed language the code-graph extractor supports.
+
+    ``query_file`` defaults to ``<name>.scm`` — set it only when a language's
+    query file diverges from its language name (none do today; the field
+    keeps that decision out of ``_query_for``'s hot path rather than hardcode
+    the f-string there).
+    """
+
+    name: str
+    extensions: tuple[str, ...]
+    query_file: str | None = None
+
+    @property
+    def query_filename(self) -> str:
+        """Resolved query file name — ``query_file`` override, else ``<name>.scm``."""
+        return self.query_file or f"{self.name}.scm"
 
 
-# extension → language map
+# Every tree-sitter-backed language GraphIndex supports. ``.kts`` (Kotlin
+# build/script files) is deliberately excluded — it's build config, not
+# application code the wiki graph should model.
+_LANGUAGES: tuple[LanguageSpec, ...] = (
+    LanguageSpec("python", (".py",)),
+    LanguageSpec("javascript", (".js", ".jsx")),
+    LanguageSpec("typescript", (".ts", ".tsx")),
+    LanguageSpec("go", (".go",)),
+    LanguageSpec("rust", (".rs",)),
+    LanguageSpec("kotlin", (".kt",)),
+    LanguageSpec("java", (".java",)),
+)
+
+# Derived extension → language-name map — the single source of truth both
+# `parse_file`'s hot path and `prefetch.py`'s language list read from.
 _LANG_BY_EXT: dict[str, str] = {
-    ".py": "python",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".go": "go",
-    ".rs": "rust",
+    ext: spec.name for spec in _LANGUAGES for ext in spec.extensions
 }
+_SPEC_BY_NAME: dict[str, LanguageSpec] = {spec.name: spec for spec in _LANGUAGES}
+
 
 @dataclass(frozen=True)
 class GraphParseResult:
@@ -79,8 +113,6 @@ class GraphIndex:
         self._queries_dir = Path(__file__).parent / "graph_queries"
         # Defensive import so missing extras give a clean error.
         try:
-            import ctypes  # noqa: F401
-
             import tree_sitter  # noqa: F401
             import tree_sitter_language_pack  # noqa: F401
         except ImportError as exc:
@@ -111,6 +143,10 @@ class GraphIndex:
         from tree_sitter import QueryCursor
 
         cursor = QueryCursor(query)
+        # ``captures()`` groups nodes per capture NAME but the per-name lists are
+        # NOT mutually index-aligned (order varies once matches nest), so
+        # ``_extract`` re-aligns each parallel ``.def``/``.name`` pair by start
+        # byte via ``_by_position`` before zipping — see that helper.
         captures: dict[str, list] = cursor.captures(tree.root_node)
 
         rel = str(file_path.relative_to(repo_root))
@@ -141,96 +177,32 @@ class GraphIndex:
         if lang_name not in self._query_cache:
             from tree_sitter import Query
 
-            scm = (self._queries_dir / f"{lang_name}.scm").read_text(encoding="utf-8")
+            filename = _SPEC_BY_NAME[lang_name].query_filename
+            scm = (self._queries_dir / filename).read_text(encoding="utf-8")
             self._query_cache[lang_name] = Query(lang, scm)
         return self._query_cache[lang_name]
 
 
-# Parser shared libraries are fetched on demand from a GitHub release the first
-# time a language is seen on a cold cache. GitHub's release-asset CDN
-# occasionally returns a transient 5xx (a 504 was observed in production), and a
-# single un-retried download abort would fail an entire multi-minute indexing
-# run. Bounded exponential backoff turns that blip into a short wait; a genuine
-# repeated failure still surfaces (the last exception is re-raised). The
-# deployed image also pre-warms this cache at build time (docker/Dockerfile.api)
-# so a healthy container never reaches the network here at all.
-_PARSER_DOWNLOAD_ATTEMPTS = 3
-_PARSER_DOWNLOAD_BASE_DELAY = 2.0  # seconds (first backoff)
-_PARSER_DOWNLOAD_MAX_DELAY = 30.0  # seconds (backoff cap)
-
-
-def _download_with_retry(
-    download: Callable[[list[str]], object],
-    lang_name: str,
-    *,
-    attempts: int = _PARSER_DOWNLOAD_ATTEMPTS,
-    base_delay: float = _PARSER_DOWNLOAD_BASE_DELAY,
-    max_delay: float = _PARSER_DOWNLOAD_MAX_DELAY,
-    sleep: Callable[[float], None] = time.sleep,
-) -> None:
-    """Download *lang_name*'s parser, retrying transient failures with backoff.
-
-    Calls ``download([lang_name])`` up to *attempts* times, sleeping a capped
-    exponential delay between tries. Re-raises the final exception if every
-    attempt fails so a real (non-transient) error is never swallowed. The
-    download surface raises version-specific opaque network/IO exceptions, so we
-    retry on any exception rather than match fragile, version-coupled classes.
-    """
-    last_exc: Exception | None = None
-    for attempt in range(1, attempts + 1):
-        try:
-            download([lang_name])
-            return
-        except Exception as exc:  # noqa: BLE001 — opaque network/IO across lib versions
-            last_exc = exc
-            if attempt >= attempts:
-                break
-            delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
-            _log.warning(
-                "tree-sitter parser download for {} failed "
-                "(attempt {}/{}): {} — retrying in {:.1f}s",
-                lang_name,
-                attempt,
-                attempts,
-                exc,
-                delay,
-            )
-            sleep(delay)
-    assert last_exc is not None  # the loop only exits here after a failure
-    raise last_exc
-
-
 def _load_ts_language(lang_name: str):
-    """Load a ``tree_sitter.Language`` via the language-pack cache directory.
+    """Return a ``tree_sitter.Language`` for *lang_name* from the language pack.
 
-    ``tree_sitter_language_pack`` stores per-language shared libraries in its
-    cache directory (``~/.cache/tree-sitter-language-pack/<version>/libs/``).
-    We load the relevant ``.so`` via ``ctypes`` and hand the C function pointer
-    to ``tree_sitter.Language``.
+    ``get_language`` is the library's supported API. It does NOT return a
+    grammar bundled in the wheel — on first call for a given language it
+    downloads that parser over the network and caches it under
+    ``tree_sitter_language_pack.cache_dir()`` (verified empirically; a prior
+    docstring here claimed the 1.x line bundles every parser, which is wrong
+    for the resolved wheel). Production images pre-warm that cache at BUILD
+    time via ``python -m mewbo_graph.wiki.prefetch`` (see that module) so no
+    container ever pays the download on its first real parse. Never
+    reintroduce the manual ``ctypes`` + ``cache_dir()`` + ``download()``
+    loading path — it broke once the pack's ``download()`` became a no-op in
+    1.10.x: it returned successfully but wrote nothing, so the manual
+    ``ctypes.LoadLibrary`` then failed with "cannot open shared object file"
+    on a path that was never created.
     """
-    import ctypes
-
     import tree_sitter_language_pack as tlp
-    from tree_sitter import Language
 
-    cache = Path(tlp.cache_dir())
-    func_name = f"tree_sitter_{lang_name}"
-    lib_path = cache / f"libtree_sitter_{lang_name}.so"
-
-    # Ensure the library is downloaded before trying to load it. Resilient to a
-    # transient upstream 5xx so a network blip doesn't abort the indexing run.
-    if not lib_path.exists():
-        _log.info("Downloading tree-sitter language library for {}", lang_name)
-        _download_with_retry(tlp.download, lang_name)
-
-    lib = ctypes.cdll.LoadLibrary(str(lib_path))
-    fn = getattr(lib, func_name)
-    fn.restype = ctypes.c_void_p
-    ptr = fn()
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        return Language(ptr)
+    return tlp.get_language(lang_name)
 
 
 def _stable_id(slug: str, kind: str, name: str, file: str, byte_start: int) -> str:
@@ -239,6 +211,120 @@ def _stable_id(slug: str, kind: str, name: str, file: str, byte_start: int) -> s
         f"{slug}|{kind}|{name}|{file}|{byte_start}".encode()
     ).hexdigest()
     return h[:16]
+
+
+def _by_position(nodes: list) -> list:
+    """Order capture nodes by start byte so parallel captures zip correctly.
+
+    ``QueryCursor.captures()`` groups matches per capture NAME, but the per-name
+    lists are NOT guaranteed to be mutually index-aligned — their order varies
+    run-to-run, so a naive ``zip(captures["x.def"], captures["x.name"])`` can pair
+    a def with the WRONG name (silently attaching a node's name to another node's
+    byte range, which corrupts the graph and any downstream resolver matching on
+    name). Every captured def here is a disjoint sibling that contains its own
+    name, so document order is a sound join key: sorting BOTH lists by start byte
+    lines up the i-th def with the i-th name regardless of capture order.
+    """
+    return sorted(nodes, key=lambda n: n.start_byte)
+
+
+def _pair_defs_with_names(defs: list, names: list) -> list[tuple[Any, Any | None]]:
+    """Pair each def with the name node CONTAINED in its byte range.
+
+    Unlike the strict positional ``zip(_by_position(defs), _by_position(names))``
+    the Class/Interface/Function/Method families use (every def there has
+    exactly one name, so sort-then-zip is sound), a newer family may have a
+    def with NO name at all — e.g. Kotlin's anonymous ``companion object`` has
+    no ``type_identifier`` token to capture.
+
+    Assigns each name token to the TIGHTEST (smallest-span) containing def —
+    the same algorithm ``_subkinds_for`` uses, for the same reason. A def of
+    this family can NEST inside another (an `object` declared inside an
+    anonymous `companion object`'s body): the outer def's wider range also
+    contains the inner def's own name token. A single left-to-right pointer
+    into ``names`` (the prior implementation) assigns that name to whichever
+    def it reaches FIRST by position — the OUTER one — silently swapping
+    names between two real nodes (the outer anonymous companion ends up named
+    after the inner object; the inner object falls back to "Companion").
+    Scanning every def for each name and keeping the smallest match is what
+    correctly routes the name to its OWN (innermost) def regardless of
+    nesting; a def with no name token anywhere inside it is paired with
+    ``None`` — the caller decides the fallback (or to skip it).
+    """
+    defs = _by_position(defs)
+    names = _by_position(names)
+    assigned: dict[int, Any] = {}  # def index → its name node
+    for name_node in names:
+        best_idx: int | None = None
+        best_span: int | None = None
+        for i, d in enumerate(defs):
+            if d.start_byte <= name_node.start_byte < d.end_byte:
+                span = d.end_byte - d.start_byte
+                if best_span is None or span < best_span:
+                    best_idx, best_span = i, span
+        if best_idx is not None:
+            assigned[best_idx] = name_node
+    return [(d, assigned.get(i)) for i, d in enumerate(defs)]
+
+
+def _subkinds_for(captures: dict[str, list], family: str, defs: list) -> dict[int, str]:
+    """Map a def's ``start_byte`` → subkind string via the capture convention.
+
+    A capture named ``@<family>.subkind.<value>`` (e.g.
+    ``@class.subkind.data_class``) mints a new subkind purely by naming it in
+    a language's ``.scm`` file — no Python change required. This scans every
+    capture key carrying the ``.subkind.`` infix whose head matches *family*,
+    and assigns ``<value>`` to whichever *defs* entry byte-contains the
+    captured token (the token may be the def itself, e.g. a whole
+    ``companion_object``, or a modifier keyword nested inside it).
+
+    Picks the TIGHTEST (smallest-span) containing def, not merely the first
+    one found — a data class nested inside a sealed class both belong to the
+    "class" family, so the sealed class's wider range also technically
+    contains the nested data class's "data" token; without this, the nested
+    def's own subkind is silently lost to its outer container.
+    """
+    result: dict[int, str] = {}
+    for key, tokens in captures.items():
+        head, marker, value = key.partition(".subkind.")
+        if not marker or head != family:
+            continue
+        for tok in tokens:
+            best = None
+            for d in defs:
+                if d.start_byte <= tok.start_byte < d.end_byte and (
+                    best is None or (d.end_byte - d.start_byte) < (best.end_byte - best.start_byte)
+                ):
+                    best = d
+            if best is not None:
+                result[best.start_byte] = value
+    return result
+
+
+def _dedupe_nodes(nodes: list[GraphNode]) -> list[GraphNode]:
+    """Collapse duplicate ``node_id``s, keeping the variant carrying a subkind.
+
+    Defensive backstop: tree-sitter's own ``captures()`` already merges
+    identical (capture-name, node) pairs within one compiled query, so a
+    generic pattern (e.g. ``class.def`` matching every ``class_declaration``
+    with a "class" keyword) layered under a subkind-specific one (e.g.
+    Kotlin's "enum class" pattern) matching the SAME node does not actually
+    re-emit a second ``GraphNode`` in practice — verified empirically. This
+    fold exists so that invariant never has to be re-verified per language:
+    ``CodeGraph``'s node-id-uniqueness validator would otherwise reject the
+    whole graph outright if a future query combination ever did produce two
+    nodes for one id.
+    """
+    best: dict[str, GraphNode] = {}
+    order: list[str] = []
+    for n in nodes:
+        prev = best.get(n.node_id)
+        if prev is None:
+            order.append(n.node_id)
+            best[n.node_id] = n
+        elif prev.subkind is None and n.subkind is not None:
+            best[n.node_id] = n
+    return [best[nid] for nid in order]
 
 
 def _extract(
@@ -256,10 +342,9 @@ def _extract(
     patterns that produce exactly one sibling capture per match.
     """
     # File node — always emitted; contains all nodes inside the file.
-    file_node = GraphNode(
+    file_node = FileNode(
         slug=slug,
         node_id=_stable_id(slug, "File", rel_path, rel_path, 0),
-        type="File",
         name=rel_path,
         file=rel_path,
         range=(0, len(source)),
@@ -268,38 +353,45 @@ def _extract(
     nodes: list[GraphNode] = [file_node]
     edges: list[GraphEdge] = []
 
-    # Classes
-    cls_defs = captures.get("class.def", [])
-    cls_names = captures.get("class.name", [])
+    # Classes. ``class.subkind.<value>`` captures (e.g. Kotlin's
+    # "data"/"sealed"/"enum" modifiers, Java's "enum"/"record") refine a subset
+    # of these — see ``_subkinds_for``. A language may ALSO layer a
+    # subkind-specific pattern that re-declares the same class.def/name pair
+    # (Kotlin's shared ``class_declaration`` node needs this to discriminate
+    # data/sealed/enum from a plain class); ``_dedupe_nodes`` folds those at
+    # the end of this function.
+    cls_defs = _by_position(captures.get("class.def", []))
+    cls_names = _by_position(captures.get("class.name", []))
+    cls_subkinds = _subkinds_for(captures, "class", cls_defs)
     for cls_def_node, cls_name_node in zip(cls_defs, cls_names):
         name = cls_name_node.text.decode()
         nid = _stable_id(slug, "Class", name, rel_path, cls_def_node.start_byte)
         nodes.append(
-            GraphNode(
+            ClassNode(
                 slug=slug,
                 node_id=nid,
-                type="Class",
                 name=name,
                 file=rel_path,
                 range=(cls_def_node.start_byte, cls_def_node.end_byte),
                 docstring=_extract_docstring(cls_def_node),
+                subkind=cls_subkinds.get(cls_def_node.start_byte),
             )
         )
         edges.append(
             GraphEdge(slug=slug, source=file_node.node_id, target=nid, type="CONTAINS")
         )
 
-    # Interfaces (TypeScript, Go, Rust — trait/interface → Interface node)
+    # Interfaces (TypeScript, Go, Rust, Kotlin, Java — trait/interface → Interface node)
     for if_def_node, if_name_node in zip(
-        captures.get("interface.def", []), captures.get("interface.name", [])
+        _by_position(captures.get("interface.def", [])),
+        _by_position(captures.get("interface.name", [])),
     ):
         name = if_name_node.text.decode()
         nid = _stable_id(slug, "Interface", name, rel_path, if_def_node.start_byte)
         nodes.append(
-            GraphNode(
+            InterfaceNode(
                 slug=slug,
                 node_id=nid,
-                type="Interface",
                 name=name,
                 file=rel_path,
                 range=(if_def_node.start_byte, if_def_node.end_byte),
@@ -310,17 +402,43 @@ def _extract(
             GraphEdge(slug=slug, source=file_node.node_id, target=nid, type="CONTAINS")
         )
 
+    # Objects (Kotlin `object` / `companion object`; Scala later). A companion
+    # object's name is OPTIONAL in the grammar — an anonymous companion has no
+    # name token to capture — so pairing uses byte-containment
+    # (``_pair_defs_with_names``) instead of the strict positional zip the
+    # families above use; a name-less def falls back to the literal
+    # "Companion" (Kotlin's own implicit name for it).
+    obj_defs = captures.get("object.def", [])
+    obj_names = captures.get("object.name", [])
+    obj_subkinds = _subkinds_for(captures, "object", _by_position(obj_defs))
+    for obj_def_node, obj_name_node in _pair_defs_with_names(obj_defs, obj_names):
+        name = obj_name_node.text.decode() if obj_name_node is not None else "Companion"
+        nid = _stable_id(slug, "Object", name, rel_path, obj_def_node.start_byte)
+        nodes.append(
+            ObjectNode(
+                slug=slug,
+                node_id=nid,
+                name=name,
+                file=rel_path,
+                range=(obj_def_node.start_byte, obj_def_node.end_byte),
+                docstring=None,
+                subkind=obj_subkinds.get(obj_def_node.start_byte),
+            )
+        )
+        edges.append(
+            GraphEdge(slug=slug, source=file_node.node_id, target=nid, type="CONTAINS")
+        )
+
     # Top-level functions
-    fn_defs = captures.get("function.def", [])
-    fn_names = captures.get("function.name", [])
+    fn_defs = _by_position(captures.get("function.def", []))
+    fn_names = _by_position(captures.get("function.name", []))
     for fn_def_node, fn_name_node in zip(fn_defs, fn_names):
         name = fn_name_node.text.decode()
         nid = _stable_id(slug, "Function", name, rel_path, fn_def_node.start_byte)
         nodes.append(
-            GraphNode(
+            FunctionNode(
                 slug=slug,
                 node_id=nid,
-                type="Function",
                 name=name,
                 file=rel_path,
                 range=(fn_def_node.start_byte, fn_def_node.end_byte),
@@ -332,16 +450,15 @@ def _extract(
         )
 
     # Methods
-    m_defs = captures.get("method.def", [])
-    m_names = captures.get("method.name", [])
+    m_defs = _by_position(captures.get("method.def", []))
+    m_names = _by_position(captures.get("method.name", []))
     for m_def_node, m_name_node in zip(m_defs, m_names):
         name = m_name_node.text.decode()
         nid = _stable_id(slug, "Method", name, rel_path, m_def_node.start_byte)
         nodes.append(
-            GraphNode(
+            MethodNode(
                 slug=slug,
                 node_id=nid,
-                type="Method",
                 name=name,
                 file=rel_path,
                 range=(m_def_node.start_byte, m_def_node.end_byte),
@@ -351,6 +468,36 @@ def _extract(
         # Method CONTAINS edge: the class that contains this method.
         # We attach it to the file node as a CONTAINS edge (class→method scoping
         # ships in Task 3.2 with cross-language support).
+        edges.append(
+            GraphEdge(slug=slug, source=file_node.node_id, target=nid, type="CONTAINS")
+        )
+
+    # Properties (fields / constants) — Kotlin `property_declaration`/
+    # `class_parameter`, Java `field_declaration`. Every CURRENTLY CAPTURED
+    # def/name pair is 1:1 (a Kotlin destructuring `val (a, b) = …` doesn't
+    # match `property.def` at all — its container is `multi_variable_
+    # declaration`, not `variable_declaration` — so it never reaches this
+    # loop). Reuses the same containment helper as Object anyway: it's free
+    # (no new code, no behaviour change for the 1:1 case) and one fewer
+    # capture-shape assumption to re-verify if a future .scm pattern for this
+    # family ever does produce a name-less def.
+    prop_defs = captures.get("property.def", [])
+    prop_names = captures.get("property.name", [])
+    for prop_def_node, prop_name_node in _pair_defs_with_names(prop_defs, prop_names):
+        if prop_name_node is None:
+            continue
+        name = prop_name_node.text.decode()
+        nid = _stable_id(slug, "Property", name, rel_path, prop_def_node.start_byte)
+        nodes.append(
+            PropertyNode(
+                slug=slug,
+                node_id=nid,
+                name=name,
+                file=rel_path,
+                range=(prop_def_node.start_byte, prop_def_node.end_byte),
+                docstring=None,
+            )
+        )
         edges.append(
             GraphEdge(slug=slug, source=file_node.node_id, target=nid, type="CONTAINS")
         )
@@ -395,9 +542,11 @@ def _extract(
             )
         )
 
-    # EXTENDS edges from subclass → superclass.
-    subs = captures.get("subclass.name", [])
-    sups = captures.get("superclass.name", [])
+    # EXTENDS edges from subclass → superclass. ``_by_position`` keeps each
+    # subclass paired with its own superclass (single inheritance); a class with
+    # multiple bases is a separate, pre-existing limitation of the 1:1 zip.
+    subs = _by_position(captures.get("subclass.name", []))
+    sups = _by_position(captures.get("superclass.name", []))
     for sub_node, sup_node in zip(subs, sups):
         sub_name = sub_node.text.decode()
         sup_name = sup_node.text.decode()
@@ -412,7 +561,39 @@ def _extract(
             )
         )
 
-    return GraphParseResult(nodes=nodes, edges=edges, skipped=[])
+    # Extension functions (Kotlin `fun Receiver.name()`) — a REFERENCES edge
+    # from the already-emitted Function node to a synthetic external Class
+    # named after the receiver type, tagged so a consumer can tell it apart
+    # from an ordinary cross-file reference.
+    #
+    # CRITICAL: the source id is recomputed here from the DEF node's
+    # start_byte — the SAME (kind="Function", name, file, def.start_byte)
+    # recipe the top-level function block above uses — NOT the name token's
+    # byte. The EXTENDS block just above computes its subclass id from the
+    # NAME capture's byte instead of the def's, so it matches no persisted
+    # node and the view silently drops it (a known, out-of-scope bug — not
+    # replicated here, and not fixed there either).
+    ext_defs = _by_position(captures.get("extension.def", []))
+    ext_names = _by_position(captures.get("extension.name", []))
+    ext_receivers = _by_position(captures.get("extension.receiver", []))
+    for ext_def_node, ext_name_node, ext_recv_node in zip(
+        ext_defs, ext_names, ext_receivers
+    ):
+        ext_fn_name = ext_name_node.text.decode()
+        receiver = ext_recv_node.text.decode()
+        source_id = _stable_id(slug, "Function", ext_fn_name, rel_path, ext_def_node.start_byte)
+        edges.append(
+            GraphEdge(
+                slug=slug,
+                source=source_id,
+                target=_stable_id(slug, "Class", receiver, "<external>", 0),
+                type="REFERENCES",
+                target_name=receiver,
+                attributes={"kotlin.extension": True},
+            )
+        )
+
+    return GraphParseResult(nodes=_dedupe_nodes(nodes), edges=edges, skipped=[])
 
 
 _MEMORY_LABEL_CHARS = 60
@@ -452,6 +633,9 @@ class KnowledgeGraphView:
     cross_edges: tuple[tuple[str, str], ...]
     total_nodes: int  # full AST node count (pre-cap), for the "showing N of M" banner
     total_edges: int  # full AST edge count (pre-cap)
+    # Directory scaffold for the "hierarchy" wire mode — ``None`` in the default
+    # mode, so ``to_wire`` stays byte-identical when hierarchy is off.
+    folder_tree: FolderTree | None = None
 
     # ── Construction ────────────────────────────────────────────────────
 
@@ -462,6 +646,7 @@ class KnowledgeGraphView:
         slug: str,
         *,
         node_limit: int | None = None,
+        hierarchy: bool = False,
     ) -> KnowledgeGraphView:
         """Load the full multiplex (ast + entity + memory layers) for *slug*.
 
@@ -482,6 +667,12 @@ class KnowledgeGraphView:
         memory ANCHORS targets (``EntityKey`` / ``entity:<id>``) batch-resolve
         through the existing ``CodeStructureProvider`` + ``EntityAnchorResolver``;
         an anchor that resolves to nothing is dropped (no dangling edges).
+
+        ``hierarchy`` (default off) synthesises a directory scaffold via
+        ``FolderTree`` from the kept File nodes' paths — folder nodes + folder
+        ``CONTAINS`` edges, and a single ``parentId`` per node — and stamps it
+        onto the wire in ``to_wire``. Off ⇒ the wire is byte-identical to the
+        default mode (the SCG / Agentic Search reuse path is undisturbed).
         """
         from mewbo_graph.entities.anchor import EntityAnchorResolver  # noqa: PLC0415
 
@@ -574,6 +765,16 @@ class KnowledgeGraphView:
             if tid is not None:
                 memory_cross.append((me.source, tid))
 
+        # ── Directory scaffold (hierarchy wire mode only) ────────────────
+        # Built over the KEPT AST layer so folder nodes only scaffold files
+        # actually in the payload; the symbol→container parentId reads off the
+        # same filtered CONTAINS edges the wire emits.
+        folder_tree = (
+            FolderTree.build(slug, nodes, edges, external_nodes=kept_externals)
+            if hierarchy
+            else None
+        )
+
         return cls(
             slug=slug,
             nodes=tuple(nodes),
@@ -586,6 +787,7 @@ class KnowledgeGraphView:
             cross_edges=tuple(entity_cross + memory_cross),
             total_nodes=total_nodes,
             total_edges=total_edges,
+            folder_tree=folder_tree,
         )
 
     @staticmethod
@@ -619,10 +821,9 @@ class KnowledgeGraphView:
                 ext_id = _stable_id(slug, "External", e.target_name, "<external>", 0)
                 externals.setdefault(
                     ext_id,
-                    GraphNode(
+                    ExternalNode(
                         slug=slug,
                         node_id=ext_id,
-                        type="External",
                         name=e.target_name,
                         file="",
                         range=(0, 0),
@@ -660,12 +861,20 @@ class KnowledgeGraphView:
         Each node/edge is Cytoscape-ready (``{data: {...}}``) and carries a
         ``layer`` tag so the FE can style/filter per layer. The FE hands the
         arrays straight to ``cy.add(elements)`` with no intermediate transform.
+
+        When the view was built with ``hierarchy=True`` the directory scaffold
+        is merged in: synthesised ``Folder`` nodes + their ``CONTAINS`` edges
+        are appended, and every emitted node gains a ``parentId`` /
+        ``folderPath`` (``folderCount`` lands in ``stats``). With hierarchy off
+        the ``folder_tree`` is ``None`` and the payload is byte-identical to the
+        default mode.
         """
+        tree = self.folder_tree
         nodes = (
-            [self._node_to_wire(n, "ast") for n in self.nodes]
-            + [self._node_to_wire(n, "ast") for n in self.external_nodes]
-            + [self._entity_node_to_wire(e) for e in self.entity_nodes]
-            + [self._memory_node_to_wire(m) for m in self.memory_nodes]
+            [self._node_to_wire(n, "ast", tree) for n in self.nodes]
+            + [self._node_to_wire(n, "ast", tree) for n in self.external_nodes]
+            + [self._entity_node_to_wire(e, tree) for e in self.entity_nodes]
+            + [self._memory_node_to_wire(m, tree) for m in self.memory_nodes]
         )
         edges = (
             [self._edge_to_wire(e, "ast") for e in self.edges]
@@ -673,91 +882,131 @@ class KnowledgeGraphView:
             + [self._memory_edge_to_wire(e) for e in self.memory_edges]
             + [self._cross_edge_to_wire(s, t) for s, t in self.cross_edges]
         )
+        if tree is not None:
+            # Folder nodes carry their own parentId/folderPath off the tree.
+            nodes += [self._node_to_wire(f, "ast", tree) for f in tree.folder_nodes]
+            edges += [self._edge_to_wire(e, "ast") for e in tree.folder_edges]
+        stats: dict[str, Any] = {
+            # Legacy AST-only counters kept for back-compat consumers.
+            "nodeCount": self.node_count,
+            "edgeCount": self.edge_count,
+            "kinds": self.kinds,
+            # FULL multiplex counts ("M" in the FE "showing N of M" banner).
+            # Only the AST layer is ever capped, so entity + memory + the
+            # view-only External nodes contribute their in-view counts; the
+            # pre-cap AST total is ``self.total_nodes``. Uncapped ⇒ M == N.
+            "totalNodes": (
+                self.total_nodes
+                + len(self.external_nodes)
+                + len(self.entity_nodes)
+                + len(self.memory_nodes)
+            ),
+            "totalEdges": (
+                self.total_edges
+                + len(self.entity_edges)
+                + len(self.memory_edges)
+                + len(self.cross_edges)
+            ),
+            # ``truncated`` reflects the AST-layer node cap only (entity +
+            # memory layers are always fully included). Compare REAL kept
+            # AST nodes (``self.nodes``) against the pre-cap total —
+            # synthesized External nodes are NOT real graph nodes, so
+            # including them in the count can mask a genuine cap (e.g. cap 3
+            # of 5 real nodes + 3 externals → 6 > 5 would falsely read
+            # un-truncated). Edge drop from orphan hygiene is not truncation.
+            "truncated": len(self.nodes) < self.total_nodes,
+            "perLayer": {
+                "ast": len(self.nodes) + len(self.external_nodes),
+                "entity": len(self.entity_nodes),
+                "memory": len(self.memory_nodes),
+            },
+        }
+        # ``folderCount`` only in hierarchy mode — the default wire stays
+        # byte-identical (the SCG / Agentic Search reuse path is undisturbed).
+        if tree is not None:
+            stats["folderCount"] = len(tree.folder_nodes)
         return {
             "slug": self.slug,
             "nodes": nodes,
             "edges": edges,
-            "stats": {
-                # Legacy AST-only counters kept for back-compat consumers.
-                "nodeCount": self.node_count,
-                "edgeCount": self.edge_count,
-                "kinds": self.kinds,
-                # FULL multiplex counts ("M" in the FE "showing N of M" banner).
-                # Only the AST layer is ever capped, so entity + memory + the
-                # view-only External nodes contribute their in-view counts; the
-                # pre-cap AST total is ``self.total_nodes``. Uncapped ⇒ M == N.
-                "totalNodes": (
-                    self.total_nodes
-                    + len(self.external_nodes)
-                    + len(self.entity_nodes)
-                    + len(self.memory_nodes)
-                ),
-                "totalEdges": (
-                    self.total_edges
-                    + len(self.entity_edges)
-                    + len(self.memory_edges)
-                    + len(self.cross_edges)
-                ),
-                # ``truncated`` reflects the AST-layer node cap only (entity +
-                # memory layers are always fully included). Compare REAL kept
-                # AST nodes (``self.nodes``) against the pre-cap total —
-                # synthesized External nodes are NOT real graph nodes, so
-                # including them in the count can mask a genuine cap (e.g. cap 3
-                # of 5 real nodes + 3 externals → 6 > 5 would falsely read
-                # un-truncated). Edge drop from orphan hygiene is not truncation.
-                "truncated": len(self.nodes) < self.total_nodes,
-                "perLayer": {
-                    "ast": len(self.nodes) + len(self.external_nodes),
-                    "entity": len(self.entity_nodes),
-                    "memory": len(self.memory_nodes),
-                },
-            },
+            "stats": stats,
         }
 
     # ── Static helpers (per-record formatters) ──────────────────────────
 
     @staticmethod
-    def _node_to_wire(n: GraphNode, layer: str) -> dict[str, Any]:
+    def _stamp_hierarchy(
+        data: dict[str, Any], node_id: str, tree: FolderTree | None
+    ) -> dict[str, Any]:
+        """Add ``parentId``/``folderPath`` to a node's data when in hierarchy mode.
+
+        No-op (identity) off-mode so the default wire keeps NEITHER key and
+        stays byte-identical. ``folderPath`` is set only for Folder + File node
+        ids (per the tree's map); every other node carries an explicit ``None``.
+        """
+        if tree is None:
+            return data
+        data["parentId"] = tree.parent_of(node_id)
+        data["folderPath"] = tree.folder_path_of(node_id)
+        return data
+
+    @classmethod
+    def _node_to_wire(
+        cls, n: GraphNode, layer: str, tree: FolderTree | None = None
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "id": n.node_id,
+            "label": n.name,
+            "kind": n.type,
+            "layer": layer,
+            "file": n.file,
+            "range": list(n.range),
+            "docstring": n.docstring or "",
+        }
+        if n.subkind is not None:
+            data["subkind"] = n.subkind
+        return {"data": cls._stamp_hierarchy(data, n.node_id, tree)}
+
+    @classmethod
+    def _entity_node_to_wire(
+        cls, e: Entity, tree: FolderTree | None = None
+    ) -> dict[str, Any]:
         return {
-            "data": {
-                "id": n.node_id,
-                "label": n.name,
-                "kind": n.type,
-                "layer": layer,
-                "file": n.file,
-                "range": list(n.range),
-                "docstring": n.docstring or "",
-            },
+            "data": cls._stamp_hierarchy(
+                {
+                    "id": e.id,
+                    "label": e.name,
+                    "kind": "Entity",
+                    "layer": "entity",
+                    "entityType": e.type,
+                    "labels": list(e.labels),
+                },
+                e.id,
+                tree,
+            ),
         }
 
-    @staticmethod
-    def _entity_node_to_wire(e: Entity) -> dict[str, Any]:
-        return {
-            "data": {
-                "id": e.id,
-                "label": e.name,
-                "kind": "Entity",
-                "layer": "entity",
-                "entityType": e.type,
-                "labels": list(e.labels),
-            },
-        }
-
-    @staticmethod
-    def _memory_node_to_wire(m: MemoryNode) -> dict[str, Any]:
+    @classmethod
+    def _memory_node_to_wire(
+        cls, m: MemoryNode, tree: FolderTree | None = None
+    ) -> dict[str, Any]:
         content = m.content.strip()
         label = content[:_MEMORY_LABEL_CHARS]
         if len(content) > _MEMORY_LABEL_CHARS:
             label += "…"
         return {
-            "data": {
-                "id": m.node_id,
-                "label": label,
-                "kind": "Memory",
-                "layer": "memory",
-                "snippet": content[:_MEMORY_SNIPPET_CHARS],
-                "labels": list(m.labels),
-            },
+            "data": cls._stamp_hierarchy(
+                {
+                    "id": m.node_id,
+                    "label": label,
+                    "kind": "Memory",
+                    "layer": "memory",
+                    "snippet": content[:_MEMORY_SNIPPET_CHARS],
+                    "labels": list(m.labels),
+                },
+                m.node_id,
+                tree,
+            ),
         }
 
     @staticmethod

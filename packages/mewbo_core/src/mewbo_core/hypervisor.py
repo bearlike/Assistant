@@ -115,6 +115,13 @@ class AgentHandle:
     last_tool_id: str | None = None
     # Ref: [AgentCgroup §4.2] Tool-call-granularity timing for stall detection
     last_step_at: float | None = None
+    # The tool actually IN FLIGHT right now — stamped at dispatch start and
+    # cleared back to ``None`` when the call resolves. Distinct from
+    # ``last_tool_id`` (only updated on COMPLETION): during a long-running
+    # call, ``last_tool_id`` still names the PREVIOUS finished tool, so the
+    # watchdog must read ``active_tool_id`` for stall attribution, never
+    # ``last_tool_id``.
+    active_tool_id: str | None = None
     error: str | AgentError | None = None
     asyncio_task: asyncio.Task[object] | None = None
     # Ref: [DeepMind-Delegation §4.4] Bidirectional message passing
@@ -247,6 +254,21 @@ class AgentHypervisor:
                 handle.last_tool_id = tool_id
                 handle.last_step_at = time.monotonic()
                 self._total_steps += 1
+
+    async def mark_tool_start(self, agent_id: str, tool_id: str | None) -> None:
+        """Stamp (or clear) the tool actually in flight for stall attribution.
+
+        Ref: [AgentCgroup §4.2] ``update_step`` only stamps ``last_tool_id`` on
+        COMPLETION, so a watchdog check firing mid-call would misattribute the
+        stall to the previous, already-finished tool. Call this at dispatch
+        start with the tool name, and again with ``None`` once the call
+        resolves (success, timeout, or exception) so ``active_tool_id`` never
+        lingers stale once the agent moves on.
+        """
+        async with self._lock:
+            handle = self._agents.get(agent_id)
+            if handle:
+                handle.active_tool_id = tool_id
 
     async def mark_done(
         self,

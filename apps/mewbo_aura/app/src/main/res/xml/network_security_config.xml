@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Public-distribution default (all variants fall back to this via src/main): platform trust
+     only — system CAs, no cleartext. This is what ships to GitHub. The `enterprise` flavor
+     overrides this file (src/enterprise/res/xml/network_security_config.xml) to add a private,
+     deployment-supplied root CA. Wired from src/main/AndroidManifest.xml so EVERY variant declares a
+     config; a build-type source set (e.g. src/debug) must NOT redeclare this file or it would
+     shadow the flavor override for that build type. -->
+<network-security-config>
+    <base-config>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

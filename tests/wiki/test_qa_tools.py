@@ -7,20 +7,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 from mewbo_graph.plugins.wiki import (
     code_search as code_search_mod,
-    emit_block as emit_block_mod,
+    emit_answer as emit_answer_mod,
     read_page as read_page_mod,
     search_pages as search_pages_mod,
 )
 from mewbo_graph.plugins.wiki.code_search import WikiCodeSearchTool
-from mewbo_graph.plugins.wiki.emit_block import WikiEmitBlockTool
+from mewbo_graph.plugins.wiki.emit_answer import WikiEmitAnswerTool
 from mewbo_graph.plugins.wiki.read_page import WikiReadPageTool
 from mewbo_graph.plugins.wiki.search_pages import WikiSearchPagesTool
 from mewbo_graph.wiki.store import JsonWikiStore
 from mewbo_graph.wiki.types import (
     Embedding,
-    GraphNode,
     QaAnswer,
     WikiPage,
+    make_graph_node,
 )
 
 
@@ -52,7 +52,7 @@ def qa_setup(tmp_path):
         toc=[], nav=[],
     ))
     store.upsert_nodes("x/y", [
-        GraphNode(
+        make_graph_node(
             slug="x/y",
             node_id="f1",
             type="Function",
@@ -129,45 +129,131 @@ def test_code_search_returns_node_hit(qa_setup):
     assert "f1" in body or "authenticate" in body
 
 
-def test_emit_block_persists_open_and_close_events(qa_setup):
+def _access_events(store, answer_id="a1"):
+    return [e for e in store.load_qa_events(answer_id) if e["type"] == "access"]
+
+
+def test_code_search_records_scored_hits_with_rank(qa_setup):
+    """code_search records ranked hits carrying real score + 1-based rank (#168).
+
+    The trail must capture the retriever's ranking signal — not an unscored bulk
+    dump — so the finalizer can score-order + cap it. Each record uses the new
+    ``records`` shape (not the legacy bare ``refs``).
+    """
     store, sid = qa_setup
-    tool = WikiEmitBlockTool(session_id=sid)
-    step = MagicMock(tool_input={
-        "index": 0,
-        "block": {"kind": "p", "text": "Hello, world."},
-    })
-    with patch.object(emit_block_mod, "_resolve_runtime", return_value=_runtime(store)):
+    tool = WikiCodeSearchTool(session_id=sid)
+    step = MagicMock(tool_input={"query": "authenticate", "k": 5})
+    with patch.object(code_search_mod, "_resolve_runtime", return_value=_runtime(store)), \
+         patch.object(code_search_mod, "_make_embedder", return_value=_fake_embedder([1.0, 0.0])):
+        asyncio.run(tool.handle(step))
+
+    access = _access_events(store)
+    assert access, "code_search should record an access event"
+    recs = access[-1]["records"]
+    assert recs and all(r["ref"].startswith("graph:") for r in recs)
+    assert recs[0]["score"] is not None
+    assert recs[0]["rank"] == 1
+    assert recs[0]["op"] == "search"
+    assert recs[0]["tool"] == "wiki_code_search"
+    # New shape only — no legacy bare-ref list.
+    assert "refs" not in access[-1]
+
+
+def test_read_page_records_unscored_grounding_touch(qa_setup):
+    """A page read is a grounding confirmation — recorded unscored (no score/rank)."""
+    store, sid = qa_setup
+    tool = WikiReadPageTool(session_id=sid)
+    step = MagicMock(tool_input={"pageId": "auth"})
+    with patch.object(read_page_mod, "_resolve_runtime", return_value=_runtime(store)):
+        asyncio.run(tool.handle(step))
+
+    access = _access_events(store)
+    assert len(access) == 1
+    recs = access[0]["records"]
+    assert recs == [{
+        "ref": "wiki:auth", "score": None, "rank": None,
+        "tool": "wiki_read_page", "op": "read", "ok": True,
+    }]
+
+
+def test_emit_answer_persists_block_events_in_order_and_completes(qa_setup):
+    """ONE atomic call fans its blocks into ordered block_open/block_close pairs.
+
+    The array is delivered whole; the tool fans it server-side into the SAME
+    per-block event contract the old choreography produced (index-keyed,
+    in order), then appends the terminal ``complete`` event.
+    """
+    store, sid = qa_setup
+    assert store.get_qa("a1").status == "running"  # precondition
+    tool = WikiEmitAnswerTool(session_id=sid)
+    step = MagicMock(tool_input={"blocks": [
+        {"kind": "p", "text": "Hello, world."},
+        {"kind": "sources", "items": ["src/main.py"]},
+    ]})
+    with patch.object(emit_answer_mod, "_resolve_runtime", return_value=_runtime(store)):
         result = asyncio.run(tool.handle(step))
     assert "ok" in str(result.content)
     events = store.load_qa_events("a1")
     types = [e["type"] for e in events]
-    assert "block_open" in types
-    assert "block_close" in types
-    # open's index matches
-    opened = next(e for e in events if e["type"] == "block_open")
-    assert opened["index"] == 0
+    assert types == ["block_open", "block_close", "block_open", "block_close", "complete"]
+    opened = [e for e in events if e["type"] == "block_open"]
+    assert [e["index"] for e in opened] == [0, 1]
+    assert [e["block"]["kind"] for e in opened] == ["p", "sources"]
+    assert store.get_qa("a1").status == "complete"
 
 
-def test_emit_block_invalid_block_kind(qa_setup):
+def test_emit_answer_invalid_block_kind(qa_setup):
+    """A bad block anywhere in the array surfaces a positional validation error."""
     store, sid = qa_setup
-    tool = WikiEmitBlockTool(session_id=sid)
-    step = MagicMock(tool_input={
-        "index": 0,
-        "block": {"kind": "not_a_real_kind", "text": "x"},
+    tool = WikiEmitAnswerTool(session_id=sid)
+    step = MagicMock(tool_input={"blocks": [
+        {"kind": "not_a_real_kind", "text": "x"},
+        {"kind": "sources", "items": ["src/main.py"]},
+    ]})
+    with patch.object(emit_answer_mod, "_resolve_runtime", return_value=_runtime(store)):
+        result = asyncio.run(tool.handle(step))
+    body = str(result.content)
+    assert "validation" in body
+    assert "blocks[0] invalid" in body
+
+
+def test_emit_answer_refuses_when_already_emitted(qa_setup):
+    """A second call after an answer already has ``block_open`` events is refused."""
+    store, sid = qa_setup
+    store.append_qa_event("a1", {
+        "type": "block_open", "index": 0, "block": {"kind": "p", "text": "already there"},
     })
-    with patch.object(emit_block_mod, "_resolve_runtime", return_value=_runtime(store)):
+    tool = WikiEmitAnswerTool(session_id=sid)
+    step = MagicMock(tool_input={"blocks": [
+        {"kind": "p", "text": "x"},
+        {"kind": "sources", "items": ["src/main.py"]},
+    ]})
+    with patch.object(emit_answer_mod, "_resolve_runtime", return_value=_runtime(store)):
         result = asyncio.run(tool.handle(step))
-    assert "validation" in str(result.content)
+    body = str(result.content)
+    assert "validation" in body
+    assert "already emitted" in body
 
 
-def test_emit_block_rejects_duplicate_index(qa_setup):
+def test_emit_answer_requires_trailing_sources_block(qa_setup):
+    """No ``sources`` block (or not last) → a validation error naming ``sources``.
+
+    A rejected call writes NOTHING — the snapshot stays whatever it was before
+    the attempt (``running``, since this fixture's answer never terminated).
+    """
     store, sid = qa_setup
-    tool = WikiEmitBlockTool(session_id=sid)
-    step = MagicMock(tool_input={"index": 0, "block": {"kind": "p", "text": "x"}})
-    with patch.object(emit_block_mod, "_resolve_runtime", return_value=_runtime(store)):
-        asyncio.run(tool.handle(step))
+    tool = WikiEmitAnswerTool(session_id=sid)
+    step = MagicMock(tool_input={"blocks": [
+        {"kind": "p", "text": "a"},
+        {"kind": "p", "text": "b"},
+    ]})
+    with patch.object(emit_answer_mod, "_resolve_runtime", return_value=_runtime(store)):
         result = asyncio.run(tool.handle(step))
-    assert "validation" in str(result.content) or "already" in str(result.content)
+    body = str(result.content)
+    assert "validation" in body
+    assert "sources" in body
+    assert store.load_qa_events("a1") == []
+    assert store.get_qa("a1").status == "running"
 
 
 # ---------------------------------------------------------------------------
@@ -190,25 +276,15 @@ def test_qa_answer_defaults_to_running_status():
     assert ans.model_dump(by_alias=True)["status"] == "running"
 
 
-def test_inprogress_snapshot_reports_running(qa_setup):
-    """A non-terminal block (``p``) leaves the persisted snapshot ``running``."""
+def test_terminal_call_sets_complete_on_snapshot(qa_setup):
+    """A valid whole-answer call flips the persisted status to ``complete``."""
     store, sid = qa_setup
-    tool = WikiEmitBlockTool(session_id=sid)
-    step = MagicMock(tool_input={"index": 0, "block": {"kind": "p", "text": "Hi."}})
-    with patch.object(emit_block_mod, "_resolve_runtime", return_value=_runtime(store)):
-        asyncio.run(tool.handle(step))
-    assert store.get_qa("a1").status == "running"
-
-
-def test_terminal_sources_block_sets_complete_on_snapshot(qa_setup):
-    """The accept-state ``sources`` block flips the persisted status to ``complete``."""
-    store, sid = qa_setup
-    tool = WikiEmitBlockTool(session_id=sid)
-    step = MagicMock(tool_input={
-        "index": 0,
-        "block": {"kind": "sources", "items": ["src/main.py"]},
-    })
-    with patch.object(emit_block_mod, "_resolve_runtime", return_value=_runtime(store)):
+    tool = WikiEmitAnswerTool(session_id=sid)
+    step = MagicMock(tool_input={"blocks": [
+        {"kind": "p", "text": "The answer."},
+        {"kind": "sources", "items": ["src/main.py"]},
+    ]})
+    with patch.object(emit_answer_mod, "_resolve_runtime", return_value=_runtime(store)):
         result = asyncio.run(tool.handle(step))
     assert "ok" in str(result.content)
     # The reloaded snapshot — exactly what the GET route serializes — is terminal.
@@ -223,42 +299,37 @@ def test_terminal_sources_block_sets_complete_on_snapshot(qa_setup):
 # ---------------------------------------------------------------------------
 
 
-def test_emit_block_terminal_reason_is_completed():
-    """``WikiEmitBlockTool`` inherits ``terminal_reason() == "completed"``.
+def test_emit_answer_terminal_reason_is_completed():
+    """``WikiEmitAnswerTool`` inherits ``terminal_reason() == "completed"``.
 
-    Regression guard for #61: the tool overrides ``should_terminate_run`` but
-    declared no ``terminal_reason``, so ``tool_use_loop`` raised AttributeError
-    when it selected the terminating tool. The reason now lives on the shared
+    Regression guard for #61: a tool overriding ``should_terminate_run`` but
+    declaring no ``terminal_reason`` makes ``tool_use_loop`` raise AttributeError
+    when it selects the terminating tool. The reason lives on the shared
     ``WikiSessionTool`` base — this test fails if that base method is removed,
     because the base IS the body under test (the tool defines no own override).
     """
-    tool = WikiEmitBlockTool(session_id="sess-qa-1")
+    tool = WikiEmitAnswerTool(session_id="sess-qa-1")
     assert tool.terminal_reason() == "completed"
 
 
-def test_emit_block_terminate_then_reason_matches_loop_selector(qa_setup):
+def test_emit_answer_terminate_then_reason_matches_loop_selector(qa_setup):
     """Drive the real ``should_terminate_run → terminal_reason`` selector contract.
 
-    Mirrors the ``tool_use_loop`` step: a non-terminal block leaves the tool
-    NOT terminating; the accept-state ``sources`` block flips
-    ``should_terminate_run()`` True and ``terminal_reason()`` resolves to
-    ``"completed"`` WITHOUT raising — the exact pair the loop reads at the
-    terminating-tool seam.
+    Mirrors the ``tool_use_loop`` step: before any call the tool does not
+    request termination; the one atomic call — a valid array ending in the
+    accept-state ``sources`` block — flips ``should_terminate_run()`` True and
+    ``terminal_reason()`` resolves to ``"completed"`` WITHOUT raising — the
+    exact pair the loop reads at the terminating-tool seam.
     """
     store, sid = qa_setup
-    tool = WikiEmitBlockTool(session_id=sid)
-    with patch.object(emit_block_mod, "_resolve_runtime", return_value=_runtime(store)):
-        # Non-terminal block: the tool does not request termination.
-        non_terminal = MagicMock(tool_input={
-            "index": 0, "block": {"kind": "p", "text": "Hi."},
-        })
-        asyncio.run(tool.handle(non_terminal))
-        assert tool.should_terminate_run() is False
+    tool = WikiEmitAnswerTool(session_id=sid)
+    assert tool.should_terminate_run() is False  # before any call
 
-        # Accept-state sources block: termination requested, reason completed.
-        terminal = MagicMock(tool_input={
-            "index": 1, "block": {"kind": "sources", "items": ["src/main.py"]},
-        })
-        asyncio.run(tool.handle(terminal))
+    step = MagicMock(tool_input={"blocks": [
+        {"kind": "p", "text": "Hi."},
+        {"kind": "sources", "items": ["src/main.py"]},
+    ]})
+    with patch.object(emit_answer_mod, "_resolve_runtime", return_value=_runtime(store)):
+        asyncio.run(tool.handle(step))
     assert tool.should_terminate_run() is True
     assert tool.terminal_reason() == "completed"

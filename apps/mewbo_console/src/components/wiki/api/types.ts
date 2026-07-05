@@ -33,6 +33,11 @@ export interface Project {
    *  (.mewbo/wiki.json or .devin/wiki.json). Sole driver of the
    *  "Maintainer Edited" badge — legacy records default to false. */
   maintainerEdited?: boolean;
+  /** True iff the project was indexed in graph-only (developer) mode: the
+   *  AST code graph was built with NO documentation pages and NO LLM. Drives
+   *  the WikiScreen "No documentation available" empty state. Absent on
+   *  ordinary records → treat as false. */
+  graphOnly?: boolean;
 }
 
 // ── Platforms (wizard) ────────────────────────────────────────────────
@@ -135,6 +140,12 @@ export interface WizardSubmission {
   filterMode: FilterMode;
   dirs: string[];
   files: string[];
+  /** Optional branch/tag to clone; omitted = repo default branch. */
+  ref?: string;
+  /** Developer-mode opt-in: build ONLY the AST code graph — no documentation
+   *  pages, no LLM. Only honoured by the backend when ``runtime.developer_mode``
+   *  is on; omitted entirely otherwise. Default off. */
+  graphOnly?: boolean;
 }
 
 export interface IndexingJob {
@@ -354,9 +365,9 @@ export type QaEvent =
 
 // ── Knowledge graph (viewer) ──────────────────────────────────────────
 //
-// Wire shape returned by ``GET /v1/wiki/projects/<slug>/graph``. Each
-// node/edge is already Cytoscape-ready — the consumer can pass the
-// arrays straight to ``cy.add(elements)``.
+// Wire shape returned by ``GET /v1/wiki/projects/<slug>/graph``. The
+// ``{nodes,edges}`` arrays feed straight into the shared 3D ``Graph3DView``
+// (and its ``CollapseModel`` for the ``?hierarchy=1`` folder LOD).
 
 export type GraphNodeKind =
   | "File"
@@ -365,13 +376,25 @@ export type GraphNodeKind =
   | "Function"
   | "Method"
   | "Interface"
+  // ── Extended symbol kinds (schema v2 — Gitea #188) ──
+  // ``Object`` is a singleton (Kotlin ``object`` / ``companion object``);
+  // ``Property`` is a field / property / constant. Both ride the ``ast`` layer
+  // and render as code discs, distinguished only by colour like the others.
+  | "Object"
+  | "Property"
   // ── Multiplex layers (wire contract v2) ──
   // ``External`` is an AST node for a cross-file/import target the graph
   // now resolves and shares; ``Entity`` and ``Memory`` are the abstract
   // and memory-orchestration layers respectively.
   | "External"
   | "Entity"
-  | "Memory";
+  | "Memory"
+  // ── Hierarchy scaffold (``?hierarchy=1``) ──
+  // ``Folder`` is a synthetic directory supernode (id ``folder:<path>``,
+  // layer ``ast``) that folds its subtree via ``CONTAINS`` edges — the
+  // spatial scaffold AND the level-of-detail collapse mechanism for the
+  // 3D galaxy. Collapsed folders render as a single sphere.
+  | "Folder";
 
 export type GraphEdgeKind =
   | "CONTAINS"
@@ -397,6 +420,10 @@ export interface KnowledgeGraphNode {
     id: string;
     label: string;
     kind: GraphNodeKind;
+    /** Open per-kind refinement (schema v2 — Gitea #188): e.g. ``companion``
+     *  for a Kotlin companion object, ``const`` for a constant. Absent when
+     *  the node carries no refinement (every current AST kind). */
+    subkind?: string;
     /** Multiplex layer (wire contract v2). Absent on legacy AST-only jobs. */
     layer?: GraphLayer;
     /** AST nodes only — absent on entity/memory nodes. */
@@ -409,6 +436,13 @@ export interface KnowledgeGraphNode {
     labels?: string[];
     /** Memory nodes only — the stored snippet. */
     snippet?: string;
+    /** Hierarchy scaffold (``?hierarchy=1``): id of the enclosing
+     *  ``Folder`` supernode, or ``null`` for a visible root. Absent on
+     *  flat (non-hierarchy) payloads. */
+    parentId?: string | null;
+    /** Hierarchy scaffold: the directory path this node sits under (for
+     *  folders, their own path). Absent on flat payloads. */
+    folderPath?: string | null;
   };
 }
 
@@ -442,7 +476,39 @@ export interface KnowledgeGraph {
     truncated?: boolean;
     /** Per-layer node tallies (wire contract v2). Absent on legacy jobs. */
     perLayer?: Partial<Record<GraphLayer, number>>;
+    /** Count of synthetic ``Folder`` supernodes in a ``?hierarchy=1``
+     *  payload. Absent on flat payloads. */
+    folderCount?: number;
   };
+}
+
+// ── Graph selection contract (3D galaxy ↔ inspector) ──────────────────
+//
+// The shared seam between the 3D galaxy screen (which emits a selection on a
+// node/edge click) and ``GraphInspector`` (which renders it). A ``folder`` /
+// ``file`` / ``module`` / ``symbol`` / ``external`` / ``entity`` / ``memory``
+// selection carries a ``node``; an ``edge`` selection carries the clicked
+// ``edge`` plus, for a collapsed supernode↔supernode tie, the ``aggregated``
+// constituent edges that were folded into it.
+
+/** Coarse selection bucket. ``symbol`` collapses Class/Function/Method/
+ *  Interface — the inspector renders them with one symbol layout. */
+export type GraphSelectionKind =
+  | "folder"
+  | "file"
+  | "module"
+  | "symbol"
+  | "external"
+  | "entity"
+  | "memory"
+  | "edge";
+
+export interface GraphSelection {
+  kind: GraphSelectionKind;
+  node?: KnowledgeGraphNode;
+  edge?: KnowledgeGraphEdge;
+  /** Constituent edges folded into an aggregated supernode↔supernode tie. */
+  aggregated?: KnowledgeGraphEdge[];
 }
 
 // ── Catalog (non-git workspace) ───────────────────────────────────────

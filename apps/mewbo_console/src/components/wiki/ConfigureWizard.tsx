@@ -19,10 +19,12 @@ import {
   Database,
   Eye,
   EyeOff,
+  GitBranch,
   GitFork,
   Globe,
   Info,
   KeyRound,
+  Network,
   RotateCcw,
   Sparkles,
   XCircle,
@@ -32,7 +34,9 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { useConfig } from "../../hooks/useConfig";
 
 import { ModelChip, ModelPicker } from "./ModelPicker";
 import { WikiTopBar } from "./WikiTopBar";
@@ -43,6 +47,7 @@ import { PlatformTile } from "./configure-wizard/PlatformTile";
 import { Stepper } from "./configure-wizard/Stepper";
 import { getDefaultExclusions, uploadCatalogDocuments } from "./api/client";
 import {
+  useBranches,
   useSubmitWizard,
   useWikiDefaults,
   useWikiLanguages,
@@ -102,9 +107,13 @@ interface WizardState {
   depth: "comprehensive" | "concise";
   language: string;
   model: string;
+  /** Branch/tag to clone; empty = repo default branch. */
+  ref: string;
   filterMode: "exclude" | "include";
   dirs: string;
   files: string;
+  /** Developer-mode opt-in: build only the AST graph, skip docs + LLM. */
+  graphOnly: boolean;
   // ── catalog fields ────────────────────────────────────────────────
   /** Human-readable workspace name; slugified to produce the project slug. */
   catalogName: string;
@@ -135,6 +144,10 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
   const [, navigate] = useLocation();
   const platforms = useWikiPlatforms();
   const languages = useWikiLanguages();
+  const { config } = useConfig();
+  const developerMode = Boolean(
+    (config?.runtime as { developer_mode?: boolean } | undefined)?.developer_mode
+  );
   const { defaultModel } = useModels();
   const wikiDefaults = useWikiDefaults();
   const seedModel = wikiDefaults.data?.model || defaultModel;
@@ -156,9 +169,11 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
     depth: "comprehensive",
     language: "en",
     model: "",
+    ref: "",
     filterMode: "exclude",
     dirs: "",
     files: "",
+    graphOnly: false,
     catalogName: "",
     catalogDocs: [],
   }));
@@ -173,6 +188,14 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
 
   const gitSlug = useMemo(() => slugFromRepoUrl(state.url), [state.url]);
   const catalogSlug = useMemo(() => slugifyName(state.catalogName), [state.catalogName]);
+
+  // Branch list for the generation step's branch picker. Disabled until the
+  // URL looks like a git URL (the hook gates internally).
+  const branches = useBranches({
+    repoUrl: state.url,
+    token: state.token || undefined,
+    slug: gitSlug ?? undefined,
+  });
 
   const platform =
     platformList.find((p) => p.id === state.platform) ?? platformList[0];
@@ -239,6 +262,11 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
       filterMode: state.filterMode,
       dirs: state.dirs.split("\n").map((s) => s.trim()).filter(Boolean),
       files: state.files.split("\n").map((s) => s.trim()).filter(Boolean),
+      // Forward the chosen branch/tag only when set — empty means default.
+      ...(state.ref ? { ref: state.ref } : {}),
+      // Only forward the developer-mode opt-in when it's actually available
+      // and engaged — the field is omitted entirely otherwise.
+      ...(developerMode && state.graphOnly ? { graphOnly: true } : {}),
     };
     submit.mutate(payload, {
       onSuccess: (job) => {
@@ -328,6 +356,10 @@ export function ConfigureWizard({ initialUrl = "" }: ConfigureWizardProps) {
                   state={state}
                   set={set}
                   languages={languageList}
+                  branches={branches.data?.branches ?? []}
+                  defaultBranch={branches.data?.defaultBranch ?? null}
+                  branchesLoading={branches.isLoading}
+                  developerMode={developerMode}
                 />
               )}
               {step === 2 && state.sourceType === "git" && (
@@ -692,10 +724,22 @@ function StepGeneration({
   state,
   set,
   languages,
+  branches,
+  defaultBranch,
+  branchesLoading,
+  developerMode,
 }: {
   state: WizardState;
   set: (patch: Partial<WizardState>) => void;
   languages: Array<{ id: string; label: string; subtle?: string }>;
+  /** Remote branches for the branch picker (empty until loaded / on error). */
+  branches: string[];
+  /** Repo default branch, when known — labels the "Default" option. */
+  defaultBranch: string | null;
+  /** True while the branch list is in flight. */
+  branchesLoading: boolean;
+  /** Gated developer-mode features (graph-only indexing). */
+  developerMode: boolean;
 }) {
   return (
     <div className="space-y-5">
@@ -754,6 +798,66 @@ function StepGeneration({
           <ModelPicker value={state.model} onChange={(v) => set({ model: v })} variant="full" />
         </Field>
       </div>
+
+      <Field label="Branch">
+        <div className="flex items-center gap-2 h-11 px-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--input))] focus-within:border-[hsl(var(--border-strong))] focus-within:ring-2 focus-within:ring-[hsl(var(--primary))]/30 relative">
+          <GitBranch className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
+          <select
+            value={state.ref}
+            onChange={(e) => set({ ref: e.target.value })}
+            disabled={branchesLoading}
+            className="flex-1 bg-transparent text-sm outline-none appearance-none pr-6 cursor-pointer text-[hsl(var(--foreground))] disabled:cursor-default"
+          >
+            {branchesLoading ? (
+              <option value="">Loading branches…</option>
+            ) : (
+              <>
+                <option value="">
+                  {defaultBranch ? `Default · ${defaultBranch}` : "Default branch"}
+                </option>
+                {branches.map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </>
+            )}
+          </select>
+          <ChevronDown className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))] pointer-events-none absolute right-3" />
+        </div>
+      </Field>
+
+      {/* Developer-mode opt-in: graph-only indexing. Hidden entirely unless
+          ``runtime.developer_mode`` is on. */}
+      {developerMode && (
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold">Developer mode</h3>
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">
+              Settings for inspecting indexing without generating docs.
+            </p>
+          </div>
+          <label className="flex items-start gap-3 p-3.5 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 cursor-pointer">
+            <span className="text-[hsl(var(--primary))] mt-0.5 shrink-0">
+              <Network className="h-4 w-4" />
+            </span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm font-medium">
+                Graph only — skip documentation (no LLM)
+              </span>
+              <span className="block text-[11px] text-[hsl(var(--muted-foreground))]">
+                Build the AST code graph only; no docs are generated.
+              </span>
+            </span>
+            <Switch
+              checked={state.graphOnly}
+              onCheckedChange={(v) => set({ graphOnly: v })}
+              aria-label="Graph only — skip documentation (no LLM)"
+              className="mt-0.5 shrink-0"
+            />
+          </label>
+        </div>
+      )}
     </div>
   );
 }

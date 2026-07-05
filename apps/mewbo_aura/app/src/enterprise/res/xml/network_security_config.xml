@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Enterprise distribution ONLY (overrides src/main for enterpriseDebug/enterpriseRelease): bakes a
+     private, deployment-supplied root CA (@raw/enterprise_ca — gitignored, seeded by the seedEnterpriseCa
+     Gradle task) as a base-config trust anchor so it applies to release enterprise builds too
+     (NOT under <debug-overrides>, which release ignores). system + user anchors are kept so
+     public TLS and hand-installed CAs still work; cleartext is permitted for LAN/enterprise
+     backends. This flavor never ships to GitHub. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+            <certificates src="@raw/enterprise_ca" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -18,17 +18,16 @@ from mewbo_cli.cli_master import (
     _format_steps,
     _parse_command,
     _parse_verbosity,
-    _print_resilience_events,
     _resolve_session_id,
-    _resolve_cli_version,
     _run_query,
-    _truncate_middle,
     _verbosity_to_level,
     _bootstrap_cli_logging_env,
-    _format_model,
     build_parser,
-    render_header,
-    HeaderContext,
+)
+from mewbo_cli.cli_notices import print_resilience_events  # noqa: E402
+from mewbo_cli.tui.widgets.header import (  # noqa: E402
+    _truncate_middle,
+    _format_model,
 )
 
 
@@ -596,37 +595,6 @@ def test_run_query_dims_tool_panels_after_response(monkeypatch, tmp_path):
     assert captured["highlight_latest"] is False
 
 
-def test_render_header_responsive_modes():
-    """Render header across width breakpoints."""
-    ctx = HeaderContext(
-        title="Mewbo",
-        version="0.1.0",
-        status_label="Ready",
-        status_color="green",
-        model="openai/gpt-4o-mini",
-        session_id="session-123",
-        base_url="http://127.0.0.1:4136/v1",
-        langfuse_enabled=False,
-        langfuse_reason="disabled",
-        builtin_enabled=1,
-        builtin_disabled=2,
-        external_enabled=3,
-        external_disabled=1,
-    )
-
-    cases = [
-        (120, ["model", "session", "base"]),
-        (90, ["model", "session", "base"]),
-        (60, ["Langfuse:", "Tools:"]),
-    ]
-    for width, expected in cases:
-        console = Console(record=True, width=width)
-        render_header(console, ctx)
-        output = console.export_text()
-        for token in expected:
-            assert token in output
-
-
 def test_cli_bootstrap_and_format_helpers(monkeypatch):
     """Cover CLI helper branches in a single flow."""
     assert _truncate_middle("abcdef", 0) == ""
@@ -643,7 +611,6 @@ def test_cli_bootstrap_and_format_helpers(monkeypatch):
     _bootstrap_cli_logging_env(["prog", "-vv"])
     assert get_config_value("runtime", "log_level") == "TRACE"
 
-    assert _resolve_cli_version()  # returns package version string
     assert _format_model("gpt-4o", 10).plain == "gpt-4o"
 
 
@@ -675,9 +642,6 @@ def test_run_cli_single_query(monkeypatch, tmp_path):
         fallback_models=None,
     )
 
-    def fake_header(*args, **kwargs):
-        return None
-
     def fake_orchestrate(*args, **kwargs):
         step = ActionStep(
             tool_id="home_assistant_tool",
@@ -688,7 +652,7 @@ def test_run_cli_single_query(monkeypatch, tmp_path):
         task_queue.task_result = "ok"
         return task_queue
 
-    monkeypatch.setattr("mewbo_cli.cli_master.render_header", fake_header)
+    monkeypatch.setattr("mewbo_cli.cli_master._print_plain_header", lambda *a, **kw: None)
     monkeypatch.setattr("mewbo_core.session_runtime.orchestrate_session", fake_orchestrate)
     monkeypatch.setattr("mewbo_cli.cli_master.load_registry", lambda: ToolRegistry())
     assert run_cli(args) == 0
@@ -726,7 +690,8 @@ def test_run_cli_interactive_quit(monkeypatch, tmp_path):
             self.calls += 1
             return "/quit"
 
-    monkeypatch.setattr("mewbo_cli.cli_master.render_header", lambda *args, **kwargs: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._print_plain_header", lambda *args, **kwargs: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._textual_enabled", lambda: False)
     monkeypatch.setattr("mewbo_cli.cli_master.FileHistory", DummyHistory)
     monkeypatch.setattr(
         "mewbo_cli.cli_master.PromptSession",
@@ -775,7 +740,7 @@ def test_print_resilience_events_renders(tmp_path):
     )
 
     console = Console(record=True, width=120)
-    _print_resilience_events(console, store, session_id)
+    print_resilience_events(console, store, session_id)
 
     output = console.export_text()
     assert "Retrying gpt-5.4 after RateLimit (1/3, 2s)" in output
@@ -808,7 +773,7 @@ def test_print_resilience_events_scoped_to_last_run(tmp_path):
     )
 
     console = Console(record=True, width=120)
-    _print_resilience_events(console, store, session_id)
+    print_resilience_events(console, store, session_id)
 
     output = console.export_text()
     assert "(new)" in output
@@ -826,7 +791,7 @@ def test_run_query_renders_resilience_events(monkeypatch, tmp_path):
 
     def fake_orchestrate(*_args, **_kwargs):
         # The real core appends a "user" event and emits resilience events to
-        # the transcript; mirror that so _print_resilience_events can replay.
+        # the transcript; mirror that so print_resilience_events can replay.
         store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
         store.append_event(
             session_id,

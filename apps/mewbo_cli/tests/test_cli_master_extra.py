@@ -1,6 +1,7 @@
 """Extra tests for cli_master.py — targeting uncovered branches."""
 
 # ruff: noqa: I001
+import time
 import types
 from unittest.mock import MagicMock
 
@@ -16,24 +17,27 @@ from mewbo_core.tool_registry import ToolRegistry, ToolSpec
 
 from mewbo_cli.cli_context import CliState
 from mewbo_cli.cli_master import (
-    HeaderContext,
     _build_cli_hook_manager,
-    _fmt_tokens,
     _format_tool_output,
-    _maybe_print_recovery_hint,
     _maybe_warn_missing_configs,
-    _model_basename,
     _parse_verbosity,
-    _print_resilience_events,
-    _print_usage_footer,
     _render_preflight_warnings,
     _render_results_with_registry,
     _render_tool_payload,
     _run_query,
     _should_force_preview,
-    _truncate_middle,
     _verbosity_to_level,
-    render_header,
+)
+from mewbo_cli.cli_notices import (
+    fmt_tokens as _fmt_tokens,
+    maybe_print_recovery_hint as _maybe_print_recovery_hint,
+    model_basename as _model_basename,
+    print_resilience_events as _print_resilience_events,
+    print_usage_footer as _print_usage_footer,
+)
+from mewbo_cli.tui.widgets.header import (
+    HeaderContext,
+    _truncate_middle,
 )
 
 
@@ -117,57 +121,6 @@ def test_parse_verbosity_verbose_invalid():
 
 def test_parse_verbosity_none_when_no_flags():
     assert _parse_verbosity(["prog", "--query", "hi"]) is None
-
-
-# ---------------------------------------------------------------------------
-# render_header — tiny/normal/wide width breakpoints
-# ---------------------------------------------------------------------------
-
-
-def test_render_header_wide_with_skill_count():
-    """Wide header includes skill count."""
-    ctx = _make_header_ctx(skill_count=5)
-    console = Console(record=True, width=120)
-    render_header(console, ctx)
-    output = console.export_text()
-    assert "5 available" in output
-
-
-def test_render_header_normal_includes_base_url():
-    """Normal-width header includes base URL when width >= 85."""
-    ctx = _make_header_ctx(base_url="http://127.0.0.1:4136/v1")
-    console = Console(record=True, width=90)
-    render_header(console, ctx)
-    output = console.export_text()
-    assert "127.0.0.1" in output
-
-
-def test_render_header_tiny():
-    """Tiny header fits in 50 columns."""
-    ctx = _make_header_ctx()
-    console = Console(record=True, width=50)
-    render_header(console, ctx)
-    output = console.export_text()
-    assert "Mewbo" in output
-    assert "Langfuse" in output
-
-
-def test_render_header_langfuse_off():
-    """Tiny header shows langfuse off when disabled."""
-    ctx = _make_header_ctx(langfuse_enabled=False, langfuse_reason="key missing")
-    console = Console(record=True, width=50)
-    render_header(console, ctx)
-    output = console.export_text()
-    assert "off" in output
-
-
-def test_render_header_zero_skill_count():
-    """Wide header marks zero skills in red-dim style (text still shows '0')."""
-    ctx = _make_header_ctx(skill_count=0)
-    console = Console(record=True, width=120)
-    render_header(console, ctx)
-    output = console.export_text()
-    assert "0 available" in output
 
 
 # ---------------------------------------------------------------------------
@@ -695,10 +648,10 @@ def test_render_preflight_warnings_no_failures():
 
 
 def test_build_cli_hook_manager_spinner_path():
-    """Spinner start/stop hooks work without agent_display."""
+    """Spinner start/stop hooks work with the 2-arg signature."""
     console = Console(record=True)
     reg = _make_tool_registry("bash_tool")
-    hook_manager = _build_cli_hook_manager(console, reg, agent_display=None)
+    hook_manager = _build_cli_hook_manager(console, reg)
 
     step = ActionStep(tool_id="bash_tool", operation="run", tool_input="ls")
     mock_result = get_mock_speaker()(content="ok")
@@ -975,7 +928,7 @@ def test_run_cli_no_fallback_flag(monkeypatch, tmp_path):
         no_fallback=True,
     )
 
-    monkeypatch.setattr("mewbo_cli.cli_master.render_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._print_plain_header", lambda *a, **kw: None)
 
     def fake_orchestrate(*a, **kw):
         q = TaskQueue(action_steps=[])
@@ -1012,7 +965,7 @@ def test_run_cli_fallback_models_comma_split(monkeypatch, tmp_path):
         no_fallback=False,
     )
 
-    monkeypatch.setattr("mewbo_cli.cli_master.render_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._print_plain_header", lambda *a, **kw: None)
 
     captured: dict = {}
 
@@ -1070,7 +1023,8 @@ def test_run_cli_unknown_command_branch(monkeypatch, tmp_path):
                 return "/notacommand"
             return "/quit"
 
-    monkeypatch.setattr("mewbo_cli.cli_master.render_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._print_plain_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._textual_enabled", lambda: False)
     monkeypatch.setattr("mewbo_cli.cli_master.FileHistory", DummyHistory)
     monkeypatch.setattr("mewbo_cli.cli_master.PromptSession", lambda *a, **kw: DummySession())
     result = run_cli(args)
@@ -1112,7 +1066,8 @@ def test_run_cli_eof_exits_gracefully(monkeypatch, tmp_path):
         def prompt(self, *a, **kw):
             raise EOFError
 
-    monkeypatch.setattr("mewbo_cli.cli_master.render_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._print_plain_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._textual_enabled", lambda: False)
     monkeypatch.setattr("mewbo_cli.cli_master.FileHistory", DummyHistory)
     monkeypatch.setattr("mewbo_cli.cli_master.PromptSession", lambda *a, **kw: DummySession())
     result = run_cli(args)
@@ -1177,7 +1132,8 @@ def test_run_cli_skill_invocation(monkeypatch, tmp_path):
     def fake_run_query(*a, skill_instructions=None, **kw):
         run_query_calls.append(skill_instructions or "")
 
-    monkeypatch.setattr("mewbo_cli.cli_master.render_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._print_plain_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._textual_enabled", lambda: False)
     monkeypatch.setattr("mewbo_cli.cli_master.FileHistory", DummyHistory)
     monkeypatch.setattr("mewbo_cli.cli_master.PromptSession", lambda *a, **kw: DummySession())
     monkeypatch.setattr("mewbo_core.skills.SkillRegistry", DummySkillRegistry)
@@ -1228,8 +1184,66 @@ def test_run_cli_empty_input_skipped(monkeypatch, tmp_path):
                 return "   "  # blank → skip
             return "/quit"
 
-    monkeypatch.setattr("mewbo_cli.cli_master.render_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._print_plain_header", lambda *a, **kw: None)
+    monkeypatch.setattr("mewbo_cli.cli_master._textual_enabled", lambda: False)
     monkeypatch.setattr("mewbo_cli.cli_master.FileHistory", DummyHistory)
     monkeypatch.setattr("mewbo_cli.cli_master.PromptSession", lambda *a, **kw: DummySession())
     result = run_cli(args)
     assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# App-path console-log gating (#160 — no log bleed onto the Textual alt-screen)
+# ---------------------------------------------------------------------------
+
+
+def test_redirect_app_logs_to_file_quiets_console(tmp_path, monkeypatch):
+    """The App path drops the stderr sink and routes detail to a file."""
+    from mewbo_cli.cli_master import _redirect_app_logs_to_file
+    import mewbo_core.common as common
+
+    monkeypatch.setattr(
+        "mewbo_core.config.resolve_mewbo_home", lambda: tmp_path, raising=True
+    )
+    # Force a live stderr sink so we can assert it gets removed.
+    common._configure_logging()
+    if common._STDERR_SINK_ID is None:
+        common._LOG_CONFIGURED = False
+        common._configure_logging()
+    assert common._STDERR_SINK_ID is not None
+
+    args = _make_args(log_file=None)
+    path = _redirect_app_logs_to_file(args)
+
+    assert path == str(tmp_path / "cli.log")
+    # Console sink gone (no terminal bleed), file sink active (detail captured).
+    assert common._STDERR_SINK_ID is None
+    assert common._CLI_LOG_SINK_ID is not None
+
+    common.get_logger(name="test.cli").error("boom-off-screen")
+    # The file sink is enqueue=True (async writer thread), so the file can
+    # exist before the record is flushed — poll for the CONTENT, not just
+    # existence, or the read races the background write.
+    contents = ""
+    for _ in range(200):
+        if (tmp_path / "cli.log").exists():
+            contents = (tmp_path / "cli.log").read_text()
+            if "boom-off-screen" in contents:
+                break
+        time.sleep(0.01)
+    assert "boom-off-screen" in contents
+
+
+def test_redirect_app_logs_to_file_noop_with_explicit_log_file(monkeypatch):
+    """When --log-file was passed, run_cli already redirected — this is a no-op."""
+    from mewbo_cli.cli_master import _redirect_app_logs_to_file
+
+    called = []
+    monkeypatch.setattr(
+        "mewbo_core.common.set_cli_log_file",
+        lambda *a, **kw: called.append((a, kw)) or "x",
+        raising=True,
+    )
+    args = _make_args(log_file="/tmp/explicit.log")
+    assert _redirect_app_logs_to_file(args) is None
+    assert called == []

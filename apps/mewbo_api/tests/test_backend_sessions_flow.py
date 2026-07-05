@@ -70,6 +70,29 @@ def _fake_run_sync(*, session_id: str, user_query: str, should_cancel=None, **_k
     )
 
 
+def _fake_run_sync_with_attachments(
+    *, session_id: str, user_query: str, attachments=None, should_cancel=None, **_kwargs
+):
+    """Like ``_fake_run_sync`` but persists ``attachments`` on the ``user``
+    event exactly as the real ``Orchestrator._run_with_session_context`` does
+    (additive — only set when non-empty) — used to prove the events-replay
+    half of the attachment-card contract without paying for a real
+    ``Orchestrator``/``ToolUseLoop`` build.
+    """
+    payload: dict = {"text": user_query}
+    if attachments:
+        payload["attachments"] = attachments
+    backend.session_store.append_event(session_id, {"type": "user", "payload": payload})
+    backend.session_store.append_event(session_id, {"type": "assistant", "payload": {"text": "ok"}})
+    backend.session_store.append_event(
+        session_id,
+        {
+            "type": "completion",
+            "payload": {"done": True, "done_reason": "completed", "task_result": "ok"},
+        },
+    )
+
+
 def _wait_for_run(session_id: str, timeout: float = 2.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -142,6 +165,58 @@ class TestSessionCreate:
         assert resp.status_code == 200
         notes = backend.notification_store.list(include_dismissed=False)
         assert any(n.get("event_type") == "created" for n in notes)
+
+    def test_create_with_mobile_surface_header_tags_mobile_origin(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """Aura sends ``X-Mewbo-Surface: android`` on every request — a session
+        created under that header must be durably tagged ``mobile:android`` so
+        ``SessionOrigin.classify`` (and therefore the /api/sessions summary)
+        reports the new MOBILE origin, without clobbering session_tag lookup.
+        """
+        _reset_backend(tmp_path, monkeypatch)
+        headers = {**auth_headers, "X-Mewbo-Surface": "android"}
+        resp = client.post("/api/sessions", headers=headers, json={})
+        assert resp.status_code == 200
+        sid = resp.get_json()["session_id"]
+        assert backend.session_store.tags_for_session(sid) == ["mobile:android"]
+        # A session needs a visible (non-context) event to surface on the list
+        # endpoint (list_sessions skips context-only sessions) — mirrors how a
+        # real Aura session gains a user turn before it's ever listed.
+        backend.session_store.append_event(sid, {"type": "user", "payload": {"text": "hi"}})
+        list_resp = client.get("/api/sessions", headers=auth_headers)
+        summaries = {s["session_id"]: s for s in list_resp.get_json()["sessions"]}
+        assert summaries[sid]["origin"] == "mobile"
+
+    def test_create_without_surface_header_stays_user_origin(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """No ``X-Mewbo-Surface`` header (or a non-mobile one) must not be tagged
+        mobile — the session keeps classifying as the plain USER origin."""
+        _reset_backend(tmp_path, monkeypatch)
+        resp = client.post("/api/sessions", headers=auth_headers, json={})
+        assert resp.status_code == 200
+        sid = resp.get_json()["session_id"]
+        assert backend.session_store.tags_for_session(sid) == []
+        backend.session_store.append_event(sid, {"type": "user", "payload": {"text": "hi"}})
+        list_resp = client.get("/api/sessions", headers=auth_headers)
+        summaries = {s["session_id"]: s for s in list_resp.get_json()["sessions"]}
+        assert summaries[sid]["origin"] == "user"
+
+    def test_create_with_mobile_surface_and_session_tag_keeps_both(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """The mobile surface tag is additive — it must not clobber an explicit
+        ``session_tag`` lookup applied earlier in the same request."""
+        _reset_backend(tmp_path, monkeypatch)
+        headers = {**auth_headers, "X-Mewbo-Surface": "android"}
+        resp = client.post(
+            "/api/sessions", headers=headers, json={"session_tag": "aura-chat-1"}
+        )
+        assert resp.status_code == 200
+        sid = resp.get_json()["session_id"]
+        assert backend.session_store.resolve_tag("aura-chat-1") == sid
+        assert "mobile:android" in backend.session_store.tags_for_session(sid)
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +401,124 @@ class TestSessionQuery:
             json={"query": "hello", "project": "managed:nonexistent-uuid-xyz"},
         )
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Attachment cards contract: attachments ride the persisted ``user`` event
+# (additive to the existing sibling ``context`` event), live and on replay.
+# ---------------------------------------------------------------------------
+
+_ATTACHMENT_DESCRIPTORS = [
+    {
+        "id": "a1b2c3",
+        "filename": "note.txt",
+        "content_type": "text/plain",
+        "size_bytes": 12,
+        "stored_name": "a1b2c3_note.txt",
+        "uploaded_at": "2026-07-03T00:00:00+00:00",
+        "parsed": False,
+    }
+]
+
+
+class TestSessionQueryAttachments:
+    def test_query_threads_attachments_into_start_async(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """The already-parsed request ``attachments`` list reaches ``start_async``."""
+        _reset_backend(tmp_path, monkeypatch)
+        captured: dict = {}
+        monkeypatch.setattr(
+            backend.runtime, "start_async", lambda **kw: captured.update(kw) or "r:1"
+        )
+        sid = backend.session_store.create_session()
+        resp = client.post(
+            f"/api/sessions/{sid}/query",
+            headers=auth_headers,
+            json={"query": "look at this", "attachments": _ATTACHMENT_DESCRIPTORS},
+        )
+        assert resp.status_code == 202
+        assert captured.get("attachments") == _ATTACHMENT_DESCRIPTORS
+
+    def test_query_without_attachments_passes_none(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """No ``attachments`` field in the request body → ``None`` kwarg, not ``[]``."""
+        _reset_backend(tmp_path, monkeypatch)
+        captured: dict = {}
+        monkeypatch.setattr(
+            backend.runtime, "start_async", lambda **kw: captured.update(kw) or "r:1"
+        )
+        sid = backend.session_store.create_session()
+        resp = client.post(
+            f"/api/sessions/{sid}/query",
+            headers=auth_headers,
+            json={"query": "no files here"},
+        )
+        assert resp.status_code == 202
+        assert captured.get("attachments") is None
+
+    def test_sync_query_threads_attachments_into_run_sync(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """The legacy sync ``/api/query`` endpoint forwards attachments too."""
+        _reset_backend(tmp_path, monkeypatch)
+        captured: dict = {}
+
+        def fake_run_sync(**kw):
+            captured.update(kw)
+            return DummyQueue("ok")
+
+        monkeypatch.setattr(backend.runtime, "run_sync", fake_run_sync)
+        resp = client.post(
+            "/api/query",
+            headers=auth_headers,
+            json={"query": "look at this", "attachments": _ATTACHMENT_DESCRIPTORS},
+        )
+        assert resp.status_code == 200
+        assert captured.get("attachments") == _ATTACHMENT_DESCRIPTORS
+
+    def test_events_replay_persisted_attachments_on_user_event(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """``GET /events`` replays the descriptors on the ``user`` event, live-shape."""
+        _reset_backend(tmp_path, monkeypatch)
+        monkeypatch.setattr(backend.runtime, "run_sync", _fake_run_sync_with_attachments)
+        sid = backend.session_store.create_session()
+        client.post(
+            f"/api/sessions/{sid}/query",
+            headers=auth_headers,
+            json={"query": "look at this", "attachments": _ATTACHMENT_DESCRIPTORS},
+        )
+        _wait_for_run(sid)
+
+        resp = client.get(f"/api/sessions/{sid}/events", headers=auth_headers)
+        assert resp.status_code == 200
+        events = resp.get_json()["events"]
+        user_events = [e for e in events if e.get("type") == "user"]
+        assert len(user_events) == 1
+        assert user_events[0]["payload"]["attachments"] == _ATTACHMENT_DESCRIPTORS
+
+    def test_events_omit_attachments_key_when_none_sent(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A query with no attachments produces a clean ``user`` payload (no key)."""
+        _reset_backend(tmp_path, monkeypatch)
+        monkeypatch.setattr(backend.runtime, "run_sync", _fake_run_sync_with_attachments)
+        sid = backend.session_store.create_session()
+        client.post(
+            f"/api/sessions/{sid}/query",
+            headers=auth_headers,
+            json={"query": "no files here"},
+        )
+        _wait_for_run(sid)
+
+        resp = client.get(f"/api/sessions/{sid}/events", headers=auth_headers)
+        assert resp.status_code == 200
+        events = resp.get_json()["events"]
+        user_events = [e for e in events if e.get("type") == "user"]
+        assert len(user_events) == 1
+        assert "attachments" not in user_events[0]["payload"]
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,10 @@ services:
       args:
         BASE_IMAGE: ghcr.io/bearlike/mewbo-base:latest
         WIKI_EXTRAS: "1"
+        # scip-python + scip Go CLI for precise Python symbol resolution in the
+        # wiki code-graph indexer. OFF until the indexer shells out to them —
+        # flip to "1" (and rebuild the api image) to provision the ~55 MB pair.
+        SCIP_EXTRAS: "0"
     network_mode: host
     # Survive a host reboot — without this the api stays DOWN after a crash
     # while mongo/mcp (which have it) come back, so the whole stack looks dead.

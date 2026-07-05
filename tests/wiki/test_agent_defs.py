@@ -53,12 +53,12 @@ def test_wiki_qa_agent_def_loads():
     tools = set(agent_def.allowed_tools or [])
     # Root is a hypervisor: it orients, dispatches probes, and emits the answer.
     expected_tools = {"wiki_list_pages", "spawn_agent", "check_agents",
-                      "wiki_emit_block", "wiki_submit_insight"}
+                      "wiki_emit_answer", "wiki_submit_insight"}
     assert expected_tools.issubset(tools)
     # It must NOT carry the probe's retrieval tools — delegation is the point.
     assert "wiki_query_graph" not in tools
     assert "wiki_code_search" not in tools
-    for kw in ["spawn_agent", "wiki-qa-probe", "wiki_emit_block", "probe"]:
+    for kw in ["spawn_agent", "wiki-qa-probe", "wiki_emit_answer", "probe"]:
         assert kw in agent_def.body
 
 
@@ -75,9 +75,9 @@ def test_wiki_qa_probe_agent_def_loads():
                       "wiki_grep", "wiki_list_files", "wiki_submit_insight"}
     assert expected_tools.issubset(tools)
     # A probe never writes the answer and never fans out further.
-    assert "wiki_emit_block" not in tools
+    assert "wiki_emit_answer" not in tools
     assert "spawn_agent" not in tools
-    assert "wiki_emit_block" in set(agent_def.denied_tools or [])
+    assert "wiki_emit_answer" in set(agent_def.denied_tools or [])
     assert "spawn_agent" in set(agent_def.denied_tools or [])
     # Body teaches the ANN-probe instinct + the return contract.
     for kw in ["graph", "FINDINGS", "CITE", "seed"]:

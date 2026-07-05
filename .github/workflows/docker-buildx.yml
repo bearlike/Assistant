@@ -34,6 +34,7 @@ permissions:
 
 jobs:
   docker:
+    name: Build & push images
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:

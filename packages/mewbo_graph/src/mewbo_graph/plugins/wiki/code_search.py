@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
 from mewbo_graph.plugins.wiki._ctx import resolve_runtime
+from mewbo_graph.wiki.qa_access import QaAccessRecord
 
 if TYPE_CHECKING:
     from mewbo_core.classes import ActionStep
@@ -109,7 +110,13 @@ class WikiCodeSearchTool(WikiSessionTool):
             for h in hits
             if h.kind == "node"
         ]
-        self._record_qa_access(ctx, [f"graph:{h.id}" for h in hits if h.kind == "node"])
+        # Grounding: record only the node hits clearing the score floor (a ratio
+        # of the top hit's score), carrying the retriever's real score + rank.
+        # ``hits`` is already score-sorted (the ONE ranking engine) — no re-rank.
+        node_hits = [(f"graph:{h.id}", h.score) for h in hits if h.kind == "node"]
+        self._record_qa_access(
+            ctx, QaAccessRecord.from_ranked_hits(node_hits, tool=self.tool_id)
+        )
         return MockSpeaker(content=str({"hits": results}))
 
 

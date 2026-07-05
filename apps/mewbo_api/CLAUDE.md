@@ -98,6 +98,7 @@ Scope: this file applies to the `apps/mewbo_api/` package. It captures runtime b
 - **Deployment needs git credentials in the api container.** The pickup fetches PR branches and agent sessions push to them; the image sets `credential.helper=store` but ships no credentials — mount the host's `~/.git-credentials` to the container user's HOME (see `docker-compose.override.yml`, untracked). Without it: 422 `could not read Username`.
 - Endpoint auth accepts KeyStore-minted keys (`POST /api/keys`), not just the master token — CI secrets should hold a labeled revocable key.
 - **Reply tokens live server-side, keyed by forge host** (`channels.vcs.tokens` config) — the workflow's `GITHUB_TOKEN` dies with the job, long before the agent run ends, so it can't deliver the reply. `/repos/{owner}/{repo}/issues/{n}/comments` + `Authorization: token` are identical on GitHub and Gitea (one client, both forges). Gitea gotcha: minting a PAT for another user (`POST /api/v1/users/<bot>/tokens`, admin-only) rejects token auth with `auth required` — use **basic** auth (`-u admin:$TOKEN`). Unlike the act_runner, the api container's system CA store trusts the internal CA (git and Python `ssl` share it), so `tls_verify` stays default there.
+- **PR-creation identity comes from the forge CLI login, not the git credential store (full issue loop E2E-verified live 2026-07-04 on `agent-pickup-sandbox`).** `gh` only speaks GitHub, so on Gitea the agent needs `tea` — without it (pre-2026-07-04) the agent self-served by reading the PAT out of the mounted `~/.git-credentials` and curling `POST /repos/{owner}/{repo}/pulls`, which (1) authored PRs as the mounted PAT's human owner and (2) leaked that PAT in plaintext into the session transcript (Mongo/Langfuse). Now `docker/init.d/15-tea-setup.sh` installs-if-missing + logs `tea` in per `channels.vcs.tokens` host (bot identity; falls back to `~/.git-credentials` per host), and the pickup prompt nudges "prefer a forge CLI like `tea` or `gh`". The bot PAT needs scopes `read:user` (tea login resolves the user) + `write:issue` (reply comments) + `write:repository` (PRs) — a `write:issue`-only token 403s on `/api/v1/user` and tea login fails. Git *pushes* still authenticate via `~/.git-credentials` (unchanged). Continuity/guards all live-proven the same day: `@mention` → `resumed:true` + steering/`r2` on the SAME tagged session and worktree; the bot's own reply comment and a non-bot assignment both skip.
 
 ## MCP-facing contracts (#40–#45, non-obvious only)
 
@@ -118,11 +119,14 @@ The `apps/mewbo_mcp` facade depends on these REST decisions (see its CLAUDE.md
   returns `status`/`done_reason`/`title` (from `summarize_session`/`load_title`)
   so the MCP overview reads them instead of reconstructing from the timeline tail
   (the old `status:null` + ignored-title source).
-- **Idle session-control = Devin-modeled.** `/interrupt` on idle → 200
+- **Idle session-control follows the common coding-agent convention.** `/interrupt` on idle → 200
   `{interrupted:false}` (no-op); `/message` on idle/finished → re-engage via the
   `start_async`/query path, returning the new `run_id`; only a terminated session
-  rejects. `/agents` token rollup delegates to `build_usage_numbers` so a
-  root-only session reports real tokens (not 0).
+  rejects. `/agents` token rollup delegates to `build_usage_numbers` — the same
+  builder `/usage` calls — so a root-only session's call/agent counts aggregate
+  correctly; the `input_tokens`/`output_tokens` fields themselves currently read
+  0 for every session until #193 lands (Langfuse is the only live token source
+  meanwhile).
 - **Worktree lifecycle is system-owned.** The `on_session_end` hook is the SOLE
   reaper; it also auto-reaps the promoted parent project when it has no worktree
   children left (kills the #53 orphan). The DELETE route is idempotent:

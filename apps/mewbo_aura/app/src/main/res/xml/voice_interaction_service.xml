@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  §5.3. `recognitionService` points at the platform recognizer component (GMS/Pixel's standard
+  on-device recognizer, matching D-3's "on-device recognizer on Pixel") - it is GMS-specific and
+  will not resolve on the AOSP-only redroid container; assistant-role verification is Pixel-only
+  by design (apps/mewbo_aura/CLAUDE.md device matrix, §15.2/§15.3), which is where this field is
+  actually exercised. `SpeechRecognizerTranscriber` itself still resolves the SYSTEM's configured
+  default recognizer independently via `SpeechRecognizer.createSpeechRecognizer(context)` - this
+  field is the platform's required schema attribute for a `VoiceInteractionService` declaration,
+  not the only place STT is wired.
+-->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.mewbo.aura.voice.AuraSessionService"
+    android:recognitionService="com.google.android.googlequicksearchbox/com.google.android.voicesearch.serviceapi.GoogleRecognitionService"
+    android:supportsAssist="true" />

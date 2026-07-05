@@ -146,9 +146,14 @@ lives in this package.
   spawned a session*. The session record stores **no** origin field — every
   session is created identically — so origin is reconstructed from two durable
   signals: the session's **tags** (`wiki:job:`/`wiki:qa:` → wiki,
-  `agentic_search:` → search, channel `:room:`/`:thread:` → channel) and, as
-  fallback, the first context event's `client_capabilities`/`source_platform`.
-  Tags win (they survive even when a job stored empty context).
+  `agentic_search:` → search, channel `:room:`/`:thread:` → channel,
+  `mobile:` → mobile) and, as fallback, the first context event's
+  `client_capabilities`/`source_platform`/`client` (a mobile surface —
+  `android`/`ios`/`aura-*`, via `is_mobile_surface` — → `MOBILE`, checked
+  BEFORE the generic `source_platform` → CHANNEL fallback so a mobile client
+  never reads as a channel; this retroactively reclassifies existing Aura
+  sessions, which already persist `context.client == "aura-android"`, without a
+  migration). Tags win (they survive even when a job stored empty context).
   `summarize_session` attaches it as `origin`; the console badges + filters the
   landing page on it. `SessionStore.tags_for_session` is the concrete reverse of
   `resolve_tag` (one impl over `list_tags`, shared by every backend).
@@ -228,6 +233,12 @@ per-call-site handlers.** The seam stays taxonomy-free: it propagates whatever
   un-stamped paths are findable).
 - `project = managed:<uuid>` is an ephemeral worktree → emitted as the `worktree`
   metadata facet, never a (high-card) `project` chip.
+- **`transcript_sink` is the CLI local-vs-synced facet (#171).** A `transcript_sink`
+  context key (`synced` when the local-first CLI mirrors to a remote API, else
+  absent ⇒ local) is promoted by `_facets_from_context` to a low-card
+  `transcript_sink:` chip — SEPARATE from `surface` (which stays `cli`). The CLI
+  writes the context event; do NOT confuse it with a `source_platform` event
+  (`SessionOrigin.classify` reads `source_platform` as CHANNEL).
 - **Runtime-granted capabilities must be OVERLAID into `derive`'s context (#84).**
   `derive` reads `client_capabilities` from the merged context — i.e. only the
   CLIENT-ADVERTISED set. A capability granted at runtime (the #83-B `scg`
@@ -554,6 +565,33 @@ drop-oldest queue). Single-process is correct (gunicorn `--workers 1`); a
 queue, applying content-key dedup against the subscribe↔backlog race and
 **draining completely before `stream_end`** so the terminal `completion` event
 (published during the close-race window) is never dropped.
+
+## Authoritative todos (`update_todos` → `todos` event, #173)
+
+`update_todos.py` is the ONE authoritative live-progress surface — replaces the
+CLI-only tool-call heuristic (a `fleet_bridge.TodoTracker`, retired). It mirrors
+`exit_plan_mode` (internal schema injected into `bind_tools`, dispatched in
+`ToolUseLoop._execute_tool_call`, attached inline to root depth-0 so it carries
+`agent_context.agent_id`) but is **terminal-free**: `should_terminate_run()` is
+always `False` — the agent keeps working. `modes = {"act"}` (plan mode drafts a
+plan via `exit_plan_mode` instead).
+
+- **Re-emit the FULL list each call ⇒ compaction-resilient.** The tool publishes
+  ONE `todos` event through the standard `append_event`→`SessionEventBus`
+  choke-point; the latest event is the whole truth, so a rebuilt message list
+  never desyncs the displayed progress. The schema *description* teaches the
+  frequent-full-re-emit + exactly-one-`in_progress` idiom (no loop/prompt-registry
+  change).
+- **Shared wire contract (a console workstream consumes it verbatim):**
+  `{ type: "todos", payload: { items: [{label, status}], source: "plan"|"agent",
+  agent_id } }` where `status ∈ {pending, in_progress, completed}`. `TodosPayload`/
+  `TodoItemPayload` are typed members of the `types.py` `EventPayload` union.
+- **`source` discriminates ONE schema, not two systems:** `agent` = the live
+  working set (`update_todos` emits this); `plan` = an approved plan's steps given
+  optional status. `build_todos_event(items, *, source, agent_id)` is the single
+  contract choke-point (normalizes: drops junk/empty labels, coerces unknown
+  status → `pending`, enforces exactly-one `in_progress`); a plan-approval seam
+  emits the `plan` variant through it.
 
 ## Compaction
 

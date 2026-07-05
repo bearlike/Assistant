@@ -121,7 +121,7 @@ export type SessionExport = {
   created_at?: string;
 };
 /** Coarse provenance of a session — mirrors core ``SessionOrigin``. */
-export type SessionOrigin = 'user' | 'wiki' | 'search' | 'channel' | 'structured' | 'draft';
+export type SessionOrigin = 'user' | 'wiki' | 'search' | 'channel' | 'structured' | 'draft' | 'mobile';
 
 export type SessionSummary = {
   session_id: string;
@@ -267,9 +267,25 @@ export type PlanMeta = {
   planSummary?: string;
   timestamp?: string;
 };
+/** Lifecycle of a single todo/plan-step (mirrors #173's tri-state contract). */
+export type TodoItemStatus = "pending" | "in_progress" | "completed";
+export type TodoItem = {
+  label: string;
+  status: TodoItemStatus;
+};
+/**
+ * The authoritative live todo/plan checklist carried by the `todos` event
+ * (Gitea #173 schema: `{ items:[{label,status}], source:"plan"|"agent",
+ * agent_id }`). Rendered as a `TodoCard` in the conversation timeline.
+ */
+export type TodoMeta = {
+  items: TodoItem[];
+  source?: "plan" | "agent";
+  agentId?: string;
+};
 export type TimelineEntry = {
   id: string;
-  role: "user" | "assistant" | "plan" | "widget";
+  role: "user" | "assistant" | "plan" | "widget" | "todos";
   content: string;
   turnId: string;
   /** Timestamp of the underlying event. For user entries this is the user's
@@ -279,6 +295,11 @@ export type TimelineEntry = {
   turn?: TurnMeta;
   plan?: PlanMeta;
   widget?: WidgetReadyPayload;
+  todos?: TodoMeta;
+  /** Metadata-only descriptors for files uploaded alongside this user turn
+   * (filename/type/size — never pixels/content). Rendered as a glanceable
+   * tile row above the user bubble by {@link AttachmentCards}. */
+  attachments?: AttachmentPayload[];
 };
 export type ParsedDiffFile = {
   name: string;

@@ -11,7 +11,7 @@ from mewbo_graph.wiki.memory_types import (
 )
 from mewbo_graph.wiki.refresh import GraphDelta, MemoryReconciler
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import GraphNode
+from mewbo_graph.wiki.types import make_graph_node
 
 SLUG = "org/repo"
 T0 = "2026-06-05T00:00:00Z"
@@ -54,7 +54,7 @@ def _anchor(node_id, key):
 
 
 def _code(nid, name, doc=""):
-    return GraphNode(
+    return make_graph_node(
         slug=SLUG, node_id=nid, type="Function", name=name,
         file="auth.py", range=(0, 9), docstring=doc,
     )

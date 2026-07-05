@@ -43,6 +43,7 @@ jobs:
         run: npm run typecheck
 
   test:
+    name: Unit tests
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -62,6 +63,7 @@ jobs:
         run: npm run test:ci
 
   build:
+    name: Build & upload artifact
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout

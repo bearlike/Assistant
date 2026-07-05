@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -12,6 +13,23 @@ from mewbo_core.classes import AbstractTool, ActionStep
 from mewbo_core.common import MockSpeaker, get_mock_speaker
 
 from mewbo_tools.core import resolve_safe_path
+
+# Environment overlay that keeps every shell invocation non-interactive: no
+# pager waiting on a keypress, no credential prompt blocking on stdin.
+_PAGER_SAFE_ENV = {
+    "GIT_PAGER": "cat",
+    "PAGER": "cat",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+
+# Slightly under ToolSpec's default 120s tool-call timeout
+# (mewbo_core.tool_registry.ToolSpec.timeout, enforced by
+# ToolUseLoop._safe_execute via asyncio.wait_for) so the subprocess reaps
+# itself before the outer timeout fires. Cancelling that asyncio.wait_for
+# only abandons the awaiting coroutine — it can't kill a blocking
+# subprocess.run() — so without a bound here the process (and any pager
+# child) would leak as an orphan every time the outer timeout fired.
+_DEFAULT_TIMEOUT_S = 115.0
 
 
 @dataclass(frozen=True)
@@ -39,39 +57,54 @@ def _parse_shell_request(action_step: ActionStep | None) -> ShellRequest:
     raise ValueError("Tool input must be a string command or an object payload.")
 
 
-def _run_command(command: str, cwd: str) -> tuple[int, str]:
-    try:
-        from mewbo_tools.vendor.aider.run_cmd import run_cmd
-    except Exception:
-        run_cmd = None
+def _run_command(command: str, cwd: str, *, timeout: float = _DEFAULT_TIMEOUT_S) -> tuple[int, str]:
+    """Run a shell command non-interactively, reaping the whole process group on timeout.
 
-    if run_cmd is not None:
-        try:
-            return run_cmd(command, verbose=False, cwd=cwd)
-        except Exception as exc:
-            return 1, str(exc)
-
+    Always a plain subprocess — never a PTY (the vendored Aider ``run_cmd`` picks a
+    pexpect PTY whenever the parent has a tty, which lets a paginated command like
+    ``git log`` block forever on ``less`` and leaks the interactive rc-file banner
+    into the captured output). ``start_new_session`` puts the command in its own
+    process group so a timeout can kill the command AND any children it spawned
+    (e.g. a pager) instead of orphaning them.
+    """
+    env = {**os.environ, **_PAGER_SAFE_ENV}
     try:
-        completed = subprocess.run(
+        proc = subprocess.Popen(
             command,
             shell=True,
             cwd=cwd,
-            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
+            start_new_session=True,
+            env=env,
         )
-        return completed.returncode, (completed.stdout or "") + (completed.stderr or "")
     except OSError as exc:
         return 1, str(exc)
 
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return proc.returncode, (stdout or "") + (stderr or "")
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = proc.communicate()
+        output = (stdout or "") + (stderr or "")
+        message = f"[shell] command timed out after {timeout}s and was killed"
+        return 1, f"{output}\n{message}" if output else message
+
 
 class AiderShellTool(AbstractTool):
-    """Run shell commands using Aider's run_cmd helper."""
+    """Run shell commands non-interactively, no PTY."""
 
     def __init__(self) -> None:
         """Initialize the shell execution tool."""
         super().__init__(
             name="Aider Shell",
-            description="Run shell commands via Aider's run_cmd helper.",
+            description="Run shell commands non-interactively (no PTY, pager-safe).",
             use_llm=False,
         )
 

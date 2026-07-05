@@ -94,6 +94,25 @@ class SessionEventBus:
         with self._lock:
             self._observers.append(callback)
 
+    def has_subscribers(self, session_id: str) -> bool:
+        """True when at least one live SSE subscriber is attached to *session_id*.
+
+        Reads existing internal subscriber-map state — additive, no change to
+        publish/subscribe behavior. A cheap presence check for a caller that
+        wants to short-circuit work nobody can receive (e.g. a device-tool
+        dispatch with no client listening, rather than burning a full
+        timeout).
+
+        KNOWN LIMITATION: a subscriber is not necessarily an EXECUTOR — any
+        SSE consumer counts, including a read-only console viewer watching
+        the same session with no ability to fulfil a device-tool call. This
+        converts the common "no client attached at all" case into an
+        instant, honest error; it is not proof that a device-tool-capable
+        client is present.
+        """
+        with self._lock:
+            return bool(self._subs.get(session_id))
+
     # -- fan-out ------------------------------------------------------------
 
     def publish(self, session_id: str, event: EventRecord) -> None:

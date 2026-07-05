@@ -383,3 +383,67 @@ class TestLoadEntry:
         finally:
             sys.modules.pop(module_a, None)
             sys.modules.pop(module_b, None)
+
+
+# ---------------------------------------------------------------------------
+# capabilities_for (Gitea #182: request-scoped capability derivation)
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilitiesFor:
+    def _gated_registry(self) -> SessionToolRegistry:
+        reg = SessionToolRegistry()
+        reg.register(
+            SessionToolFactory(
+                tool_id="wiki_search_pages",
+                build=lambda sid, el: _FakeSessionToolA(session_id=sid, event_logger=el),
+                requires_capabilities=("wiki",),
+            )
+        )
+        reg.register(
+            SessionToolFactory(
+                tool_id="scg_route",
+                build=lambda sid, el: _FakeSessionToolB(session_id=sid, event_logger=el),
+                requires_capabilities=("scg",),
+            )
+        )
+        reg.register(
+            SessionToolFactory(
+                tool_id="shell",
+                build=lambda sid, el: _FakeSessionTool(session_id=sid, event_logger=el),
+            )
+        )
+        return reg
+
+    def test_unknown_tool_id_contributes_nothing(self):
+        reg = self._gated_registry()
+        assert reg.capabilities_for(["nonexistent"]) == ()
+
+    def test_ungated_tool_contributes_nothing(self):
+        """A tool with empty requires_capabilities derives no capability."""
+        reg = self._gated_registry()
+        assert reg.capabilities_for(["shell"]) == ()
+
+    def test_gated_tool_derives_its_capability(self):
+        reg = self._gated_registry()
+        assert reg.capabilities_for(["wiki_search_pages"]) == ("wiki",)
+
+    def test_multiple_tools_union_and_dedupe(self):
+        reg = self._gated_registry()
+        caps = reg.capabilities_for(["wiki_search_pages", "scg_route", "shell"])
+        assert caps == ("scg", "wiki")
+
+    def test_empty_input_returns_empty(self):
+        reg = self._gated_registry()
+        assert reg.capabilities_for([]) == ()
+
+    def test_result_is_sorted(self):
+        reg = SessionToolRegistry()
+        reg.register(
+            SessionToolFactory(
+                tool_id="a",
+                build=lambda sid, el: _FakeSessionToolA(session_id=sid, event_logger=el),
+                requires_capabilities=("zzz", "aaa"),
+            )
+        )
+        assert reg.capabilities_for(["a"]) == ("aaa", "zzz")

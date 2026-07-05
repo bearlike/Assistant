@@ -11,11 +11,11 @@ from mewbo_graph.wiki.store import JsonWikiStore
 from mewbo_graph.wiki.tokens import CloneTokenCache
 from mewbo_graph.wiki.types import (
     Frontmatter,
-    GraphNode,
     IndexingJob,
     Project,
     RepoCredential,
     WikiPage,
+    make_graph_node,
 )
 
 # ── shared fixtures ────────────────────────────────────────────────────────────
@@ -36,7 +36,9 @@ def runtime(store):
 
 
 def _node(slug, nid):
-    return GraphNode(slug=slug, node_id=nid, type="Function", name="f", file="a.py", range=(0, 1))
+    return make_graph_node(
+        slug=slug, node_id=nid, type="Function", name="f", file="a.py", range=(0, 1)
+    )
 
 
 def _page(pid):
@@ -189,3 +191,66 @@ def test_resume_idempotent_graph_skip_not_re_executed(store, runtime):
     assert "reused on resume" in body
     # The expensive embedder is never even constructed when graph is skipped.
     mk.assert_not_called()
+
+
+# ── Graph-only recovery (developer mode) ────────────────────────────────────────
+
+
+def _seed_interrupted_graph_only(store, *, job_id="j-go", slug="example.com/o/r"):
+    """A graph-only job interrupted mid-run (graph_only sticky on its submission)."""
+    job = IndexingJob(
+        jobId=job_id, slug=slug, status="interrupted",
+        scannedCount=0, totalCount=0, currentFile=None,
+        model="unused-in-graph-only", commitSha="abc123",
+    )
+    store.create_job(job)
+    store.save_job_submission(job_id, {
+        "repoUrl": f"https://{slug}", "slug": slug, "platform": "git",
+        "depth": "comprehensive", "language": "en", "model": "unused-in-graph-only",
+        "filterMode": "exclude", "dirs": [], "files": [], "graphOnly": True,
+    })
+    return job_id, slug
+
+
+def test_resume_graph_only_redrives_deterministically_no_llm(store, runtime):
+    """An interrupted graph-only job re-drives via GraphOnlyIndexer, NEVER the agent.
+
+    This is the core invariant: recovery/resume of a graph-only job must never
+    touch the LLM/agent path (_start_indexer_session / runtime.start_async).
+    """
+    from unittest.mock import patch
+
+    import mewbo_api.wiki.resume as resume_mod
+
+    job_id, slug = _seed_interrupted_graph_only(store)
+    with patch.object(resume_mod, "_start_graph_only_index") as go, \
+         patch.object(resume_mod, "_start_indexer_session") as agent:
+        out = WikiResume.resume(store, runtime, job_id, user_initiated=False)
+
+    # Deterministic re-drive taken; agent path never entered.
+    go.assert_called_once()
+    assert go.call_args.kwargs["job_id"] == job_id
+    assert go.call_args.kwargs["submission"].graph_only is True
+    agent.assert_not_called()
+    runtime.start_async.assert_not_called()
+    # Same job_id reused, no Mewbo session minted.
+    assert out["job_id"] == job_id
+    assert out["session_id"] == ""
+
+
+def test_recovery_graph_only_never_starts_agent_session(store, runtime):
+    """JobRecovery re-drives a stranded graph-only job without any LLM session."""
+    from unittest.mock import patch
+
+    import mewbo_api.wiki.resume as resume_mod
+    from mewbo_api.wiki.recovery import JobRecovery
+
+    job_id, slug = _seed_interrupted_graph_only(store)
+    with patch.object(resume_mod, "_start_graph_only_index") as go, \
+         patch.object(resume_mod, "_start_indexer_session") as agent:
+        refreshed = JobRecovery.recover_interrupted(store, runtime)
+
+    assert slug in refreshed
+    go.assert_called_once()
+    agent.assert_not_called()
+    runtime.start_async.assert_not_called()

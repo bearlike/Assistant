@@ -6,9 +6,9 @@ from mewbo_graph.wiki.resume import ResumePlan
 from mewbo_graph.wiki.store import JsonWikiStore
 from mewbo_graph.wiki.types import (
     Frontmatter,
-    GraphNode,
     IndexingJob,
     WikiPage,
+    make_graph_node,
 )
 
 
@@ -27,7 +27,9 @@ def _job(store, *, job_id="j1", slug="org/repo", status="interrupted"):
 
 
 def _node(slug, nid, name="f"):
-    return GraphNode(slug=slug, node_id=nid, type="Function", name=name, file="a.py", range=(0, 1))
+    return make_graph_node(
+        slug=slug, node_id=nid, type="Function", name=name, file="a.py", range=(0, 1)
+    )
 
 
 def _page(pid):

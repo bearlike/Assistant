@@ -30,6 +30,7 @@ from mewbo_graph.plugins.wiki._ctx import (
     resolve_qa_clone_dir,
     resolve_qa_ctx,
 )
+from mewbo_graph.wiki.qa_access import QaAccessRecord
 
 if TYPE_CHECKING:
     from mewbo_core.classes import ActionStep
@@ -305,9 +306,16 @@ class _SourceToolShim(WikiSessionTool):
 
         result = self._call(access, args)
         # access.ctx is the WikiQaCtx (carries answer_id) — record the file(s)
-        # this read touched for the deterministic citation trail. list_files
-        # only *lists* paths (no read), so it records nothing (default []).
-        self._record_qa_access(access.ctx, self._access_refs(args, result))
+        # this read touched as UNSCORED grounding confirmations (they sort after
+        # the scored search hits on the trail). list_files only *lists* paths (no
+        # read), so it records nothing (default []).
+        self._record_qa_access(
+            access.ctx,
+            [
+                QaAccessRecord.touch(ref, tool=self.tool_id, op="read")
+                for ref in self._access_refs(args, result)
+            ],
+        )
         return MockSpeaker(content=str(result))
 
     def _call(self, access: WikiSourceAccess, args: Any) -> dict[str, Any]:

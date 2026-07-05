@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from mewbo_core.classes import OrchestrationState, TaskQueue
 from mewbo_core.orchestrator import Orchestrator, _format_assistant_closure
 from mewbo_core.session_store import SessionStore
 from mewbo_core.tool_use_loop import ToolUseLoop
@@ -19,6 +20,25 @@ from mewbo_core.tool_use_loop import ToolUseLoop
 async def _failing_loop_run(*_args, **_kwargs):
     """Replacement for ``ToolUseLoop.run`` that raises immediately."""
     raise RuntimeError("LLM call exceeded 180s ceiling")
+
+
+_STALE_ERROR = "ERROR: Tool 'aider_shell_tool' timed out after 120.0s"
+
+
+async def _successful_loop_run_with_stale_error(*_args, **_kwargs):
+    """A run that recovered from a mid-run tool failure and finished clean.
+
+    ``task_queue.last_error`` stays sticky (sole most-recent-failure
+    diagnostic) even though the run completed successfully — the
+    completion payload must not surface it as an active error.
+    """
+    task_queue = TaskQueue(action_steps=[])
+    task_queue.task_result = "All done."
+    task_queue.last_error = _STALE_ERROR
+    state = OrchestrationState(goal="go")
+    state.done = True
+    state.done_reason = "completed"
+    return task_queue, state
 
 
 class TestFormatAssistantClosure:
@@ -102,3 +122,33 @@ class TestRunFailureEmitsClosure:
         # Exactly one assistant event, exactly one completion event.
         assert len(_assistant_events(store, session_id)) == 1
         assert len(_completion_events(store, session_id)) == 1
+
+
+class TestCompletionPayloadErrorGating:
+    """A stale ``last_error`` must not leak into a successful completion."""
+
+    def test_successful_completion_drops_stale_error(self, tmp_path) -> None:
+        """``done_reason == "completed"`` must omit error/last_error keys."""
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+
+        with patch.object(ToolUseLoop, "run", _successful_loop_run_with_stale_error):
+            orch.run(user_query="go", session_id=session_id, max_iters=1)
+
+        completion = _completion_events(store, session_id)[0]
+        assert completion["payload"]["done_reason"] == "completed"
+        assert "error" not in completion["payload"]
+        assert "last_error" not in completion["payload"]
+
+    def test_non_success_completion_keeps_error(self, tmp_path) -> None:
+        """A non-"completed" done_reason must still carry the error keys."""
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+
+        with patch.object(ToolUseLoop, "run", _failing_loop_run):
+            orch.run(user_query="go", session_id=session_id, max_iters=1)
+
+        completion = _completion_events(store, session_id)[0]
+        assert completion["payload"]["done_reason"] == "error"
+        assert completion["payload"]["error"] == "LLM call exceeded 180s ceiling"
+        assert completion["payload"]["last_error"] == "LLM call exceeded 180s ceiling"

@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, ChevronDown, Info, MoreHorizontal, Pencil } from 'lucide-react';
 import { MessageBubble, MarkdownContent } from './MessageBubble';
+import { AttachmentCards } from './AttachmentCards';
 import { WidgetCard } from './WidgetCard';
 import { CopyButton } from './CopyButton';
 import { ScrollToBottom } from './ScrollToBottom';
@@ -9,6 +10,7 @@ import { copyText } from '../utils/clipboard';
 import { DiffFile, SessionUsage, TimelineEntry, TurnMeta } from '../types';
 import { FileList } from './FileList';
 import { PlanCard } from './PlanCard';
+import { TodoCard } from './TodoCard';
 import { SummaryBlock } from './SummaryBlock';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import { ModelLabel } from './ModelLabel';
@@ -57,6 +59,27 @@ interface ConversationTimelineProps {
  *   the toggle only appears when needed.
  */
 /**
+ * Mid-run entry point to the trace/logs panel. Shared by BOTH in-flight
+ * assistant rows (Gitea #174): the "Working…" beat before the first token and
+ * the live streaming bubble after it. Extracting it fixes the regression where
+ * the pill vanished the instant streaming began (#137) — the only mid-run door
+ * into the trace panel must live on both rows, not just the pending one.
+ */
+function TracePill({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="pending-trace"
+      onClick={onClick}
+      title="Open trace"
+    >
+      <Activity className="w-2.5 h-2.5" aria-hidden />
+      <span>Trace</span>
+    </button>
+  );
+}
+
+/**
  * Inline beat shown immediately after a user row while the agent has
  * accepted the turn but hasn't streamed a single token yet. Replaces the
  * old bordered "Working… / Open trace" pill — visually one continuous
@@ -68,17 +91,7 @@ function PendingAssistantRow({ onShowTrace }: { onShowTrace?: () => void }) {
       <div className="pending-line" role="status" aria-live="polite">
         <span className="pending-dot" aria-hidden />
         <span className="pending-label">Working</span>
-        {onShowTrace && (
-          <button
-            type="button"
-            className="pending-trace"
-            onClick={onShowTrace}
-            title="Open trace"
-          >
-            <Activity className="w-2.5 h-2.5" aria-hidden />
-            <span>Trace</span>
-          </button>
-        )}
+        {onShowTrace && <TracePill onClick={onShowTrace} />}
       </div>
     </div>
   );
@@ -91,8 +104,18 @@ function PendingAssistantRow({ onShowTrace }: { onShowTrace?: () => void }) {
  * index.css). Mounts only while the active turn is running and tokens have
  * arrived; the turn-closing `assistant` bubble built by `buildTimeline`
  * supersedes it, so the final text is authoritative and never duplicated.
+ *
+ * Carries the same `TracePill` as `PendingAssistantRow` so the trace panel
+ * stays reachable for the whole in-flight turn, not just before streaming
+ * starts (Gitea #174).
  */
-function StreamingAssistantRow({ text }: { text: string }) {
+function StreamingAssistantRow({
+  text,
+  onShowTrace,
+}: {
+  text: string;
+  onShowTrace?: () => void;
+}) {
   return (
     <div className="pt-1.5" role="status" aria-live="polite" aria-busy="true">
       <div className="text-[hsl(var(--foreground))] text-sm">
@@ -102,6 +125,11 @@ function StreamingAssistantRow({ text }: { text: string }) {
           className="inline-block w-[2px] h-[1em] align-text-bottom -mb-px ml-px bg-[hsl(var(--primary))] animate-[wiki-caret_900ms_steps(2)_infinite]"
         />
       </div>
+      {onShowTrace && (
+        <div className="pending-line mt-1">
+          <TracePill onClick={onShowTrace} />
+        </div>
+      )}
     </div>
   );
 }
@@ -350,7 +378,7 @@ export function ConversationTimeline({
           let spacing = 'pt-[18px]';
           if (entry.role === 'assistant' && prev?.role === 'user') spacing = 'pt-1.5';
           else if (entry.role === 'user' && idx > 0) spacing = 'pt-8 mt-2';
-          else if (entry.role === 'plan' || entry.role === 'widget') spacing = 'pt-3';
+          else if (entry.role === 'plan' || entry.role === 'widget' || entry.role === 'todos') spacing = 'pt-3';
 
           const rowClass = `session-row-in group/turn flex flex-col ${spacing}`;
           const rowProps = {
@@ -368,6 +396,14 @@ export function ConversationTimeline({
             return (
               <div {...rowProps}>
                 {entry.plan && <PlanCard plan={entry.plan} onApprove={onApprovePlan} />}
+              </div>
+            );
+          }
+
+          if (entry.role === 'todos') {
+            return (
+              <div {...rowProps}>
+                {entry.todos && <TodoCard todos={entry.todos} />}
               </div>
             );
           }
@@ -450,7 +486,12 @@ export function ConversationTimeline({
                         </div>
                       </div>
                     ) : (
-                      <MessageBubble role={entry.role} content={entry.content} />
+                      <>
+                        {entry.attachments && entry.attachments.length > 0 && (
+                          <AttachmentCards attachments={entry.attachments} />
+                        )}
+                        <MessageBubble role={entry.role} content={entry.content} />
+                      </>
                     )}
                     {/* Hover-revealed row actions (Copy, Edit). Idle opacity 0,
                         full when the row is hovered or focused. Slight lift on
@@ -478,7 +519,10 @@ export function ConversationTimeline({
               </div>
               {showPending &&
                 (streamingText ? (
-                  <StreamingAssistantRow text={streamingText} />
+                  <StreamingAssistantRow
+                    text={streamingText}
+                    onShowTrace={onShowActiveTrace}
+                  />
                 ) : (
                   <PendingAssistantRow onShowTrace={onShowActiveTrace} />
                 ))}

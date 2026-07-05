@@ -515,8 +515,10 @@ class VcsPickupService:
                 f"`{worktree_branch}`, cut fresh from the default branch. Commit "
                 "your work there; never touch the default branch.",
                 f"- Implement what is asked, run focused tests, then push "
-                f"`{worktree_branch}` and open a pull request that references this "
-                "issue if you have tools to do so.",
+                f"`{worktree_branch}` and open a pull request if you have tools "
+                f"to do so (prefer a forge CLI like `tea` or `gh` when "
+                f"available); include `Closes #{body.number}` in the pull "
+                "request description so merging it closes this issue.",
             ]
         else:
             lines += [
@@ -524,8 +526,10 @@ class VcsPickupService:
                 "a feature branch or worktree for your changes; never commit "
                 "directly to the default branch.",
                 "- Implement what is asked, run focused tests, then push your branch "
-                "and open a pull request that references this issue if you have "
-                "tools to do so.",
+                "and open a pull request if you have tools to do so (prefer a "
+                "forge CLI like `tea` or `gh` when available); include "
+                f"`Closes #{body.number}` in the pull request description so "
+                "merging it closes this issue.",
             ]
         lines += [
             "- If the trigger is a question rather than a task, just answer it; "

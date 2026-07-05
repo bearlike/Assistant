@@ -1,5 +1,5 @@
 /**
- * Q&A screen — DeepWiki's faithful two-column streaming layout.
+ * Q&A screen — a faithful two-column streaming layout.
  *
  *   Left  (sticky)  : back link · question · "Generated with [model]" pill ·
  *                     summary card · cited-source cards (lazy file excerpts) ·
@@ -10,14 +10,22 @@
  * persisted one we sync to the URL value so a shared link always shows the
  * same authoring badge.
  *
- * Source cards: the card set is the unique FILE citations from the terminal
- * ``sources`` block + the LLM-curated ``summarySources``. Inline citation
- * chips in the answer scroll to the matching card via the shared
- * ``CitationRef.domId``. The ``sources`` block is therefore NOT rendered
- * inline in the answer column — LiveBlocks paints prose only.
+ * Source cards: the card set is the unique citations from the terminal
+ * ``sources`` block + the LLM-curated ``summarySources``, kind-tagged by
+ * ``parseCitations`` so file / wiki-page / graph-node refs each render their
+ * own card. Inline citation chips in the answer scroll to the matching card
+ * via the shared ``citationDomId``. The ``sources`` block is therefore NOT
+ * rendered inline in the answer column — LiveBlocks paints prose only.
+ *
+ * Idempotent URL: when an ``answerId`` is present the screen renders the
+ * persisted snapshot (``GET /v1/wiki/qa/<id>``) and never opens a live stream,
+ * so a refresh / shared link re-reads the saved answer instead of POSTing a
+ * fresh LLM run. Without one it streams as before, then folds the freshly
+ * assigned id into the URL (``?answer=<id>``, replace) so the next refresh is
+ * idempotent — the already-streamed content keeps painting, no refetch flash.
  */
 
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import { useLocation } from "wouter";
 import { ArrowLeft, ChevronRight, Cpu, FileText, Route, Sparkles } from "lucide-react";
@@ -28,9 +36,16 @@ import { LiveBlocks } from "./LiveBlocks";
 import { ModelChip } from "./ModelPicker";
 import { QADock } from "./QADock";
 import { SourceCard } from "./SourceCard";
+import { SourceHrefProvider } from "./markdownComponents";
 import { WikiTopBar } from "./WikiTopBar";
-import { fileCitations } from "./citations";
-import { useQaAnswerSnapshot, useQaStream, useWikiPage } from "./api/hooks";
+import { IndexedSnapshot } from "./indexedSnapshot";
+import { parseCitations, type Citation } from "./citations";
+import {
+  useQaAnswerSnapshot,
+  useQaStream,
+  useWikiPage,
+  useWikiProjectBySlug,
+} from "./api/hooks";
 import { buildHref } from "./router";
 import { useStoredModel } from "./useStoredModel";
 
@@ -39,13 +54,31 @@ interface QAScreenProps {
   pageId: string;
   slug?: string;
   model?: string;
+  /**
+   * Persisted answer id (from ``?answer=`` in the URL). When set the screen
+   * renders that saved answer and skips the live stream entirely — a refresh
+   * never re-invokes the LLM.
+   */
+  answerId?: string;
 }
 
-export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenProps) {
+export function QAScreen({ question, pageId, slug, model: urlModel, answerId }: QAScreenProps) {
   const [, navigate] = useLocation();
   const [storedModel, setStoredModel] = useStoredModel();
   const repoSlug = slug ?? "bearlike/Assistant";
   const fromPageQuery = useWikiPage(pageId, repoSlug);
+
+  // Repo snapshot (shared "wiki/projects" cache) → host-aware source URLs so
+  // citation chips + file source cards open the cited file in the remote repo.
+  const projectQuery = useWikiProjectBySlug(repoSlug);
+  const repoSnapshot = useMemo(
+    () => (projectQuery.data ? IndexedSnapshot.fromProject(projectQuery.data) : null),
+    [projectQuery.data],
+  );
+  const resolveSourceHref = useCallback(
+    (c: Citation) => repoSnapshot?.sourceUrl(c.path, c.startLine, c.endLine) ?? null,
+    [repoSnapshot],
+  );
 
   // Sync local picker to the URL model when present.
   useEffect(() => {
@@ -58,44 +91,98 @@ export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenPr
 
   const answeringModel = urlModel || storedModel;
 
-  // Subscribe to the QA event stream. The stream emits `meta` →
-  // `summary_ready` → `block_open` / `block_delta` / `block_close` × N →
-  // `complete`, so we can render the left summary the moment it arrives
-  // and the right column grows naturally without an extra typewriter.
-  const stream = useQaStream({
-    question,
-    fromPageId: pageId,
-    model: answeringModel,
-    slug: repoSlug,
-  });
-  // Terminal-aware readiness: the summary card resolves once
-  // `summary_ready` lands, OR once the stream finishes (so it can't dangle
-  // a skeleton forever on a zero-source answer).
-  const leftReady = stream.summarySources !== null || stream.done;
-  const hasBlocks = stream.blocks.some((b) => b.kind !== "sources" && b.kind !== "accordion");
+  // ``answerId`` published by our OWN completed stream (folded into the URL via
+  // a replace-navigate). We track it so that self-published id doesn't flip the
+  // view into snapshot mode — that would abort the still-rendering stream and
+  // flash a refetch. Only an id we did NOT publish (a refresh / shared link)
+  // counts as the idempotent read path.
+  const publishedAnswerRef = useRef<string | null>(null);
+  const isSnapshot = Boolean(answerId) && answerId !== publishedAnswerRef.current;
 
-  // The deterministic provenance trail + per-probe model set live only on
-  // the answer snapshot (the stream's internal ``access`` events are
-  // ignored). Fetch it once the stream has settled with an id.
-  const snapshot = useQaAnswerSnapshot(stream.answerId, stream.done);
+  // Live QA stream — only when reading a persisted answer is NOT requested.
+  // Passing `null` makes `useQaStream` a no-op (no POST /v1/wiki/qa), so an
+  // idempotent ``?answer=`` load never opens a stream.
+  const stream = useQaStream(
+    isSnapshot
+      ? null
+      : { question, fromPageId: pageId, model: answeringModel, slug: repoSlug },
+  );
+
+  // Snapshot read: the source of truth in idempotent mode; in stream mode it
+  // still backfills the deterministic provenance trail once the stream settles
+  // (the stream's internal ``access`` events are intentionally ignored).
+  const snapshot = useQaAnswerSnapshot(answerId ?? stream.answerId, isSnapshot || stream.done);
+
+  // Unified view — render off these regardless of which source supplied them.
+  // Memoised so the `?? []` fallback keeps a stable reference (it feeds the
+  // `cards` useMemo deps; a fresh array each render would defeat that memo).
+  const snapshotBlocks = snapshot.data?.blocks;
+  const blocks = useMemo(
+    () => (isSnapshot ? snapshotBlocks ?? [] : stream.blocks),
+    [isSnapshot, snapshotBlocks, stream.blocks],
+  );
+  const summarySources = isSnapshot
+    ? snapshot.data?.summarySources ?? null
+    : stream.summarySources;
+  const done = isSnapshot ? snapshot.isSuccess || snapshot.isError : stream.done;
+  const errorMessage = isSnapshot
+    ? snapshot.isError
+      ? "This answer is no longer available."
+      : null
+    : stream.error?.message ?? null;
+
+  // Provenance trail + per-probe model set live only on the snapshot (both
+  // modes read them from there).
   const accessedSources = snapshot.data?.accessedSources ?? [];
   const modelsUsed = snapshot.data?.modelsUsed ?? [];
 
+  // Authoring badge prefers the persisted answer's model, falling back to the
+  // URL / locally-picked one before the snapshot resolves.
+  const generatedWithModel = snapshot.data?.model || answeringModel;
+
+  // Idempotent URL: once the live stream assigns an answer id (on `meta`), fold
+  // it into the URL so a refresh re-reads the snapshot. `replace` keeps history
+  // clean; tracking it in `publishedAnswerRef` keeps the stream alive (we never
+  // flip into snapshot mode for our own id).
+  useEffect(() => {
+    if (isSnapshot) return;
+    if (!stream.answerId || publishedAnswerRef.current === stream.answerId) return;
+    publishedAnswerRef.current = stream.answerId;
+    navigate(
+      buildHref({
+        kind: "qa",
+        question,
+        pageId,
+        slug,
+        model: answeringModel,
+        answer: stream.answerId,
+      }),
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stream.answerId, isSnapshot]);
+
+  // Terminal-aware readiness: the summary card resolves once `summary_ready`
+  // lands, OR once the answer settles (so it can't dangle a skeleton forever
+  // on a zero-source answer).
+  const leftReady = summarySources !== null || done;
+  const hasBlocks = blocks.some((b) => b.kind !== "sources" && b.kind !== "accordion");
+
   const fromPageTitle = fromPageQuery.data?.title ?? pageId;
 
-  // The cited-source card set: unique FILE citations from the terminal
-  // ``sources`` block + the curated ``summarySources`` (graph:/wiki: refs
-  // are dropped — they aren't file cards). Deduped + first-seen ordered by
-  // ``fileCitations``.
+  // The cited-source card set: unique citations from the terminal ``sources``
+  // block + the curated ``summarySources``, kind-tagged so file / wiki-page /
+  // graph-node refs each render their own card. Deduped + first-seen ordered by
+  // ``parseCitations``.
   const cards = useMemo(() => {
-    const sourceBlock = stream.blocks.find(
+    const sourceBlock = blocks.find(
       (b): b is Extract<typeof b, { kind: "sources" }> => b.kind === "sources",
     );
-    return fileCitations([
+    return parseCitations([
       ...(sourceBlock?.items ?? []),
-      ...(stream.summarySources ?? []),
+      ...(summarySources ?? []),
     ]);
-  }, [stream.blocks, stream.summarySources]);
+  }, [blocks, summarySources]);
 
   const onAsk = (q: string) => {
     navigate(
@@ -133,7 +220,7 @@ export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenPr
             <div className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
               <Sparkles className="h-3 w-3 text-[hsl(var(--primary))]" />
               <span>Generated with</span>
-              <ModelChip modelId={answeringModel} />
+              <ModelChip modelId={generatedWithModel} />
             </div>
 
             {leftReady ? (
@@ -167,7 +254,7 @@ export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenPr
                 </div>
                 <div className="space-y-2.5">
                   {cards.map((c) => (
-                    <SourceCard key={c.raw} citation={c} slug={repoSlug} />
+                    <SourceCard key={c.raw} citation={c} slug={repoSlug} snapshot={repoSnapshot} />
                   ))}
                 </div>
               </div>
@@ -184,18 +271,20 @@ export function QAScreen({ question, pageId, slug, model: urlModel }: QAScreenPr
           <div>
             {hasBlocks ? (
               <article className="prose-wiki">
-                <LiveBlocks
-                  blocks={stream.blocks}
-                  onNavigatePage={(p) =>
-                    navigate(buildHref({ kind: "page", pageId: p, slug }))
-                  }
-                />
+                <SourceHrefProvider resolve={resolveSourceHref}>
+                  <LiveBlocks
+                    blocks={blocks}
+                    onNavigatePage={(p) =>
+                      navigate(buildHref({ kind: "page", pageId: p, slug }))
+                    }
+                  />
+                </SourceHrefProvider>
               </article>
-            ) : stream.error ? (
+            ) : errorMessage ? (
               <div className="text-sm text-[hsl(var(--destructive))]">
-                {stream.error.message}
+                {errorMessage}
               </div>
-            ) : stream.done ? (
+            ) : done ? (
               <div className="text-sm text-[hsl(var(--muted-foreground))]">
                 No answer was generated for this question.
               </div>

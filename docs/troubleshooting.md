@@ -9,7 +9,7 @@ Quick reference for common failures. For session-level debugging, see the
 
 Checks:
 
-1. Verify `llm.api_key` in [`configs/app.json`](repo:configs/app.json) is set and correct.
+1. Verify `llm.api_key` in [`configs/app.json`](repo:configs/app.example.json) is set and correct.
 2. Model name must use `provider/model` syntax: `anthropic/claude-sonnet-4-6`, `openai/gpt-4o`.
 3. If using a proxy: set `llm.api_base` and verify `llm.proxy_model_prefix` matches what the proxy expects.
 4. Test connectivity directly:

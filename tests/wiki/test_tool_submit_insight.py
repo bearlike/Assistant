@@ -8,13 +8,15 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import GraphNode, IndexingJob, QaAnswer
+from mewbo_graph.wiki.types import GraphNode, IndexingJob, QaAnswer, make_graph_node
 
 SLUG = "org/repo"
 
 
 def _gn(nid: str, typ: str, name: str) -> GraphNode:
-    return GraphNode(slug=SLUG, node_id=nid, type=typ, name=name, file="auth.py", range=(0, 9))
+    return make_graph_node(
+        slug=SLUG, node_id=nid, type=typ, name=name, file="auth.py", range=(0, 9)
+    )
 
 
 def _store(tmp_path: Path) -> JsonWikiStore:

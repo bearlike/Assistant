@@ -31,6 +31,7 @@ from mewbo_core.attachments import (
     parsed_sidecar_path,
 )
 from mewbo_core.classes import TaskQueue
+from mewbo_core.client_tools import ClientDeclaredTool, ClientToolSpec, DeviceToolDispatcher
 from mewbo_core.common import get_logger
 from mewbo_core.config import (
     AppConfig,
@@ -50,10 +51,12 @@ from mewbo_core.key_store import KeyStoreBase, create_key_store
 from mewbo_core.notifications import NotificationStore
 from mewbo_core.permissions import auto_approve
 from mewbo_core.project_store import VirtualProject, create_project_store
+from mewbo_core.session_provenance import MOBILE_TAG_PREFIX, is_mobile_surface
 from mewbo_core.session_runtime import SessionRuntime, parse_core_command
 from mewbo_core.session_store import SessionStoreBase, create_session_store
+from mewbo_core.session_tools import SessionTool
 from mewbo_core.share_store import ShareStore
-from mewbo_core.tool_registry import ToolSpec, load_registry
+from mewbo_core.tool_registry import classify_tool_scope, load_registry
 from mewbo_core.types import EventRecord
 from mewbo_core.worktree import WorktreeBranchInUseError, WorktreeManager
 from mewbo_tools.integration.file_catalog import FileCatalog
@@ -258,9 +261,9 @@ project_store = create_project_store()
 def _auto_cleanup_worktree_on_session_end(session_id: str, error: str | None) -> None:
     """Auto-remove a worktree-backed session's worktree if it is clean.
 
-    Mirrors the Claude Code default: when a worktree-bound session ends and
-    leaves no uncommitted changes / unpushed commits behind, drop the
-    worktree. Otherwise keep it so the user can resume or recover work.
+    When a worktree-bound session ends and leaves no uncommitted changes /
+    unpushed commits behind, drop the worktree. Otherwise keep it so the
+    user can resume or recover work.
 
     After reaping the child worktree, also reaps the auto-promoted parent if it
     now has no remaining worktree children (the #53 orphan-parent symptom). An
@@ -315,6 +318,15 @@ _hook_manager.on_session_end.append(_auto_cleanup_worktree_on_session_end)
 runtime = SessionRuntime(session_store=session_store)
 notification_store = NotificationStore(root_dir=session_store.root_dir)
 share_store = ShareStore(root_dir=session_store.root_dir)
+
+# Client-declared device tools (Gitea #179, Phase 1): register the concrete
+# dispatcher into the core seam, mirroring how the api registers
+# RunStoreSearchLauncher for the agentic-search SessionTool. Unconditional
+# (no feature flag) — a session simply never advertises `device_tools` when
+# the feature isn't in use.
+from mewbo_api.device_tools import ApiDeviceToolDispatcher, get_pending_calls  # noqa: E402
+
+DeviceToolDispatcher.register(ApiDeviceToolDispatcher(runtime=runtime))
 
 authorizations = {"apikey": {"type": "apiKey", "in": "header", "name": "X-API-KEY"}}
 VERSION = get_version()
@@ -669,6 +681,19 @@ def _build_context_payload(request_data: dict[str, object]) -> dict[str, object]
     return payload
 
 
+def _extract_attachments(request_data: dict[str, object]) -> list[dict] | None:
+    """Return the request's top-level ``attachments`` list, or ``None``.
+
+    Same shape/validation as the ``attachments`` half of
+    ``_build_context_payload`` — reused here so the orchestration call
+    (``start_async``/``run_sync``) can thread the identical descriptor
+    dicts onto the persisted ``user`` event (additive; the sibling
+    ``context`` event keeps carrying them for LLM vision input, unchanged).
+    """
+    attachments = request_data.get("attachments")
+    return attachments if isinstance(attachments, list) else None
+
+
 def _session_attachment_map(session_id: str) -> dict[str, str]:
     """Map a session's attachment display names → the best path to render.
 
@@ -706,6 +731,95 @@ def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | No
     if isinstance(mcp_tools, list) and mcp_tools:
         return [str(t) for t in mcp_tools if t]
     return None
+
+
+def _extract_device_tools(context_payload: dict[str, object]) -> list[ClientToolSpec]:
+    """Validate ``context.device_tools`` raw JSON schemas into specs.
+
+    Raises ``ValueError`` (caller maps to 400) on a malformed entry, or on a
+    duplicate ``tool_id`` within the declaration — a client-declared tool that
+    fails validation must never silently vanish from the run, and
+    ``SessionToolRegistry.build_for`` resolves session tools by id (first
+    match wins), so a silent duplicate would leave the second declaration
+    invisible rather than rejected.
+    """
+    if not context_payload:
+        return []
+    raw = context_payload.get("device_tools")
+    if not isinstance(raw, list) or not raw:
+        return []
+    specs: list[ClientToolSpec] = []
+    seen_ids: set[str] = set()
+    for entry in raw:
+        try:
+            spec = ClientToolSpec.model_validate(entry)
+        except ValidationError as exc:
+            raise ValueError(f"Invalid device tool declaration: {exc}") from exc
+        if spec.tool_id in seen_ids:
+            raise ValueError(f"Duplicate device tool_id declared: {spec.tool_id!r}")
+        seen_ids.add(spec.tool_id)
+        specs.append(spec)
+    return specs
+
+
+def _derive_tool_grants(
+    session_id: str, context_payload: dict[str, object]
+) -> tuple[list[str] | None, list[SessionTool]]:
+    """Single seam: ``(allowed_tools, extra_session_tools)`` from a context payload.
+
+    STRICT — raises ``ValueError`` (caller maps to 400) when ``device_tools``
+    contains a malformed entry. Use this at a site that has NOT YET persisted
+    *context_payload* (``POST /query``, sync ``POST /api/query``): validate
+    before ``append_context_event`` so a malformed declaration 400s without
+    ever poisoning the session's context. Re-drive sites that read
+    ALREADY-persisted context (``/message`` re-engage, ``/recover``) must use
+    :func:`_derive_tool_grants_tolerant` instead — see its docstring.
+    """
+    allowed_tools = _extract_allowed_tools(context_payload)
+    device_specs = _extract_device_tools(context_payload)
+    extra_session_tools: list[SessionTool] = [
+        ClientDeclaredTool(session_id, spec) for spec in device_specs
+    ]
+    return allowed_tools, extra_session_tools
+
+
+def _derive_tool_grants_tolerant(
+    session_id: str, context_payload: dict[str, object]
+) -> tuple[list[str] | None, list[SessionTool]]:
+    """Self-healing sibling of :func:`_derive_tool_grants` for RE-DRIVES.
+
+    ``/message`` re-engage and ``/recover`` derive grants from the session's
+    LAST-PERSISTED context event, not a fresh request body they could 400 on
+    behalf of. If that persisted context was ever poisoned by a malformed
+    ``device_tools`` declaration — a stale write from before the
+    validate-before-persist ordering existed, or any future write path that
+    doesn't validate — a hard 400 here would brick the session: every
+    re-engage/recover attempt re-reads the same stored poison and 400s
+    forever, with no request-body fix the client can offer (this call's body
+    doesn't even carry ``device_tools``). So a malformed persisted
+    declaration is DROPPED (bind zero device tools) with a logged warning,
+    and the run proceeds; ``allowed_tools`` is derived independently since an
+    ``mcp_tools`` failure is a different failure mode entirely.
+    """
+    try:
+        return _derive_tool_grants(session_id, context_payload)
+    except ValueError as exc:
+        logging.warning(
+            "Dropping malformed persisted device_tools for session {}: {}",
+            session_id,
+            exc,
+        )
+        return _extract_allowed_tools(context_payload), []
+
+
+def _load_last_context(session_id: str) -> dict[str, object]:
+    """Most-recent persisted ``context`` event payload for a session ({} if none)."""
+    events = runtime.session_store.load_transcript(session_id)
+    for event in reversed(events):
+        if event.get("type") == "context":
+            payload = event.get("payload")
+            return dict(payload) if isinstance(payload, dict) else {}
+    return {}
 
 
 def _extract_fallback_models(context_payload: dict[str, object]) -> tuple[str, ...] | None:
@@ -1580,6 +1694,28 @@ session_events_model = ns.model(
     },
 )
 
+session_events_ingest_request_model = ns.model(
+    "SessionEventsIngestRequest",
+    {
+        "record": fields.Nested(
+            session_event_model,
+            description="A single event record to append (use this OR `records`).",
+        ),
+        "records": fields.List(
+            fields.Nested(session_event_model),
+            description="A batch of event records to append (use this OR `record`).",
+        ),
+    },
+)
+
+session_events_ingest_model = ns.model(
+    "SessionEventsIngestResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "appended": fields.Integer(example=3, description="Number of events appended."),
+    },
+)
+
 session_message_enqueued_model = ns.model(
     "SessionMessageEnqueued",
     {
@@ -1598,6 +1734,44 @@ session_interrupt_model = ns.model(
         "session_id": fields.String(example="9e2d47c1a0b34f12"),
         "interrupted": fields.Boolean(example=True),
     },
+)
+
+device_tool_error_model = ns.model(
+    "DeviceToolError",
+    {
+        "code": fields.String(example="permission_denied"),
+        "message": fields.String(example="User denied the SMS permission."),
+    },
+)
+
+device_tool_result_model = ns.model(
+    "DeviceToolResultRequest",
+    {
+        "call_token": fields.String(
+            required=True,
+            description="Single-use token carried on the `device_tool_call` event this answers.",
+            example="Q1sT9x...redacted",
+        ),
+        "status": fields.String(
+            required=True,
+            description="`ok` or `error`.",
+            example="ok",
+        ),
+        "result": fields.Raw(
+            required=False,
+            description="The tool's return value. Present when `status` is `ok`.",
+        ),
+        "error": fields.Nested(
+            device_tool_error_model,
+            required=False,
+            description="Structured error. Present when `status` is `error`.",
+        ),
+    },
+)
+
+device_tool_resolved_model = ns.model(
+    "DeviceToolResolved",
+    {"resolved": fields.Boolean(example=True)},
 )
 
 session_recover_response_model = ns.model(
@@ -1842,10 +2016,23 @@ tool_spec_model = ns.model(
         "description": fields.String(example="Run a shell command in the project directory."),
         "disabled_reason": fields.String(example=None),
         "server": fields.String(
-            example=None, description="Originating MCP server (MCP tools only)."
+            example=None,
+            description=(
+                "Originating MCP server (MCP tools only), OR the product-tool group "
+                "name (`Wiki`, `Agentic Search`) for a capability-gated internal tool."
+            ),
         ),
         "scope": fields.String(
-            example="global", description="`global`, `project`, or `plugin`."
+            example="builtin", description="`builtin`, `project`, `system`, or `plugin`."
+        ),
+        "requires_capability": fields.String(
+            example=None,
+            description=(
+                "Set only on capability-gated internal/product tools (wiki_*, scg_*, "
+                "agentic_search): the session capability that must be granted for the "
+                "tool to actually bind. Selecting the tool via a session's `mcp_tools` "
+                "allowlist grants this capability for that request (Gitea #182)."
+            ),
         ),
     },
 )
@@ -2767,7 +2954,7 @@ class VirtualProjectWorktrees(Resource):
         # Optional ``base`` — when provided, the backend creates a fresh
         # branch from <base> via ``git worktree add -b <branch> <path> <base>``.
         # When absent, ``branch`` must already exist locally / as a remote
-        # tracking ref. This mirrors the Claude Code worktree workflow.
+        # tracking ref for the per-session worktree workflow.
         base_raw = payload.get("base")
         base = str(base_raw).strip() if base_raw else None
         if not branch:
@@ -2954,6 +3141,12 @@ class Sessions(Resource):
         session_tag = payload.get("session_tag")
         if session_tag:
             runtime.session_store.tag_session(session_id, session_tag)
+        # Mobile clients (Aura) declare their surface via X-Mewbo-Surface;
+        # tag the session additively so SessionOrigin.classify() reports the
+        # MOBILE origin. Never clobbers an explicit session_tag above.
+        surface = _request_surface()
+        if surface and is_mobile_surface(surface):
+            runtime.tag_session(session_id, f"{MOBILE_TAG_PREFIX}{surface.lower()}")
         context_payload = _build_context_payload(payload)
         # Capability header — clients may declare supported features (e.g. "stlite"
         # for the widget builder). Parse comma-separated values and persist in the
@@ -3076,12 +3269,21 @@ class SessionQuery(Resource):
         # Use model from context if provided, else config default
         if "model" not in context_payload:
             context_payload["model"] = get_config_value("llm", "default_model", default="unknown")
+
+        # Validate BEFORE persisting: a malformed `device_tools` declaration
+        # must 400 without poisoning the session's context event, or
+        # `/message` re-engage and `/recover` (which read the LAST-PERSISTED
+        # context) would inherit the same malformed declaration and 400
+        # forever — a bricked session (Gitea #179 whole-branch review, F6).
+        try:
+            allowed_tools, extra_session_tools = _derive_tool_grants(session_id, context_payload)
+        except ValueError as exc:
+            return {"message": str(exc)}, 400
+
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
 
         mode = _parse_mode(request_data.get("mode"))
-
-        allowed_tools = _extract_allowed_tools(context_payload)
 
         # Skill activation: resolve from top-level "skill" field or context.skill.
         skill_instructions = _resolve_skill_instructions(request_data, user_query, context_payload)
@@ -3124,6 +3326,8 @@ class SessionQuery(Resource):
             max_iters=max_iters,
             session_step_budget=budget,
             source_platform=source_platform,
+            extra_session_tools=extra_session_tools,
+            attachments=_extract_attachments(request_data),
         )
         if not started:
             return {"message": "Session is already running."}, 409
@@ -3208,6 +3412,48 @@ class SessionEvents(Resource):
             # affordance without re-deriving recoverability from the timeline.
             "recoverable": summary["recoverable"],
         }, 200
+
+    @api.doc(
+        security="apikey",
+        params={"session_id": "Session id to mirror events into."},
+        description=(
+            "Append one or more transcript event records to a session — the "
+            "ingest seam for a local-first CLI mirroring its authoritative local "
+            "JSONL transcript to this deployment for cross-device visibility. Body "
+            "is `{record}` (single) or `{records: [...]}` (batch); each record is "
+            "an event `{type, payload, ts?}`. The session is materialised "
+            "idempotently, so the first mirrored event creates it."
+        ),
+    )
+    @ns.expect(session_events_ingest_request_model)
+    @ns.response(202, "Events appended.", session_events_ingest_model)
+    @kit.auth_error()
+    def post(self, session_id: str) -> tuple[dict, int]:
+        """Ingest mirrored session events
+
+        Append one or more event records to a session's transcript. The session
+        is created idempotently on first use so an external local-first client
+        (the CLI) can mirror its transcript here. Local JSONL stays authoritative
+        on the client; this endpoint only stores what it is handed.
+        """
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        payload = request.get_json(silent=True) or {}
+        records = payload.get("records")
+        if records is None and isinstance(payload.get("record"), dict):
+            records = [payload["record"]]
+        if not isinstance(records, list) or not records:
+            return {
+                "message": "Body must include a `record` object or non-empty `records` list."
+            }, 400
+        clean = [rec for rec in records if isinstance(rec, dict) and rec.get("type")]
+        if not clean:
+            return {"message": "No valid event records (each needs a `type`)."}, 400
+        runtime.ensure_session(session_id)
+        for record in clean:
+            runtime.append_event(session_id, record)
+        return {"session_id": session_id, "appended": len(clean)}, 202
 
 
 @ns.route("/sessions/<string:session_id>/stream")
@@ -3394,24 +3640,34 @@ class SessionMessage(Resource):
             return {"message": "'text' is required"}, 400
         if runtime.enqueue_message(session_id, text):
             return {"session_id": session_id, "enqueued": True}, 202
-        # No active run → re-engage: start a fresh run with this message.
-        model = get_config_value("llm", "default_model", default="unknown")
-        runtime.append_context_event(session_id, {"model": model})
+        # No active run → re-engage: start a fresh run with this message,
+        # inheriting the session's persisted context (model/mode/tool
+        # allowlist) like /query and /recover do — never clobber it with the
+        # config default (a picker-selected model must survive re-engagement).
+        last_context = _load_last_context(session_id)
+        model_name = str(last_context.get("model", "")) or None
         # Resolve cwd from session context (honours persisted external cwd) or
         # fall back to the per-session temp dir for sessions without a project.
         session_cwd = _resolve_session_cwd(session_id) or session_temp_dir(session_id)
         budget = int(get_config_value("agent", "session_step_budget", default=0))
         max_iters = int(get_config_value("agent", "max_iters", default=30))
+        # Tolerant: re-engagement reads PERSISTED context it can't 400 on
+        # behalf of — a poisoned prior write self-heals (drops device tools,
+        # keeps going) instead of bricking the session (#179 review, F6).
+        allowed_tools, extra_session_tools = _derive_tool_grants_tolerant(session_id, last_context)
         run_id = runtime.start_async(
             session_id=session_id,
             user_query=text,
-            model_name=str(model) or None,
+            model_name=model_name,
             approval_callback=auto_approve,
             hook_manager=_hook_manager,
+            mode=_parse_mode(last_context.get("mode")),
+            allowed_tools=allowed_tools,
             cwd=session_cwd,
             max_iters=max_iters,
             session_step_budget=budget,
             source_platform=_request_surface(),
+            extra_session_tools=extra_session_tools,
         )
         if not run_id:
             return {"message": "Session is already running."}, 409
@@ -3452,6 +3708,110 @@ class SessionInterrupt(Resource):
         if not ok:
             return {"session_id": session_id, "interrupted": False}, 200
         return {"session_id": session_id, "interrupted": True}, 202
+
+
+def _parse_device_tool_result_body(body: dict[str, object]) -> dict[str, object] | None:
+    """Validate a device-tool result POST body; ``None`` on a malformed shape.
+
+    Strips ``call_token`` (a bearer secret, checked separately by the caller)
+    from the returned payload — this is exactly the ``{"status": "ok",
+    "result": ...}`` / ``{"status": "error", "error": {...}}`` shape
+    ``DeviceToolDispatcherImpl.dispatch`` returns, so it rides straight
+    through to :meth:`DevicePendingCalls.resolve` with no reshaping.
+
+    An error result with neither a non-empty ``error.code`` nor a non-empty
+    ``error.message`` is rejected here (400), not merely defaulted downstream
+    — ``{"status":"error","error":{}}`` is a valid-looking body a client could
+    send, and letting it through would depend entirely on
+    ``client_tools._error_envelope``'s blank-field defaulting to make the
+    failure visible to the loop (#179 review, F3). Reject early instead of
+    trusting a second layer to compensate.
+    """
+    status = body.get("status")
+    if status not in ("ok", "error"):
+        return None
+    if not isinstance(body.get("call_token"), str) or not body["call_token"]:
+        return None
+    payload: dict[str, object] = {"status": status}
+    if status == "ok":
+        payload["result"] = body.get("result")
+    else:
+        error = body.get("error")
+        if not isinstance(error, dict):
+            return None
+        code = str(error.get("code", "") or "").strip()
+        message = str(error.get("message", "") or "").strip()
+        if not code and not message:
+            return None
+        payload["error"] = error
+    return payload
+
+
+@ns.route("/sessions/<string:session_id>/device_tools/<string:call_id>/result")
+class SessionDeviceToolResult(Resource):
+    """Deliver a client-fulfilled result for a pending device-tool call."""
+
+    @api.doc(
+        security="apikey",
+        params={
+            "session_id": "Session id returned by POST /api/sessions.",
+            "call_id": "The `call_id` from the `device_tool_call` event being answered.",
+        },
+        description=(
+            "Deliver the client-side result for a pending `device_tool_call` "
+            "event (see `context.device_tools` on POST /query). The caller "
+            "presents the single-use `call_token` carried on that event, "
+            "proving session-stream read access and preventing replay — NOT "
+            "proof the response came from the specific device the call was "
+            "dispatched to (any concurrent viewer of the session's SSE "
+            "stream receives the same token; verified per-device identity "
+            "is a future phase). A result may be delivered exactly once; a "
+            "second POST for the same call returns 409."
+        ),
+    )
+    @ns.response(
+        200, "Result delivered; the waiting tool call resolves.", device_tool_resolved_model
+    )
+    @kit.errors(
+        400,
+        403,
+        404,
+        409,
+        shape="message",
+        descriptions={
+            400: "The request body is malformed.",
+            403: "`call_token` does not match the pending call.",
+            404: "No pending call with that `call_id` (unknown, expired, or already delivered).",
+            409: "A result was already delivered for this call.",
+        },
+    )
+    @kit.auth_error()
+    @ns.expect(device_tool_result_model)
+    def post(self, session_id: str, call_id: str) -> tuple[dict, int]:
+        """Deliver a device-tool result
+
+        Delivers the client-side result for a pending `device_tool_call`
+        event; the caller presents the call's single-use `call_token`,
+        proving session-stream read access and anti-replay (not device
+        identity — see the route description). A result may be delivered
+        exactly once.
+        """
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+        body = request.get_json(silent=True) or {}
+        payload = _parse_device_tool_result_body(body)
+        if payload is None:
+            return {"message": "Invalid device tool result body."}, 400
+        call_token = str(body.get("call_token", ""))
+        outcome = get_pending_calls().resolve(session_id, call_id, call_token, payload)
+        if outcome == "ok":
+            return {"resolved": True}, 200
+        if outcome == "not_found":
+            return {"message": "No pending device tool call with that id."}, 404
+        if outcome == "bad_token":
+            return {"message": "call_token does not match the pending call."}, 403
+        return {"message": "A result was already delivered for this call."}, 409
 
 
 def _try_wiki_indexing_resume(session_id: str, action: str) -> dict | None:
@@ -3600,16 +3960,12 @@ class SessionRecovery(Resource):
 
         # Reuse the same dispatch shape as SessionQuery.post so recovered
         # runs inherit the session's context and settings.
-        events = runtime.session_store.load_transcript(session_id)
-        last_context: dict[str, object] = {}
-        for event in reversed(events):
-            if event.get("type") == "context":
-                payload = event.get("payload")
-                if isinstance(payload, dict):
-                    last_context = dict(payload)
-                break
+        last_context = _load_last_context(session_id)
         mode = _parse_mode(last_context.get("mode"))
-        allowed_tools = _extract_allowed_tools(last_context)
+        # Tolerant: recovery reads PERSISTED context it can't 400 on behalf
+        # of — a poisoned prior write self-heals (drops device tools, keeps
+        # going) instead of bricking the session (#179 review, F6).
+        allowed_tools, extra_session_tools = _derive_tool_grants_tolerant(session_id, last_context)
         try:
             project_cwd = _resolve_project_cwd({"context": last_context})
         except ValueError as exc:
@@ -3637,6 +3993,7 @@ class SessionRecovery(Resource):
             max_iters=max_iters,
             session_step_budget=budget,
             source_platform=_request_surface(),
+            extra_session_tools=extra_session_tools,
         )
         if not run_id:
             return {"message": "Session is already running."}, 409
@@ -4891,6 +5248,14 @@ class NotificationClear(Resource):
         return {"cleared": cleared}, 200
 
 
+# Display label for a capability-gated plugin's product-tool group in
+# GET /api/tools (Gitea #182). Keyed by `PluginManifest.name` (which today
+# equals the capability it declares for both shipped product plugins); a
+# future capability-gated plugin not in this map falls back to a titlecased
+# rendering of its manifest name rather than needing this list touched.
+_PRODUCT_TOOL_SERVER_LABELS = {"wiki": "Wiki", "scg": "Agentic Search"}
+
+
 @ns.route("/tools")
 class Tools(Resource):
     """List available tool integrations."""
@@ -4909,8 +5274,8 @@ class Tools(Resource):
         },
         description=(
             "List every known tool integration with its enablement state, the MCP "
-            "server it comes from, and a `scope` of `global`, `project`, or "
-            "`plugin`. Pass `project` to include tools configured inside that "
+            "server it comes from, and a `scope` of `builtin`, `project`, `system`, "
+            "or `plugin`. Pass `project` to include tools configured inside that "
             "project. Use the `tool_id` values in a session's `mcp_tools` "
             "allowlist to scope what a run may call."
         ),
@@ -4921,10 +5286,10 @@ class Tools(Resource):
         """List tools
 
         Returns every known tool integration with its enablement state, the
-        MCP server it comes from, and a `scope` of `global`, `project`, or
-        `plugin`. Pass `project` to include tools configured inside that
-        project. Use the `tool_id` values in a session's `mcp_tools` allowlist
-        to scope what a run may call.
+        MCP server it comes from, and a `scope` of `builtin`, `project`,
+        `system`, or `plugin`. Pass `project` to include tools configured
+        inside that project. Use the `tool_id` values in a session's
+        `mcp_tools` allowlist to scope what a run may call.
         """
         auth_error = _require_api_key()
         if auth_error:
@@ -4959,16 +5324,6 @@ class Tools(Resource):
 
         plugin_servers = set(fan_out.mcp_servers.keys())
 
-        def _tool_scope(spec: ToolSpec) -> str:
-            if spec.kind != "mcp":
-                return "global"
-            server = spec.metadata.get("server", "")
-            if server in plugin_servers:
-                return "plugin"
-            if server in global_servers:
-                return "global"
-            return "project"
-
         tools = [
             {
                 "tool_id": spec.tool_id,
@@ -4978,10 +5333,51 @@ class Tools(Resource):
                 "description": spec.description,
                 "disabled_reason": spec.metadata.get("disabled_reason"),
                 "server": spec.metadata.get("server"),
-                "scope": _tool_scope(spec),
+                "scope": classify_tool_scope(
+                    spec, global_servers=global_servers, plugin_servers=plugin_servers
+                ),
+                "requires_capability": None,
             }
             for spec in specs
         ]
+
+        # Product/internal tools (wiki_*, scg_*, agentic_search) live in a
+        # capability-gated SessionToolRegistry, not the MCP/core ToolRegistry
+        # above — they never appeared here before Gitea #182. `fan_out` (already
+        # fetched for its MCP servers) also carries every plugin's manifest +
+        # raw session_tool_entries, so no new discovery machinery is needed:
+        # a capability-gated plugin (non-empty `requires_capabilities`) becomes
+        # one `server`-grouped entry per tool. First-registration-wins across
+        # plugins, mirroring SessionToolRegistry.register's own dedupe — the
+        # wiki and scg manifests both contribute the shared entity-minting
+        # tools (mint_entity/relate_entities/resolve_entity), which must
+        # appear exactly once, not once per contributing plugin.
+        seen_product_ids: set[str] = set()
+        for pc in fan_out.components:
+            manifest = pc.manifest
+            if manifest is None or not manifest.requires_capabilities:
+                continue
+            server_label = _PRODUCT_TOOL_SERVER_LABELS.get(
+                manifest.name, manifest.name.replace("_", " ").title()
+            )
+            for entry in pc.session_tool_entries:
+                tool_id = str(entry.get("tool_id", "")).strip()
+                if not tool_id or tool_id in seen_product_ids:
+                    continue
+                seen_product_ids.add(tool_id)
+                tools.append(
+                    {
+                        "tool_id": tool_id,
+                        "name": tool_id,
+                        "kind": "builtin",
+                        "enabled": True,
+                        "description": None,
+                        "disabled_reason": None,
+                        "server": server_label,
+                        "scope": "plugin",
+                        "requires_capability": manifest.requires_capabilities[0],
+                    }
+                )
         return {"tools": tools}, 200
 
 
@@ -5110,10 +5506,19 @@ class MewboQuery(Resource):
         if session_id not in existing_sessions:
             notification_service.emit_session_created(session_id)
         context_payload = _build_context_payload(request_data)
+
+        # Validate BEFORE persisting: a malformed `device_tools` declaration
+        # must 400 without poisoning the session's context event, or
+        # `/message` re-engage and `/recover` (which read the LAST-PERSISTED
+        # context) would inherit the same malformed declaration and 400
+        # forever — a bricked session (Gitea #179 whole-branch review, F6).
+        try:
+            allowed_tools, extra_session_tools = _derive_tool_grants(session_id, context_payload)
+        except ValueError as exc:
+            return {"message": str(exc)}, 400
+
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
-
-        allowed_tools = _extract_allowed_tools(context_payload)
 
         # Resolve project → cwd, falling back to a per-session temp dir
         try:
@@ -5137,6 +5542,8 @@ class MewboQuery(Resource):
             allowed_tools=allowed_tools,
             cwd=project_cwd,
             source_platform=_request_surface(),
+            extra_session_tools=extra_session_tools,
+            attachments=_extract_attachments(request_data),
         )
         notification_service.emit_completion(session_id)
         task_result = deepcopy(task_queue.task_result)

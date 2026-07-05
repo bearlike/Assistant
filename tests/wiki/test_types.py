@@ -16,7 +16,7 @@ from mewbo_graph.wiki.types import (
     ErrorEvent,
     FinalizingEvent,
     GraphEdge,
-    GraphNode,
+    GraphNodeAdapter,
     H2Block,
     H3Block,
     HeartbeatEvent,
@@ -390,6 +390,9 @@ def test_page_plan_defaults():
 # ── 10. GraphNode / GraphEdge / Embedding ─────────────────────────────────────
 
 def test_graph_node_roundtrip():
+    # ``GraphNode`` is a discriminated union (schema v2) — validate through the
+    # ``GraphNodeAdapter`` so the ``type`` discriminator dispatches to the
+    # per-kind subclass; the instance still dumps/re-parses identically.
     data = {
         "slug": "x/y",
         "node_id": "n1",
@@ -399,9 +402,14 @@ def test_graph_node_roundtrip():
         "range": [10, 50],
         "docstring": "A class.",
     }
-    obj, dumped = roundtrip(GraphNode, data)
+    obj = GraphNodeAdapter.validate_python(data)
+    dumped = obj.model_dump(mode="json", by_alias=True)
+    assert GraphNodeAdapter.validate_python(dumped) == obj
+    assert type(obj).__name__ == "ClassNode"
     assert obj.node_id == "n1"
     assert obj.type == "Class"
+    # Schema-v2 additions default in on a legacy-shape payload.
+    assert obj.subkind is None and obj.attributes == {}
     assert dumped["range"] == [10, 50]
 
 

@@ -21,9 +21,9 @@ from mewbo_graph.wiki.credentials import CredentialStore
 from mewbo_graph.wiki.resume import ResumePlan
 from mewbo_graph.wiki.store import WikiStoreBase
 from mewbo_graph.wiki.tokens import CloneTokenCache
-from mewbo_graph.wiki.types import IndexingJob
+from mewbo_graph.wiki.types import IndexingJob, WizardSubmission
 
-from .jobs import _render_resume_query, _start_indexer_session
+from .jobs import _render_resume_query, _start_graph_only_index, _start_indexer_session
 
 logging = get_logger(name="api.wiki.resume")
 
@@ -41,6 +41,26 @@ class WikiResume:
     def is_resumable(job: IndexingJob) -> bool:
         """True when *job* is a checkpoint-resume candidate (non-terminal-success)."""
         return job.status not in _NON_RESUMABLE
+
+    @staticmethod
+    def _graph_only_submission(
+        store: WikiStoreBase, job: IndexingJob
+    ) -> WizardSubmission | None:
+        """Return the persisted submission iff *job* is graph-only, else ``None``.
+
+        ``graph_only`` is sticky on the submission sidecar (round-trips through
+        ``save_job_submission``), so a graph-only job is detected by reconstructing
+        its ``WizardSubmission``. A missing / invalid / non-graph-only sidecar
+        yields ``None`` → the normal agent resume path runs.
+        """
+        raw = store.get_job_submission(job.job_id)
+        if not raw:
+            return None
+        try:
+            sub = WizardSubmission.model_validate(raw)
+        except Exception:
+            return None
+        return sub if sub.graph_only else None
 
     @classmethod
     def resume(
@@ -82,6 +102,25 @@ class WikiResume:
         cred = CredentialStore.load(store, slug)
         if cred is not None and cred.kind == "token":
             CloneTokenCache.store(job_id, cred.value)
+
+        # CORE INVARIANT: a graph-only (developer-mode) job must NEVER re-enter the
+        # LLM/agent path on recovery OR manual resume. ``graph_only`` is sticky on
+        # the persisted submission; when set we re-drive the SAME job_id through the
+        # deterministic ``GraphOnlyIndexer`` instead of ``_start_indexer_session``.
+        # That path is idempotent (re-clone/scan/build/finalize + supersede-stale),
+        # so a from-scratch re-drive is correct — no checkpoint-resume machinery
+        # needed. Both ``JobRecovery`` (auto) and the manual resume endpoint funnel
+        # through here, so this ONE branch covers both.
+        gosub = cls._graph_only_submission(store, job)
+        if gosub is not None:
+            store.update_job(job_id, status="scanning", error=None)
+            store.append_job_event(job_id, {
+                "type": "log", "level": "info",
+                "text": "Resuming graph-only index (deterministic re-drive, no LLM)",
+            })
+            _start_graph_only_index(store=store, job_id=job_id, submission=gosub)
+            logging.info("wiki resume (graph-only) job=%s slug=%s", job_id, slug)
+            return {"job_id": job_id, "session_id": "", "status": "scanning"}
 
         # Compute the checkpoint decision ONCE (graph count + plan + pages) and
         # persist it so the per-tool-call ctx rebuild is a cheap dict read. A

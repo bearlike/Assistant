@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from mewbo_graph.wiki.refresh import DocStalenessPlanner, GraphDelta
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import Frontmatter, GraphNode, SourceRef, WikiPage
+from mewbo_graph.wiki.types import Frontmatter, SourceRef, WikiPage, make_graph_node
 
 SLUG = "org/repo"
 
@@ -30,7 +30,7 @@ def _page(page_id, sources):
 
 
 def _code(nid, name, f):
-    return GraphNode(slug=SLUG, node_id=nid, type="Function", name=name, file=f, range=(0, 9))
+    return make_graph_node(slug=SLUG, node_id=nid, type="Function", name=name, file=f, range=(0, 9))
 
 
 def _delta(*, added=(), modified=(), removed=(), affected=None):

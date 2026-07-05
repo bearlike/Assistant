@@ -14,9 +14,14 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context
 from mewbo_core.common import get_logger
 from mewbo_graph.wiki.store import WikiStoreBase
 from mewbo_graph.wiki.types import IndexingJob, WikiError, WizardSubmission
+from pydantic import BaseModel, ConfigDict, Field
 
 from .catalogues import LANGUAGES, PLATFORMS
-from .errors import register_error_handler, wiki_error_response
+from .errors import (
+    documentation_unavailable_response,
+    register_error_handler,
+    wiki_error_response,
+)
 from .events import WikiQaSseGenerator, WikiSseGenerator
 from .jobs import QaSessionEndHook, WikiIndexingJob, WikiIndexingSessionEndHook, WikiQaSession
 from .resume import WikiResume
@@ -213,14 +218,29 @@ def _hydrate_platform(job: IndexingJob) -> IndexingJob:
     return job.model_copy(update=patch)
 
 
+class BranchListRequest(BaseModel):
+    """``POST /v1/wiki/branches`` request body (transport-only — never persisted).
+
+    Lives api-side because it is wire transport, not a domain model that travels
+    with the store (see the wiki CLAUDE.md API/library boundary). ``token`` is the
+    same never-persisted secret the wizard submits for a private clone.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    repo_url: str = Field(alias="repoUrl")
+    slug: str | None = None
+    token: str | None = None
+
+
 def register(app, runtime, hook_manager=None) -> None:
     """Mount /v1/wiki/* routes on the given Flask app + attach runtime ref.
 
     When a ``hook_manager`` is supplied, two ``on_session_end`` hooks are
     registered (idempotent across repeated ``register`` calls):
 
-    - :class:`QaSessionEndHook`: reconciles QA answers whose run halts before
-      the terminal ``wiki_emit_block`` sources block (models_used stamp).
+    - :class:`QaSessionEndHook`: reconciles QA answers whose run ends without
+      the terminal ``wiki_emit_answer`` call (one-shot nudge + models_used stamp).
     - :class:`WikiIndexingSessionEndHook`: marks non-terminal indexing jobs
       ``interrupted`` when their session ends — defense-in-depth so infra
       failures (tool-internal network / IO errors) hand off to ``JobRecovery``
@@ -232,7 +252,7 @@ def register(app, runtime, hook_manager=None) -> None:
     if hook_manager is not None:
         existing = hook_manager.on_session_end
         if not any(isinstance(h, QaSessionEndHook) for h in existing):
-            existing.append(QaSessionEndHook(runtime))
+            existing.append(QaSessionEndHook(runtime, hook_manager=hook_manager))
         if not any(isinstance(h, WikiIndexingSessionEndHook) for h in existing):
             existing.append(WikiIndexingSessionEndHook(runtime))
     register_error_handler(app)
@@ -311,9 +331,15 @@ def _build_blueprint() -> Blueprint:
             node_limit = int(node_limit_raw) if node_limit_raw else None
         except (TypeError, ValueError):
             node_limit = None
+        # ``?hierarchy=1`` (truthy) synthesises a Folder scaffold + per-node
+        # parentId so the FE can cluster/collapse by directory. Default off →
+        # the wire is byte-identical to the legacy AST-only payload.
+        hierarchy = request.args.get("hierarchy", "").lower() in {"1", "true", "yes"}
         from mewbo_graph.wiki.graph import KnowledgeGraphView  # noqa: PLC0415
 
-        view = KnowledgeGraphView.for_slug(_store(), slug, node_limit=node_limit)
+        view = KnowledgeGraphView.for_slug(
+            _store(), slug, node_limit=node_limit, hierarchy=hierarchy
+        )
         return jsonify(view.to_wire())
 
     @bp.route("/projects/<path:slug>/source", methods=["GET"])
@@ -562,16 +588,21 @@ def _build_blueprint() -> Blueprint:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"answer {answer_id} not found")
             )
-        # Resolve the deterministic provenance trail's ``graph:<node_id>`` refs to
-        # readable labels for the retrieval-details panel (entity hashes →
-        # ``name (type)`` / ``file#Symbol``). NON-destructive: the stored snapshot
-        # keeps raw ids (the memory depositor anchors off them) — only the wire is
-        # humanised (#70).
+        # Resolve ``graph:<node_id>`` refs to readable labels (entity hashes →
+        # ``name (type)`` / ``file#Symbol``) for BOTH provenance panels: the
+        # retrieval-details trail (accessedSources) and the cited panel
+        # (summarySources — which now folds in the file/graph the answer grounded on,
+        # #172, so its graph refs need the same humanising). NON-destructive: the
+        # stored snapshot keeps raw ids (the memory depositor anchors off them) — only
+        # the wire is humanised (#70).
         from mewbo_graph.wiki.qa import AccessedSourceResolver  # noqa: PLC0415
 
         data = ans.model_dump(mode="json", by_alias=True)
         data["accessedSources"] = AccessedSourceResolver.resolve_refs(
             _store(), ans.slug, ans.accessed_sources
+        )
+        data["summarySources"] = AccessedSourceResolver.resolve_refs(
+            _store(), ans.slug, ans.summary_sources
         )
         return jsonify(data)
 
@@ -598,6 +629,16 @@ def _build_blueprint() -> Blueprint:
             return wiki_error_response(
                 WikiError(code="validation", message=str(exc), fields=fields or None)
             )
+        # Graph-only (zero-LLM) onboarding is a developer-mode feature: honour
+        # ``graphOnly`` ONLY when ``runtime.developer_mode`` is on; otherwise
+        # force it False so an unprivileged caller can never opt into the
+        # no-docs path (the wire field is accepted but ignored).
+        from mewbo_core.config import get_config_value  # noqa: PLC0415
+
+        if submission.graph_only and not get_config_value(
+            "runtime", "developer_mode", default=False
+        ):
+            submission = submission.model_copy(update={"graph_only": False})
         try:
             job = WikiIndexingJob.start(
                 submission, runtime=_runtime, hook_manager=None
@@ -611,6 +652,52 @@ def _build_blueprint() -> Blueprint:
         )
         resp.status_code = 202
         return resp
+
+    @bp.route("/branches", methods=["POST"])
+    def post_branches():
+        """List a remote repo's branches so the wizard can pick a ref to onboard.
+
+        Resolves the credential the same way ``wiki_clone_repo`` does but WITHOUT a
+        job (no warm ``CloneTokenCache``): the body ``token`` wins; else the durable
+        per-slug ``CredentialStore`` (token → URL injection, ssh_key → key file).
+        Returns ``{branches, defaultBranch}``; a ``ls-remote`` failure maps to the
+        standard ``repo_access`` envelope.
+        """
+        auth = _require_auth()
+        if auth:
+            return auth
+        try:
+            req = BranchListRequest.model_validate(request.get_json(silent=True) or {})
+        except Exception as exc:
+            fields = _pydantic_fields(exc)
+            return wiki_error_response(
+                WikiError(code="validation", message=str(exc), fields=fields or None)
+            )
+
+        from mewbo_graph.plugins.wiki.branches import (  # noqa: PLC0415
+            BranchListError,
+            RemoteBranchLister,
+        )
+        from mewbo_graph.wiki.credentials import CredentialStore  # noqa: PLC0415
+
+        token = req.token
+        ssh_key: str | None = None
+        if not token and req.slug:
+            cred = CredentialStore.load(_store(), req.slug)
+            if cred is not None and cred.kind == "token":
+                token = cred.value
+            elif cred is not None and cred.kind == "ssh_key":
+                ssh_key = cred.value
+        try:
+            remote = RemoteBranchLister(
+                url=req.repo_url, token=token, ssh_key=ssh_key
+            ).list_heads()
+        except BranchListError as exc:
+            return wiki_error_response(WikiError(code="repo_access", message=str(exc)))
+        return jsonify({
+            "branches": remote.branches,
+            "defaultBranch": remote.default_branch,
+        })
 
     @bp.route("/index/<string:job_id>", methods=["DELETE"])
     def delete_index(job_id: str):
@@ -728,6 +815,14 @@ def _build_blueprint() -> Blueprint:
                 message="question and project are required",
                 fields=missing,
             ))
+        # A graph-only (developer-mode) project has NO documentation — reject Q&A
+        # at the route (mirrors the ``get_page`` check). Without this, the QA probe's
+        # ``wiki_read_page`` raises ``DocumentationUnavailableError`` INSIDE a
+        # SessionTool, where the Flask errorhandler never fires and the orchestrator
+        # flails instead of returning a clean 409.
+        project = _store().get_project(slug)
+        if project is not None and getattr(project, "graph_only", False):
+            return documentation_unavailable_response(slug)
         try:
             answer = WikiQaSession.start(
                 slug=slug,

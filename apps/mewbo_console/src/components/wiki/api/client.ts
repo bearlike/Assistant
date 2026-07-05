@@ -139,14 +139,17 @@ export async function deleteProject(slug: string): Promise<{ deleted: boolean }>
  * Fetch the persisted code knowledge graph for a project. ``limit`` caps
  * the node set (edges whose endpoints aren't in the surviving set are
  * dropped server-side) — the FE always passes one to bound canvas cost
- * for very large graphs.
+ * for very large graphs. ``hierarchy`` requests the directory-scaffold
+ * payload (synthetic ``Folder`` supernodes + ``parentId``/``folderPath``
+ * on every node) that powers the 3D galaxy's collapse model.
  */
 export async function getKnowledgeGraph(
   slug: string,
-  options: { limit?: number } = {},
+  options: { limit?: number; hierarchy?: boolean } = {},
 ): Promise<KnowledgeGraph> {
   const params = new URLSearchParams();
   if (options.limit != null) params.set("limit", String(options.limit));
+  if (options.hierarchy) params.set("hierarchy", "1");
   const qs = params.toString();
   const path = `/v1/wiki/projects/${encodeURIComponent(slug)}/graph${qs ? `?${qs}` : ""}`;
   return http<KnowledgeGraph>("GET", path);
@@ -379,6 +382,27 @@ export async function uploadCatalogDocuments(
 
 export async function submitWizard(input: WizardSubmission): Promise<IndexingJob> {
   return createIndexingJob({ ...input });
+}
+
+/** Request shape for ``POST /v1/wiki/branches``. */
+export interface ListBranchesInput {
+  repoUrl: string;
+  slug?: string;
+  token?: string;
+}
+
+/** Response shape from ``POST /v1/wiki/branches``. */
+export interface ListBranchesResult {
+  branches: string[];
+  defaultBranch: string | null;
+}
+
+/**
+ * List the remote's branches so the wizard can offer a branch picker.
+ * ``POST /v1/wiki/branches``. Failures surface as the standard WikiError.
+ */
+export async function listBranches(input: ListBranchesInput): Promise<ListBranchesResult> {
+  return http<ListBranchesResult>("POST", "/v1/wiki/branches", input);
 }
 
 // ── Refresh ────────────────────────────────────────────────────────────────

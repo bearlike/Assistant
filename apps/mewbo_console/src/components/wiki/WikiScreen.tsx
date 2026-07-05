@@ -9,17 +9,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Loader2, Sparkles, X } from "lucide-react";
+import { Loader2, Network, Sparkles, X } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { DiagramZoom } from "./DiagramZoom";
 import { IndexedSnapshotCaption } from "./IndexedSnapshotCaption";
 import { MarkdownBlock } from "./MarkdownBlock";
+import { SourceHrefProvider } from "./markdownComponents";
 import { QADock } from "./QADock";
 import { RefreshThisWiki } from "./RefreshThisWiki";
 import { WikiTopBar } from "./WikiTopBar";
 import { IndexedSnapshot } from "./indexedSnapshot";
+import type { Citation } from "./citations";
 import { useWikiPage, useWikiProjectBySlug } from "./api/hooks";
 import { buildHref, type PlatformId } from "./router";
 import { useStoredModel } from "./useStoredModel";
@@ -49,6 +52,9 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
     () => (projectQuery.data ? IndexedSnapshot.fromProject(projectQuery.data) : null),
     [projectQuery.data]
   );
+  // Graph-only (developer-mode) projects carry no documentation pages — show a
+  // dedicated empty state whose primary action opens the graph viewer.
+  const graphOnly = projectQuery.data?.graphOnly === true;
 
   // Scroll-spy: pick the heading whose top is just above the offset.
   // rAF-coalesced so multi-event scroll bursts don't queue duplicate work;
@@ -94,6 +100,14 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
     [navigate, slug]
   );
 
+  // Resolve a cited source to its repo blob URL so citation chips open the
+  // file (at the cited lines) in a new tab. Null → chip keeps its scroll-to
+  // fallback. Keyed on the snapshot so the memo is stable across scroll ticks.
+  const resolveSourceHref = useCallback(
+    (c: Citation) => snapshot?.sourceUrl(c.path, c.startLine, c.endLine) ?? null,
+    [snapshot]
+  );
+
   const onJump = (id: string) => {
     const el = document.getElementById(id);
     const scroller = document.getElementById("wiki-scroller");
@@ -125,7 +139,11 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
         showBackToAll
       />
       <div id="wiki-scroller" className="flex-1 overflow-y-auto pb-32">
-        {pageQuery.isLoading || !page ? (
+        {graphOnly ? (
+          <GraphOnlyEmptyState
+            href={buildHref({ kind: "graph", slug: repoSlug, platform })}
+          />
+        ) : pageQuery.isLoading || !page ? (
           <div className="flex items-center justify-center py-20 text-sm text-[hsl(var(--muted-foreground))]">
             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             Loading page…
@@ -165,12 +183,14 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
               >
                 {page.title}
               </h1>
-              <MarkdownBlock
-                body={page.body}
-                frontmatter={page.frontmatter}
-                onNavigatePage={goPage}
-                onZoomDiagram={setZoomDiagId}
-              />
+              <SourceHrefProvider resolve={resolveSourceHref}>
+                <MarkdownBlock
+                  body={page.body}
+                  frontmatter={page.frontmatter}
+                  onNavigatePage={goPage}
+                  onZoomDiagram={setZoomDiagId}
+                />
+              </SourceHrefProvider>
             </main>
 
             {/* Right rail — maintainer-edited badge lives in WikiTopBar
@@ -228,14 +248,53 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
         )}
       </div>
 
-      <QADock
-        placeholder={`Ask MewboWiki about ${repoSlug}`}
-        model={model}
-        onModelChange={setModel}
-        onAsk={onAsk}
-      />
+      {!graphOnly && (
+        <QADock
+          placeholder={`Ask MewboWiki about ${repoSlug}`}
+          model={model}
+          onModelChange={setModel}
+          onAsk={onAsk}
+        />
+      )}
 
       <DiagramZoom diagramId={zoomDiagId} onClose={() => setZoomDiagId(null)} />
+    </div>
+  );
+}
+
+/**
+ * Empty state shown for a project indexed in graph-only (developer) mode:
+ * no documentation pages exist, so the primary action is to open the graph
+ * viewer. Atomic, single-purpose; composes the shared `Button` (`asChild`
+ * link) over the existing `/wiki/graph` route — no bespoke nav.
+ */
+function GraphOnlyEmptyState({ href }: { href: string }) {
+  return (
+    <div className="flex items-center justify-center px-4 py-20">
+      <div className="max-w-[520px] w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-[0_6px_22px_rgba(0,0,0,0.12)] p-8 text-center">
+        <span
+          aria-hidden
+          className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
+        >
+          <Network className="h-6 w-6" />
+        </span>
+        <h2 className="mt-4 text-lg font-semibold tracking-[-0.01em]">
+          No documentation available
+        </h2>
+        <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))] [text-wrap:pretty]">
+          This project was indexed in graph-only (developer) mode, so no
+          documentation pages were generated. The AST code graph is ready to
+          explore.
+        </p>
+        <div className="mt-5 flex items-center justify-center">
+          <Button variant="primary" size="md" asChild>
+            <a href={href} className="inline-flex items-center gap-1.5">
+              <Network className="h-4 w-4" />
+              Explore the graph
+            </a>
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

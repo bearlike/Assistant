@@ -1,4 +1,4 @@
-"""Built-in agent type definitions (like Claude Code's PLAN_AGENT)."""
+"""Built-in agent type definitions (e.g. the planning agent)."""
 
 PLAN_AGENT_CONFIG = {
     "agent_type": "plan",

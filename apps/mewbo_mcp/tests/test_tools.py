@@ -319,6 +319,72 @@ def test_history_turns(fake_rest):
     assert out["turns"][0]["assistant_text"] == "a1"
     assert out["turns"][0]["step_count"] == 1
     assert out["turns"][1]["done_reason"] == "stop"
+    # No turn here carries attachments — the key is omitted, not an empty list.
+    assert "attachments" not in out["turns"][0]
+    assert "attachments" not in out["turns"][1]
+
+
+def _history_events_with_attachment():
+    events = _history_events()["events"]
+    events = [dict(e) for e in events]
+    events[0] = {
+        "type": "user",
+        "ts": "t0",
+        "payload": {
+            "text": "q1",
+            "attachments": [
+                {
+                    "id": "a1",
+                    "filename": "spec.pdf",
+                    "content_type": "application/pdf",
+                    "size_bytes": 2048,
+                    "stored_name": "a1_spec.pdf",
+                    "uploaded_at": "2026-07-03T00:00:00+00:00",
+                    "parsed": True,
+                }
+            ],
+        },
+    }
+    return {"running": False, "events": events}
+
+
+def test_history_turns_includes_lean_attachments_when_present(fake_rest):
+    fake = fake_rest.on("GET", "/api/sessions/s1/events", _history_events_with_attachment())
+    out = run(tools.SessionTools(fake.client()).history(session_id="s1", level="turns"))
+    assert out["turns"][0]["attachments"] == [
+        {"filename": "spec.pdf", "content_type": "application/pdf", "size_bytes": 2048}
+    ]
+    # Storage-internal fields never leak into the projection.
+    assert "stored_name" not in out["turns"][0]["attachments"][0]
+    assert "id" not in out["turns"][0]["attachments"][0]
+    # The turn with no attachments stays clean.
+    assert "attachments" not in out["turns"][1]
+
+
+def test_history_full_includes_lean_attachments_when_present(fake_rest):
+    fake = (
+        fake_rest
+        .on("GET", "/api/sessions/s1/events", _history_events_with_attachment())
+        .on("GET", "/api/sessions/s1/agents", {"agents": [], "running": False})
+    )
+    out = run(
+        tools.SessionTools(fake.client()).history(session_id="s1", level="full", turn=1)
+    )
+    assert out["attachments"] == [
+        {"filename": "spec.pdf", "content_type": "application/pdf", "size_bytes": 2048}
+    ]
+
+
+def test_history_full_omits_attachments_key_when_absent(fake_rest):
+    fake = (
+        fake_rest
+        .on("GET", "/api/sessions/s1/events", _history_events())
+        .on("GET", "/api/sessions/s1/agents", {"agents": [], "running": False})
+    )
+    out = run(
+        tools.SessionTools(fake.client()).history(session_id="s1", level="full", turn=1)
+    )
+    assert "attachments" not in out
 
 
 def test_history_steps_requires_turn_and_omits_full_result(fake_rest):
@@ -1249,8 +1315,8 @@ def test_list_projects_surfaces_identity_and_drops_noise(fake_rest):
                 "name": "Assistant",
                 "source": "config",
                 "path": "/secret/host/path",
-                "repo": {"host": "git.hurricane.home", "owner": "bearlike", "name": "Assistant"},
-                "aliases": ["git.hurricane.home/bearlike/Assistant", "bearlike/Assistant"],
+                "repo": {"host": "git.example.com", "owner": "bearlike", "name": "Assistant"},
+                "aliases": ["git.example.com/bearlike/Assistant", "bearlike/Assistant"],
             }
         ]
     }

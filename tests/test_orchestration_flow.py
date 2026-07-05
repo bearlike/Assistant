@@ -592,6 +592,133 @@ class TestSessionCapabilities:
         # stays metadata-only) — the tag list carries origin/product/etc.
         assert isinstance(captured.get("tags"), list)
 
+    # -----------------------------------------------------------------
+    # allowed_tools-derived capability (Gitea #182)
+    # -----------------------------------------------------------------
+
+    def _register_gated_tool(self, orch, *, tool_id: str, capability: str) -> None:
+        from mewbo_core.session_tools import SessionToolFactory
+
+        orch._session_tool_registry.register(
+            SessionToolFactory(
+                tool_id=tool_id,
+                build=lambda sid, el: None,  # never actually built in these tests
+                requires_capabilities=(capability,),
+            )
+        )
+
+    def test_allowed_tools_derives_capability_for_a_gated_product_tool(self, tmp_path):
+        """Naming a product tool in ``allowed_tools`` grants its capability.
+
+        This is the #182 fix: previously only the client-advertised header (or
+        a runtime provider) could grant a capability, so surface (a) — the
+        AgentDef/skill catalog — stayed blind to a tool selected purely via
+        ``context.mcp_tools``. Now the SAME allowlist that already reaches
+        ``SessionToolRegistry.build_for`` also derives the capability.
+        """
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+        self._register_gated_tool(orch, tool_id="wiki_search_pages", capability="wiki")
+
+        caps = orch._session_capabilities(session_id, allowed_tools=["wiki_search_pages"])
+        assert "wiki" in caps
+
+    def test_derived_capability_is_request_scoped_not_sticky(self, tmp_path):
+        """Omitting the tool on a later call withholds the derived capability.
+
+        Unlike the client-advertised header (sticky, additive-only, no revoke
+        — see the module docstring on ``_session_capabilities``), a derived
+        grant is recomputed fresh from THIS call's ``allowed_tools`` and is
+        never written to a context event.
+        """
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+        self._register_gated_tool(orch, tool_id="wiki_search_pages", capability="wiki")
+
+        with_tool = orch._session_capabilities(session_id, allowed_tools=["wiki_search_pages"])
+        assert "wiki" in with_tool
+
+        without_tool = orch._session_capabilities(session_id)
+        assert "wiki" not in without_tool
+
+    def test_derived_capability_unions_with_advertised_sticky_header(self, tmp_path):
+        """A header-advertised capability and a derived one coexist (union)."""
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        store.append_event(
+            session_id,
+            {"type": "context", "payload": {"client_capabilities": ["search"]}},
+        )
+        self._register_gated_tool(orch, tool_id="wiki_search_pages", capability="wiki")
+
+        caps = orch._session_capabilities(session_id, allowed_tools=["wiki_search_pages"])
+        assert "search" in caps
+        assert "wiki" in caps
+
+    def test_ungated_or_unknown_allowed_tools_derive_nothing(self, tmp_path):
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+        assert orch._session_capabilities(session_id, allowed_tools=["shell"]) == ()
+        assert orch._session_capabilities(session_id, allowed_tools=["nonexistent"]) == ()
+
+    def test_derivation_still_applies_when_transcript_load_fails(self, tmp_path):
+        """A nonexistent session (transcript load error) still derives from tools.
+
+        The advertised-header half of the read necessarily comes back empty
+        (there is no transcript to read), but the derivation itself has no
+        dependency on transcript state.
+        """
+        orch, _store = _make_orchestrator(tmp_path)
+        self._register_gated_tool(orch, tool_id="wiki_search_pages", capability="wiki")
+        caps = orch._session_capabilities(
+            "nonexistent-session", allowed_tools=["wiki_search_pages"]
+        )
+        assert "wiki" in caps
+
+    def test_derived_capability_reaches_both_gating_surfaces_symmetrically(self, tmp_path):
+        """End-to-end: the SAME derived caps unlock surface (a) AND surface (b).
+
+        Regression target for the #84 asymmetry this issue closes: a tool bound
+        via ``build_for``'s allowlist gate is useless if the agent meant to use
+        it is invisible to ``filter_by_capabilities`` (the AgentDef/skill
+        catalog gate). Both gates must see the identical capability tuple.
+        """
+        from dataclasses import dataclass
+
+        from mewbo_core.capabilities import filter_by_capabilities
+
+        @dataclass(frozen=True)
+        class _FakeAgentDef:
+            name: str
+            requires_capabilities: tuple[str, ...] = ()
+
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+        self._register_gated_tool(orch, tool_id="wiki_search_pages", capability="wiki")
+
+        caps = orch._session_capabilities(session_id, allowed_tools=["wiki_search_pages"])
+
+        # Surface (b): the tool itself builds (allowlist gate — unaffected by
+        # this fix, already worked; asserted here for the full end-to-end picture).
+        built = orch._session_tool_registry.build_for(
+            ["wiki_search_pages"], session_id=session_id, event_logger=None
+        )
+        assert len(built) == 1
+
+        # Surface (a): the wiki-qa AgentDef, gated purely on capability, is now
+        # visible too — this is what was BROKEN before #182 when a tool was
+        # selected only via allowed_tools with no advertised header.
+        agent_defs = [
+            _FakeAgentDef("wiki-qa", requires_capabilities=("wiki",)),
+            _FakeAgentDef("scg-search", requires_capabilities=("scg",)),
+        ]
+        visible = filter_by_capabilities(agent_defs, caps)
+        assert [a.name for a in visible] == ["wiki-qa"]
+
 
 class _StopRun(Exception):
     """Sentinel to short-circuit ``Orchestrator.run`` after provenance derive."""
@@ -959,6 +1086,82 @@ class TestCompletionEvents:
         assert isinstance(result, tuple)
         tq, state = result
         assert state.done is True
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator: attachments threaded onto the persisted ``user`` event
+# ---------------------------------------------------------------------------
+
+
+class TestUserEventAttachments:
+    """``run(attachments=...)`` additively duplicates the descriptor dicts
+
+    onto the persisted ``user`` event (the sibling ``context`` event keeps
+    carrying them for LLM vision input, unchanged) so a client can render
+    attachment cards above the turn — live and on session revisit — without
+    joining across events.
+    """
+
+    def test_attachments_persisted_on_user_event(self, tmp_path):
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        descriptors = [
+            {
+                "id": "a1",
+                "filename": "spec.pdf",
+                "content_type": "application/pdf",
+                "size_bytes": 2048,
+                "stored_name": "a1_spec.pdf",
+                "uploaded_at": "2026-07-03T00:00:00+00:00",
+                "parsed": True,
+            }
+        ]
+
+        with patch.object(ToolUseLoop, "run", _simple_loop_run):
+            orch.run(
+                user_query="summarize the attached spec",
+                session_id=session_id,
+                max_iters=1,
+                attachments=descriptors,
+            )
+
+        events = store.load_transcript(session_id)
+        user_events = [e for e in events if e.get("type") == "user"]
+        assert len(user_events) == 1
+        assert user_events[0]["payload"]["text"] == "summarize the attached spec"
+        # Exact same descriptor dicts — no reshaping of the AttachmentDescriptor.
+        assert user_events[0]["payload"]["attachments"] == descriptors
+
+    def test_no_attachments_yields_clean_payload(self, tmp_path):
+        """Omitting attachments must NOT add an empty/None key to the payload."""
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+
+        with patch.object(ToolUseLoop, "run", _simple_loop_run):
+            orch.run(user_query="no attachments here", session_id=session_id, max_iters=1)
+
+        events = store.load_transcript(session_id)
+        user_events = [e for e in events if e.get("type") == "user"]
+        assert len(user_events) == 1
+        assert user_events[0]["payload"] == {"text": "no attachments here"}
+        assert "attachments" not in user_events[0]["payload"]
+
+    def test_empty_attachments_list_also_yields_clean_payload(self, tmp_path):
+        """An empty list is falsy — same clean-payload contract as None."""
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+
+        with patch.object(ToolUseLoop, "run", _simple_loop_run):
+            orch.run(
+                user_query="no attachments here either",
+                session_id=session_id,
+                max_iters=1,
+                attachments=[],
+            )
+
+        events = store.load_transcript(session_id)
+        user_events = [e for e in events if e.get("type") == "user"]
+        assert "attachments" not in user_events[0]["payload"]
 
 
 # ---------------------------------------------------------------------------

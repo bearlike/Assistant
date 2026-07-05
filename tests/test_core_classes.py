@@ -60,6 +60,43 @@ def test_action_step_validation_logs_for_invalid_entries():
     assert queue.action_steps[0].operation == "bad"
 
 
+class _RecordingLogger:
+    """Stub for ``classes.logging`` that records ``.error()`` calls."""
+
+    def __init__(self) -> None:
+        self.errors: list[str] = []
+
+    def error(self, msg: str) -> None:
+        self.errors.append(msg)
+
+
+def test_internal_tool_ids_do_not_log_validation_errors(monkeypatch):
+    """Loop-injected internal tools (update_todos et al.) must not spam ERROR.
+
+    Every executed tool call — including session tools ``ToolUseLoop`` binds
+    directly (update_todos, exit_plan_mode, spawn_agent, ...) — is converted
+    to an ``ActionStep`` and lands in the final ``TaskQueue``. None of those
+    ids are registered via ``set_available_tools``, so without
+    ``INTERNAL_TOOL_IDS`` every historical step would log a false-positive.
+    """
+    set_available_tools(["home_assistant_tool"])
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(classes, "logging", recorder)
+    step = ActionStep(tool_id="update_todos", operation="set", tool_input={"items": []})
+    TaskQueue(action_steps=[step])
+    assert recorder.errors == []
+
+
+def test_unknown_tool_id_still_logs_validation_error(monkeypatch):
+    """A genuinely unknown tool_id must still trigger the error log."""
+    set_available_tools(["home_assistant_tool"])
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(classes, "logging", recorder)
+    step = ActionStep(tool_id="totally_bogus_tool", operation="set", tool_input={})
+    TaskQueue(action_steps=[step])
+    assert any("not a valid Assistant tool" in msg for msg in recorder.errors)
+
+
 def test_save_json(tmp_path, monkeypatch):
     """Write JSON payloads using the tool helper."""
     from mewbo_core.classes import AbstractTool

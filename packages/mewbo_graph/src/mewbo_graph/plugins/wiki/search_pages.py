@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
 from mewbo_graph.plugins.wiki._ctx import resolve_runtime
+from mewbo_graph.wiki.qa_access import QaAccessRecord
 
 if TYPE_CHECKING:
     from mewbo_core.classes import ActionStep
@@ -105,7 +106,13 @@ class WikiSearchPagesTool(WikiSessionTool):
                     "sources": source_ids,
                 })
 
-        self._record_qa_access(ctx, [f"wiki:{h.id}" for h in hits])
+        # Grounding: record only page hits clearing the score floor (a ratio of
+        # the top hit's score), carrying the retriever's real score + rank.
+        # ``hits`` is already score-sorted (the ONE ranking engine) — no re-rank.
+        page_hits = [(f"wiki:{h.id}", h.score) for h in hits]
+        self._record_qa_access(
+            ctx, QaAccessRecord.from_ranked_hits(page_hits, tool=self.tool_id)
+        )
         return MockSpeaker(content=str({"hits": results}))
 
 

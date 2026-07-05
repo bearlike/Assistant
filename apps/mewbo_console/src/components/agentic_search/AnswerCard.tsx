@@ -43,7 +43,7 @@ function SynthesisMarkdown({ source, cursor }: { source: string; cursor?: boolea
 }
 
 /**
- * Google-overview-style fold for the synthesis body: content reads open, but
+ * Read-open overflow fold for the synthesis body: content reads open, but
  * once it overflows the clip height it tucks behind a soft mask-fade with a
  * "Show more" / "Show less" control. The toggle only appears when the body
  * actually overflows (measured) — short answers render whole, no dead control.
@@ -175,7 +175,7 @@ export function AnswerCard({
         <SynthesisMarkdown source={answer.tldr} cursor />
       ) : (
         <>
-          {/* The final answer reads open (Google-overview style): the body
+          {/* The final answer reads open (read-open overflow-fold style): the body
               shows in full, and only folds behind a soft "Show more" mask-fade
               when it actually overflows the clip height. */}
           <FoldableAnswer>

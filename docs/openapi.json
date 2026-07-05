@@ -511,6 +511,59 @@
       },
       "type": "object"
     },
+    "DeviceToolError": {
+      "properties": {
+        "code": {
+          "example": "permission_denied",
+          "type": "string"
+        },
+        "message": {
+          "example": "User denied the SMS permission.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "DeviceToolResolved": {
+      "properties": {
+        "resolved": {
+          "example": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DeviceToolResultRequest": {
+      "properties": {
+        "call_token": {
+          "description": "Single-use token carried on the `device_tool_call` event this answers.",
+          "example": "Q1sT9x...redacted",
+          "type": "string"
+        },
+        "error": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/DeviceToolError"
+            }
+          ],
+          "description": "Structured error. Present when `status` is `error`."
+        },
+        "result": {
+          "description": "The tool's return value. Present when `status` is `ok`.",
+          "type": "object"
+        },
+        "status": {
+          "description": "`ok` or `error`.",
+          "example": "ok",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_token",
+        "status"
+      ],
+      "type": "object"
+    },
     "DraftMessageError400": {
       "properties": {
         "message": {
@@ -1983,6 +2036,40 @@
       },
       "type": "object"
     },
+    "SessionEventsIngestRequest": {
+      "properties": {
+        "record": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionEvent"
+            }
+          ],
+          "description": "A single event record to append (use this OR `records`)."
+        },
+        "records": {
+          "description": "A batch of event records to append (use this OR `record`).",
+          "items": {
+            "$ref": "#/definitions/SessionEvent"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SessionEventsIngestResponse": {
+      "properties": {
+        "appended": {
+          "description": "Number of events appended.",
+          "example": 3,
+          "type": "integer"
+        },
+        "session_id": {
+          "example": "9e2d47c1a0b34f12",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "SessionEventsResponse": {
       "properties": {
         "done_reason": {
@@ -2860,13 +2947,17 @@
           "example": "Shell",
           "type": "string"
         },
+        "requires_capability": {
+          "description": "Set only on capability-gated internal/product tools (wiki_*, scg_*, agentic_search): the session capability that must be granted for the tool to actually bind. Selecting the tool via a session's `mcp_tools` allowlist grants this capability for that request (Gitea #182).",
+          "type": "string"
+        },
         "scope": {
-          "description": "`global`, `project`, or `plugin`.",
-          "example": "global",
+          "description": "`builtin`, `project`, `system`, or `plugin`.",
+          "example": "builtin",
           "type": "string"
         },
         "server": {
-          "description": "Originating MCP server (MCP tools only).",
+          "description": "Originating MCP server (MCP tools only), OR the product-tool group name (`Wiki`, `Agentic Search`) for a capability-gated internal tool.",
           "type": "string"
         },
         "tool_id": {
@@ -5278,6 +5369,83 @@
         ]
       }
     },
+    "/api/sessions/{session_id}/device_tools/{call_id}/result": {
+      "post": {
+        "description": "Deliver the client-side result for a pending `device_tool_call` event (see `context.device_tools` on POST /query). The caller presents the single-use `call_token` carried on that event, proving session-stream read access and preventing replay \u2014 NOT proof the response came from the specific device the call was dispatched to (any concurrent viewer of the session's SSE stream receives the same token; verified per-device identity is a future phase). A result may be delivered exactly once; a second POST for the same call returns 409.\nDelivers the client-side result for a pending `device_tool_call`\nevent; the caller presents the call's single-use `call_token`,\nproving session-stream read access and anti-replay (not device\nidentity \u2014 see the route description). A result may be delivered\nexactly once.",
+        "operationId": "post_session_device_tool_result",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "The `call_id` from the `device_tool_call` event being answered.",
+            "in": "path",
+            "name": "call_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/DeviceToolResultRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result delivered; the waiting tool call resolves.",
+            "schema": {
+              "$ref": "#/definitions/DeviceToolResolved"
+            }
+          },
+          "400": {
+            "description": "The request body is malformed.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          },
+          "403": {
+            "description": "`call_token` does not match the pending call.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError403"
+            }
+          },
+          "404": {
+            "description": "No pending call with that `call_id` (unknown, expired, or already delivered).",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError404"
+            }
+          },
+          "409": {
+            "description": "A result was already delivered for this call.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError409"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Deliver a device-tool result",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
     "/api/sessions/{session_id}/events": {
       "get": {
         "description": "Return the session's event timeline plus authoritative run state \u2014 `running`, `status`, `done_reason`, `title`, and `recoverable`. Pass `after` (the `ts` of your last event) to fetch only newer events while polling; the status fields are always computed from the full transcript. Prefer the stream endpoint for push delivery.\nReturns the session's event timeline plus authoritative run state:\n`running`, `status`, `done_reason`, `title`, and `recoverable`. Pass\n`after` to fetch only new events while polling; the status fields are\nalways computed from the full transcript. Prefer the stream endpoint\nwhen you want push delivery.",
@@ -5329,6 +5497,50 @@
           }
         ],
         "summary": "Poll session events",
+        "tags": [
+          "Sessions"
+        ]
+      },
+      "post": {
+        "description": "Append one or more transcript event records to a session \u2014 the ingest seam for a local-first CLI mirroring its authoritative local JSONL transcript to this deployment for cross-device visibility. Body is `{record}` (single) or `{records: [...]}` (batch); each record is an event `{type, payload, ts?}`. The session is materialised idempotently, so the first mirrored event creates it.\nAppend one or more event records to a session's transcript. The session\nis created idempotently on first use so an external local-first client\n(the CLI) can mirror its transcript here. Local JSONL stays authoritative\non the client; this endpoint only stores what it is handed.",
+        "operationId": "post_session_events",
+        "parameters": [
+          {
+            "description": "Session id to mirror events into.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SessionEventsIngestRequest"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Events appended.",
+            "schema": {
+              "$ref": "#/definitions/SessionEventsIngestResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Ingest mirrored session events",
         "tags": [
           "Sessions"
         ]
@@ -6151,7 +6363,7 @@
     },
     "/api/tools": {
       "get": {
-        "description": "List every known tool integration with its enablement state, the MCP server it comes from, and a `scope` of `global`, `project`, or `plugin`. Pass `project` to include tools configured inside that project. Use the `tool_id` values in a session's `mcp_tools` allowlist to scope what a run may call.\nReturns every known tool integration with its enablement state, the\nMCP server it comes from, and a `scope` of `global`, `project`, or\n`plugin`. Pass `project` to include tools configured inside that\nproject. Use the `tool_id` values in a session's `mcp_tools` allowlist\nto scope what a run may call.",
+        "description": "List every known tool integration with its enablement state, the MCP server it comes from, and a `scope` of `builtin`, `project`, `system`, or `plugin`. Pass `project` to include tools configured inside that project. Use the `tool_id` values in a session's `mcp_tools` allowlist to scope what a run may call.\nReturns every known tool integration with its enablement state, the\nMCP server it comes from, and a `scope` of `builtin`, `project`,\n`system`, or `plugin`. Pass `project` to include tools configured\ninside that project. Use the `tool_id` values in a session's\n`mcp_tools` allowlist to scope what a run may call.",
         "operationId": "get_tools",
         "parameters": [
           {

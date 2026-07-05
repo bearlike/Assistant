@@ -23,6 +23,31 @@ from mewbo_core.types import ActionStepPayload, ToolInput
 logging = get_logger(name="core.classes")
 AVAILABLE_TOOLS: list[str] = ["home_assistant_tool"]
 
+# Tool ids ``ToolUseLoop`` injects directly into ``bind_tools`` (session
+# tools + inline agent-management/skill schemas) rather than sourcing from
+# ``ToolRegistry`` — so they never reach ``set_available_tools``. Every
+# executed tool call is converted to an ``ActionStep`` for ``TaskQueue``
+# compatibility (``tool_use_loop.py:_tool_call_to_action_step``), so these
+# ids must count as valid here or every historical step logs a
+# false-positive "not a valid Assistant tool" error. Defined here (classes.py
+# is the base of the module, imported by all of them) rather than imported,
+# to avoid a circular import. Kept in lockstep with where each is defined:
+# ``exit_plan_mode.py``, ``update_todos.py``, ``spawn_agent.py``,
+# ``skills.py``, ``structured_response.py``. ``tool_search`` is excluded —
+# it IS registered through ``ToolRegistry`` (see ``tool_registry.py``).
+INTERNAL_TOOL_IDS: frozenset[str] = frozenset(
+    {
+        "exit_plan_mode",
+        "update_todos",
+        "spawn_agent",
+        "spawn_agents",
+        "check_agents",
+        "steer_agent",
+        "activate_skill",
+        "emit_result",
+    }
+)
+
 
 @dataclass
 class ToolResult:
@@ -128,7 +153,7 @@ class TaskQueue(BaseModel):
             action.operation = action.operation.lower()
             error_msg_list = []
 
-            if action.tool_id not in AVAILABLE_TOOLS:
+            if action.tool_id not in AVAILABLE_TOOLS and action.tool_id not in INTERNAL_TOOL_IDS:
                 error_msg_list.append(f"`{action.tool_id}` is not a valid Assistant tool.")
 
             if action.operation not in ["get", "set", "execute"]:

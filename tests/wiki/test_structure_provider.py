@@ -8,13 +8,13 @@ from mewbo_graph.wiki.structure_provider import (
     StructureProvider,
     entity_key_for_node,
 )
-from mewbo_graph.wiki.types import GraphNode
+from mewbo_graph.wiki.types import GraphNode, make_graph_node
 
 SLUG = "org/repo"
 
 
 def _gn(nid: str, typ: str, name: str, f: str = "auth.py") -> GraphNode:
-    return GraphNode(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
+    return make_graph_node(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
 
 
 @pytest.fixture

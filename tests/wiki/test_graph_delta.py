@@ -6,7 +6,7 @@ from mewbo_graph.wiki.graph import GraphParseResult, _stable_id
 from mewbo_graph.wiki.memory_types import FileManifest
 from mewbo_graph.wiki.refresh import ChangeSet, GraphDeltaIndexer
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import GraphEdge, GraphNode
+from mewbo_graph.wiki.types import GraphEdge, make_graph_node
 
 from .conftest import FakeParser
 
@@ -19,7 +19,7 @@ def store(tmp_path):
 
 
 def _node(nid, typ, name, f):
-    return GraphNode(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
+    return make_graph_node(slug=SLUG, node_id=nid, type=typ, name=name, file=f, range=(0, 9))
 
 
 def _seed_two_file_graph(store):
@@ -140,3 +140,54 @@ def test_added_file_indexes_new_entities(store, tmp_path) -> None:
     delta = indexer.apply(SLUG, root, change, commit="c2")
     assert "c.py#fresh" in delta.added_keys
     assert store.get_file_manifest(SLUG, "c.py").content_hash == "hC"
+
+
+def test_malformed_parse_result_is_rejected_before_upsert(store, tmp_path) -> None:
+    """A bad parse result (duplicate node_id) must be rejected, not persisted.
+
+    Regression: ``apply`` used to go straight from ``parse_file`` to
+    ``upsert_nodes``/``upsert_edges`` with NO ``CodeGraph`` validation — only
+    the first full index (``build_graph_core``) was gated; a steady-state
+    refresh bypassed schema-v2 enforcement entirely.
+    """
+    _seed_two_file_graph(store)
+    root = tmp_path / "clone"
+    dup_id = "dupNode"
+    reparse = GraphParseResult(
+        nodes=[
+            _node("fileA2", "File", "a.py", "a.py"),
+            _node(dup_id, "Function", "one", "a.py"),
+            _node(dup_id, "Function", "two", "a.py"),  # SAME id — invalid
+        ],
+        edges=[GraphEdge(slug=SLUG, source="fileA2", target=dup_id, type="CONTAINS")],
+        skipped=[],
+    )
+    indexer = GraphDeltaIndexer(store, parser=FakeParser({"a.py": reparse}))
+    change = ChangeSet(
+        added=[], modified=["a.py"], deleted=[], current_hashes={"a.py": "hA2"}
+    )
+    with pytest.raises(ValueError, match="graph schema validation failed"):
+        indexer.apply(SLUG, root, change, commit="c2")
+
+    # Nothing from the bad reparse landed — the pre-existing a.py graph is
+    # already retracted by step 2 (stale-node cleanup precedes validation),
+    # so the store correctly ends up WITHOUT a.py rather than with corrupt data.
+    ids = {n.node_id for n in store.query_graph(SLUG)}
+    assert dup_id not in ids
+
+
+def test_dangling_nonsynthetic_edge_is_rejected_before_upsert(store, tmp_path) -> None:
+    """A CONTAINS edge whose target doesn't resolve (no target_name) is rejected."""
+    _seed_two_file_graph(store)
+    root = tmp_path / "clone"
+    reparse = GraphParseResult(
+        nodes=[_node("fileA2", "File", "a.py", "a.py")],
+        edges=[GraphEdge(slug=SLUG, source="fileA2", target="ghost", type="CONTAINS")],
+        skipped=[],
+    )
+    indexer = GraphDeltaIndexer(store, parser=FakeParser({"a.py": reparse}))
+    change = ChangeSet(
+        added=[], modified=["a.py"], deleted=[], current_hashes={"a.py": "hA2"}
+    )
+    with pytest.raises(ValueError, match="graph schema validation failed"):
+        indexer.apply(SLUG, root, change, commit="c2")

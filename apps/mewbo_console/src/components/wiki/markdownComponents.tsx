@@ -15,11 +15,14 @@
  * so `LiveBlocks` leaves it off and the mermaid module never loads there.
  *
  * Citation chips: a `[label](src:path#L1-9)` link (or a `path:line` /
- * `path#L..` bare-text fallback) renders as an accent CHIP. Clicking it
- * scrolls to + briefly highlights the matching `SourceCard` via the shared
- * `CitationRef.domId` id — no prop threading; the card finds itself by id.
+ * `path#L..` bare-text fallback) renders as an accent CHIP. Clicking it opens
+ * the cited file in the source repository (a host-aware blob URL at the cited
+ * lines) in a new tab, resolved via the injected {@link SourceHrefProvider}.
+ * When no repo URL resolves it falls back to scrolling to + flashing the
+ * matching `SourceCard` via the shared `CitationRef.domId` id.
  */
 
+import { createContext, useContext, type ReactNode } from "react";
 import { Github } from "lucide-react";
 import type { Components } from "react-markdown";
 
@@ -27,6 +30,32 @@ import { cn } from "@/lib/utils";
 
 import { MermaidBlock } from "./MermaidBlock";
 import { CitationRef, type Citation } from "./citations";
+
+/**
+ * Resolves a cited source to an external "open the file in its repo" URL
+ * (host-aware blob link at the cited line range) — see
+ * ``indexedSnapshot.ts:IndexedSnapshot.sourceUrl``. Returns ``null`` when the
+ * project has no resolvable repo (legacy record, azure/generic-git host), in
+ * which case the chip falls back to its scroll-to-card behaviour.
+ *
+ * Injected via context so the three SrcChip call sites (the markdown ``a``
+ * renderer, the streaming inline-atom path, and the wiki-page sources block)
+ * all pick it up without threading a callback through every block component.
+ */
+export type SourceHrefResolver = (citation: Citation) => string | null;
+
+const SourceHrefContext = createContext<SourceHrefResolver | null>(null);
+
+/** Wrap any wiki markdown subtree to make its citation chips link to the repo. */
+export function SourceHrefProvider({
+  resolve,
+  children,
+}: {
+  resolve: SourceHrefResolver | null;
+  children: ReactNode;
+}) {
+  return <SourceHrefContext.Provider value={resolve}>{children}</SourceHrefContext.Provider>;
+}
 
 /**
  * Deterministic id from a string. Used so the same mermaid block produces
@@ -49,19 +78,43 @@ export interface MarkdownComponentOptions {
   enableMermaid?: boolean;
 }
 
+const SRC_CHIP_CLASS =
+  "inline-flex items-center gap-1 px-1.5 py-px rounded font-mono text-[11px] align-baseline cursor-pointer border-0 no-underline bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/20 transition-colors";
+
 /**
- * Inline citation chip — accent-tinted, monospace, `path:line`. Clicking it
- * scrolls to the matching {@link SourceCard} and flashes it. The card is
- * located by the shared `CitationRef.domId`, so this works whenever a card
- * for the citation exists (Q&A) and is a harmless no-op when none does
- * (wiki pages, which render the same chip statically).
+ * Inline citation chip — accent-tinted, monospace, `path:line`.
+ *
+ * When the enclosing {@link SourceHrefProvider} can resolve the citation to a
+ * repo blob URL, the chip is a real anchor that opens that file (at the cited
+ * line range) in a NEW TAB — the primary "take me to the source" affordance,
+ * and the only useful one on wiki pages (which have no right-panel cards).
+ *
+ * Without a resolvable repo it falls back to scrolling to + flashing the
+ * matching {@link SourceCard}, located by the shared `CitationRef.domId` — a
+ * harmless no-op when no card exists.
  */
 export function SrcChip({ citation }: { citation: Citation }) {
-  const domId = CitationRef.domId(citation);
+  const resolveHref = useContext(SourceHrefContext);
+  const href = resolveHref?.(citation) ?? null;
   const label = CitationRef.label(citation);
 
+  if (href) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={citation.raw}
+        className={SRC_CHIP_CLASS}
+      >
+        <Github className="h-2.5 w-2.5" />
+        <span className="truncate max-w-[260px]">{label}</span>
+      </a>
+    );
+  }
+
   const onClick = () => {
-    const el = document.getElementById(domId);
+    const el = document.getElementById(CitationRef.domId(citation));
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     el.classList.add("src-card-flash");
@@ -69,12 +122,7 @@ export function SrcChip({ citation }: { citation: Citation }) {
   };
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={citation.raw}
-      className="inline-flex items-center gap-1 px-1.5 py-px rounded font-mono text-[11px] align-baseline cursor-pointer border-0 bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/20 transition-colors"
-    >
+    <button type="button" onClick={onClick} title={citation.raw} className={SRC_CHIP_CLASS}>
       <Github className="h-2.5 w-2.5" />
       <span className="truncate max-w-[260px]">{label}</span>
     </button>

@@ -10,7 +10,7 @@
  *   /wiki/p/:pageId                → WikiScreen
  *   /wiki/qa?q=...&page=...&model=...
  *                                  → QAScreen
- *   /wiki/graph?slug=...           → KnowledgeGraphScreen
+ *   /wiki/graph?slug=...           → KnowledgeGraph3DScreen
  */
 
 import { useLocation } from "wouter";
@@ -31,6 +31,12 @@ export type WikiRoute =
       pageId: string;
       slug?: string;
       model?: string;
+      /**
+       * Persisted answer id. When present the QA screen renders the saved
+       * answer (``GET /v1/wiki/qa/<id>``) instead of POSTing a fresh run, so a
+       * refresh / shared link is idempotent and never re-invokes the LLM.
+       */
+      answer?: string;
       platform?: PlatformId;
     }
   | { kind: "graph"; slug?: string; platform?: PlatformId };
@@ -89,6 +95,7 @@ export function parseWikiRoute(path: string, queryString: string): WikiRoute {
       pageId: params.get("page") || "core",
       slug: params.get("slug") || undefined,
       model: params.get("model") || undefined,
+      answer: params.get("answer") || undefined,
       platform: parsePlatform(params.get("platform")),
     };
   }
@@ -144,6 +151,7 @@ export function buildHref(route: WikiRoute): string {
       params.set("page", route.pageId);
       if (route.slug) params.set("slug", route.slug);
       if (route.model) params.set("model", route.model);
+      if (route.answer) params.set("answer", route.answer);
       appendPlatform(params, route.platform);
       return `/wiki/qa?${params.toString()}`;
     }

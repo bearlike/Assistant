@@ -68,6 +68,9 @@ X-Api-Key: <your-token>
 
 Returns the full usage breakdown as JSON. All token fields are integers; zero for sessions or events that predate cache tracking.
 
+> [!IMPORTANT] Per-session token counts currently read zero here
+> The per-session token rollup in this endpoint is not live yet. Every token count it returns is currently `0` for every session, regardless of real usage. The response shape below is stable and documents the field contract, so the values in the example are illustrative, not what a live call returns today. Until the rollup is wired up, the tracing backend (Langfuse) is the live source for per-session token counts.
+
 ```json
 {
   "root_model": "anthropic/claude-sonnet-4-6",

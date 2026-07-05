@@ -6,7 +6,7 @@
  */
 
 export interface ParsedSlug {
-  /** DNS host (``github.com``, ``git.hurricane.home``) — absent on legacy
+  /** DNS host (``github.com``, ``git.example.com``) — absent on legacy
    *  two-segment slugs from before the canonical refactor. */
   host?: string;
   owner: string;
@@ -41,8 +41,8 @@ export function parseSlug(slug: string): ParsedSlug | null {
  * Build the canonical fully-qualified slug from a repo URL. We use the
  * URL's host + path (never a guess from the platform name).
  *
- * - Input: ``https://git.hurricane.home/bearlike/Grove``
- * - Output: ``git.hurricane.home/bearlike/Grove``
+ * - Input: ``https://git.example.com/bearlike/Grove``
+ * - Output: ``git.example.com/bearlike/Grove``
  *
  * Returns ``null`` when the URL doesn't carry both an owner and repo.
  */

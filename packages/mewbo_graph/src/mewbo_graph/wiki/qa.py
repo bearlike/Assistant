@@ -1,14 +1,15 @@
 """QA answer finalization — reconcile the snapshot from the event log and close it.
 
-The wiki-qa hypervisor renders its answer purely through ``wiki_emit_block`` events.
-The terminal ``sources`` block is the answer's *accept state* (the
-``EmitStructuredResponseTool`` pattern): emitting it drives :meth:`QaFinalizer.close`,
-which rebuilds the ``QaAnswer`` snapshot from the append-only log and appends the
-terminal ``complete`` event in one clean step — so a reloaded/shared answer is never
-empty and the SSE stream ends cleanly instead of by idle-timeout.
+The wiki-qa hypervisor renders its answer purely through per-block QA events, fanned
+out server-side from ONE atomic ``wiki_emit_answer`` call. That call is the answer's
+*accept state* (the ``EmitStructuredResponseTool`` pattern): it drives
+:meth:`QaFinalizer.close`, which rebuilds the ``QaAnswer`` snapshot from the
+append-only log and appends the terminal ``complete`` event in one clean step — so a
+reloaded/shared answer is never empty and the SSE stream ends cleanly instead of by
+idle-timeout.
 
 This lives in the library (next to ``QaAnswer`` + the store it mutates), down-only, so
-BOTH the terminal ``wiki_emit_block`` (happy path, same layer) and the API's
+BOTH the terminal ``wiki_emit_answer`` (happy path, same layer) and the API's
 ``on_session_end`` net (imports down) can call it. The deterministic provenance —
 every graph node / file / page a probe touched — is captured as ``access`` events by
 the probe tools and folded here, so ``accessed_sources`` needs no transport-layer help.
@@ -17,9 +18,11 @@ the probe tools and folded here, so ``accessed_sources`` needs no transport-laye
 """
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from mewbo_core.common import get_logger
+from mewbo_core.skills import _slugify_skill_name as _slugify
 
 from mewbo_graph.wiki.memory_types import MAX_INSIGHT_CHARS
 from mewbo_graph.wiki.types import QaAnswer
@@ -31,13 +34,20 @@ if TYPE_CHECKING:
 
 logging = get_logger(name="mewbo_graph.wiki.qa")
 
+# A ref already carries a citation scheme when it opens with one of the KNOWN
+# schemes (``wiki:`` / ``graph:`` / ``src:`` / ``entity:``). Anchoring to that
+# closed set — rather than any ``word:`` — means a multi-word page title that
+# merely contains a colon ("REST API: Reference", or a lowercased "Note: X") is
+# NOT mistaken for a scheme and still gets matched as a title.
+_SCHEME_RE = re.compile(r"^(?:wiki|graph|src|entity):")
+
 
 class QaFinalizer:
     """Reconcile a QA answer snapshot from its event log and close it.
 
     Stateless façade over an injected store (the wiki store owns the QA state).
     :meth:`close` is idempotent — a second call after a terminal event is a no-op —
-    so it is safe under the happy path (terminal ``wiki_emit_block``) racing the
+    so it is safe under the happy path (terminal ``wiki_emit_answer``) racing the
     ``on_session_end`` net, and under SSE reconnects.
     """
 
@@ -57,12 +67,22 @@ class QaFinalizer:
             return False  # already terminal — idempotent
 
         blocks = cls._blocks_from_events(events)
+        if not blocks and not error:
+            # A run that ended without ever emitting is a FAILURE, not an empty
+            # success — the user would otherwise see a blank answer stamped
+            # "complete" (observed: a model narrating its emit call as text).
+            error = (
+                "the model produced no answer blocks — "
+                "wiki_emit_answer was never called"
+            )
         snap = store.get_qa(answer_id)
         if snap is not None:
             data = snap.model_dump(by_alias=True)
+            authority = cls._page_authority(store, snap.slug)
+            accessed = cls._accessed_from_events(events)
             data["blocks"] = blocks
-            data["summarySources"] = cls._summary_sources(events, blocks)
-            data["accessedSources"] = cls._accessed_from_events(events)
+            data["summarySources"] = cls._summary_sources(events, blocks, authority, accessed)
+            data["accessedSources"] = accessed
             # The terminal status on the snapshot, so a non-streaming consumer
             # (the MCP ``ask_wiki`` poll) sees an authoritative done-signal.
             data["status"] = "error" if error else "complete"
@@ -89,7 +109,7 @@ class QaFinalizer:
         """Stamp transcript-derived metadata (``models_used``) onto the snapshot.
 
         Independent of the terminal state: the API ``on_session_end`` net fires
-        AFTER the terminal ``wiki_emit_block`` already closed the happy path, so
+        AFTER the terminal ``wiki_emit_answer`` already closed the happy path, so
         models must be writable post-close. No-op when nothing is supplied.
         """
         if not models:
@@ -114,25 +134,77 @@ class QaFinalizer:
 
     @staticmethod
     def _summary_sources(
-        events: list[dict[str, Any]], blocks: list[dict[str, Any]]
+        events: list[dict[str, Any]],
+        blocks: list[dict[str, Any]],
+        authority: dict[str, str],
+        accessed: list[str],
     ) -> list[str]:
-        """Prefer an explicit ``summary_ready``; else derive from the final sources block."""
+        """The cited sources: the LLM's curated PAGES + the file/graph it grounded on.
+
+        Two halves, order-preservingly deduped:
+
+        * **Curated pages** — the LLM's page picks (:meth:`_curated_page_sources`),
+          re-schemed slug/title → ``wiki:<id>``.
+        * **File + graph evidence (#172)** — the non-page refs off the deterministic
+          accessed trail (``qa_access`` — already bounded + score-ranked). The curated
+          block is ~100% page-slugs even though source files are the most-read
+          evidence, so the real files/symbols the answer rests on never reached the
+          cited panel; folding the trail's file/graph refs in fixes that skew with no
+          second ranker. ``wiki:`` refs are skipped (the curated half owns pages), and
+          graph ids stay RAW here — ``AccessedSourceResolver`` humanises them at READ
+          time exactly as it does the accessed trail.
+        """
+        curated = QaFinalizer._curated_page_sources(events, blocks, authority)
+        file_graph = [ref for ref in accessed if not ref.startswith("wiki:")]
+        return QaFinalizer._dedup([*curated, *file_graph])
+
+    @staticmethod
+    def _curated_page_sources(
+        events: list[dict[str, Any]],
+        blocks: list[dict[str, Any]],
+        authority: dict[str, str],
+    ) -> list[str]:
+        """The LLM's curated PAGE sources, with bare page refs (slug OR title) re-schemed.
+
+        Prefers an explicit ``summary_ready`` event (the first ``wiki_search_pages``
+        hit set, recorded as BARE page ids); else derives from the final ``sources``
+        block. Each candidate runs through the SAME title→slug normalization the emit
+        seam uses (:meth:`_tag_page_ref`), so a page cited by id OR title resolves to
+        ``wiki:<id>`` — even on a path the emit-time tagging never touched (the bare-id
+        ``summary_ready`` list, an un-tagged reconstructed block). The block-derivation
+        branch keeps only ``wiki:`` items; file/graph evidence is folded in separately
+        by :meth:`_summary_sources`. ``summary_ready`` is a page-only list already.
+        """
         for ev in events:
             if ev.get("type") == "summary_ready" and ev.get("sources"):
-                return [str(s) for s in ev["sources"]]
+                return [QaFinalizer._tag_page_ref(str(s), authority) for s in ev["sources"]]
         for blk in reversed(blocks):
             if blk.get("kind") == "sources":
-                return [str(i) for i in blk.get("items", []) if str(i).startswith("wiki:")]
+                tagged = (QaFinalizer._tag_page_ref(str(i), authority)
+                          for i in blk.get("items", []))
+                return [t for t in tagged if t.startswith("wiki:")]
         return []
 
     @classmethod
     def _accessed_from_events(cls, events: list[dict[str, Any]]) -> list[str]:
-        """De-duplicate every ref the probes recorded via ``access`` events."""
-        refs: list[str] = []
+        """Fold ``access`` events into the bounded, score-ranked retrieval trail.
+
+        Each retrieval tool records a compact ``access`` event of typed
+        ``QaAccessRecord``s — scored search hits (with ``score``/``rank``) plus
+        unscored navigation seeds and grounding reads. The fold dedupes by ref
+        (best score wins), orders scored hits by descending score with the
+        unscored entries after, and caps to the configured top-N — so the trail
+        stays a tight, high-signal list instead of the full unranked
+        graph-navigation set. Backward-tolerant: a legacy event carrying bare
+        ``refs`` strings folds as unscored entries.
+        """
+        from mewbo_graph.wiki.qa_access import QaAccessRecord  # noqa: PLC0415
+
+        records: list[QaAccessRecord] = []
         for ev in events:
             if ev.get("type") == "access":
-                refs.extend(str(r) for r in ev.get("refs", []))
-        return cls._dedup(refs)
+                records.extend(QaAccessRecord.from_event(ev))
+        return QaAccessRecord.fold(records)
 
     @staticmethod
     def _dedup(items: list[str]) -> list[str]:
@@ -162,28 +234,55 @@ class QaFinalizer:
         reloaded snapshot at once (the FE already drops ``wiki:`` from the file
         cards). File refs (``path`` / ``path#L…``) and already-schemed refs
         (``graph:`` / ``wiki:``) pass through untouched. Deterministic: membership
-        in the project's real page-id set is the authority, never a guess.
+        in the project's real page authority (slug id OR slugified title) is the
+        rule, never a guess.
         """
         items = block.get("items")
         if not isinstance(items, list):
             return block
-        page_ids = {p.id for p in store.list_pages(slug)}
-        if not page_ids:
+        authority = QaFinalizer._page_authority(store, slug)
+        if not authority:
             return block
         block = dict(block)
-        block["items"] = [QaFinalizer._tag_page_ref(str(it), page_ids) for it in items]
+        block["items"] = [QaFinalizer._tag_page_ref(str(it), authority) for it in items]
         return block
 
     @staticmethod
-    def _tag_page_ref(ref: str, page_ids: set[str]) -> str:
-        """``<bare-page-id>`` / ``pages/<id>`` → ``wiki:<id>`` when it IS a page."""
+    def _page_authority(store: WikiStoreBase, slug: str) -> dict[str, str]:
+        """Map each page's slug-id AND slugified title → its canonical page id.
+
+        The QA model cites a page by either its slug id ("agent-x-search-subsystem")
+        OR its human title ("Agent X Search Subsystem"); both must re-scheme to the
+        same ``wiki:<page-id>``. Keys are normalized through the shared slugify
+        (lowercase, runs of punctuation/space → single dash) so a title and its id
+        collapse to one lookup; ids are inserted first so a real id is never
+        shadowed by another page's title-slug collision. The lookup VALUE is the
+        untouched ``page.id`` (what we emit), independent of the slugified key.
+        """
+        pages = store.list_pages(slug)
+        authority: dict[str, str] = {}
+        for p in pages:  # ids first — a real id is authoritative
+            key = _slugify(p.id)
+            if key:
+                authority[key] = p.id
+        for p in pages:  # then titles, never overriding an id
+            key = _slugify(p.title)
+            if key:
+                authority.setdefault(key, p.id)
+        return authority
+
+    @staticmethod
+    def _tag_page_ref(ref: str, authority: dict[str, str]) -> str:
+        """Re-scheme a bare page ref (slug id OR title) → ``wiki:<id>`` when it IS a page."""
         ref = ref.strip()
-        # A ``#`` ⇒ a file line-range ref; a ``:`` ⇒ already schemed (graph:/wiki:)
-        # or a ``path:line`` colon form — leave every one of those alone.
-        if not ref or "#" in ref or ":" in ref:
+        # A ``#`` ⇒ a file line-range/anchor ref; a leading ``scheme:`` ⇒ already
+        # schemed (graph:/wiki:/src:/entity:) — leave both alone. The scheme test is
+        # anchored + whitespace-free, so a plain multi-word title still gets matched.
+        if not ref or "#" in ref or _SCHEME_RE.match(ref):
             return ref
         candidate = ref[len("pages/"):] if ref.startswith("pages/") else ref
-        return f"wiki:{candidate}" if candidate in page_ids else ref
+        page_id = authority.get(_slugify(candidate))
+        return f"wiki:{page_id}" if page_id else ref
 
 
 class QaMemoryDepositor:

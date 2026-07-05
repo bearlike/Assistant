@@ -20,6 +20,12 @@ This port intentionally omits the console's diff/widget/plan rendering — the
 MCP tiers (overview / turns / steps / full) only need turn boundaries, the
 turn's events, the closing assistant text, the done_reason, and token
 totals. Everything else stays in the TS layer where it is rendered.
+
+``Turn.attachments`` is a deliberate MCP-side-only addition (not yet a field
+on the console's ``TimelineEntry``): it reads the opening ``user`` event's
+``attachments`` (AttachmentDescriptor dicts) so an external agent can see what
+was attached to a turn. Defensively empty (``[]``) for any event that lacks
+the field — including every event recorded before this was added.
 """
 
 from __future__ import annotations
@@ -72,6 +78,10 @@ class Turn:
     done_reason: str | None = None
     model: str | None = None
     closed: bool = False
+    # The opening ``user`` event's ``attachments`` (AttachmentDescriptor dicts),
+    # or ``[]`` when the turn carried none — defensively coerced so an older
+    # event without the field never breaks the projection.
+    attachments: list[EventRecord] = field(default_factory=list)
 
     @property
     def steps(self) -> list[EventRecord]:
@@ -96,6 +106,18 @@ def _num(payload: dict[str, Any], key: str) -> int:
     if isinstance(value, (int, float)):
         return int(value)
     return 0
+
+
+def _dict_list(value: Any) -> list[EventRecord]:
+    """Coerce a ``user`` event's ``attachments`` field to a list of dicts.
+
+    Defensive, matching every other payload read in this module: a missing or
+    malformed field (not a list, or a list with non-dict entries) yields an
+    empty list rather than raising.
+    """
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def compute_turn_token_usage(turn_events: list[EventRecord]) -> TurnTokenUsage | None:
@@ -200,6 +222,7 @@ def build_timeline(events: list[EventRecord]) -> list[Turn]:
                 user_ts=event.get("ts"),
                 events=[event],
                 model=last_model,
+                attachments=_dict_list(payload.get("attachments")),
             )
             turns.append(current)
             continue

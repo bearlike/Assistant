@@ -3,13 +3,13 @@
 
 Colocated reference for the `/wiki/*` namespace of the console. Read this
 before touching anything under `src/components/wiki/`. The Gitea handoff
-issue is at https://git.hurricane.home/bearlike/Assistant/issues/5 — it
+issue is `bearlike/Assistant#5` on the project's private Gitea instance — it
 documents the API contract verbatim and is the source of truth for the
 *backend* side of the swap. This file documents the *frontend* side.
 
 ## What it is
 
-A DeepWiki-style auto-generated docs surface for code repositories,
+An auto-generated docs surface for code repositories,
 implemented entirely against a mock API today. Six screens cover the full
 "index a repo → browse the wiki → ask questions about it" loop, all
 behind `/wiki/*`. Production wiring is a one-file swap in `api/client.ts`.
@@ -124,7 +124,7 @@ work. Heartbeat frames are silently skipped inside the parser.
 `AbortSignal` cancels the underlying `fetch` on unmount.
 
 Backend contract and design:
-`docs/specs/2026-05-14-deepwiki-style-gen-design.md`
+`docs/specs/2026-05-14-wiki-style-gen-design.md`
 
 ## Markdown rendering pipeline
 

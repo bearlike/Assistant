@@ -4,7 +4,7 @@
 // MUST stay behaviorally in sync; a parity test
 // (apps/mewbo_mcp/tests/test_timeline.py) checks shared fixtures. When you
 // change turn-boundary or token-usage logic here, update the Python port too.
-import { DiffFile, EventRecord, TimelineEntry, TurnMeta, TurnTokenUsage, WidgetReadyPayload } from "../types";
+import { AttachmentPayload, DiffFile, EventRecord, SessionContext, TimelineEntry, TodoItem, TodoItemStatus, TodoMeta, TurnMeta, TurnTokenUsage, WidgetReadyPayload } from "../types";
 import { extractUnifiedDiffs, mergeDiffFiles } from "./diff";
 import { parseStructuredResult } from "./logs";
 
@@ -80,6 +80,39 @@ export function turnHasWidget(timeline: TimelineEntry[], turnId: string): boolea
   return timeline.some((entry) => entry.turnId === turnId && entry.role === "widget");
 }
 
+/**
+ * Parse a `todos` event payload (#173 schema) into {@link TodoMeta}, dropping
+ * label-less rows. Returns null when no usable items remain so callers never
+ * render an empty (fabricated) card. The CLI's `done` state is normalized to
+ * the console's `completed` so either producer renders identically.
+ */
+function parseTodos(payload: Record<string, unknown> | undefined): TodoMeta | null {
+  const rawItems = payload?.items;
+  const raw = Array.isArray(rawItems) ? rawItems : [];
+  const items: TodoItem[] = [];
+  for (const entry of raw) {
+    const o = (entry ?? {}) as Record<string, unknown>;
+    const label = typeof o.label === "string" ? o.label.trim() : "";
+    if (!label) continue;
+    const rawStatus = typeof o.status === "string" ? o.status : "pending";
+    const status: TodoItemStatus =
+      rawStatus === "completed" || rawStatus === "done"
+        ? "completed"
+        : rawStatus === "in_progress"
+          ? "in_progress"
+          : "pending";
+    items.push({ label, status });
+  }
+  if (items.length === 0) return null;
+  const src = payload?.source;
+  const agentId = payload?.agent_id;
+  return {
+    items,
+    source: src === "agent" ? "agent" : src === "plan" ? "plan" : undefined,
+    agentId: typeof agentId === "string" ? agentId : undefined,
+  };
+}
+
 export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   let turnIndex = 0;
@@ -89,10 +122,19 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
   let diffFiles: DiffFile[] = [];
   let lastModel: string | undefined;
   let turnModel: string | undefined;
+  // Fallback source for older sessions where attachment descriptors were
+  // only ever written onto the `context` event (not the `user` event
+  // itself). Mirrors the lastModel/turnModel tracking above.
+  let lastAttachments: AttachmentPayload[] | undefined;
   for (const event of events) {
     if (event.type === "context") {
-      const payload = event.payload as { model?: string } | undefined;
+      const payload = event.payload as
+        | { model?: string; attachments?: AttachmentPayload[] }
+        | undefined;
       if (payload?.model) lastModel = payload.model;
+      if (Array.isArray(payload?.attachments) && payload.attachments.length > 0) {
+        lastAttachments = payload.attachments;
+      }
       continue;
     }
     if (event.type === "user") {
@@ -102,13 +144,27 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
       diffFiles = [];
       turnStart = event.ts;
       turnModel = lastModel;
+      // Primary source: the persisted `user` event now carries its own
+      // attachments. Fall back to the last-seen `context` event for
+      // sessions recorded before that change.
+      const userPayload = event.payload as
+        | { text?: string; attachments?: AttachmentPayload[] }
+        | undefined;
+      const attachments =
+        userPayload?.attachments && userPayload.attachments.length > 0
+          ? userPayload.attachments
+          : lastAttachments;
       entries.push({
         id: `user-${turnIndex}`,
         role: "user",
         content: String(event.payload?.text ?? ""),
         turnId: currentTurnId,
         ts: event.ts,
+        attachments: attachments && attachments.length > 0 ? attachments : undefined,
       });
+      // A `context` event's attachments belong to the ONE turn it precedes —
+      // clear so a later attachment-less turn never inherits a stale set.
+      lastAttachments = undefined;
       continue;
     }
     if (!currentTurnId) {
@@ -142,6 +198,31 @@ export function buildTimeline(events: EventRecord[]): TimelineEntry[] {
           timestamp: event.ts
         }
       });
+      continue;
+    }
+    if (event.type === "todos") {
+      // Authoritative live todo/plan checklist (Gitea #173/#174). Upsert ONE
+      // card per turn so successive snapshots update the checklist in place
+      // instead of stacking a card per emission. Empty lists are dropped —
+      // todos are never fabricated.
+      const todo = parseTodos(event.payload);
+      if (todo) {
+        const existing = entries.find(
+          (e) => e.role === "todos" && e.turnId === currentTurnId,
+        );
+        if (existing) {
+          existing.todos = todo;
+        } else {
+          entries.push({
+            id: `todos-${currentTurnId}`,
+            role: "todos",
+            content: "",
+            turnId: currentTurnId,
+            ts: event.ts,
+            todos: todo,
+          });
+        }
+      }
       continue;
     }
     if (event.type === "widget_ready") {
@@ -342,6 +423,35 @@ export function getActiveStreamText(events: EventRecord[]): string {
   }
   const parts = buffer ? [...finalized, buffer] : finalized;
   return parts.join("\n\n");
+}
+
+/**
+ * The session's effective context — the single most-recent `context`-type
+ * event's payload, verbatim. Mirrors the backend's `_load_last_context`
+ * (apps/mewbo_api/.../backend.py), which is what `/message` re-engage and
+ * `/recover` actually read to resume a session: a reverse scan that returns
+ * the FIRST (i.e. latest) context event's payload as-is — never merged
+ * across events. This matters because InputBar's per-turn context payload
+ * OMITS a falsy field (e.g. a cleared `project`) rather than sending it as
+ * `null` — folding payloads forward would make a cleared field "stick" from
+ * an earlier event (Gitea #185).
+ *
+ * `fallback` (typically the session summary's last-known context) is used
+ * only when no context event has been observed yet at all — the transient
+ * window before a session's events have loaded — and self-corrects the
+ * instant a real context event is seen.
+ */
+export function getLastContext(
+  events: EventRecord[],
+  fallback?: SessionContext,
+): SessionContext | undefined {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event.type === "context") {
+      return event.payload as SessionContext;
+    }
+  }
+  return fallback;
 }
 
 function formatDuration(start?: string, end?: string): string | undefined {

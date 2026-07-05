@@ -18,7 +18,7 @@ matches — producing one ``SessionTool`` instance per agent per session.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -206,6 +206,25 @@ class SessionToolRegistry:
                     "session tool {} failed to instantiate: {}", tid, exc
                 )
         return tools
+
+    def capabilities_for(self, tool_ids: Iterable[str]) -> tuple[str, ...]:
+        """Union ``requires_capabilities`` of every registered factory in *tool_ids*.
+
+        Pure lookup, no I/O — the read-side mirror of the capability half of
+        :meth:`build_for`'s gate. Used to derive a REQUEST-SCOPED capability
+        grant from a caller's tool allowlist (Gitea #182): selecting a
+        product tool by id (e.g. via ``context.mcp_tools``) also unlocks the
+        capability that gates its AgentDef family on the catalog surface,
+        without a separate client-advertised header. Unknown ids and
+        factories with no capability gate contribute nothing. Returns a
+        sorted, deduped tuple (same shape as :func:`capabilities.parse_capabilities`).
+        """
+        granted: set[str] = set()
+        for tid in tool_ids:
+            factory = self._factories.get(tid)
+            if factory is not None:
+                granted.update(factory.requires_capabilities)
+        return tuple(sorted(granted))
 
 
 __all__ = [

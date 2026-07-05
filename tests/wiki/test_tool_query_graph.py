@@ -1,13 +1,14 @@
 """WikiQueryGraphTool tests."""
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
 from mewbo_graph.plugins.wiki import query_graph as query_graph_mod
 from mewbo_graph.plugins.wiki.query_graph import WikiQueryGraphTool
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import GraphEdge, GraphNode, IndexingJob
+from mewbo_graph.wiki.types import GraphEdge, IndexingJob, QaAnswer, make_graph_node
 
 
 @pytest.fixture
@@ -18,11 +19,11 @@ def setup(tmp_path):
     store.create_job(job)
     store.attach_job_session("j1", "sess-1")
     store.upsert_nodes("x/y", [
-        GraphNode(slug="x/y", node_id="f1", type="Function", name="auth",
+        make_graph_node(slug="x/y", node_id="f1", type="Function", name="auth",
                   file="a.py", range=(0, 100), docstring="check token"),
-        GraphNode(slug="x/y", node_id="f2", type="Function", name="store",
+        make_graph_node(slug="x/y", node_id="f2", type="Function", name="store",
                   file="a.py", range=(0, 100), docstring=None),
-        GraphNode(slug="x/y", node_id="c1", type="Class", name="Engine",
+        make_graph_node(slug="x/y", node_id="c1", type="Class", name="Engine",
                   file="b.py", range=(0, 100), docstring=None),
     ])
     store.upsert_edges("x/y", [
@@ -79,6 +80,57 @@ def test_query_returns_neighbors(setup):
     content = str(result.content)
     assert "Engine" in content   # c1
     assert "auth" not in content # f1 itself not returned
+
+
+# ── Access-trail recording (#168) — navigation is not grounding ────────────────
+
+
+@pytest.fixture
+def qa_setup(tmp_path):
+    """A QA session over a seed node with 50 neighbours (an unbounded record floods)."""
+    store = JsonWikiStore(root_dir=tmp_path / "wiki")
+    store.save_qa(QaAnswer(answerId="qa1", fromPageId="overview", summarySources=[],
+                           model="m", blocks=[], slug="x/y"))
+    store.attach_qa_session("qa1", "sess-qa")
+    nodes = [make_graph_node(slug="x/y", node_id="S", type="Function", name="seed",
+                       file="a.py", range=(0, 1))]
+    edges = []
+    for i in range(50):
+        nodes.append(make_graph_node(slug="x/y", node_id=f"n{i}", type="Function",
+                               name=f"f{i}", file="a.py", range=(0, 1)))
+        edges.append(GraphEdge(slug="x/y", source="S", target=f"n{i}", type="CALLS"))
+    store.upsert_nodes("x/y", nodes)
+    store.upsert_edges("x/y", edges)
+    return store, "sess-qa"
+
+
+def test_query_graph_records_only_seed_not_full_result(qa_setup):
+    """A neighbours query records ONLY the seed node, not the ~50-node walk (#168)."""
+    store, sid = qa_setup
+    runtime = MagicMock(wiki_store=store)
+    tool = WikiQueryGraphTool(session_id=sid)
+    step = MagicMock(tool_input={"neighbors_of": "S", "limit": 50})
+    with patch.object(query_graph_mod, "_resolve_runtime", return_value=runtime):
+        asyncio.run(tool.handle(step))
+
+    access = [e for e in store.load_qa_events("qa1") if e["type"] == "access"]
+    assert len(access) == 1
+    recs = access[0]["records"]
+    assert len(recs) == 1  # the seed, NOT the 50 neighbours
+    assert recs[0]["ref"] == "graph:S"
+    assert recs[0]["score"] is None and recs[0]["op"] == "nav"
+
+
+def test_query_graph_filter_records_nothing(qa_setup):
+    """A plain type/name filter is navigation with no entry node — records nothing."""
+    store, sid = qa_setup
+    runtime = MagicMock(wiki_store=store)
+    tool = WikiQueryGraphTool(session_id=sid)
+    step = MagicMock(tool_input={"node_type": "Function", "limit": 50})
+    with patch.object(query_graph_mod, "_resolve_runtime", return_value=runtime):
+        asyncio.run(tool.handle(step))
+
+    assert [e for e in store.load_qa_events("qa1") if e["type"] == "access"] == []
 
 
 def test_query_validates_unknown_kwarg(setup):

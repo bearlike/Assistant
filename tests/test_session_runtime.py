@@ -225,6 +225,58 @@ def test_start_async_emits_run_accepted_before_registry_build(tmp_path, monkeypa
     assert "run_accepted" in seen["types"]
 
 
+def test_start_async_threads_attachments_to_orchestrate_session(tmp_path, monkeypatch):
+    """``start_async``/``run_sync`` forward ``attachments`` untouched.
+
+    Mirrors ``test_start_async_emits_run_accepted_before_registry_build``: patch
+    ``orchestrate_session`` (not ``run_sync``) so the REAL ``run_sync`` threading
+    is exercised without paying for a real ``Orchestrator`` build.
+    """
+    import mewbo_core.session_runtime as sr
+    from mewbo_core.classes import TaskQueue
+
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+
+    descriptors = [{"id": "a1", "filename": "note.txt"}]
+    captured: dict = {}
+
+    def fake_orchestrate_session(**kwargs):
+        captured.update(kwargs)
+        return TaskQueue(action_steps=[])
+
+    monkeypatch.setattr(sr, "orchestrate_session", fake_orchestrate_session)
+
+    runtime.start_async(session_id=session_id, user_query="hello", attachments=descriptors)
+    _wait_idle(runtime, session_id)
+
+    assert captured.get("attachments") == descriptors
+
+
+def test_start_async_without_attachments_passes_none(tmp_path, monkeypatch):
+    """Backward-compatible default: omitting ``attachments`` forwards ``None``."""
+    import mewbo_core.session_runtime as sr
+    from mewbo_core.classes import TaskQueue
+
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+
+    captured: dict = {}
+
+    def fake_orchestrate_session(**kwargs):
+        captured.update(kwargs)
+        return TaskQueue(action_steps=[])
+
+    monkeypatch.setattr(sr, "orchestrate_session", fake_orchestrate_session)
+
+    runtime.start_async(session_id=session_id, user_query="hello")
+    _wait_idle(runtime, session_id)
+
+    assert captured.get("attachments") is None
+
+
 def test_start_async_does_not_emit_run_accepted_when_busy(tmp_path):
     """A refused concurrent start emits no second ``run_accepted`` marker."""
     store = SessionStore(root_dir=str(tmp_path))

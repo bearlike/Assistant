@@ -11,9 +11,11 @@ permissions:
 
 jobs:
   stale:
+    name: Close stale issues & PRs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/stale@v10
+      - name: Mark & close stale issues/PRs
+        uses: actions/stale@v10
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           days-before-stale: 45

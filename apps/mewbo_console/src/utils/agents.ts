@@ -4,7 +4,7 @@ export const AGENT_ID_TAG_CLASS =
 export const MODEL_TAG_CLASS =
   'text-[10px] font-mono text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded whitespace-nowrap';
 
-/** Hash an agent id to one of 8 cycling color slots (Claude Code palette). */
+/** Hash an agent id to one of 8 cycling color slots. */
 export function agentColorIndex(agentId: string): number {
   let hash = 0;
   for (let i = 0; i < agentId.length; i++) {

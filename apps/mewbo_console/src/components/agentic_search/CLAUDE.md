@@ -16,8 +16,8 @@ defers the route — it does NOT shrink the chunk. The view statically imported
 its heavy children, so the inert landing page (the common first paint) was
 forced to download all of them: `ResultsPanel` → `AnswerCard` →
 react-markdown/remark-gfm/rehype-highlight, and `graph/WorkspaceGraphDialog` →
-`KnowledgeGraphRenderer` (cytoscape + fcose). Rollup pooled them into one
-~592KB chunk the landing chunk referenced statically.
+the shared `Graph3DView` (`react-force-graph-3d` + three.js). Rollup pooled them
+into one heavy chunk the landing chunk referenced statically.
 
 Fix: `React.lazy` the run-only / dialog-only children (`ResultsPanel`,
 `WorkspaceGraphDialog`) and wrap their render sites in `Suspense`. They already
@@ -28,10 +28,12 @@ only on an active run / graph open. `LandingPanel`, `SourcesDialog`,
 **The trap (verify, don't assume): React.lazy ≠ a build-time chunk-size win.**
 A lazy boundary only helps if it removes the *static* import edge — confirm the
 emitted landing chunk no longer statically references the heavy chunk
-(`grep` the built `AgenticSearchView-*.js` for `markdownComponents`/`cytoscape`;
+(`grep` the built `AgenticSearchView-*.js` for `markdownComponents`/`react-force-graph`;
 dynamic `import()` refs are fine, top-level `import … from` are not). Here the
-landing chunk dropped 104KB→32KB and the ~205KB-raw markdown+graph engine now
-loads only on run/graph. Keep `cssMinify: "esbuild"` (lightningcss chokes on the
+landing chunk dropped 104KB→32KB and the markdown + 3D-graph engine
+(`react-force-graph-3d` + three.js — heavier than the old cytoscape build, so the
+split matters more) now loads only on run/graph. Keep `cssMinify: "esbuild"`
+(lightningcss chokes on the
 composer-shell template literal).
 
 ## The streaming rule — no synthetic timers
@@ -475,10 +477,16 @@ edit stays quiet) — the smallest honest signal that the BE re-drove the map.
 
 ## Workspace graph view (#79)
 
-`graph/` reuses the wiki `KnowledgeGraphRenderer` ENGINE via an injected
-`GraphRenderConfig` (honest extraction — kind/edge/colour maps only; no fork).
-`graph/types.ts` mirrors the API wire 1:1 (closed unions, exhaustive Record
-maps); `scgGraphConfig.ts` owns the SCG palette/glyphs/layer grouping;
+`graph/` reuses the shared 3D `Graph3DView` engine (the SAME WebGL galaxy the
+wiki Knowledge Graph renders) via an injected `SCG_GRAPH_THEME` — no Cytoscape,
+no per-domain renderer. `WorkspaceGraphDialog` owns only the React lifecycle, the
+SCG `NodeInspector` (capability schema / recipe / anchored notes), and the
+unmapped-ghost hint; an SCG graph has no folder hierarchy, so it passes through
+the engine's `CollapseModel` unchanged. `graph/types.ts` mirrors the API wire 1:1
+(closed unions, exhaustive Record maps); `scgGraphConfig.ts` owns the SCG
+palette/labels/layer grouping and builds `SCG_GRAPH_THEME` (+ `SCG_KIND_DOT` /
+`SCG_KIND_LABEL` for the inspector header) — all from the existing `--graph-*`
+token family, no icon SVGs or node shapes (the 3D engine has neither).
 `useWorkspaceGraph` → `GET /workspaces/<id>/graph`. Schema edges address nodes by
 `node_id` (the API remaps from `source_key`); unmapped sources render as ghost
 nodes linking to the Sources map flow. Entry: workspace-card + results-rail.

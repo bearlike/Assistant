@@ -154,6 +154,18 @@ its own opinions about prompt engineering, edit format, and file
 context — we don't fight them. The bridge is a thin shim. If a Mewbo
 tool wants Aider's edit semantics, it goes through here.
 
+`integration/aider_shell_tool.py` deliberately does NOT use the vendored
+`run_cmd` (it picks a pexpect PTY whenever the parent has a tty — that let a
+paginated command like `git log` block forever on `less`, leaked the
+interactive rc-file banner into tool output, and left orphaned children after
+core's tool-call timeout gave up on the hung await). Shell execution is always
+non-interactive: `subprocess.Popen(..., stdin=DEVNULL, start_new_session=True)`
+with a pager-safe env (`GIT_PAGER`/`PAGER=cat`, `GIT_TERMINAL_PROMPT=0`), and its
+own timeout (`_DEFAULT_TIMEOUT_S`, just under `ToolSpec`'s 120s default) that
+`os.killpg`s the whole process group on expiry — cancelling the outer
+`asyncio.wait_for` can't kill a blocking subprocess, so the tool must reap
+itself.
+
 ## Vendored code
 
 `vendor/` holds third-party code we copied in (license-compatible) and

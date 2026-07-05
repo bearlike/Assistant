@@ -186,6 +186,7 @@ docker.env
 docker-compose.override.yml
 docker/init.d/*
 !docker/init.d/10-git-setup.sh
+!docker/init.d/15-tea-setup.sh
 /.claude/settings.json
 /.playwright-mcp
 

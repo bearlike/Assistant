@@ -58,7 +58,7 @@ Five cross-cutting invariants, each with ONE shared seam — keep new tools on t
    `get_*_run` companion: `search`→`get_search_run`, `ask_wiki`→`get_wiki_answer`,
    `structured_query`→`get_structured_run`. A timeout returns `status:"running"`
    + the handle, never a terminal failure. **`run_id` is per-run, not the
-   session id** (Devin-modeled): the API mints `"<session_id>:r<seq>"`; MCP only
+   session id** (a parent-session:sub-run id convention): the API mints `"<session_id>:r<seq>"`; MCP only
    passes it through.
 3. **Smallest-useful-payload default.** Projection lives MCP-side. `list_sessions`
    caps to 20 newest + compact rows; `read_wiki_structure` defaults to `detail=

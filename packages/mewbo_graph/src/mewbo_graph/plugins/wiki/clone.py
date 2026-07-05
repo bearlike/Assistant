@@ -96,15 +96,9 @@ class WikiCloneRepoTool(WikiSessionTool):
         emit_log(ctx, f"Cloning {args.url}{f' @ {args.ref}' if args.ref else ''}…")
 
         # 5. Run git clone (shallow, one branch).
-        cmd: list[str] = ["git", "clone", "--depth=1"]
-        # Self-hosted servers on private TLDs (e.g. git.example.home) typically
-        # use self-signed certs. Skip TLS verification for those hosts only —
-        # public hosts (github.com, gitlab.com, ...) still validate normally.
-        if _is_private_host(args.url):
-            cmd[1:1] = ["-c", "http.sslVerify=false"]
-        if args.ref:
-            cmd += ["--branch", args.ref, "--single-branch"]
-        cmd += [clone_url, str(clone_dir)]
+        cmd = build_clone_command(
+            clone_url, clone_dir, ref=args.ref, private_host=_is_private_host(args.url)
+        )
 
         run_env, key_path = _ssh_env_for(ssh_key)
         try:
@@ -188,6 +182,26 @@ class WikiCloneRepoTool(WikiSessionTool):
 _PRIVATE_TLDS = (".home", ".local", ".internal", ".lan", ".intranet", ".corp")
 
 
+def build_clone_command(
+    clone_url: str, clone_dir: Any, *, ref: str | None, private_host: bool
+) -> list[str]:
+    """Build the ``git clone --depth=1 [...]`` argv (shared by both clone paths).
+
+    Self-hosted servers on private TLDs (e.g. git.example.home) typically use
+    self-signed certs, so ``private_host`` inserts ``-c http.sslVerify=false`` —
+    public hosts (github.com, gitlab.com, ...) still validate normally. A non-null
+    *ref* pins a single branch/tag/sha via ``--branch <ref> --single-branch``;
+    null clones the repo's default branch.
+    """
+    cmd: list[str] = ["git", "clone", "--depth=1"]
+    if private_host:
+        cmd[1:1] = ["-c", "http.sslVerify=false"]
+    if ref:
+        cmd += ["--branch", ref, "--single-branch"]
+    cmd += [clone_url, str(clone_dir)]
+    return cmd
+
+
 def _is_private_host(url: str) -> bool:
     """Return True when *url*'s host sits on a reserved/private-network TLD.
 
@@ -266,8 +280,10 @@ def _git_rev_parse(clone_dir: Any, args: list[str]) -> str | None:
 __all__ = [
     "WikiCloneArgs",
     "WikiCloneRepoTool",
+    "build_clone_command",
     "_inject_token",
     "_ssh_env_for",
+    "_is_private_host",
     "_err_result",
     "_git_rev_parse",
 ]

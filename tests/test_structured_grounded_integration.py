@@ -131,7 +131,7 @@ def _wiki_store(tmp_path: Path):
 
 def _seed_workspace(wiki_store, slug: str = "org/repo") -> None:
     """Seed a page + graph node + embedding so retrieval has something to return."""
-    from mewbo_graph.wiki.types import Embedding, GraphNode, WikiPage
+    from mewbo_graph.wiki.types import Embedding, WikiPage, make_graph_node
 
     wiki_store.save_page(slug, WikiPage(
         id="auth",
@@ -142,7 +142,7 @@ def _seed_workspace(wiki_store, slug: str = "org/repo") -> None:
         nav=[],
     ))
     wiki_store.upsert_nodes(slug, [
-        GraphNode(
+        make_graph_node(
             slug=slug,
             node_id="f1",
             type="Function",

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { EventRecord } from "../types";
-import { buildTimeline, getActiveStreamText, getActiveTurn, turnHasWidget } from "../utils/timeline";
+import { buildTimeline, getActiveStreamText, getActiveTurn, getLastContext, turnHasWidget } from "../utils/timeline";
 import { buildLogs } from "../utils/logs";
 
 // Minimal helper — only fields the timeline builder reads.
@@ -491,6 +491,61 @@ describe("buildTimeline — widget_ready events render inline in the turn", () =
   });
 });
 
+describe("buildTimeline — todos events render as an in-turn checklist (#174)", () => {
+  test("todos event inside a turn produces one todos entry between user and assistant", () => {
+    const entries = buildTimeline([
+      ev("2026-07-01T08:00:00Z", "user", { text: "plan it" }),
+      ev("2026-07-01T08:00:05Z", "todos", {
+        items: [
+          { label: "Read the issue", status: "completed" },
+          { label: "Write the fix", status: "in_progress" },
+          { label: "Verify", status: "pending" },
+        ],
+        source: "plan",
+        agent_id: "root",
+      }),
+      ev("2026-07-01T08:00:10Z", "assistant", { text: "done" }),
+    ]);
+    const roles = entries.map((e) => e.role);
+    expect(roles).toEqual(["user", "todos", "assistant"]);
+    const todo = entries.find((e) => e.role === "todos")?.todos;
+    expect(todo?.source).toBe("plan");
+    expect(todo?.agentId).toBe("root");
+    expect(todo?.items.map((i) => i.status)).toEqual([
+      "completed",
+      "in_progress",
+      "pending",
+    ]);
+  });
+
+  test("successive todos snapshots upsert ONE card (no stacking) and normalise `done`→`completed`", () => {
+    const entries = buildTimeline([
+      ev("2026-07-01T08:00:00Z", "user", { text: "go" }),
+      ev("2026-07-01T08:00:03Z", "todos", {
+        items: [{ label: "Step A", status: "in_progress" }],
+      }),
+      ev("2026-07-01T08:00:06Z", "todos", {
+        // CLI producer uses `done`; the console normalises it to `completed`.
+        items: [{ label: "Step A", status: "done" }],
+      }),
+    ]);
+    const todos = entries.filter((e) => e.role === "todos");
+    expect(todos).toHaveLength(1);
+    expect(todos[0].todos?.items).toEqual([{ label: "Step A", status: "completed" }]);
+  });
+
+  test("empty / label-less todos are dropped — never a fabricated card", () => {
+    const entries = buildTimeline([
+      ev("2026-07-01T08:00:00Z", "user", { text: "go" }),
+      ev("2026-07-01T08:00:03Z", "todos", { items: [] }),
+      ev("2026-07-01T08:00:04Z", "todos", { items: [{ label: "   ", status: "pending" }] }),
+      ev("2026-07-01T08:00:10Z", "assistant", { text: "done" }),
+    ]);
+    expect(entries.some((e) => e.role === "todos")).toBe(false);
+    expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
+  });
+});
+
 describe("turnHasWidget", () => {
   const widgetPayload = {
     widget_id: "w1",
@@ -684,5 +739,98 @@ describe("getActiveStreamText — live token deltas (#137)", () => {
     ];
     // The turn-closing assistant bubble is authoritative; no live preview.
     expect(getActiveStreamText(events)).toBe("");
+  });
+});
+
+describe("buildTimeline — attachment threading onto the user turn", () => {
+  const att = (filename: string, content_type: string, size_bytes: number) => ({
+    id: filename, filename, content_type, size_bytes, stored_name: filename,
+  });
+
+  test("attachments on the user event land on the user entry", () => {
+    const entries = buildTimeline([
+      ev("2026-07-03T10:00:00Z", "user", {
+        text: "what is this?",
+        attachments: [att("pug.png", "image/png", 140462)],
+      }),
+      ev("2026-07-03T10:00:05Z", "assistant", { text: "a pug" }),
+    ]);
+    expect(entries[0]).toMatchObject({ role: "user" });
+    expect(entries[0].attachments).toHaveLength(1);
+    expect(entries[0].attachments?.[0]).toMatchObject({
+      filename: "pug.png", content_type: "image/png",
+    });
+  });
+
+  test("falls back to a preceding context event's attachments (older sessions)", () => {
+    const entries = buildTimeline([
+      ev("2026-07-03T10:00:00Z", "context", {
+        model: "claude-sonnet-5",
+        attachments: [att("report.pdf", "application/pdf", 13264)],
+      }),
+      ev("2026-07-03T10:00:01Z", "user", { text: "summarize" }),
+      ev("2026-07-03T10:00:05Z", "assistant", { text: "ok" }),
+    ]);
+    const user = entries.find(e => e.role === "user");
+    expect(user?.attachments?.[0]).toMatchObject({ filename: "report.pdf" });
+  });
+
+  test("context attachments belong to ONE turn — a later attachment-less turn stays clean", () => {
+    const entries = buildTimeline([
+      ev("2026-07-03T10:00:00Z", "context", {
+        attachments: [att("a.png", "image/png", 100)],
+      }),
+      ev("2026-07-03T10:00:01Z", "user", { text: "first" }),
+      ev("2026-07-03T10:00:02Z", "assistant", { text: "r1" }),
+      ev("2026-07-03T10:00:03Z", "user", { text: "second" }),
+      ev("2026-07-03T10:00:04Z", "assistant", { text: "r2" }),
+    ]);
+    const users = entries.filter(e => e.role === "user");
+    expect(users[0].attachments).toHaveLength(1);
+    expect(users[1].attachments).toBeUndefined();
+  });
+
+  test("a user turn with no attachments has undefined attachments", () => {
+    const entries = buildTimeline([
+      ev("2026-07-03T10:00:00Z", "user", { text: "plain" }),
+      ev("2026-07-03T10:00:05Z", "assistant", { text: "ok" }),
+    ]);
+    expect(entries[0].attachments).toBeUndefined();
+  });
+});
+
+describe("getLastContext — most-recent context event wins, never merged", () => {
+  test("a field cleared (omitted) in a later event does NOT stick from an earlier one", () => {
+    // Context event A sets a project; event B is a later re-submission (e.g.
+    // the user cleared the project back to Temporary) that omits the key
+    // entirely — InputBar's omission convention for a falsy field, never an
+    // explicit null. The effective context must reflect B verbatim, not fold
+    // A's `project` forward (Gitea #185).
+    const events: EventRecord[] = [
+      ev("2026-07-01T10:00:00Z", "context", { project: "X", mcp_tools: ["shell"] }),
+      ev("2026-07-01T10:00:05Z", "user", { text: "do the thing" }),
+      ev("2026-07-01T10:01:00Z", "context", { mcp_tools: [] }),
+    ];
+    const ctx = getLastContext(events);
+    expect(ctx?.project).toBeUndefined();
+    expect(ctx).toEqual({ mcp_tools: [] });
+  });
+
+  test("returns the single latest context event's payload verbatim (no merge across events)", () => {
+    const events: EventRecord[] = [
+      ev("2026-07-01T10:00:00Z", "context", { project: "X", model: "gpt-5" }),
+      ev("2026-07-01T10:01:00Z", "context", { model: "gpt-6" }),
+    ];
+    // The latest event doesn't carry `project` at all — it must not resurface.
+    expect(getLastContext(events)).toEqual({ model: "gpt-6" });
+  });
+
+  test("falls back to the provided fallback when no context event exists yet", () => {
+    const events: EventRecord[] = [
+      ev("2026-07-01T10:00:00Z", "user", { text: "hi" }),
+    ];
+    const fallback = { project: "X" };
+    expect(getLastContext(events, fallback)).toBe(fallback);
+    expect(getLastContext([], undefined)).toBeUndefined();
   });
 });

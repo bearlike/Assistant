@@ -8,9 +8,9 @@ to fetch the schemas it actually needs. ``ToolUseLoop`` watches for the
 matched names in the tool result and re-binds the model so the matched
 tools become invocable.
 
-Result format mirrors Claude Code's ``ToolSearchTool`` so the model
-recognises it from training data — one ``<function>{...}</function>``
-line per match inside a ``<functions>`` block.
+Result format is designed so the model recognises it from training data —
+one ``<function>{...}</function>`` line per match inside a ``<functions>``
+block.
 """
 
 from __future__ import annotations
@@ -63,9 +63,9 @@ def _score_spec(
 ) -> float:
     """Score a single spec against query terms.
 
-    Weights mirror Claude Code's tuned values: exact part match dominates,
-    description match is a tiebreaker. Required terms (``+term``) act as a
-    gate — return 0 if any required term is missing.
+    Weights are tuned so exact part match dominates, description match is a
+    tiebreaker. Required terms (``+term``) act as a gate — return 0 if any
+    required term is missing.
     """
     desc = spec.description.lower()
     all_terms = [*required, *optional]

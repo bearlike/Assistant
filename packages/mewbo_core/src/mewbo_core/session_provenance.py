@@ -21,6 +21,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+# Shared "what counts as a mobile surface" contract — used by both the
+# classifier below (context fallback) and the api tagging seam that stamps
+# ``mobile:<platform>`` at session creation, so the two never drift.
+MOBILE_TAG_PREFIX = "mobile:"
+MOBILE_SURFACES: frozenset[str] = frozenset({"android", "ios", "aura-android"})
+
+
+def is_mobile_surface(surface: object) -> bool:
+    """True when ``surface`` names a mobile client (a bare platform or Aura)."""
+    if not isinstance(surface, str):
+        return False
+    value = surface.lower()
+    return value in MOBILE_SURFACES or value.startswith("aura")
+
 
 class SessionOrigin(str, Enum):
     """Coarse provenance of a session, derived from its tags + context."""
@@ -29,6 +43,7 @@ class SessionOrigin(str, Enum):
     WIKI = "wiki"
     SEARCH = "search"
     CHANNEL = "channel"
+    MOBILE = "mobile"
     STRUCTURED = "structured"
     DRAFT = "draft"
 
@@ -45,6 +60,7 @@ class SessionOrigin(str, Enum):
             ("agentic_search:", cls.SEARCH),
             ("structured:", cls.STRUCTURED),
             ("draft:", cls.DRAFT),
+            (MOBILE_TAG_PREFIX, cls.MOBILE),
         )
         for tag in tags:
             for prefix, origin in tag_prefixes:
@@ -52,6 +68,13 @@ class SessionOrigin(str, Enum):
                     return origin
             if ":room:" in tag or ":thread:" in tag:
                 return cls.CHANNEL
+        # Mobile fallback runs BEFORE the generic source_platform->CHANNEL
+        # branch below: Aura already persists context["client"] ==
+        # "aura-android" (no ``mobile:`` tag), so this must be checked first
+        # or a mobile source_platform would misclassify as CHANNEL.
+        surface = context.get("source_platform") or context.get("client")
+        if is_mobile_surface(surface):
+            return cls.MOBILE
         if context.get("source_platform"):
             return cls.CHANNEL
         capabilities = context.get("client_capabilities")
@@ -108,6 +131,7 @@ class TraceProvenance:
         "product",
         "session_type",
         "surface",
+        "transcript_sink",
         "project",
         "repo",
         "branch",
@@ -123,6 +147,7 @@ class TraceProvenance:
         SessionOrigin.WIKI: "wiki",
         SessionOrigin.SEARCH: "search",
         SessionOrigin.CHANNEL: "channel",
+        SessionOrigin.MOBILE: "mobile",
         SessionOrigin.STRUCTURED: "structured",
         SessionOrigin.DRAFT: "draft",
     }
@@ -194,6 +219,10 @@ class TraceProvenance:
             if head == "draft" and len(parts) >= 2:
                 # ``draft:stream`` — token-streaming /v1/draft/stream.
                 return {"product": "draft", "session_type": f"draft_{parts[1]}"}
+            if head == "mobile" and len(parts) >= 2:
+                # ``mobile:<platform>`` — stamped by the api tagging seam for a
+                # mobile-created session (e.g. ``mobile:android`` from Aura).
+                return {"product": "mobile", "session_type": f"mobile_{parts[1]}"}
             if head == "vcs" and len(parts) >= 4:
                 return {
                     "product": "vcs",
@@ -234,6 +263,13 @@ class TraceProvenance:
             value = cls._as_str(context.get(key))
             if value:
                 out[key] = value
+        # ``transcript_sink`` is the CLI's local-vs-synced facet (Gitea #171):
+        # ``local-only`` vs ``synced`` — a low-cardinality chip that distinguishes
+        # a purely-local CLI session from one mirrored to a remote API, so console/
+        # wiki/search never cross-operate on a synced CLI transcript.
+        sink = cls._as_str(context.get("transcript_sink"))
+        if sink:
+            out["transcript_sink"] = sink
         workspace = cls._as_str(context.get("structured_workspace")) or cls._as_str(
             context.get("workspace")
         )

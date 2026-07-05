@@ -77,7 +77,7 @@ async def bounded_poll(
 # Long-running-tool budget invariant (#41): every inline poll budget
 # (``WikiTools``/``SearchTools``/``StructuredQueryTools`` ``timeout_s``) MUST be
 # strictly below the transport/proxy timeout (httpx read 30s, and the shorter
-# ``mcp.hurricane.home`` front-proxy ceiling). The budget is the tightest ceiling
+# front-proxy ceiling of this deployment's MCP reverse proxy). The budget is the tightest ceiling
 # so :func:`poll_or_handle` ALWAYS returns the resumable handle as
 # ``status:"running"`` before any layer cuts the connection — a raw
 # ``httpx.ReadTimeout`` mid-poll can never strand the caller without an id.
@@ -397,6 +397,9 @@ class SessionTools:
             "step_offset": offset,
             "agents": "call get_agent_tree(session_id) for the sub-agent tree",
         }
+        attachments = self._shape_attachments(selected)
+        if attachments:
+            out["attachments"] = attachments
         if offset + self.FULL_STEPS_PAGE < len(all_steps):
             out["next_step_offset"] = offset + self.FULL_STEPS_PAGE
         return out
@@ -553,7 +556,7 @@ class SessionTools:
     def _turn_summary(cls, turn: Turn) -> dict[str, Any]:
         """Per-turn summary for the ``turns`` tier (truncated text, no step detail)."""
         usage = turn.token_usage()
-        return {
+        out: dict[str, Any] = {
             "index": turn.index,
             "user_text": cls._truncate(turn.user_text),
             "assistant_text": cls._truncate(cls._clean_summary(turn)),
@@ -561,6 +564,28 @@ class SessionTools:
             "step_count": turn.step_count,
             "tokens": usage.to_dict() if usage else None,
         }
+        attachments = cls._shape_attachments(turn)
+        if attachments:
+            out["attachments"] = attachments
+        return out
+
+    @staticmethod
+    def _shape_attachments(turn: Turn) -> list[dict[str, Any]]:
+        """Lean projection of a turn's user attachments, or ``[]`` when none.
+
+        Drops the storage-internal fields (``id``/``stored_name``/
+        ``uploaded_at``/``parsed``) that carry zero signal for an external
+        agent inspecting the conversation — the same "smallest-useful-payload"
+        rule every other projection in this class follows.
+        """
+        return [
+            {
+                "filename": a.get("filename"),
+                "content_type": a.get("content_type"),
+                "size_bytes": a.get("size_bytes"),
+            }
+            for a in turn.attachments
+        ]
 
     @staticmethod
     def _event_payload(event: dict[str, Any]) -> dict[str, Any]:

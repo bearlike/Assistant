@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- User-facing product name. "Aura" is the internal project codename and must not
+         appear in UI copy; the product word in-app is "Mewbo" (title bar, placeholders). -->
+    <string name="app_name">Mewbo Assistant</string>
+</resources>

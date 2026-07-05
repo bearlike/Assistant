@@ -4,7 +4,7 @@
 
 Scope: this file applies to `apps/mewbo_console/src/components/wiki/`.
 Captures the non-obvious engineering decisions made while building the
-DeepWiki-style FE — the parts you'd miss from reading the code alone.
+auto-generated-wiki FE — the parts you'd miss from reading the code alone.
 
 ## Read both files
 
@@ -27,7 +27,8 @@ Existing examples to copy from:
 | Class                      | File                              | Pattern         |
 |----------------------------|-----------------------------------|-----------------|
 | `IndexingProgress`         | `progress.ts`                     | static factories `fromJob` / `fromStream`, private `_compute` |
-| `KnowledgeGraphRenderer`   | `KnowledgeGraphRenderer.ts`       | constructor + lifecycle methods, static `toElements/buildStylesheet/layoutOptions` |
+| `CollapseModel`            | `collapseModel.ts`                | pure visible-set + edge re-point/aggregate over an `expanded` set; static `initialExpanded`/`visibleGraph` |
+| `Graph3DView`              | `Graph3DView.tsx`                 | thin domain-agnostic 3D view over `CollapseModel`; injected `Graph3DTheme` + `renderInspector` render-prop |
 | `RelativeTime`             | `relativeTime.ts`                 | static-only, `Intl.RelativeTimeFormat` |
 
 If you find yourself writing a free function that grows to need more
@@ -124,42 +125,88 @@ to 9 — that surface is just a recent-activity blip, not an audit log.
 goal here because the BE already replays from idx 0 if no header is
 sent.
 
-## KnowledgeGraphRenderer
+## Graph3DView — the one shared graph engine
 
-`KnowledgeGraphRenderer.ts` wraps `cytoscape` + `cytoscape-fcose`.
-Mounted via ref by `KnowledgeGraphScreen.tsx`. No `react-cytoscapejs`
-wrapper — that library re-mounts the canvas on every prop change and
-loses layout state.
+`Graph3DView.tsx` is the SINGLE graph renderer in the console — `react-force-graph-3d`
+(three.js / WebGL). It replaced the old 2D Cytoscape `KnowledgeGraphRenderer`
+that the wiki and Agentic Search forked between them; both `KnowledgeGraphRenderer.ts`
+and the dead `KnowledgeGraphScreen.tsx` are DELETED, and `cytoscape` /
+`cytoscape-fcose` / `@types/cytoscape` (and the fcose ambient decl in
+`vite-env.d.ts`) are gone. There is no second renderer to keep in sync.
 
-Pattern:
-- Constructor takes the container element + theme tokens.
-- `render(nodes, edges)` is the entry point.
-- `fit()`, `relayout()`, `focusNode(id)`, `applyFilter(term)`,
-  `applyTheme(theme)`, `onNodeClick(cb)`, `dispose()` — methods on the
-  instance.
-- `static toElements(view)`, `static buildStylesheet(theme)`,
-  `static layoutOptions()` — pure helpers.
+It is **domain-agnostic**: it treats node `kind` / `layer` as opaque strings and
+reads every colour / label / layer / size from an injected `Graph3DTheme`; the
+caller supplies the side-panel via the `renderInspector` render-prop. Both the
+wiki Knowledge Graph and the SCG workspace graph satisfy the structural
+`{ nodes:[{data}], edges:[{data}] }` wire shape, so each is a THIN adapter:
 
-Theme is snapshotted from CSS variables at construction; a
-`MutationObserver` on `<html>` swaps stylesheets when the theme class
-flips, so the graph re-themes without re-mounting.
+- **Wiki** — `KnowledgeGraph3DScreen.tsx` assembles `WIKI_GRAPH_THEME` from the
+  `graphTheme.ts` maps and wires the typed `inspector/GraphInspector` registry.
+- **SCG** — `agentic_search/graph/WorkspaceGraphDialog.tsx` assembles
+  `SCG_GRAPH_THEME` from `scgGraphConfig.ts` and renders its own `NodeInspector`.
 
-Cytoscape types miss `cytoscape-fcose` — handled by a one-line
-ambient declaration in `vite-env.d.ts`. Do not import internals from
-fcose; just call `layout({ name: "fcose", ... })`.
+`Graph3DView` owns the toolbar (name filter, kind chips, per-layer toggle group,
+Fit/Reset), the click→pick selection, and composes the pure `CollapseModel` for
+folder LOD. Don't wrap `<ForceGraph3D>` in a bespoke imperative scene class — the
+library owns camera, picking, force layout, hover labels, and nav.
 
-**Multiplex layers (not AST-only).** Each node carries `data.layer ∈
+**Multiplex layers (not AST-only).** Each wiki node carries `data.layer ∈
 ast|entity|memory` with `kind` widened by `External|Entity|Memory`; edges add
-`ANCHORS|RELATES` + `layer …|cross`. The `kind` unions stay CLOSED so every
-`Record<Kind,…>` map (`ICON_PATHS`/`KIND_VAR`/`EDGE_VAR`/`KIND_DOT`/`EDGE_DOT`/
-`KIND_LAYER`) is exhaustive and `tsc` flags a missing row — never loosen to
-`string` (the open-vocab entity verb rides the edge `label`, not `kind`). Layers
-differ by SHAPE+colour (entity=rect, memory=hexagon, external=diamond vs AST
-discs); cross-layer `ANCHORS` are dashed. The per-layer toggle is a thin wrapper
-over the existing `hiddenKinds` chip machinery via `static kindsForLayer` —
-hiding a layer's kinds cascades to its edges through the renderer's
+`ANCHORS|RELATES`. The `kind`/`layer` unions stay CLOSED so every `Record<Kind,…>`
+map in `graphTheme.ts` (`KIND_VAR`/`EDGE_VAR`/`KIND_DOT`/`KIND_LAYER` +
+`ALL_NODE_KINDS`/`LAYER_ORDER`/`LAYER_LABEL`/`LAYER_DOT`) is exhaustive and `tsc`
+flags a missing row — never loosen to `string` (the open-vocab entity verb rides
+the edge `label`, not `kind`). In 3D, kinds differ by COLOUR (and folders by a
+size boost), not shape — the old Cytoscape per-shape/dashed-edge scheme is gone.
+The per-layer toggle cascades into the engine's `hiddenKinds` set via
+`kindLayer`; hiding a layer's kinds drops its edges through the `linkVisibility`
 endpoint-hidden rule (no separate edge enumeration). New layer tokens go in BOTH
 `:root` and `.light`.
+
+## Code Galaxy — the 3D graph view (`/wiki/graph`)
+
+`KnowledgeGraph3DScreen.tsx` (`react-force-graph-3d`, three.js/WebGL) is the
+`/wiki/graph` route — a thin adapter over the shared `Graph3DView`. That same
+`Graph3DView` is THE single graph engine for both this wiki Knowledge Graph and
+the Agentic-Search SCG workspace graph (`agentic_search/graph/WorkspaceGraphDialog`);
+the old 2D Cytoscape screen + renderer are deleted. `CollapseModel` and
+`graphTheme` are shared; a folderless graph (the SCG case) flows through
+`CollapseModel` as a pure pass-through. Non-obvious decisions (so we don't
+re-derive them):
+
+- **3D is the GPU path, not decoration.** `react-force-graph`'s *2D* build is
+  plain Canvas (the same wall the old Cytoscape engine hit at ~2–5K nodes); only
+  the *3D* build is WebGL. The worst real graph (a large internal Python
+  monorepo) is ~17K nodes / ~68K edges — far past the 2D canvas.
+- **Directory hierarchy IS the level-of-detail — that's the crash fix, not a
+  fancier renderer.** The BE `?hierarchy=1` wire (see `mewbo_graph` `FolderTree`)
+  adds `Folder` supernodes + `parentId`; folders start collapsed except depth-1,
+  so the live force sim is a few hundred nodes, never 17K. Cosmograph/GPU-sim,
+  server-side layout precompute, tile streaming, and Louvain/Leiden clustering
+  were all deliberately CUT (YAGNI at this scale — the folder tree IS the
+  clustering).
+- **One atomic class: `CollapseModel`** (`collapseModel.ts`) — pure visible-set +
+  edge re-point/aggregate over an externally-held `expanded` set. `Graph3DView` is
+  thin glue: `graphData = useMemo(() => model.visibleGraph(expanded), …)` fed to
+  `<ForceGraph3D>`. Do NOT wrap ForceGraph3D in a bespoke imperative scene class;
+  the library owns camera, picking, layout, labels, and nav (an earlier
+  `CodeGalaxyScene` wrapper was written then deleted for exactly this reason).
+- **`graphTheme.ts` is the single kind→colour/layer/size home** — it also houses
+  the presentation maps the toolbar reads (`ALL_NODE_KINDS`, `KIND_DOT`,
+  `LAYER_ORDER`, `LAYER_LABEL`, `LAYER_DOT`). Both adapters draw from it via their
+  `Graph3DTheme` (the wiki directly; the SCG theme mirrors the same token family).
+  Don't re-duplicate the palette maps or the `cssVarColor` hsl-comma-normaliser.
+- **Per-frame accessors must be O(1).** `linkVisibility`/`nodeColor`/`nodeVal`
+  run per element every frame — look up via an id→node/kind `Map` built in the
+  `graphData` memo, never `nodes.find()` (that was O(N·E) per frame).
+- **Selection → the typed `inspector/` registry** — exhaustive
+  `Record<GraphSelectionKind,…>` (a missing kind is a `tsc` error, no silent
+  default), one atomic panel per kind, reusing the old side-panel rendering +
+  `buildMarkdownComponents` + `buildHref`. Shared neighbour lookups go through a
+  plain-`Map` `GraphIndex` (no graph library).
+- **Escalation if heavy folder expansions ever choke:** `react-force-graph` runs
+  d3-force on the MAIN thread (no worker, no GPU) → precompute layout
+  server-side (Graphviz `sfdp`) and ship static `fx/fy/fz`. Not built yet.
 
 ## Route additions go through `router.ts`
 
@@ -243,6 +290,40 @@ reload in `UpdatePrompt.handleReload` is the consistent fix.
 no synthetic timer. Route variant: `/draft` added to `WikiRoute` union +
 `router.ts` + `WikiApp.tsx` in lockstep.
 
+## Branch picker (generation step)
+
+The generation step offers a branch dropdown so the user picks the ref to
+onboard. It's a plain native `<select>` reusing the **language-selector**
+pattern (bordered flex box + `GitBranch` icon + overlay `ChevronDown`) — NOT a
+shadcn `Command`/combobox: the option set is tiny and static per repo, so a
+combobox would be bespoke weight for nothing (KISS). Branches load via
+`useBranches` (`POST /v1/wiki/branches`), keyed `["wiki","branches", repoUrl,
+Boolean(token)]` — the cache key carries token-*presence* only, NEVER the raw
+token — `enabled` only once the URL looks like a git URL, `retry: false` so a
+bad URL/token doesn't hammer the endpoint. The first option (value `""`) is
+`Default · <defaultBranch>`; on loading it's a disabled "Loading branches…", on
+error/empty it falls back to just the default option (the query failure is
+swallowed — no toast, no retry). `state.ref` is spread into the submission ONLY
+when non-empty (mirrors how `graphOnly` is conditionally included), so an
+untouched picker submits no `ref` and the BE clones the default branch.
+
+## Developer mode — graph-only onboarding + no-docs state
+
+When `config.runtime.developer_mode` is on (read via `useConfig`),
+`ConfigureWizard`'s generation step reveals a **"Developer mode" subheading**
+grouping the single "Graph only — skip documentation (no LLM)" `<Switch>` that
+sets `graphOnly` on the submission; the whole section is HIDDEN (and
+`graphOnly` omitted) when dev mode is off — the subheading exists so the toggle
+reads as a dev-only setting, distinct from the normal generation options above
+it (the branch picker is one of those — NOT under this heading). A project that
+comes back
+`graphOnly:true` renders `GraphOnlyEmptyState` in `WikiScreen` — a "No
+documentation available" panel whose PRIMARY CTA is `buildHref({ kind:"graph" })`
+(the existing graph viewer is the whole point); it REPLACES the docs grid and
+suppresses the `QADock` (nothing to ask). Reuses the shadcn `Switch`/`Button`
+primitives — no bespoke UI. A graph-only run's progress simply skips
+enrich/plan/pages (a `graph`→`finalize` jump); don't special-case the bar.
+
 ## Q&A vs Indexing — distinct streams
 
 `useIndexingStream` and `useQaStream` look similar but have distinct
@@ -253,6 +334,22 @@ stream is one-shot per job, the Q&A stream is one-shot per question.
 (the run keeps going server-side). Cancel = `DELETE /v1/wiki/index/<id>`.
 Q&A doesn't have an explicit cancel endpoint — unmount = subscriber
 gone, server stops streaming when the connection closes.
+
+## Idempotent Q&A URL — `?answer=<id>` (Gitea #165)
+
+A completed answer is addressable, so a refresh/share replays it with ZERO LLM
+(was: every mount re-POSTed `/v1/wiki/qa` and re-ran the agent). The whole fix is
+FE — the backend already persisted the full answer (`GET /v1/wiki/qa/<id>` →
+`blocks`+`summarySources`+`accessedSources`+`modelsUsed`), it was just only read
+for the footer. Wiring: `router.ts`'s `qa` variant carries an optional `answer`
+id (parse + `buildHref` in lock-step); `QAScreen`, when it has an `answer` id it
+did NOT publish itself, renders from `useQaAnswerSnapshot(id)` and feeds
+`useQaStream(null)` (a genuine no-op — no POST). On a fresh ask, the `meta`
+event's `answerId` is folded into the URL via `navigate(replace)`;
+`publishedAnswerRef` keeps our OWN id from flipping the live stream into snapshot
+mode, so the stream paints through without an abort/refetch flash. Known edge: a
+refresh mid-generation shows the partial persisted snapshot (still no LLM
+re-invoke), not a resumed stream.
 
 ## Q&A answer rendering — cited-sources viewer (one renderer, one citation grammar)
 
@@ -276,25 +373,37 @@ blocks so a sources-only stream still hits the terminal branch.
   `CitationRef.domId` is the load-bearing chip↔card identity: the inline chip
   and the `SourceCard` derive the SAME id, so chip→card scroll-nav is
   `getElementById(domId).scrollIntoView()` + transient `src-card-flash` — no
-  prop threading. `fileCitations()` builds the card set (file refs only, deduped,
-  `graph:`/`wiki:` dropped).
+  prop threading. **Chips NAVIGATE first, scroll second (the old scroll-to-card is
+  now the FALLBACK):** a `SourceHrefProvider` context carries
+  `IndexedSnapshot.sourceUrl(path,start,end)` — the ONE host-aware blob-URL builder
+  (GitHub `/blob`, Gitea `/src/branch`, GitLab `/-/blob`, Bitbucket `/src`+`#lines-`;
+  returns `null` for azure/generic/missing `repoUrl`/`branch` so a chip never
+  mis-links) — so a `src:` chip renders a real `<a target="_blank">` to the
+  remote-repo file at its cited line range, and `SourceCard` file→repo-blob /
+  page→wiki-route open in a new tab. `parseCitations()` builds the card set as a discriminated union
+  (`{kind: file|page|graph}`, deduped, first-seen order) — it KEEPS the `wiki:`
+  page + `graph:` node refs that the legacy `fileCitations()` dropped (the latter
+  is still exported for file-only callers). #165.
 - **Inline citations are chips via the `src:` href scheme.** The generation
   prompt emits `[path:line](src:path#L<a>-<b>)`; the shared link renderer detects
   `href^="src:"` → accent chip (`bg-[hsl(var(--primary))]/10`, monospace). This
   is a BE↔FE contract — keep both ends in sync.
-- **Right panel = `SourceCard` per cited file** (`SourceCard.tsx`), native
-  `<details open>` (KISS — there is no vendored Collapsible; don't add one),
-  lazily fetching the line-numbered excerpt via `useSourceExcerpt` →
-  `GET /v1/wiki/projects/<slug>/source` and highlighting the cited range.
-  Accessed-files + model are demoted to a small secondary footer (kept — they're
-  appreciated provenance — just not the primary content).
-- **The two #70 bugs are BE fixes — this FE is unchanged.** A wiki PAGE cited as
-  a bare path used to 404 the file `SourceCard`; it is re-schemed `wiki:<page-id>`
-  server-side at the emit seam, so `fileCitations` drops it (the existing `wiki:`
-  path). The retrieval-details `graph:<hash>` entity refs are resolved to
-  `name (type)` / `file#Symbol` server-side at the qa-snapshot route — the wire
-  stays `string[]` and `shortenCitation` keeps rendering them. Don't reintroduce
-  a FE-side page-set fetch or hash resolver; both live BE-side (`mewbo_graph.wiki.qa`).
+- **Right panel = `SourceCard` per cited source** (`SourceCard.tsx`), native
+  `<details open>` (KISS — no vendored Collapsible; don't add one), branching on
+  `ParsedCitation.kind`: `file` → line-numbered excerpt via `useSourceExcerpt` →
+  `GET /v1/wiki/projects/<slug>/source`; `page` → the cited page's own body via
+  the SINGLE-page hook `useWikiPage(pageId, slug)` (so a doc citation shows the
+  prose it grounded on, not a 404); `graph` → a compact resolved label, no fetch.
+  A failed excerpt reads a muted "source unavailable", never raw stderr-red.
+  Accessed-files + model stay a small secondary footer.
+- **Cited page/graph sources now RENDER (supersedes the #70 "FE unchanged" rule — #165).**
+  A wiki PAGE cited by the model is re-schemed `wiki:<page-id>` server-side (now by
+  page id OR slugified title — `tag_page_citations`); the FE no longer DROPS it —
+  the `page` branch fetches that ONE page by id and shows its body. This is the
+  allowed single-page-by-id read (same as `WikiScreen`), NOT the still-forbidden
+  page-SET fetch or a client-side hash resolver: the retrieval-trail `graph:<hash>`
+  refs in the FOOTER stay resolved server-side (`AccessedSourceResolver`, wire is
+  `string[]`). Don't reintroduce a page-set fetch or a FE hash resolver.
 
 ## Recovery UI (Gitea #54)
 

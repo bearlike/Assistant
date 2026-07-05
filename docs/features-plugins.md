@@ -1,7 +1,7 @@
 # Plugins & Marketplace
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-console-05-plugins.png" alt="The Plugins page in the Mewbo console showing four installed plugins and a marketplace listing with install buttons" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../assets/img/mewbo-console-05-plugins.png" alt="The Plugins page in the Mewbo console showing four installed plugins and a marketplace listing with install buttons" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 Plugins extend Mewbo with new agent definitions, skills, hooks, and MCP tool configurations. Install them from a marketplace or from a local directory. They activate automatically at session start without a restart. Plugins are first-class citizens. A plugin's skills appear in the skill catalogue, its hooks fire alongside native hooks, and its MCP servers appear in the tool list.
@@ -123,7 +123,7 @@ Plugin system settings live under `plugins` in [`configs/app.json`](configuratio
 | `plugins.marketplace_default_host` | string | `github.com` | Default host for bare `owner/repo` entries |
 | `plugins.install_path` | string | `""` | Override for the plugin cache directory; defaults to `$MEWBO_HOME/plugins/` |
 
-Each `marketplaces` entry can take any of three forms — the catalog is **not** locked to GitHub:
+Each `marketplaces` entry can take any of three forms. The catalog is **not** locked to GitHub:
 
 | Form | Example | Resolves to |
 |---|---|---|
@@ -150,11 +150,11 @@ When `marketplaces` lists catalogs that are not yet cloned locally, Mewbo shallo
 
 ### Authenticating to private and self-hosted catalogs
 
-Catalogs are fetched with plain `git clone`, so they inherit your ambient git configuration — no host-specific path is required. For private or self-hosted hosts (Gitea, GitLab, Forgejo, GitHub Enterprise, …):
+Catalogs are fetched with plain `git clone`, so they inherit your ambient git configuration. No host-specific path is required. For private or self-hosted hosts (Gitea, GitLab, Forgejo, GitHub Enterprise, and similar):
 
-- **HTTPS token** — provide a credential helper. In containers, mount `~/.git-credentials` (`https://user:token@host`); the Docker image enables `credential.helper store`. `GITHUB_TOKEN` is still bridged to `github.com` automatically.
-- **SSH** — use an `ssh://` or scp-style entry and mount an SSH key or agent socket; git picks it up.
-- **Self-signed internal CA** — point `GIT_SSL_CAINFO` at your CA bundle. Git reads it from the environment, so verification stays on — no global `GIT_SSL_NO_VERIFY`.
+- **HTTPS token**: provide a credential helper. In containers, mount `~/.git-credentials` (`https://user:token@host`); the Docker image enables `credential.helper store`. `GITHUB_TOKEN` is still bridged to `github.com` automatically.
+- **SSH**: use an `ssh://` or scp-style entry and mount an SSH key or agent socket; git picks it up.
+- **Self-signed internal CA**: point `GIT_SSL_CAINFO` at your CA bundle. Git reads it from the environment, so verification stays on. You never need a global `GIT_SSL_NO_VERIFY`.
 
 Plugin skills never override personal (`~/.claude/skills/`) or project-local (`.claude/skills/`) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name.
 
@@ -230,13 +230,21 @@ This keeps core widget-agnostic: the full contract for a capability bundle is **
 
 ## Built-in plugins
 
-Some plugins ship inside the core package at [packages/mewbo_core/src/mewbo_core/builtin_plugins/](repo:packages/mewbo_core/src/mewbo_core/builtin_plugins). They are discovered through the same plugin pipeline as user and marketplace plugins, byte-for-byte normal plugins indistinguishable except for their location on the scan path. No `installed_plugins.json` entry is needed.
+Some plugins ship inside the product itself rather than a marketplace. They are discovered through the same plugin pipeline as user and marketplace plugins. They are byte-for-byte normal plugins, indistinguishable except for their location on the scan path. No `installed_plugins.json` entry is needed.
+
+Two packages carry them. The core package ships the widget-builder at [packages/mewbo_core/src/mewbo_core/builtin_plugins/](repo:packages/mewbo_core/src/mewbo_core/builtin_plugins). The `mewbo_graph` capability library ships the wiki and SCG suites, at [packages/mewbo_graph/src/mewbo_graph/plugins/wiki/](repo:packages/mewbo_graph/src/mewbo_graph/plugins/wiki) and [packages/mewbo_graph/src/mewbo_graph/plugins/scg/](repo:packages/mewbo_graph/src/mewbo_graph/plugins/scg).
 
 Currently bundled:
 
-| Plugin | Capability | What it contributes |
-|---|---|---|
-| [widget-builder](features-widgets.md) | `stlite` | `st-widget-builder` agent + skill, `submit_widget` session tool, an stlite example library, and an AST-based import allowlist |
+| Plugin | Ships in | Capability | What it contributes |
+|---|---|---|---|
+| [widget-builder](web/widgets.md) | `mewbo_core` | `stlite` | `st-widget-builder` agent + skill, `submit_widget` session tool, an stlite example library, and an AST-based import allowlist |
+| [wiki](features-wiki.md) | `mewbo_graph` | `wiki` | The MewboWiki suite behind [Agentic Wiki](features-wiki.md): the `wiki-indexer`, `wiki-enricher`, `wiki-page-writer`, and `wiki-qa` agents, plus the `wiki_*` session tools that clone a repo, scan it, build the code graph, write pages, answer questions, and submit insights |
+| [scg](features-search-scg.md) | `mewbo_graph` | `scg` | The Source Capability Graph suite behind [Agentic Search](features-search.md): the `scg-mapper` and `scg-search` agents, plus the `scg_*` session tools that map connector reachability and route or traverse the graph |
+
+### How a library ships plugins
+
+Plugins whose tools wrap a heavier substrate ship **with that substrate**, not in the core wheel. That is why the wiki and SCG suites live in `mewbo_graph` (as `mewbo_graph.plugins.wiki` and `mewbo_graph.plugins.scg`) rather than in core: their tools import the graph engine, so they belong beside it. Importing the library pushes its plugin root to the core loader through `register_builtin_root` (in `mewbo_core.plugins`), so plugin discovery walks core's own built-in root plus every root a library registered. Core never imports up to find them. The library registers itself on import. A lean install without `mewbo_graph` never registers those suites, so the wiki and SCG features are simply absent rather than broken.
 
 The built-in path is resolved via `importlib.resources`, so it survives editable installs, wheels, and zipapps identically.
 
@@ -246,7 +254,7 @@ The built-in path is resolved via `importlib.resources`, so it survives editable
 
 To develop a plugin locally before publishing it to a marketplace, place the plugin directory anywhere on disk and point `plugins.registry_paths` at a custom `installed_plugins.json` that references it. Alternatively, use the CLI install flow with a `./relative-path` source in a local `marketplace.json`.
 
-The minimum viable plugin is a directory containing only `.claude-plugin/plugin.json`. Everything else (`skills/`, `agents/`, `hooks/`, `.mcp.json`, `session_tools`) is optional and discovered automatically. The bundled [widget-builder](features-widgets.md) is a complete working example. See [packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/](repo:packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder).
+The minimum viable plugin is a directory containing only `.claude-plugin/plugin.json`. Everything else (`skills/`, `agents/`, `hooks/`, `.mcp.json`, `session_tools`) is optional and discovered automatically. The bundled [widget-builder](web/widgets.md) is a complete working example. See [packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/](repo:packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder).
 
 ---
 

@@ -221,6 +221,137 @@ class TestTools:
 
 
 # ---------------------------------------------------------------------------
+# /api/tools — product-tool catalog (Gitea #182 P1)
+# ---------------------------------------------------------------------------
+
+
+def _fake_fan_out(*, wiki_gated: bool = True, scg_gated: bool = True):
+    """Build a real PluginFanOut with synthetic wiki/scg-shaped components.
+
+    Deterministic stand-in for real plugin discovery (an I/O boundary) — a
+    unit test must not depend on which plugins happen to be installed/enabled
+    in the environment it runs in.
+    """
+    from mewbo_core.plugins import PluginComponents, PluginFanOut, PluginManifest
+
+    components = []
+    if wiki_gated:
+        components.append(
+            PluginComponents(
+                manifest=PluginManifest(name="wiki", requires_capabilities=("wiki",)),
+                session_tool_entries=[
+                    {"tool_id": "wiki_search_pages", "module": "x", "class": "Y"},
+                    {"tool_id": "mint_entity", "module": "x", "class": "Y"},
+                ],
+            )
+        )
+    if scg_gated:
+        components.append(
+            PluginComponents(
+                manifest=PluginManifest(name="scg", requires_capabilities=("scg",)),
+                session_tool_entries=[
+                    {"tool_id": "agentic_search", "module": "x", "class": "Y"},
+                    # Shared with the wiki plugin above — must dedupe to ONE row.
+                    {"tool_id": "mint_entity", "module": "x", "class": "Y"},
+                ],
+            )
+        )
+    # An ungated plugin contribution (empty requires_capabilities) must NOT
+    # leak into the product-tool catalog — it stays allowlist-only.
+    components.append(
+        PluginComponents(
+            manifest=PluginManifest(name="internal_only"),
+            session_tool_entries=[{"tool_id": "internal_plumbing", "module": "x", "class": "Y"}],
+        )
+    )
+    return PluginFanOut(
+        components=components,
+        skill_dirs=[],
+        command_files=[],
+        agent_files=[],
+        mcp_servers={},
+        hooks_configs=[],
+    )
+
+
+class TestToolsProductCatalog:
+    def test_gated_product_tools_appear_with_server_and_capability(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        _reset_backend(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            "mewbo_core.plugins.load_all_plugin_components", _fake_fan_out
+        )
+        resp = client.get("/api/tools", headers=auth_headers)
+        assert resp.status_code == 200
+        by_id = {t["tool_id"]: t for t in resp.get_json()["tools"]}
+
+        assert by_id["wiki_search_pages"]["server"] == "Wiki"
+        assert by_id["wiki_search_pages"]["kind"] == "builtin"
+        assert by_id["wiki_search_pages"]["scope"] == "plugin"
+        assert by_id["wiki_search_pages"]["requires_capability"] == "wiki"
+
+        assert by_id["agentic_search"]["server"] == "Agentic Search"
+        assert by_id["agentic_search"]["requires_capability"] == "scg"
+
+    def test_shared_tool_across_two_plugins_appears_exactly_once(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """mint_entity is contributed by BOTH the wiki and scg manifests."""
+        _reset_backend(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            "mewbo_core.plugins.load_all_plugin_components", _fake_fan_out
+        )
+        resp = client.get("/api/tools", headers=auth_headers)
+        ids = [t["tool_id"] for t in resp.get_json()["tools"]]
+        assert ids.count("mint_entity") == 1
+        # First-registration-wins (component iteration order) → the wiki group.
+        by_id = {t["tool_id"]: t for t in resp.get_json()["tools"]}
+        assert by_id["mint_entity"]["server"] == "Wiki"
+
+    def test_ungated_plugin_contribution_excluded_from_product_catalog(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A plugin with no requires_capabilities stays allowlist-only, invisible here."""
+        _reset_backend(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            "mewbo_core.plugins.load_all_plugin_components", _fake_fan_out
+        )
+        resp = client.get("/api/tools", headers=auth_headers)
+        ids = [t["tool_id"] for t in resp.get_json()["tools"]]
+        assert "internal_plumbing" not in ids
+
+    def test_core_builtin_tools_have_no_requires_capability(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """Additive field: existing (non-product) rows are unaffected."""
+        _reset_backend(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            "mewbo_core.plugins.load_all_plugin_components", _fake_fan_out
+        )
+        resp = client.get("/api/tools", headers=auth_headers)
+        tools = resp.get_json()["tools"]
+        product_ids = {"wiki_search_pages", "mint_entity", "agentic_search"}
+        non_product_rows = [t for t in tools if t["tool_id"] not in product_ids]
+        assert non_product_rows, "expected at least one non-product tool row from the registry"
+        assert all(t["requires_capability"] is None for t in non_product_rows)
+
+    def test_no_gated_plugins_leaves_tools_list_unaffected(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        _reset_backend(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            "mewbo_core.plugins.load_all_plugin_components",
+            lambda: _fake_fan_out(wiki_gated=False, scg_gated=False),
+        )
+        resp = client.get("/api/tools", headers=auth_headers)
+        assert resp.status_code == 200
+        ids = [t["tool_id"] for t in resp.get_json()["tools"]]
+        assert "wiki_search_pages" not in ids
+        assert "agentic_search" not in ids
+
+
+# ---------------------------------------------------------------------------
 # /api/skills
 # ---------------------------------------------------------------------------
 

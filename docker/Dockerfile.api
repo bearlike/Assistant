@@ -34,6 +34,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends git wget \
     && apt-get update && apt-get install -y --no-install-recommends gh docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
+# 0b. tea (Gitea CLI) — single static binary from the official gitea.com
+#     release; runtime login setup lives in docker/init.d/15-tea-setup.sh.
+ARG TEA_VERSION=0.14.0
+RUN curl -fsSL "https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/tea-${TEA_VERSION}-linux-$(dpkg --print-architecture)" \
+        -o /usr/local/bin/tea \
+    && chmod +x /usr/local/bin/tea
+
 # 1. Copy only dependency metadata first (layer caching — survives source changes)
 COPY pyproject.toml uv.lock ./
 COPY packages/mewbo_core/pyproject.toml packages/mewbo_core/pyproject.toml
@@ -72,25 +79,61 @@ RUN --mount=type=cache,target=/root/.cache/uv \
             -e "apps/mewbo_api[wiki]"; \
     fi
 
+# SCIP symbol indexers (Python precise symbol resolution) — only baked in when
+# SCIP_EXTRAS=1, mirroring the WIKI_EXTRAS toggle above. The wiki code-graph
+# indexer shells out to two pinned binaries at index time:
+#   - scip-python : Sourcegraph's Pyright-backed Node CLI (npm global)
+#   - scip        : the SCIP companion Go CLI (print/convert/snapshot)
+# Node is ALREADY on PATH from the base image (nvm LTS → /opt/node/bin), so
+# `npm install -g` lands the `scip-python` bin beside it and the UID-1000
+# runtime user can invoke it — same provisioning shape as the base's
+# playwright-cli. The `scip` Go binary is fetched from the pinned GitHub release
+# and dropped on PATH at /usr/local/bin. Defaults OFF so a base API build pays
+# ~55 MB nothing for it; the compose api service flips SCIP_EXTRAS to "1"
+# (alongside WIKI_EXTRAS) once Python graph indexing is wired on. Versions are
+# pinned — scip-python 0.6.x and scip v0.8.x are the matched pair.
+ARG SCIP_EXTRAS=0
+ARG SCIP_PYTHON_VERSION=0.6.6
+ARG SCIP_CLI_VERSION=v0.8.1
+RUN if [ "$SCIP_EXTRAS" = "1" ]; then \
+        set -eux; \
+        npm install -g "@sourcegraph/scip-python@${SCIP_PYTHON_VERSION}"; \
+        rm -rf /root/.npm; \
+        arch="$(dpkg --print-architecture)"; \
+        case "$arch" in \
+            amd64) scip_arch=amd64 ;; \
+            arm64) scip_arch=arm64 ;; \
+            *) echo "unsupported arch for scip CLI: $arch" >&2; exit 1 ;; \
+        esac; \
+        curl -fsSL \
+            "https://github.com/sourcegraph/scip/releases/download/${SCIP_CLI_VERSION}/scip-linux-${scip_arch}.tar.gz" \
+            -o /tmp/scip.tar.gz; \
+        tar -xzf /tmp/scip.tar.gz -C /usr/local/bin scip; \
+        chmod +x /usr/local/bin/scip; \
+        rm -f /tmp/scip.tar.gz; \
+        scip-python --version; \
+        scip --version; \
+    fi
+
 # Pin the tree-sitter parser cache to a fixed, shared path so the build (root)
-# and the runtime (uid 1000) resolve the SAME directory — tree_sitter_language_pack
-# honours XDG_CACHE_HOME. Without this, a build-time pre-warm under /root/.cache
-# would be invisible to the runtime user's ~/.cache and re-downloaded at runtime.
+# and the runtime (uid 1000) resolve the SAME directory —
+# tree_sitter_language_pack honours XDG_CACHE_HOME. Without this, a build-time
+# pre-warm under /root/.cache would be invisible to the runtime user's
+# ~/.cache and re-downloaded (over the network) on the first real index.
 ENV XDG_CACHE_HOME=/opt/mewbo-cache
 
-# Pre-warm the tree-sitter parser bundle at BUILD time. The language pack (1.x)
-# fetches a per-platform parser archive from a GitHub release on first use; a
-# transient 504 there would otherwise abort a live indexing run. Baking the
-# bundle into the image removes that runtime GitHub dependency entirely (it
-# survives container restarts because it lives in the image layer, not a
-# volume). One download warms every language — the archive is the whole pack.
-# Best-effort: a transient blip at build time must not break the image; the
-# runtime path retries (mewbo_graph/wiki/graph.py:_download_with_retry) as the
-# safety net.
+# Pre-warm the tree-sitter grammar cache at BUILD time. get_language() fetches
+# a per-language parser over the network on first use and caches it (verified
+# empirically — the language-pack wheel does NOT bundle grammars, despite an
+# earlier assumption); baking the cache into the image removes that runtime
+# network dependency entirely (a transient blip mid-parse would otherwise
+# abort a live indexing run). Uses mewbo_graph.wiki.prefetch (the single
+# source of truth for the supported language list). Guarded on WIKI_EXTRAS
+# like the install step above — mewbo_graph itself isn't installed at all
+# when WIKI_EXTRAS=0, so the module's own "extra absent" skip can't fire.
 RUN if [ "$WIKI_EXTRAS" = "1" ]; then \
         mkdir -p /opt/mewbo-cache && \
-        ( python -c "import tree_sitter_language_pack as t; t.download(['python','javascript','typescript','go','rust'])" \
-          || echo 'WARN: tree-sitter parser pre-warm failed; runtime will retry-download on first index' ) && \
+        python -m mewbo_graph.wiki.prefetch && \
         chown -R 1000:1000 /opt/mewbo-cache; \
     fi
 

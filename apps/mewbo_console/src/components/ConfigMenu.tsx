@@ -19,7 +19,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { ProjectSummary, SkillSummary } from '../api/client';
+import { ProjectSummary, SkillSummary, ToolScope } from '../api/client';
 import { CreateWorktreeInput, WorktreeSummary } from '../types';
 import { getProviderIcon } from '../utils/modelIcon';
 import { isUnsupportedModel } from '../utils/modelSupport';
@@ -45,7 +45,7 @@ export type McpOption = {
   enabled: boolean;
   count?: number;
   status: McpStatus;
-  scope?: string;
+  scope?: ToolScope;
 };
 
 type ConfigMenuProps = {
@@ -387,7 +387,7 @@ export function ConfigMenu({
             <TabsTrigger value="model" className="text-[10px] px-1">Model</TabsTrigger>
             <TabsTrigger value="fallback" className="text-[10px] px-1">Fallback</TabsTrigger>
             <TabsTrigger value="skills" className="text-[10px] px-1">Skills</TabsTrigger>
-            <TabsTrigger value="mcps" className="text-[10px] px-1">MCPs</TabsTrigger>
+            <TabsTrigger value="mcps" className="text-[10px] px-1">Tools</TabsTrigger>
           </TabsList>
 
           {/* Root: summary rows that drill into other tabs */}
@@ -944,7 +944,7 @@ export function ConfigMenu({
                 </CommandEmpty>
                 {mcpSections.length === 0 && !mcpLoading && (
                   <div className="px-4 py-3 text-xs text-[hsl(var(--muted-foreground))] text-center">
-                    No MCP servers available.
+                    No tools available.
                   </div>
                 )}
                 {mcpSections.map((section) => (
@@ -960,6 +960,11 @@ export function ConfigMenu({
                       >
                         <span className="flex items-center gap-2 truncate flex-1">
                           <span className="truncate">{mcp.name}</span>
+                          {mcp.scope && (
+                            <span className="text-[10px] text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1 py-0.5 rounded shrink-0">
+                              {mcp.scope}
+                            </span>
+                          )}
                           {typeof mcp.count === 'number' && (
                             <span className="text-[10px] text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">
                               {mcp.count}

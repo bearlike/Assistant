@@ -11,7 +11,7 @@ import { useEffect } from "react";
 
 import { ConfigureWizard } from "./ConfigureWizard";
 import { IndexingScreen } from "./IndexingScreen";
-import { KnowledgeGraphScreen } from "./KnowledgeGraphScreen";
+import { KnowledgeGraph3DScreen } from "./KnowledgeGraph3DScreen";
 import { LandingScreen } from "./LandingScreen";
 import { QAScreen } from "./QAScreen";
 import { WelcomeScreen } from "./WelcomeScreen";
@@ -79,11 +79,12 @@ export default function WikiApp() {
           pageId={route.pageId}
           slug={route.slug}
           model={route.model}
+          answerId={route.answer}
         />
       );
     case "graph":
       return (
-        <KnowledgeGraphScreen slug={route.slug} platform={route.platform} />
+        <KnowledgeGraph3DScreen slug={route.slug} platform={route.platform} />
       );
   }
 }

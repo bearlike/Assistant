@@ -1,5 +1,5 @@
 site_name: Mewbo
-site_description: Documentation for Mewbo — an AI assistant modeled as a conversation state machine with a hierarchical agent hypervisor. Accessible via CLI, web console, REST API, and Home Assistant.
+site_description: Documentation for Mewbo, an AI assistant modeled as a conversation state machine with a hierarchical agent hypervisor. Use it from the terminal, the web console, Android, the REST API, and Home Assistant.
 repo_url: https://github.com/bearlike/Assistant
 repo_name: bearlike/Assistant
 site_url: https://docs.mewbo.com/
@@ -10,15 +10,34 @@ theme:
   icon: logos/logo-transparent.svg
 
   # Header tab rail (theme >= 1.3.0): fused below the top utility row, one
-  # sticky surface. The API Reference tab lands on the full-page Scalar app
-  # (docs/rest-api.md, rendered via the theme's app.html template).
+  # sticky surface. Since theme 1.6.0 a tab may claim a top-level nav Section
+  # (`section:`): pages inside a claimed section get a sidebar scoped to that
+  # section, and every other page gets the full nav minus all claimed sections.
+  # `match:` lists extra URL prefixes that also activate the tab; the API tab
+  # uses it so the full-page Scalar reference (docs/rest-api.md, app.html
+  # template, URL rest-api/) highlights the API Reference tab.
   header_tabs:
     - label: Documentation
       icon: lucide:book-open
       url: .
+    - label: Terminal
+      icon: lucide:terminal
+      url: terminal/
+      section: Terminal
+    - label: Web
+      icon: lucide:layout-dashboard
+      url: web/
+      section: Web
+    - label: Android
+      icon: lucide:smartphone
+      url: android/
+      section: Android
     - label: API Reference
       icon: lucide:braces
-      url: rest-api/
+      url: api/
+      section: API
+      match:
+        - rest-api
 
   # Mewbo brand-fork (mkdocs-shadcn-mewbo) configuration ────────────────
   ai:
@@ -29,6 +48,7 @@ theme:
       - "How do I install and configure Mewbo?"
       - "How does the agent hypervisor work?"
       - "How do I add MCP tools?"
+      - "How do I install the Android app?"
       - "How do I connect Home Assistant?"
   # Code-reference badges (theme >= 1.4.0): authors write `repo:`/`endpoint:`
   # link schemes and the theme rewrites them into DeepWiki-style badges. File
@@ -72,24 +92,45 @@ theme:
   footer:
     social:
       email: mailto:hello@mewbo.com
+    # Shortlist the footer's auto-derived Documentation column (theme >= 1.6.1).
+    # Everything else stays reachable from the header tabs and the sidebar.
+    docs:
+      - Get Started
+      - Terminal
+      - Web
+      - Android
+      - API
   nav_icons:
     Home: lucide:house
     "Get Started": lucide:rocket
     Troubleshooting: lucide:life-buoy
 
-    Configure: lucide:sliders-horizontal
-    "LLM Setup": lucide:brain
-    "Project Setup": lucide:folder-cog
-    "Configuration Reference": lucide:file-json
+    Terminal: lucide:terminal
+    "The Interface": lucide:panels-top-left
+    "Agent Fleet": lucide:users
+    "Remote Sync": lucide:cloud
+    Configuration: lucide:sliders-horizontal
 
-    Use: lucide:monitor-play
-    CLI: lucide:terminal
-    "Web Console + API": lucide:layout-dashboard
+    Web: lucide:layout-dashboard
+    Sessions: lucide:messages-square
+    "Search and Wiki": lucide:telescope
+
+    Android: lucide:smartphone
+    Install: lucide:download
+    Voice: lucide:mic
+    "Chat and Sessions": lucide:messages-square
+    "Device Tools": lucide:smartphone-nfc
+
+    API: lucide:webhook
+    Automation: lucide:bot
+    "Device Tool Bridge": lucide:cable
+    "Full Reference": lucide:globe
+
+    "Client Integrations": lucide:cable
     "MCP Server": lucide:plug-zap
     "Home Assistant": lucide:house-plug
     "Nextcloud Talk": lucide:message-circle
     Email: lucide:mail
-    "CI Agent Pickup": lucide:bot
 
     Capabilities: lucide:sparkles
     "Workspace & Execution": lucide:hammer
@@ -101,7 +142,12 @@ theme:
     "External Tools (MCP)": lucide:plug
     "Knowledge & Discovery": lucide:library
     "Agentic Wiki": lucide:book-marked
+    Overview: lucide:book-open
+    "Indexing & Generation": lucide:database
+    "Question Answering": lucide:message-circle-question
+    "Knowledge Graph": lucide:waypoints
     "Agentic Search": lucide:search
+    "Source Capability Graph": lucide:route
     "Structured Outputs": lucide:brackets
     "Composition & Delegation": lucide:users
     "Sub-agents": lucide:git-branch
@@ -121,15 +167,21 @@ theme:
     "Storage Backends": lucide:database
     "Production Setup": lucide:server
 
+    Configure: lucide:sliders-horizontal
+    "LLM Setup": lucide:brain
+    "Project Setup": lucide:folder-cog
+    "Configuration Reference": lucide:file-json
+
     Develop: lucide:code
     "Architecture Overview": lucide:blocks
     "Session Runtime": lucide:cpu
     "Building a Client": lucide:hammer
-    "REST API": lucide:globe
     "Python Reference": lucide:book-open-text
 
 hooks:
   - docs/hooks/schema_to_md.py
+  - docs/hooks/redirects.py
+  - docs/hooks/media_check.py
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -191,28 +243,49 @@ extra:
 nav:
   - Home: index.md
   - Get Started: getting-started.md
-  - Configure:
-      - LLM Setup: llm-setup.md
-      - Project Setup: project-configuration.md
-      - Configuration Reference: configuration.md
-  - Use:
-      - CLI: clients-cli.md
-      - Web Console + API: clients-web-api.md
+  - Terminal:
+      - Get Started: terminal/index.md
+      - The Interface: terminal/interface.md
+      - Agent Fleet: terminal/agent-fleet.md
+      - Remote Sync: terminal/remote-sync.md
+      - Configuration: terminal/configuration.md
+  - Web:
+      - Get Started: web/index.md
+      - Sessions: web/sessions.md
+      - Search and Wiki: web/search-and-wiki.md
+      - Web IDE: web/ide.md
+      - Widgets: web/widgets.md
+  - Android:
+      - Get Started: android/index.md
+      - Install: android/install.md
+      - Voice: android/voice.md
+      - Chat and Sessions: android/chat.md
+      - Device Tools: android/device-tools.md
+  - API:
+      - Get Started: api/index.md
+      - Building a Client: api/building-a-client.md
+      - Structured Outputs: api/structured-outputs.md
+      - Automation: api/automation.md
+      - Device Tool Bridge: api/device-tools.md
+      - Full Reference: rest-api.md
+  - Client Integrations:
       - MCP Server: clients-mcp.md
       - Home Assistant: clients-home-assistant.md
-      - Nextcloud Talk: clients-nextcloud-talk.md
       - Email: clients-email.md
-      - CI Agent Pickup: ci-agent-pickup.md
+      - Nextcloud Talk: clients-nextcloud-talk.md
   - Knowledge & Discovery:
-      - Agentic Wiki: features-wiki.md
-      - Agentic Search: features-search.md
-      - Structured Outputs: features-structured-outputs.md
+      - Agentic Wiki:
+          - Overview: features-wiki.md
+          - Indexing & Generation: features-wiki-indexing.md
+          - Question Answering: features-wiki-qa.md
+          - Knowledge Graph: features-wiki-graph.md
+      - Agentic Search:
+          - Overview: features-search.md
+          - Source Capability Graph: features-search-scg.md
   - Capabilities:
       - Workspace & Execution:
           - Built-in Tools: features-builtin-tools.md
           - Branches & Worktrees: features-worktrees.md
-          - Web IDE: features-web-ide.md
-          - Widgets: features-widgets.md
           - Code Intelligence: features-lsp.md
           - External Tools (MCP): features-mcp.md
       - Composition & Delegation:
@@ -231,10 +304,12 @@ nav:
       - Docker Compose: deployment-docker.md
       - Storage Backends: deployment-storage.md
       - Production Setup: deployment-production.md
+  - Configure:
+      - LLM Setup: llm-setup.md
+      - Project Setup: project-configuration.md
+      - Configuration Reference: configuration.md
   - Develop:
       - Architecture Overview: core-orchestration.md
       - Session Runtime: session-runtime.md
-      - Building a Client: developer-guide.md
-      - REST API: rest-api.md
       - Python Reference: reference.md
   - Troubleshooting: troubleshooting.md

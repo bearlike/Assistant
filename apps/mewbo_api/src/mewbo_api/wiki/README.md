@@ -1,6 +1,6 @@
 # Wiki backend (mewbo-api[wiki])
 
-The opt-in DeepWiki-style backend that satisfies the frontend contract in
+The opt-in auto-generated-wiki backend that satisfies the frontend contract in
 `apps/mewbo_console/src/components/wiki/api/types.ts` and serves `/v1/wiki/*`.
 
 ## Quick-start
@@ -39,9 +39,8 @@ Backend env knobs:
 
 ## Demo repo
 
-[git.hurricane.home/bearlike/wiki-demo](https://git.hurricane.home/bearlike/wiki-demo) —
-a tiny Python pkg with a `.mewbo/wiki.json` grounder. Use it for E2E smoke
-tests.
+A tiny Python pkg fixture with a `.mewbo/wiki.json` grounder, hosted on the
+project's private Gitea instance. Used for E2E smoke tests.
 
 ## Grounder
 
@@ -51,5 +50,5 @@ and injects `repo_notes[].content` into the sub-agent task prompts.
 
 ## Design + plan
 
-- Design: `docs/specs/2026-05-14-deepwiki-style-gen-design.md`
-- Plan: `docs/plans/2026-05-14-deepwiki-style-gen-plan.md`
+- Design: `docs/specs/2026-05-14-wiki-style-gen-design.md`
+- Plan: `docs/plans/2026-05-14-wiki-style-gen-plan.md`

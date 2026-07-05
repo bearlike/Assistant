@@ -1,6 +1,6 @@
 # Storage Backends
 
-Mewbo stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store. It has zero dependencies and works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the [Web IDE](features-web-ide.md) feature (which requires MongoDB for container state).
+Mewbo stores session transcripts, compaction summaries, titles, and metadata in a pluggable storage backend. The default is a JSON filesystem store. It has zero dependencies and works immediately after installation. Switch to MongoDB for multi-instance deployments, persistence across container restarts, or when using the [Web IDE](web/ide.md) feature (which requires MongoDB for container state).
 
 ## JSON (Default)
 
@@ -24,10 +24,10 @@ MEWBO_MONGODB_URI=mongodb://mewbo:mewbo@localhost:27018/mewbo?authSource=admin
 MEWBO_MONGODB_DATABASE=mewbo
 ```
 
-The MongoDB driver stores all session data in collections within the configured database. Connection settings are read from environment variables, which override anything set in [`configs/app.json`](repo:configs/app.json).
+The MongoDB driver stores all session data in collections within the configured database. Connection settings are read from environment variables, which override anything set in [`configs/app.json`](repo:configs/app.example.json).
 
 > [!IMPORTANT] Required for the Web IDE
-> The [Web IDE](features-web-ide.md) feature needs MongoDB to persist container state across API restarts. Without MongoDB, the Web IDE button stays disabled.
+> The [Web IDE](web/ide.md) feature needs MongoDB to persist container state across API restarts. Without MongoDB, the Web IDE button stays disabled.
 
 > [!TIP] Recommended for production
 > Docker deployments, multi-worker API setups, and any environment where session data must survive container restarts should prefer MongoDB over the JSON driver.
@@ -76,12 +76,12 @@ To preserve history before switching:
 
 | Variable / Config key | Source | Default | Description |
 |----------------------|--------|---------|-------------|
-| `MEWBO_STORAGE_DRIVER` | Env var | `json` | Storage driver: `json` or `mongodb`. Env var takes precedence over [`configs/app.json`](repo:configs/app.json). |
+| `MEWBO_STORAGE_DRIVER` | Env var | `json` | Storage driver: `json` or `mongodb`. Env var takes precedence over [`configs/app.json`](repo:configs/app.example.json). |
 | `MEWBO_MONGODB_URI` | Env var | `mongodb://localhost:27017` | Full MongoDB connection URI. |
 | `MEWBO_MONGODB_DATABASE` | Env var | `mewbo` | MongoDB database name. |
 | `MEWBO_HOME` | Env var | `~/.mewbo` | Data root for the JSON driver. In Docker, set to `/app/data` (mapped to the `api-data` named volume). |
-| `storage.driver` | [`configs/app.json`](repo:configs/app.json) | `json` | Config file equivalent of `MEWBO_STORAGE_DRIVER` (env var wins). |
-| `storage.mongodb.uri` | [`configs/app.json`](repo:configs/app.json) | `mongodb://localhost:27017` | Config file equivalent of `MEWBO_MONGODB_URI` (env var wins). |
-| `storage.mongodb.database` | [`configs/app.json`](repo:configs/app.json) | `mewbo` | Config file equivalent of `MEWBO_MONGODB_DATABASE` (env var wins). |
+| `storage.driver` | [`configs/app.json`](repo:configs/app.example.json) | `json` | Config file equivalent of `MEWBO_STORAGE_DRIVER` (env var wins). |
+| `storage.mongodb.uri` | [`configs/app.json`](repo:configs/app.example.json) | `mongodb://localhost:27017` | Config file equivalent of `MEWBO_MONGODB_URI` (env var wins). |
+| `storage.mongodb.database` | [`configs/app.json`](repo:configs/app.example.json) | `mewbo` | Config file equivalent of `MEWBO_MONGODB_DATABASE` (env var wins). |
 
-Environment variables always take precedence over values in [`configs/app.json`](repo:configs/app.json).
+Environment variables always take precedence over values in [`configs/app.json`](repo:configs/app.example.json).

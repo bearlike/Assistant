@@ -51,6 +51,7 @@ from .types import (
     Embedding,
     GraphEdge,
     GraphNode,
+    GraphNodeAdapter,
     IndexingJob,
     Project,
     QaAnswer,
@@ -112,13 +113,50 @@ class WikiStoreBase(abc.ABC):
     def save_page(self, slug: str, page: WikiPage) -> None:
         """Persist *page* for the project *slug*; overwrites if same page_id."""
 
-    @abc.abstractmethod
     def get_page(self, slug: str, page_id: str) -> WikiPage | None:
-        """Return a single wiki page, or None if absent."""
+        """Return a single wiki page, or None if absent.
+
+        THE single doc-content read seam: every upstream doc reader (the API
+        page route, the ``wiki_read_page`` Q&A tool, the MCP ``read_wiki_page``
+        facade over the route) funnels through here, so guarding it once makes a
+        graph-only project's "no documentation" failure deterministic everywhere.
+        A project indexed in graph-only (developer) mode carries
+        ``graph_only=True`` and has ZERO pages — reading page content then raises
+        :class:`DocumentationUnavailableError` from this ONE place rather than
+        returning a confusing ``None``. The driver-specific fetch lives in
+        :meth:`_get_page_raw`; this template method only adds the guard. The graph
+        endpoint never calls this, so visualisation stays unaffected.
+        """
+        self._assert_docs_available(slug)
+        return self._get_page_raw(slug, page_id)
+
+    @abc.abstractmethod
+    def _get_page_raw(self, slug: str, page_id: str) -> WikiPage | None:
+        """Driver fetch of a single page (no graph-only guard)."""
+
+    def _assert_docs_available(self, slug: str) -> None:
+        """Raise :class:`DocumentationUnavailableError` for a graph-only project.
+
+        Best-effort lookup: a missing/absent project is NOT a graph-only one, so
+        the read proceeds (the caller handles the ``None`` page). Only a project
+        record present AND flagged ``graph_only`` blocks doc reads.
+        """
+        from .errors import DocumentationUnavailableError  # noqa: PLC0415
+
+        project = self.get_project(slug)
+        if project is not None and getattr(project, "graph_only", False):
+            raise DocumentationUnavailableError(slug)
 
     @abc.abstractmethod
     def list_pages(self, slug: str) -> list[WikiPage]:
-        """Return all pages for project *slug*."""
+        """Return all pages for project *slug*.
+
+        NOT doc-guarded: ``list_pages`` is also the page-id roster used by the
+        deterministic internal paths (finalize prune, resume, retriever,
+        ``QaFinalizer.tag_page_citations``), so guarding it would break indexing
+        and finalize themselves. A graph-only project simply returns ``[]`` here
+        (it has no pages); the guard lives on the doc-CONTENT read (:meth:`get_page`).
+        """
 
     def prune_pages(self, slug: str, keep: Iterable[str]) -> int:
         """Drop every page for *slug* whose ``page_id`` is not in *keep*.
@@ -723,8 +761,8 @@ class JsonWikiStore(WikiStoreBase):
         index[page.id] = page.title
         self._index_path(slug).write_text(json.dumps(index, indent=2), encoding="utf-8")
 
-    def get_page(self, slug: str, page_id: str) -> WikiPage | None:
-        """Return a single wiki page, or None if absent."""
+    def _get_page_raw(self, slug: str, page_id: str) -> WikiPage | None:
+        """Return a single wiki page, or None if absent (no doc-guard)."""
         return self._load_json(self._page_path(slug, page_id), WikiPage)
 
     def list_pages(self, slug: str) -> list[WikiPage]:
@@ -1129,6 +1167,28 @@ class JsonWikiStore(WikiStoreBase):
                 logging.warning("Skipping malformed line in %s", path)
         return out
 
+    def _load_graph_nodes(self, path: Path) -> list[GraphNode]:
+        """Load a graph-node JSONL, dispatching each line to its per-kind class.
+
+        ``GraphNode`` is a discriminated union (schema v2), so validation goes
+        through :data:`GraphNodeAdapter` — the ``type`` discriminator picks
+        ``FileNode``/``ClassNode``/… ; legacy lines without ``subkind``/
+        ``attributes`` validate to the defaults. Mirrors ``_load_jsonl`` but
+        can't reuse it (the union is not a single ``BaseModel`` subclass).
+        """
+        if not path.exists():
+            return []
+        out: list[GraphNode] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(GraphNodeAdapter.validate_json(line))
+            except Exception:
+                logging.warning("Skipping malformed line in %s", path)
+        return out
+
     def _write_jsonl(self, path: Path, items: list[Any]) -> None:
         """Atomically rewrite a JSONL file (tmp + rename)."""
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1142,7 +1202,7 @@ class JsonWikiStore(WikiStoreBase):
     def upsert_nodes(self, slug: str, nodes: Iterable[GraphNode]) -> None:
         """Upsert graph nodes for *slug*; dedup by node_id."""
         with self._lock:
-            existing = {n.node_id: n for n in self._load_jsonl(self._nodes_path(slug), GraphNode)}
+            existing = {n.node_id: n for n in self._load_graph_nodes(self._nodes_path(slug))}
             for node in nodes:
                 existing[node.node_id] = node
             self._write_jsonl(self._nodes_path(slug), list(existing.values()))
@@ -1186,9 +1246,9 @@ class JsonWikiStore(WikiStoreBase):
                     related_ids.add(edge.target)
                 elif edge.target == neighbors_of:
                     related_ids.add(edge.source)
-            all_nodes = self._load_jsonl(self._nodes_path(slug), GraphNode)
+            all_nodes = self._load_graph_nodes(self._nodes_path(slug))
             return [n for n in all_nodes if n.node_id in related_ids]
-        nodes = self._load_jsonl(self._nodes_path(slug), GraphNode)
+        nodes = self._load_graph_nodes(self._nodes_path(slug))
         if node_type is not None:
             nodes = [n for n in nodes if n.type == node_type]
         if name_match is not None:
@@ -1216,7 +1276,7 @@ class JsonWikiStore(WikiStoreBase):
     def delete_nodes_by_file(self, slug: str, file: str) -> int:
         """Delete every code node whose ``file`` equals *file*; return count."""
         with self._lock:
-            nodes = self._load_jsonl(self._nodes_path(slug), GraphNode)
+            nodes = self._load_graph_nodes(self._nodes_path(slug))
             keep = [n for n in nodes if n.file != file]
             removed = len(nodes) - len(keep)
             if removed:
@@ -1228,7 +1288,7 @@ class JsonWikiStore(WikiStoreBase):
         with self._lock:
             file_ids = {
                 n.node_id
-                for n in self._load_jsonl(self._nodes_path(slug), GraphNode)
+                for n in self._load_graph_nodes(self._nodes_path(slug))
                 if n.file == file
             }
             if not file_ids:
@@ -1719,8 +1779,8 @@ class MongoWikiStore(WikiStoreBase):
             {"slug": slug, "page_id": page.id}, doc, upsert=True
         )
 
-    def get_page(self, slug: str, page_id: str) -> WikiPage | None:
-        """Return a single wiki page, or None if absent."""
+    def _get_page_raw(self, slug: str, page_id: str) -> WikiPage | None:
+        """Return a single wiki page, or None if absent (no doc-guard)."""
         doc = self._col("wiki_pages").find_one({"slug": slug, "page_id": page_id})
         if doc is None:
             return None
@@ -2121,14 +2181,14 @@ class MongoWikiStore(WikiStoreBase):
             cursor = self._col("wiki_graph_nodes").find(
                 {"slug": slug, "node_id": {"$in": list(related_ids)}}
             )
-            return [GraphNode.model_validate(_strip_mongo_meta(d)) for d in cursor]
+            return [GraphNodeAdapter.validate_python(_strip_mongo_meta(d)) for d in cursor]
         query: dict[str, Any] = {"slug": slug}
         if node_type is not None:
             query["type"] = node_type
         if name_match is not None:
             query["name"] = {"$regex": re.escape(name_match), "$options": "i"}
         cursor = self._col("wiki_graph_nodes").find(query)
-        return [GraphNode.model_validate(_strip_mongo_meta(d)) for d in cursor]
+        return [GraphNodeAdapter.validate_python(_strip_mongo_meta(d)) for d in cursor]
 
     def list_edges(self, slug: str) -> list[GraphEdge]:
         """Return every edge for *slug* (graph-viewer endpoint)."""
