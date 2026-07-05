@@ -4,7 +4,7 @@ Mewbo ships a set of first-party tools that every session has available by defau
 
 This page documents every built-in tool, its parameters, example output, and the configuration switches that control which editing backend is active.
 
-For setup and installation, see [Getting Started](getting-started.md). For tool permissions and approval modes, see the [CLI client](clients-cli.md) page.
+For setup and installation, see [Getting Started](getting-started.md). For tool permissions and approval modes, see [The Interface](terminal/interface.md) page of the terminal client.
 
 ## Tool catalog
 
@@ -25,7 +25,7 @@ For setup and installation, see [Getting Started](getting-started.md). For tool 
 `read_file` reads a local file and returns its content with 1-based line numbers, mirroring `cat -n` output. Reads are line-windowed: the default window is 2 000 lines, and `offset` / `limit` let the session page through arbitrarily large files without exhausting the context window. Mewbo also deduplicates repeated reads of the same slice so the same content does not consume context twice. In the web console, every `read_file` call renders as an expandable card in the session timeline showing the project, file path, and the exact line window the assistant pulled into context.
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-console-file-read-log.jpg" alt="A read_file tool card in the Mewbo console showing lines 81 through 90 of a 733-line litellm-config.yml with a truncated tag" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../assets/img/mewbo-console-file-read-log.jpg" alt="A read_file tool card in the Mewbo console showing lines 81 through 90 of a 733-line litellm-config.yml with a truncated tag" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 ### Parameters
@@ -68,10 +68,10 @@ Read lines 200–400 of a large source file:
 Mewbo has two editing backends. Both apply edits atomically and return a unified diff so you can see exactly what changed. In the web console, every file edit is rendered as an expandable diff card in the session timeline, with line-level additions and deletions highlighted in green and red.
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-console-04-file-edit.jpg" alt="A file-edit tool card in the Mewbo console showing a unified diff with +23 additions and -2 deletions" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../assets/img/mewbo-console-04-file-edit.jpg" alt="A file-edit tool card in the Mewbo console showing a unified diff with +23 additions and -2 deletions" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-The active backend for a session is chosen automatically based on the model, or you can pin it via [`agent.edit_tool`](configuration.md#agent) in [`configs/app.json`](repo:configs/app.json).
+The active backend for a session is chosen automatically based on the model, or you can pin it via [`agent.edit_tool`](configuration.md#agent) in [`configs/app.json`](repo:configs/app.example.json).
 
 ### search_replace_block (Aider-style)
 
@@ -144,7 +144,7 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 `aider_shell_tool` runs an arbitrary shell command and returns stdout, stderr, exit code, and wall-clock duration. In the web console, every shell call renders as a terminal card in the session timeline with the command, the working directory, and the captured output so you can review exactly what the assistant ran.
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-console-shell-log.jpg" alt="A shell tool card in the Mewbo console showing a gh release list command with its JSON response and a 348ms duration" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../assets/img/mewbo-console-shell-log.jpg" alt="A shell tool card in the Mewbo console showing a gh release list command with its JSON response and a 348ms duration" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 ### Parameters
@@ -173,7 +173,7 @@ When `old_string` is empty, the tool **appends** `new_string` to the file (or cr
 - The command runs in a subprocess with the specified working directory. If `cwd` is outside the resolved `root`, the tool raises a path-validation error.
 - Stdout and stderr are merged into the `stdout` field.
 - Shell invocations never run in parallel with other write tools in the same step.
-- Shell invocations require approval in the default permission policy. See the [CLI client](clients-cli.md) page for approval modes and auto-approve flags.
+- Shell invocations require approval in the default permission policy. See [The Interface](terminal/interface.md) for approval modes and auto-approve flags.
 
 ---
 

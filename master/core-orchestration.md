@@ -638,7 +638,7 @@ Existing adapters: Nextcloud Talk ([`nextcloud_talk.py`](repo:apps/mewbo_api/src
 - **Tools**: implement `AbstractTool` or register an MCP server with a schema.
 - **File edit tool**: set `agent.edit_tool` to `"search_replace_block"` or `"structured_patch"`, or leave empty for auto-selection.
 - **Plugins**: install from configured marketplaces; see [Plugins & Marketplace](features-plugins.md).
-- **Web IDE**: opt-in per-session code-server containers via `agent.web_ide`; see [Web IDE](features-web-ide.md).
+- **Web IDE**: opt-in per-session code-server containers via `agent.web_ide`; see [Web IDE](web/ide.md).
 - **Hooks**: shell command (`type: "command"`) or HTTP webhook (`type: "http"`); see [Permissions & Hooks](features-permissions-hooks.md).
 - **Interfaces**: reuse `SessionRuntime` and the event transcript model.
 - **Chat platforms**: implement `ChannelAdapter`, register in `init_channels()`; see [Nextcloud Talk](clients-nextcloud-talk.md) and [Email](clients-email.md).
@@ -647,5 +647,5 @@ Existing adapters: Nextcloud Talk ([`nextcloud_talk.py`](repo:apps/mewbo_api/src
 ## Further reading
 
 - [Session Runtime](session-runtime.md): the shared facade used by CLI and API.
-- [Building a Client](developer-guide.md): full walkthrough for embedding the core.
+- [Building a Client](api/building-a-client.md): full walkthrough for embedding the core.
 - [API Reference](reference.md): mkdocstrings reference for every module.

@@ -23,7 +23,7 @@ All of it is open source.
 <div class="ms-cta-row">
   <a class="ms-btn ms-btn--primary" href="getting-started/">Quickstart →</a>
   <a class="ms-btn ms-btn--secondary" href="deployment-docker/">Install via Docker</a>
-  <a class="ms-btn ms-btn--ghost" href="reference/">API reference</a>
+  <a class="ms-btn ms-btn--ghost" href="api/">API reference</a>
 </div>
 
 <div class="ms-pills" aria-label="What makes Mewbo different">
@@ -51,14 +51,14 @@ All of it is open source.
 
 <div class="swiper ms-shots">
 <div class="swiper-wrapper">
-<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-01-front.png" alt="The Mewbo Console home listing recent sessions" /><figcaption>Your sessions at a glance</figcaption></figure></div>
-<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-02-tasks.png" alt="A Mewbo task in the console, broken into steps with tool calls and results" /><figcaption>Inside a task, step by step</figcaption></figure></div>
-<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-07-widgets.png" alt="Interactive widgets rendered inline in a Mewbo conversation" /><figcaption>Interactive widgets, inline in chat</figcaption></figure></div>
-<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-wiki-02-overview.jpg" alt="A MewboWiki overview page with a runtime flow diagram and an Ask MewboWiki box" /><figcaption>Agentic Wiki: documentation grounded in your code</figcaption></figure></div>
-<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-wiki-03-graph.jpg" alt="The MewboWiki interactive knowledge graph of a repository" /><figcaption>Your codebase as a living knowledge graph</figcaption></figure></div>
-<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-search-01-landing.jpg" alt="The Agentic Search landing page with workspaces scoped to connected sources" /><figcaption>Agentic Search: workspaces over your connected tools</figcaption></figure></div>
-<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-search-02-results.jpg" alt="Agentic Search results: one ranked list across connected sources with a synthesised overview" /><figcaption>One ranked list across every tool, topped by a synthesis</figcaption></figure></div>
-<div class="swiper-slide"><figure><img loading="lazy" src="mewbo-console-05-plugins.png" alt="The Mewbo plugins page with installed plugins and marketplace listings" /><figcaption>Plugins and a marketplace to extend any session</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-console-01-front.png" alt="The Mewbo Console home listing recent sessions" /><figcaption>Your sessions at a glance</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-console-02-tasks.png" alt="A Mewbo task in the console, broken into steps with tool calls and results" /><figcaption>Inside a task, step by step</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-console-07-widgets.png" alt="Interactive widgets rendered inline in a Mewbo conversation" /><figcaption>Interactive widgets, inline in chat</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-wiki-02-overview.jpg" alt="A MewboWiki overview page with a runtime flow diagram and an Ask MewboWiki box" /><figcaption>Agentic Wiki: documentation grounded in your code</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-wiki-03-graph.jpg" alt="The MewboWiki interactive knowledge graph of a repository" /><figcaption>Your codebase as a living knowledge graph</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-search-01-landing.jpg" alt="The Agentic Search landing page with workspaces scoped to connected sources" /><figcaption>Agentic Search: workspaces over your connected tools</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-search-02-results.jpg" alt="Agentic Search results: one ranked list across connected sources with a synthesised overview" /><figcaption>One ranked list across every tool, topped by a synthesis</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-console-05-plugins.png" alt="The Mewbo plugins page with installed plugins and marketplace listings" /><figcaption>Plugins and a marketplace to extend any session</figcaption></figure></div>
 </div>
 <div class="swiper-pagination"></div>
 <div class="swiper-button-prev"></div>
@@ -71,24 +71,32 @@ All of it is open source.
 
 ## Choose your surface { .ms-h2-icon data-icon="target" }
 
-One engine. Five clients. Pick whichever matches where the work already happens inside your team. Behaviour, tools, and configs are identical across all of them; the mode of access is what changes.
+One engine, many front doors. Pick the surface that matches where your team already works. Behaviour, tools, and configs stay identical across all of them. Only the mode of access changes.
 
 <div class="ms-grid ms-grid--5">
 
-<a class="ms-card" href="clients-cli/">
+<a class="ms-card" href="terminal/">
   <span class="ms-card__icon">
     <iconify-icon icon="lucide:terminal" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
-  <span class="ms-card__title">CLI</span>
-  <span class="ms-card__body">For developers shipping code. Run tests, refactors, and migrations alongside your git workflow, with plan-mode approval ahead of any destructive step.</span>
+  <span class="ms-card__title">Terminal</span>
+  <span class="ms-card__body">For developers shipping code. Run tests, refactors, and migrations next to your git workflow. Plan mode gates every destructive step behind your approval.</span>
 </a>
 
-<a class="ms-card" href="clients-web-api/">
+<a class="ms-card" href="web/">
   <span class="ms-card__icon">
     <iconify-icon icon="lucide:app-window" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
-  <span class="ms-card__title">Web console &amp; API</span>
-  <span class="ms-card__body">For teams that need audit trails. Review sessions side by side, and drive scheduled runs from CI, cron, or your internal ops stack.</span>
+  <span class="ms-card__title">Web console</span>
+  <span class="ms-card__body">For teams that need audit trails. Review sessions side by side in the browser. The REST API drives the same sessions from CI, cron, or your ops stack.</span>
+</a>
+
+<a class="ms-card" href="android/">
+  <span class="ms-card__icon">
+    <iconify-icon icon="simple-icons:android" width="20" height="20" aria-hidden="true"></iconify-icon>
+  </span>
+  <span class="ms-card__title">Android</span>
+  <span class="ms-card__body">For work that follows you off the desk. Aura is the native Android client. Start a session, watch the agent tree, and steer it from your phone.</span>
 </a>
 
 
@@ -159,34 +167,19 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 <span class="ms-card__body">Your team's knowledge hides in repos, trackers, chat, and docs. One question fans a sub-agent out to each connected source in parallel. Their hits merge and re-rank into a single list that spans every source, topped by a synthesised overview cited to its origins, with a trace of every source it queried. One question. Every tool. One ranked answer.</span>
 </a>
 
-<a class="ms-card" href="features-widgets/">
+<a class="ms-card" href="web/widgets/">
 <span class="ms-card__title">Widgets inline in chat</span>
 <span class="ms-card__body">Ask for a chart, a card, or a data table and an interactive widget appears directly in the conversation. Widgets run in a sandboxed browser environment with no server involvement. Data is baked in at creation time, so widgets persist across sessions as permanent snapshots. Teams with internal data systems that lack good reporting interfaces can surface results visually on demand.</span>
 </a>
 
-<a class="ms-card" href="features-plugins/">
-<span class="ms-card__title">Plugin and Agent Skills platform</span>
-<span class="ms-card__body">Extend Mewbo with new agent types, skills, hooks, and tools using the same plugin format as Claude Code. Plugins are compatible with the official Claude plugins marketplace and activate automatically at session start. Capability gating ensures features only appear on surfaces that can support them. The bundled widget-builder is the reference example.</span>
-</a>
-
 <a class="ms-card" href="clients-mcp/">
 <span class="ms-card__title">Mewbo as an MCP server</span>
-<span class="ms-card__body">Expose Mewbo to your whole agent fleet. Claude Code, Codex, Cursor, or another Mewbo connects over MCP to start coding sessions on a fresh worktree, steer and read them back at the detail it needs, and ask grounded questions of your Agentic Wiki — authenticated with a key you issue and revoke.</span>
+<span class="ms-card__body">Expose Mewbo to your whole agent fleet. Claude Code, Codex, Cursor, or another Mewbo connects over MCP to start coding sessions on a fresh worktree, steer and read them back at the detail it needs, and ask grounded questions of your Agentic Wiki, authenticated with a key you issue and revoke.</span>
 </a>
 
-<a class="ms-card" href="features-structured-outputs/">
+<a class="ms-card" href="api/structured-outputs/">
 <span class="ms-card__title">Structured Outputs</span>
 <span class="ms-card__body">Describe what you need, pass a JSON Schema, and get back a validated object. An agentic session does the research first: it can search your code and wiki, and ground itself in a connected search workspace, before it writes a single field. On a workspace with a mapped Source Capability Graph the run goes graph-first, so the answer carries provenance. Built for pipelines that need machine-readable output, not prose.</span>
-</a>
-
-<a class="ms-card" href="ci-agent-pickup/">
-<span class="ms-card__title">CI Agent Pickup</span>
-<span class="ms-card__body">Assign a bot account to an issue, or @mention it in a comment, and Mewbo picks the work up. One workflow file runs on both GitHub Actions and Gitea Actions. It hands the item to your Mewbo API, an agent session starts in the right working directory, and the final answer lands back on the issue or PR as a comment from the bot.</span>
-</a>
-
-<a class="ms-card" href="rest-api/">
-<span class="ms-card__title">REST API Reference</span>
-<span class="ms-card__body">The full HTTP surface, generated from the running API server so it never drifts from the code. Browse every endpoint with its parameters and response shapes, and copy ready-to-run request samples in curl, Python, JavaScript, and more.</span>
 </a>
 
 </div>
@@ -221,7 +214,7 @@ Mewbo reads the configuration you already have. Point it at a project and it pic
 
 <a class="ms-card" href="features-plugins/#session-tools">
 <span class="ms-card__title">Session tools</span>
-<span class="ms-card__body">Plugins contribute per-agent stateful tools via a <code>session_tools</code> array in <code>plugin.json</code>. The core imports the class and wires it to the <code>ToolUseLoop</code>; widgets, exit-plan-mode, and future capability bundles all use the same primitive.</span>
+<span class="ms-card__body">Plugins contribute per-agent stateful tools via a <code>session_tools</code> array in <code>plugin.json</code></span>
 </a>
 
 </div>
@@ -240,10 +233,10 @@ Mewbo reads the configuration you already have. Point it at a project and it pic
 <span class="ms-card__title">Workspace &amp; execution</span>
 <ul class="ms-card__list">
   <li><a href="features-builtin-tools/">Built-in tools</a>: read, edit, shell, list</li>
-  <li><a href="features-web-ide/">Web IDE</a>: per-session code-server</li>
+  <li><a href="web/ide/">Web IDE</a>: per-session code-server</li>
   <li><a href="features-lsp/">Code intelligence (LSP)</a></li>
   <li><a href="features-mcp/">External tools (MCP)</a></li>
-  <li><a href="features-widgets/">Widgets</a>: interactive UI inline in chat</li>
+  <li><a href="web/widgets/">Widgets</a>: interactive UI inline in chat</li>
 </ul>
 </div>
 
@@ -251,7 +244,7 @@ Mewbo reads the configuration you already have. Point it at a project and it pic
 <span class="ms-card__title">Knowledge &amp; discovery</span>
 <ul class="ms-card__list">
   <li><a href="features-wiki/">Agentic Wiki</a>: source-grounded repo docs</li>
-  <li><a href="features-wiki/#the-knowledge-graph">Knowledge graph</a> of the codebase</li>
+  <li><a href="features-wiki-graph/">Knowledge graph</a> of the codebase</li>
   <li><a href="features-search/">Agentic Search</a> across connected MCPs</li>
 </ul>
 </div>
@@ -315,8 +308,9 @@ A five-step journey. Each step is short, and each link lands on the page you nee
 <div class="ms-step">
 <p class="ms-step__title">Use</p>
 <ul class="ms-step__links">
-  <li><a href="clients-cli/">CLI</a></li>
-  <li><a href="clients-web-api/">Web console and API</a></li>
+  <li><a href="terminal/">Terminal</a></li>
+  <li><a href="web/">Web console</a></li>
+  <li><a href="android/">Android</a></li>
   <li><a href="clients-mcp/">MCP server</a></li>
   <li><a href="features-plan-mode/">Plan mode</a></li>
 </ul>
@@ -336,8 +330,8 @@ A five-step journey. Each step is short, and each link lands on the page you nee
 <ul class="ms-step__links">
   <li><a href="features-mcp/">MCP tools</a></li>
   <li><a href="features-plugins/">Plugins</a></li>
-  <li><a href="features-widgets/">Interactive widgets</a></li>
-  <li><a href="developer-guide/">Build a client</a></li>
+  <li><a href="web/widgets/">Interactive widgets</a></li>
+  <li><a href="api/building-a-client/">Build a client</a></li>
 </ul>
 </div>
 

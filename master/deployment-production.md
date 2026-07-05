@@ -138,7 +138,7 @@ Since both the API (`5125`) and console (`3001`) use host networking, `127.0.0.1
 
 Langfuse provides LLM-level tracing for every session. Each multi-turn session appears as one trace group, making it straightforward to see which tools were called, what the model reasoned, and where errors occurred.
 
-Add Langfuse config to [`configs/app.json`](repo:configs/app.json):
+Add Langfuse config to [`configs/app.json`](repo:configs/app.example.json):
 
 ```json
 {
@@ -151,7 +151,7 @@ Add Langfuse config to [`configs/app.json`](repo:configs/app.json):
 }
 ```
 
-For a self-hosted Langfuse instance, set `host` to your deployment URL. The [`configs/app.json`](repo:configs/app.json) file is mounted read-only into the API container; changes take effect on the next `docker compose up -d` (no rebuild needed).
+For a self-hosted Langfuse instance, set `host` to your deployment URL. The [`configs/app.json`](repo:configs/app.example.json) file is mounted read-only into the API container; changes take effect on the next `docker compose up -d` (no rebuild needed).
 
 ### Filtering traces by provenance
 

@@ -1,7 +1,7 @@
 # Plan Mode
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-console-03-plan-approval.jpg" alt="A plan in the Mewbo console showing a rejected draft and a revised plan awaiting approval" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../assets/img/mewbo-console-03-plan-approval.jpg" alt="A plan in the Mewbo console showing a rejected draft and a revised plan awaiting approval" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 By default Mewbo runs in **act mode**: the model calls tools as soon as it decides to, and each call executes immediately. That is usually what you want for quick, low-risk work. For anything destructive, complex, or unfamiliar, switch to **plan mode**. In plan mode the assistant explores your workspace with read-only tools, drafts a step-by-step plan to a session-scoped file you can inspect, and then pauses for your approval before a single write or shell command runs. It gives you a checkpoint between "I want this done" and "the agent is changing my files."

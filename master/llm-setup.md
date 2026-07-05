@@ -3,7 +3,7 @@
 This page covers the minimum LLM configuration required to run Mewbo.
 
 ## Minimum configuration
-Set these keys in [`configs/app.json`](repo:configs/app.json):
+Set these keys in [`configs/app.json`](repo:configs/app.example.json):
 
 ```json
 {
@@ -19,10 +19,10 @@ That's it. LiteLLM auto-routes `anthropic/claude-sonnet-4-6` to the Anthropic AP
 See the optional configuration table below.
 
 > [!TIP] Edit it in the console
-> Every key here is also editable in the console's **Settings → Models & Inference** panel, which writes the same config. The panel maps the API base, the (write-only) API key, and the per-role model fields — default, action-plan, tool, and title — to the keys documented on this page.
+> Every key here is also editable in the console's **Settings → Models & Inference** panel, which writes the same config. The panel maps the API base, the (write-only) API key, and the per-role model fields (default, action-plan, tool, and title) to the keys documented on this page.
 
 <div style="display: flex; justify-content: center;">
-  <img src="../mewbo-settings-01-models.jpg" alt="The Models & Inference panel of the Mewbo console Settings screen, with fields for the API base, a configured (write-only) API key, and the default, action-plan, tool, and title model IDs" style="width: 100%; max-width: 880px; height: auto;" />
+  <img src="../assets/img/mewbo-settings-01-models.jpg" alt="The Models & Inference panel of the Mewbo console Settings screen, with fields for the API base, a configured (write-only) API key, and the default, action-plan, tool, and title model IDs" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
 ## Optional LLM configuration
@@ -40,7 +40,7 @@ See the optional configuration table below.
 When the primary model fails with a retryable error, Mewbo walks an ordered fallback
 list before giving up. Useful for rate-limit tolerance and provider outages.
 
-Fallback is off by default and requires an explicit opt-in. Config (in [`configs/app.json`](repo:configs/app.json)):
+Fallback is off by default and requires an explicit opt-in. Config (in [`configs/app.json`](repo:configs/app.example.json)):
 
 ```json
 {
